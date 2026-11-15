@@ -83,6 +83,8 @@ mod match_cross_collection_properties;
 mod match_graph_first;
 #[path = "bdd/match_id_semantics.rs"]
 mod match_id_semantics;
+#[path = "bdd/match_inline_properties.rs"]
+mod match_inline_properties;
 #[path = "bdd/match_order_by_core.rs"]
 mod match_order_by_core;
 #[path = "bdd/match_order_by_exact.rs"]

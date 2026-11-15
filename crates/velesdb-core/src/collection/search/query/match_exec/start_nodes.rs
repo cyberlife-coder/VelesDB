@@ -133,9 +133,9 @@ impl Collection {
         bitmap
             .iter()
             .filter(|&id| {
-                let (_, properties) =
-                    memo.read_unmemoized(first_node.collection.as_deref(), u64::from(id));
-                Self::node_matches_properties(properties.as_deref(), &first_node.properties)
+                let id = u64::from(id);
+                let (_, properties) = memo.read_unmemoized(first_node.collection.as_deref(), id);
+                Self::properties_hold(id, properties.as_deref(), &first_node.properties)
             })
             .map(|id| Self::build_start_binding(u64::from(id), first_node))
             .collect()
@@ -166,7 +166,7 @@ impl Collection {
                 let (own, properties) = guards
                     .payload_memo
                     .read_unmemoized(first_node.collection.as_deref(), *id);
-                Self::payloads_match_pattern(own.as_deref(), properties.as_deref(), first_node)
+                Self::payloads_match_pattern(*id, own.as_deref(), properties.as_deref(), first_node)
             })
             .map(|id| Self::build_start_binding(id, first_node))
             .collect()
@@ -190,7 +190,7 @@ impl Collection {
         } else {
             memo.get_annotated(node.collection.as_deref(), id)
         };
-        Self::payloads_match_pattern(own.as_deref(), properties.as_deref(), node)
+        Self::payloads_match_pattern(id, own.as_deref(), properties.as_deref(), node)
     }
 
     /// Whether `node` has neither labels nor inline properties to check.
@@ -199,16 +199,29 @@ impl Collection {
     }
 
     /// Label check against the node's own payload, property check against
-    /// its (possibly annotated) property payload.
+    /// its (possibly annotated) property payload — both as every MATCH
+    /// engine decides them ([`crate::velesql::has_every_label`],
+    /// [`crate::velesql::inline_properties_hold`]).
     fn payloads_match_pattern(
+        id: u64,
         own: Option<&serde_json::Value>,
         properties: Option<&serde_json::Value>,
         node: &NodePattern,
     ) -> bool {
-        if !node.labels.is_empty() && !Self::node_matches_labels(own, &node.labels) {
-            return false;
-        }
-        node.properties.is_empty() || Self::node_matches_properties(properties, &node.properties)
+        crate::velesql::has_every_label(&node.labels, &labels_of(own))
+            && Self::properties_hold(id, properties, &node.properties)
+    }
+
+    /// Whether node `id`, whose properties `payload` holds, satisfies the
+    /// inline properties `properties`.
+    fn properties_hold(
+        id: u64,
+        payload: Option<&serde_json::Value>,
+        properties: &HashMap<String, crate::velesql::Value>,
+    ) -> bool {
+        crate::velesql::inline_properties_hold(properties, |key| {
+            crate::velesql::element_property(id, key, |k| payload?.get(k))
+        })
     }
 
     /// Builds a `(node_id, bindings)` pair for a start node.
@@ -222,52 +235,15 @@ impl Collection {
         }
         (id, bindings)
     }
+}
 
-    /// Checks if a node's payload matches the required labels.
-    pub(super) fn node_matches_labels(
-        payload: Option<&serde_json::Value>,
-        required: &[String],
-    ) -> bool {
-        let Some(payload) = payload else { return false };
-        let Some(labels) = payload.get("_labels").and_then(|v| v.as_array()) else {
-            return false;
-        };
-        let node_labels: Vec<&str> = labels.iter().filter_map(|v| v.as_str()).collect();
-        required.iter().all(|r| node_labels.contains(&r.as_str()))
-    }
-
-    /// Checks if a node's payload matches the required properties.
-    pub(super) fn node_matches_properties(
-        payload: Option<&serde_json::Value>,
-        properties: &HashMap<String, crate::velesql::Value>,
-    ) -> bool {
-        let Some(payload) = payload else { return false };
-        properties.iter().all(|(key, expected)| {
-            payload
-                .get(key)
-                .is_some_and(|actual| Self::values_match(expected, actual))
-        })
-    }
-
-    /// Compares a VelesQL Value with a JSON value.
-    pub(super) fn values_match(
-        velesql_value: &crate::velesql::Value,
-        json_value: &serde_json::Value,
-    ) -> bool {
-        use crate::velesql::Value;
-
-        match (velesql_value, json_value) {
-            (Value::String(s), serde_json::Value::String(js)) => s == js,
-            // Numbers match by exact value, as a WHERE `=` decides: `1.0`
-            // is `1`, `-0.0` is `0`, `2^53 + 1` is not `2^53.0`.
-            (
-                literal @ (Value::Integer(_) | Value::UnsignedInteger(_) | Value::Float(_)),
-                serde_json::Value::Number(n),
-            ) => crate::velesql::compare_number_literal(n, literal)
-                .is_some_and(std::cmp::Ordering::is_eq),
-            (Value::Boolean(b), serde_json::Value::Bool(jb)) => b == jb,
-            (Value::Null, serde_json::Value::Null) => true,
-            _ => false,
-        }
-    }
+/// The `_labels` a node's own payload carries.
+fn labels_of(payload: Option<&serde_json::Value>) -> Vec<&str> {
+    payload
+        .and_then(|p| p.get("_labels"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect()
 }

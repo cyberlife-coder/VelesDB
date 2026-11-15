@@ -1987,6 +1987,17 @@ A node is enclosed in parentheses with optional alias, labels, and properties:
 (alias:Label@collection)         -- Node resolved from a specific collection (cross-collection)
 ```
 
+A node matches a pattern node when it carries **every** listed label. A
+relationship matches when its type is **one of** the listed types
+(`-[:A|B]->`). Inline properties `(n {k: v})` and `-[r {k: v}]->` mean `n.k = v`
+/ `r.k = v` for each pair, evaluated as WHERE evaluates `=`: in three-valued
+logic (`{k: NULL}`, or a `null` or absent `k`, matches nothing), numbers by
+exact value, `{id: 3}` reading the element's id, and `{k: $name}` taking the
+caller's parameter (an unbound one refuses the query). An alias repeated in
+the pattern names one node, so `(a)-[:R]->(b)-[:R]->(a)` requires a cycle; an
+unnamed node is walked but binds no name, and a query returns one row per
+distinct binding of its named nodes and relationships.
+
 #### Cross-Collection Annotation (`@collection`)
 
 The `@collection` suffix on a node pattern gives the node the properties of the

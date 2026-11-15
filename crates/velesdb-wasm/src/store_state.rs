@@ -31,10 +31,10 @@ pub struct StoreState {
 }
 
 impl StoreState {
-    /// Returns the JSON payload stored for `id`, if the id exists and carries one.
-    ///
-    /// Used by cross-collection MATCH enrichment to merge a referenced
-    /// collection's metadata into graph results by node id.
+    /// Returns the JSON payload stored for `id`, if the id exists and carries
+    /// one. A linear scan: tests only (`MATCH` indexes rows once per query,
+    /// see `velesql_match_sources`).
+    #[cfg(test)]
     pub(crate) fn payload_for_id(&self, id: u64) -> Option<&serde_json::Value> {
         let idx = self.ids.iter().position(|&x| x == id)?;
         self.payloads.get(idx).and_then(Option::as_ref)

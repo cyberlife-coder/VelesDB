@@ -89,7 +89,9 @@ mod orderby_multi_tests;
 #[cfg(test)]
 mod parallel_aggregation_tests;
 mod param_binding;
-pub use param_binding::{bind_condition, bind_value};
+pub use param_binding::{bind_condition, bind_match_clause, bind_value};
+mod pattern_match;
+pub use pattern_match::{element_property, has_every_label, inline_properties_hold};
 mod parser;
 #[cfg(test)]
 mod parser_tests;

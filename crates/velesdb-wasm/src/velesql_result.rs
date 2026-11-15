@@ -154,6 +154,13 @@ impl QueryResultRow {
         })
     }
 
+    /// This row with `id` set: a MATCH row's walk target.
+    #[must_use]
+    pub(crate) fn with_id(mut self, id: u64) -> Self {
+        self.id = id;
+        self
+    }
+
     /// This row with `score` set: a MATCH row's similarity score, computed
     /// after the row's JSON was built.
     #[must_use]

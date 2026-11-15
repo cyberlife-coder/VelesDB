@@ -173,19 +173,16 @@ fn test_match_at_collection_enriches_referenced_node() {
     assert!(data["a"].get("email").is_none());
 }
 
+/// An `@collection` naming no collection refuses the MATCH, as in core: it
+/// cannot read properties from a collection that does not exist.
 #[test]
-fn test_match_at_collection_missing_collection_is_skipped() {
-    // An @collection pointing at a non-existent vector collection must not
-    // fail the MATCH — the graph results are returned un-enriched.
+fn test_match_at_collection_missing_collection_is_refused() {
     let mut db = DatabaseInner::new();
     seed_person_profile_graph(&mut db);
 
     let q = parse_match("MATCH (a:Person)-[:HAS]->(b:Profile@nope) RETURN a, b LIMIT 10");
-    let rows = execute_match(&mut db, &q, &Params::new()).expect("test: match still succeeds");
-    assert_eq!(rows.len(), 1);
-    let data: serde_json::Value =
-        serde_json::from_str(rows[0].data_json_ref()).expect("test: row json");
-    assert_eq!(data["b"]["name"], serde_json::json!("Bob"));
+    let err = execute_match(&mut db, &q, &Params::new()).expect_err("test: refused");
+    assert!(err.contains("VELES-002") && err.contains("nope"), "{err}");
 }
 
 #[test]

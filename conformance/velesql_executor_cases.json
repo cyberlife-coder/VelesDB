@@ -519,17 +519,43 @@
   "match_cases": [
     {
       "id": "M001",
-      "core_query": "SELECT * FROM people WHERE MATCH (a:Person)-[:KNOWS]->(b:Person) ORDER BY people.id ASC",
-      "wasm_query": "MATCH (a:Person@people)-[:KNOWS]->(b:Person@people) RETURN a ORDER BY a.id ASC",
+      "query": "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a ORDER BY a.id ASC",
+      "params": {"_collection": "people"},
+      "binding": "a",
       "expect_ids": [1, 2, 3],
-      "note": "issue #1544: 1-hop MATCH. Query text differs per engine by design — see documented_divergences D004: core treats vector-collection points as graph nodes (SELECT ... WHERE MATCH over the 'people' vector collection); WASM keeps a separate in-memory graph store addressed via @collection annotations and the standalone MATCH ... RETURN form. Both graphs encode the SAME topology (chain 1->2->3->4, label KNOWS) and are asserted against the SAME golden ids"
+      "note": "issue #1544: 1-hop MATCH, one query text for both engines: the target collection comes from `_collection`, and each row's `a` binding is compared. Both engines hold the SAME topology (chain 1->2->3->4, label KNOWS); only where the edges are stored differs (D004)"
     },
     {
       "id": "M002",
-      "core_query": "SELECT * FROM people WHERE MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person) ORDER BY people.id ASC",
-      "wasm_query": "MATCH (a:Person@people)-[:KNOWS]->(b:Person@people)-[:KNOWS]->(c:Person@people) RETURN a ORDER BY a.id ASC",
+      "query": "MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person) RETURN a ORDER BY a.id ASC",
+      "params": {"_collection": "people"},
+      "binding": "a",
       "expect_ids": [1, 2],
       "note": "issue #1544: 2-hop MATCH over the same chain topology as M001"
+    },
+    {
+      "id": "M003",
+      "query": "MATCH (a:Person)-[:KNOWS]->(:Person) RETURN a ORDER BY a.id ASC",
+      "params": {"_collection": "people"},
+      "binding": "a",
+      "expect_ids": [1, 2, 3],
+      "note": "an unnamed node binds no name: one row per distinct binding of the named nodes"
+    },
+    {
+      "id": "M004",
+      "query": "MATCH (a:Person {name: $who})-[:KNOWS]->(b:Person) RETURN b",
+      "params": {"_collection": "people", "who": "Bo"},
+      "binding": "b",
+      "expect_ids": [3],
+      "note": "inline pattern properties filter as WHERE `=` does, a `$name` taking the caller's value"
+    },
+    {
+      "id": "M005",
+      "query": "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE name = 'Cy' RETURN a",
+      "params": {"_collection": "people"},
+      "binding": "a",
+      "expect_ids": [2],
+      "note": "a bare WHERE column reads the walk's target, the last node"
     }
   ],
   "query_params": {
@@ -1129,10 +1155,10 @@
     },
     {
       "id": "D004",
-      "area": "MATCH data model (core unified vs WASM separate graph store)",
-      "core_behavior": "graph nodes ARE vector-collection points (payload `_labels` field); edges live on the same Collection via add_edge; MATCH is expressed as `SELECT ... FROM <collection> WHERE MATCH (...)`",
-      "wasm_behavior": "edges live in a separate in-memory graph store per name (`INSERT EDGE`, `WasmDatabase.addEdge`); the nodes a MATCH binds are, as in core, the points of the collection with that name (payload as properties, `_labels` as labels, vectors scoring `similarity()`), plus nodes written with `INSERT NODE`, which win on a shared id; the target is the first node's `@collection`, else the `_collection` param, else `graph`; queried with the standalone `MATCH ... RETURN` form",
-      "status": "accepted architectural difference, narrowed: only the edge store stays separate (WASM has no persistence layer to unify it with); fixture match_cases M001/M002 carry a `core_query`/`wasm_query` pair instead of one shared query string, both encoding the same graph topology, asserted against the same golden ids",
+      "area": "MATCH edge storage (core unified vs WASM separate graph store)",
+      "core_behavior": "graph nodes ARE collection points (payload `_labels` field); edges live on the same Collection via add_edge",
+      "wasm_behavior": "edges live in a separate in-memory graph store per name (`INSERT EDGE`, `WasmDatabase.addEdge`); the nodes a MATCH binds are, as in core, the points of the collection with that name, plus nodes written with `INSERT NODE`, which win on a shared id. Everything a query can observe is the same: the target comes from `_collection`, `@collection` adds properties, and the same MATCH text returns the same rows",
+      "status": "accepted architectural difference, storage only: fixture match_cases run ONE query text on both engines; each harness only loads the shared topology its own way",
       "evidence": "crates/velesdb-wasm/src/velesql_match.rs: match_target(), inferred_graph_store(); crates/velesdb-wasm/src/velesql_match_nodes.rs: MatchNodes; crates/velesdb-core/src/database/query_engine.rs: execute_match_routed()"
     },
     {
