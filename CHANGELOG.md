@@ -138,6 +138,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`POST /collections/{name}/relations` no longer fails permanently after an
+  edge with ID `u64::MAX` exists** (server, 2026-11-15). The handler picks the
+  next edge ID as `max_edge_id + 1`, and that sum saturated at `u64::MAX`, an
+  ID any client can store through `POST /graph/edges`. From then on every call
+  re-probed the one taken ID 1 000 times and answered 500 until that edge was
+  deleted. Past `u64::MAX` the probe now jumps to a random ID; the normal
+  `max + 1` path is unchanged.
+
 - **REPL `.graph store-payload` takes `--vector`** like the one-shot
   `velesdb graph store-payload`. The REPL command stored the payload only, so a
   graph created with a dimension could not get node embeddings from the REPL,
