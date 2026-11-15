@@ -387,36 +387,33 @@ fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
     })
 }
 
+/// One element of a compiled LIKE pattern. Patterns and texts are matched
+/// character by character (Unicode scalar values), so `_` is one character
+/// and never one byte of a multi-byte UTF-8 character.
 #[derive(Clone, Copy)]
 enum Token {
     AnySeq,
     AnyOne,
-    Literal(u8),
+    Literal(char),
 }
 
-fn tokenize_like_pattern(pattern: &[u8]) -> Vec<Token> {
+fn tokenize_like_pattern(pattern: &str) -> Vec<Token> {
     let mut out = Vec::with_capacity(pattern.len());
-    let mut i = 0;
-    while i < pattern.len() {
-        match pattern[i] {
-            b'\\' if i + 1 < pattern.len() => {
-                out.push(Token::Literal(pattern[i + 1]));
-                i += 2;
-            }
-            b'%' => {
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some(escaped) => out.push(Token::Literal(escaped)),
+                // A trailing backslash escapes nothing: it is itself.
+                None => out.push(Token::Literal('\\')),
+            },
+            '%' => {
                 if !matches!(out.last(), Some(Token::AnySeq)) {
                     out.push(Token::AnySeq);
                 }
-                i += 1;
             }
-            b'_' => {
-                out.push(Token::AnyOne);
-                i += 1;
-            }
-            c => {
-                out.push(Token::Literal(c));
-                i += 1;
-            }
+            '_' => out.push(Token::AnyOne),
+            c => out.push(Token::Literal(c)),
         }
     }
     out
@@ -450,16 +447,16 @@ impl CompiledLikePattern {
     /// so the (identical-per-row) pattern lowercase happens exactly once.
     fn compile(pattern: &str, case_insensitive: bool) -> Self {
         let lowered;
-        let pattern_bytes = if case_insensitive {
+        let pattern_text = if case_insensitive {
             lowered = pattern.to_lowercase();
-            lowered.as_bytes()
+            lowered.as_str()
         } else {
-            pattern.as_bytes()
+            pattern
         };
         Self {
             source: pattern.as_bytes().to_vec(),
             case_insensitive,
-            tokens: tokenize_like_pattern(pattern_bytes),
+            tokens: tokenize_like_pattern(pattern_text),
             dp_prev: Vec::new(),
             dp_curr: Vec::new(),
         }
@@ -477,11 +474,11 @@ impl CompiledLikePattern {
     /// differs across candidates); the pattern lowercase is already amortized.
     fn run(&mut self, text: &str) -> bool {
         let lowered;
-        let text_bytes = if self.case_insensitive {
+        let text = if self.case_insensitive {
             lowered = text.to_lowercase();
-            lowered.as_bytes()
+            lowered.as_str()
         } else {
-            text.as_bytes()
+            text
         };
 
         // Disjoint field borrows so tokens can be read while the DP buffers are
@@ -507,7 +504,7 @@ impl CompiledLikePattern {
 
         dp_curr.clear();
         dp_curr.resize(n + 1, false);
-        for &ch in text_bytes {
+        for ch in text.chars() {
             dp_curr.fill(false);
             for (j, tok) in tokens.iter().enumerate() {
                 dp_curr[j + 1] = match tok {

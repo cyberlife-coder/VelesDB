@@ -451,3 +451,31 @@ fn test_point_ids_accepts_an_integer_valued_float() {
         assert_eq!(cond.point_ids(), None);
     }
 }
+
+// `_` is one character, not one byte (UTF-8 text).
+
+#[test]
+fn like_underscore_matches_one_multibyte_character() {
+    assert!(like_match("café", "caf_", false));
+    assert!(like_match("日本語", "日_語", false));
+    assert!(!like_match("日本", "日_語", false));
+}
+
+#[test]
+fn like_underscore_never_splits_a_character() {
+    // "é" is two bytes: two `_` used to match it, one byte each.
+    assert!(!like_match("é", "__", false));
+    assert!(like_match("é", "_", false));
+}
+
+#[test]
+fn ilike_underscore_matches_one_multibyte_character() {
+    assert!(like_match("CAFÉ", "caf_", true));
+    assert!(like_match("Ÿes", "_ES", true));
+}
+
+#[test]
+fn like_escape_takes_a_whole_multibyte_character() {
+    assert!(like_match("aé", "a\\é", false));
+    assert!(!like_match("ax", "a\\é", false));
+}

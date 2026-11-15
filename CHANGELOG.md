@@ -132,6 +132,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`LIKE`/`ILIKE` `_` matches one character, not one byte.** The matcher
+  compiled patterns and scanned text byte by byte, so on UTF-8 text `'caf_'`
+  did not match `"café"`, and `'__'` matched the single character `"é"` (two
+  bytes). Patterns and text are now matched character by character, as the
+  WASM executor already did.
+
 - **`POST /collections/{name}/relations` no longer fails permanently after an
   edge with ID `u64::MAX` exists** (server, 2026-11-15). The handler picks the
   next edge ID as `max_edge_id + 1`, and that sum saturated at `u64::MAX`, an
