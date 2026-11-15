@@ -7,17 +7,16 @@
 //! that a caller can neither set nor filter on, which was believed to make
 //! them invisible to every caller-facing recall path.
 //!
-//! It does not, for a `!=` predicate. [`velesdb_core::Condition::Neq`] is
-//! `is_none_or`: a fact that has no such field at all *matches*. Scaffolding
-//! carries only reserved keys, so it has none of the caller's columns, so
-//! `status != "archived"` sweeps in every artefact the service ever wrote.
+//! It did not, for a `!=` predicate, while `VelesQL`'s `!=` matched a fact that
+//! has no such field at all: scaffolding carries only reserved keys, so it has
+//! none of the caller's columns, so `status != "archived"` swept in every
+//! artefact the service ever wrote.
 //!
-//! Since #1759 the adapter also spells a caller's `ne` as
-//! `field IS NOT NULL AND field != $p`, so a fact lacking the column no longer
-//! matches at all — which closes this leak a second time, at its root. The
-//! marker exclusion below is kept regardless: it still relies on `is_none_or`
-//! (that is how it keeps caller facts while dropping marked ones), and it is
-//! what protects the paths where the caller passes no `ne` predicate.
+//! `VelesQL`'s WHERE is now three-valued: `!=` on an absent field is UNKNOWN,
+//! never true, so a caller's `ne` cannot select scaffolding at all. The marker
+//! exclusion is kept regardless — it is what protects the paths where the
+//! caller passes no `ne` predicate — and is written `marker IS NULL OR
+//! marker != true`, since a bare `!=` would now drop every caller fact.
 //!
 //! Categories: Nominal (≥60%), Edge (~20%), Negative (≥20%).
 
@@ -73,9 +72,10 @@ struct Seeded {
     /// A caller fact carrying `status: "active"`, i.e. one the predicate
     /// matches on its own terms.
     with_status: u64,
-    /// A caller fact carrying NO `status` column at all. `!=` must keep it
-    /// (that is what `is_none_or` means for a caller field) — proving the fix
-    /// excludes scaffolding without also blacking out honest facts.
+    /// A caller fact carrying NO `status` column at all. `!=` does not select
+    /// it (a comparison on an absent field is UNKNOWN), yet a recall without
+    /// a `ne` must still return it — proving the marker exclusion does not
+    /// also black out honest facts.
     without_status: u64,
     /// `ctx://source/<hash>` handle of a stored compilation source.
     source_handle: String,
@@ -192,7 +192,7 @@ fn recall_where_ne_predicate_still_returns_caller_facts() {
     );
     // This assertion was inverted by #1759, deliberately. It used to require a
     // caller fact with NO `status` column to survive `status != "archived"`,
-    // because `Condition::Neq` is `is_none_or` and a missing field matched.
+    // because VelesQL's `!=` then matched a missing field (it is now UNKNOWN).
     // That is the very shape that made `ne` mean two different things on the
     // two backends, and the published contract now says a filter is satisfied
     // only by a fact that HAS the field with a non-null value.

@@ -262,8 +262,8 @@ impl Collection {
     /// Recursively evaluates a single condition node, three-valued.
     ///
     /// `None` is SQL's UNKNOWN: the predicate could not be decided for this
-    /// record — today only a `similarity()` leaf whose vector cannot be scored
-    /// produces it. It is deliberately NOT folded into `false` here, because
+    /// record — a metadata comparison on a `null` or absent field, or a
+    /// `similarity()` leaf whose vector cannot be scored. It is deliberately NOT folded into `false` here, because
     /// the two differ under negation: `NOT false` admits the row, `NOT
     /// UNKNOWN` does not. Collapsing them at the leaf is what made
     /// `NOT similarity()` return rows it could not actually score.
@@ -300,7 +300,7 @@ impl Collection {
             // instead of rebuilding it (and cloning the AST) on every row.
             other => {
                 let filter = graph_cache.metadata_filter(other);
-                Ok(Some(filter.matches_point(ctx.id, ctx.payload)))
+                Ok(filter.evaluate_point(ctx.id, ctx.payload))
             }
         }
     }
