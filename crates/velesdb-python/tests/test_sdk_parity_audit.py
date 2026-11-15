@@ -400,3 +400,35 @@ def test_rebuild_index_and_all_point_ids(temp_db):
     reclaimed = col.rebuild_index()
     assert isinstance(reclaimed, int)
     assert sorted(col.all_point_ids()) == [1, 2, 3]
+
+
+def test_contract_exports_match_core():
+    import velesdb
+
+    assert velesdb.EXPIRES_AT_KEY == "_veles_expires_at"
+    assert isinstance(velesdb.VELESQL_CONTRACT_VERSION, str)
+    assert velesdb.VELESQL_CONTRACT_VERSION.count(".") == 2
+    # score_range: cosine similarity is bounded in [-1, 1], dot is unbounded.
+    assert velesdb.score_range("cosine") == (-1.0, 1.0)
+    assert velesdb.score_range("dot") is None
+    # hash_edge_id is deterministic and distinct per label.
+    a = velesdb.hash_edge_id(1, 2, "KNOWS")
+    assert a == velesdb.hash_edge_id(1, 2, "KNOWS")
+    assert a != velesdb.hash_edge_id(1, 2, "LIKES")
+    for name in (
+        "hash_id",
+        "hash_edge_id",
+        "score_range",
+        "EXPIRES_AT_KEY",
+        "VELESQL_CONTRACT_VERSION",
+        "metric_normalize",
+    ):
+        assert name in velesdb.__all__, name
+
+
+def test_parsed_statement_table_aliases_include_join_aliases():
+    parsed = velesdb.VelesQL().parse(
+        "SELECT a.id FROM docs AS a JOIN other AS b ON a.id = b.id LIMIT 1"
+    )
+    assert parsed.table_alias == "a"
+    assert set(parsed.table_aliases) == {"a", "b"}

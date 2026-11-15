@@ -264,9 +264,9 @@ impl Database {
     ///     auto_reindex: Optional :class:`AutoReindexOptions` dataclass.
     ///           When provided, an :class:`AutoReindexManager` is
     ///           constructed from the options and attached to the
-    ///           freshly-created collection as a runtime-only hook.
-    ///           The attachment is not persisted — re-attach after
-    ///           every `Database(path)` to restore the behavior.
+    ///           freshly-created collection. The policy is mirrored into
+    ///           the collection's persisted config (schema v2), so it is
+    ///           restored automatically on every `Database(path)` open.
     ///
     /// Returns:
     ///     Collection instance
@@ -637,8 +637,9 @@ impl Database {
     ///
     /// Args:
     ///     sql: VelesQL query string.
-    ///     params: Optional parameter bindings (e.g., ``{"$v": [0.1, 0.2]}``).
-    ///             Pass ``None`` or omit to run with no bindings.
+    ///     params: Optional parameter bindings (bare names, e.g., ``{"v": [0.1, 0.2]}``
+    ///             for the ``$v`` placeholder). Pass ``None`` or omit to run
+    ///             with no bindings.
     ///
     /// Returns:
     ///     List of result dicts for SELECT queries.
@@ -664,7 +665,7 @@ impl Database {
     ///     >>> db.execute_query("CREATE COLLECTION notes (dimension=128, metric=cosine)")
     ///     >>> db.execute_query(
     ///     ...     "SELECT * FROM docs WHERE vector NEAR $q LIMIT 10",
-    ///     ...     params={"$q": [0.1, 0.2]},
+    ///     ...     params={"q": [0.1, 0.2]},
     ///     ... )
     ///     >>> # Cross-collection MATCH: enrich from 'inventory' collection
     ///     >>> db.execute_query(

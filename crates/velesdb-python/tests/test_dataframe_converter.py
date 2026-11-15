@@ -374,3 +374,45 @@ class TestNaNVectorGuard:
         )
         # Row 1: valid vector — key must be present
         assert points[1]["vector"] == [0.5, 0.6]
+
+
+class TestToDataframeVectorColumn:
+    """to_dataframe must keep a top-level 'vector' (include_vectors=True results)."""
+
+    @pytest.fixture
+    def pd(self):
+        return pytest.importorskip("pandas")
+
+    def test_vector_kept_as_column(self, pd):
+        results = [
+            {"id": 1, "score": 0.9, "vector": [0.1, 0.2], "payload": {"t": "a"}},
+            {"id": 2, "score": 0.8, "vector": [0.3, 0.4], "payload": {"t": "b"}},
+        ]
+        df = to_dataframe(results)
+        assert "vector" in df.columns
+        assert list(df["vector"]) == [[0.1, 0.2], [0.3, 0.4]]
+        assert list(df["id"]) == [1, 2]
+
+    def test_payload_vector_renamed_not_overwritten(self, pd):
+        results = [{"id": 1, "score": 0.9, "vector": [0.1], "payload": {"vector": "meta"}}]
+        df = to_dataframe(results)
+        assert list(df["vector"]) == [[0.1]]
+        assert list(df["payload_vector"]) == ["meta"]
+
+    def test_results_without_vector_have_no_vector_column(self, pd):
+        df = to_dataframe([_make_search_result(1, 0.5)])
+        assert "vector" not in df.columns
+
+
+class TestRowToPointIdCoercion:
+    """_row_to_point must not silently truncate non-integral float ids."""
+
+    def test_integral_float_id_accepted(self):
+        assert _row_to_point({"id": 3.0})["id"] == 3
+
+    def test_non_integral_float_id_rejected(self):
+        with pytest.raises(ValueError, match="integer"):
+            _row_to_point({"id": 2.5})
+
+    def test_int_id_unchanged(self):
+        assert _row_to_point({"id": 7})["id"] == 7
