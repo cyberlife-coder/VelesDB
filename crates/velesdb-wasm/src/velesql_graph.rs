@@ -26,23 +26,37 @@ pub(crate) fn execute_match(
     query: &Query,
     params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
-    // Read-path gate (audit F-5.4, #1392). The graph store is inferred from
-    // the pattern, so the collection hint is best-effort: the first annotated
-    // pattern node's collection, else empty. Zero-overhead without an observer.
-    let collection = match_collection_hint(query);
-    db.check_query_access(collection, WasmQueryOperationKind::GraphTraversal)?;
+    // Read-path gate (audit F-5.4, #1392), asked about every collection the
+    // MATCH reads. Zero-overhead without an observer.
+    for collection in match_gate_collections(query, params)? {
+        db.check_query_access(&collection, WasmQueryOperationKind::GraphTraversal)?;
+    }
     crate::velesql_match::execute_match(db, query, params)
 }
 
-/// Best-effort collection name for a MATCH read gate: the first pattern node
-/// carrying an `@collection` annotation, or `""` when none is present.
-fn match_collection_hint(query: &Query) -> &str {
-    query
-        .match_clause
-        .as_ref()
-        .and_then(|clause| clause.patterns.first())
-        .and_then(|pattern| pattern.nodes.iter().find_map(|n| n.collection.as_deref()))
-        .unwrap_or("")
+/// Every collection a MATCH reads, for its read gate, in first-read order:
+/// the graph it walks ([`crate::velesql_match::match_target`], the rule the
+/// executor uses), then each `@collection` a node payload is merged from.
+/// A MATCH without patterns reads nothing and is asked about `""`.
+fn match_gate_collections(query: &Query, params: &Params) -> Result<Vec<String>, String> {
+    let Some(clause) = query.match_clause.as_ref() else {
+        return Ok(vec![String::new()]);
+    };
+    let Some(pattern) = clause.patterns.first() else {
+        return Ok(vec![String::new()]);
+    };
+    let mut collections = vec![crate::velesql_match::match_target(pattern, params)?];
+    for name in clause
+        .patterns
+        .iter()
+        .flat_map(|p| p.nodes.iter())
+        .filter_map(|n| n.collection.as_deref())
+    {
+        if !collections.iter().any(|c| c == name) {
+            collections.push(name.to_string());
+        }
+    }
+    Ok(collections)
 }
 
 // ---------------------------------------------------------------------------
