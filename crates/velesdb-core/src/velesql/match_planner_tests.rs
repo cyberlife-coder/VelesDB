@@ -188,7 +188,9 @@ fn test_planner_vector_first_returns_threshold() {
 }
 
 // =========================================================================
-// Audit 2026-06 cluster F2: relationship-alias references force GraphFirst
+// Seeding: VectorFirst only seeds the shared walk, so it binds edge aliases
+// like GraphFirst; the plan is VectorFirst only when the nearest start nodes
+// are the ones the rows come from.
 // =========================================================================
 
 /// Adds a `r` alias to the pattern relationship of a match clause.
@@ -197,111 +199,20 @@ fn with_rel_alias(mut match_clause: MatchClause) -> MatchClause {
     match_clause
 }
 
-#[test]
-fn test_planner_forces_graph_first_when_where_references_edge_alias() {
-    let mut match_clause = with_rel_alias(make_match_clause(true, Some(10)));
-    let sim = match_clause
-        .where_clause
-        .take()
-        .expect("test: similarity condition");
-    match_clause.where_clause = Some(Condition::And(
-        Box::new(sim),
-        Box::new(Condition::Comparison(crate::velesql::Comparison {
-            column: "r.since".to_string(),
-            operator: CompareOp::Eq,
-            value: crate::velesql::Value::Integer(2020),
-        })),
-    ));
-
-    let strategy = MatchQueryPlanner::plan(&match_clause, &default_stats());
-    assert!(
-        matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
-        "WHERE r.since must force GraphFirst (VectorFirst cannot bind edge aliases), got {strategy:?}"
-    );
+fn plan_of(sql: &str) -> MatchExecutionStrategy {
+    let query = crate::velesql::Parser::parse(sql).expect("test: parse");
+    let clause = query.match_clause.expect("test: match clause present");
+    MatchQueryPlanner::plan(&clause, &default_stats())
 }
 
-#[test]
-fn test_planner_forces_graph_first_when_return_references_edge_alias() {
-    let mut match_clause = with_rel_alias(make_match_clause(true, Some(10)));
-    match_clause.return_clause.items = vec![crate::velesql::ReturnItem {
-        expression: "r.since".to_string(),
-        alias: None,
-    }];
-
-    let strategy = MatchQueryPlanner::plan(&match_clause, &default_stats());
-    assert!(
-        matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
-        "RETURN r.since must force GraphFirst (VectorFirst cannot bind edge aliases), got {strategy:?}"
-    );
+fn is_vector_first(strategy: &MatchExecutionStrategy) -> bool {
+    matches!(strategy, MatchExecutionStrategy::VectorFirst { .. })
 }
 
+/// The seeded walk binds a relationship alias as any walk does, so a
+/// reference to one no longer forces GraphFirst.
 #[test]
-fn test_planner_forces_graph_first_when_edge_alias_referenced_on_large_graphs() {
-    // similarity on a NON-start alias over large, dense stats, plus an
-    // edge-alias reference in RETURN: GraphFirst, which binds edge aliases.
-    let mut match_clause = with_rel_alias(make_match_clause(true, Some(10)));
-    if let Some(Condition::Similarity(sim)) = match_clause.where_clause.as_mut() {
-        sim.field = "b.embedding".to_string();
-        sim.threshold = 0.85;
-    }
-    match_clause.return_clause.items = vec![crate::velesql::ReturnItem {
-        expression: "r.since".to_string(),
-        alias: None,
-    }];
-    let stats = MatchGraphStats {
-        total_nodes: 50_000,
-        total_edges: 500_000,
-        avg_degree: 10.0,
-        label_count: 10,
-        label_selectivity: 0.1,
-    };
-
-    let strategy = MatchQueryPlanner::plan(&match_clause, &stats);
-    assert!(
-        matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
-        "edge-alias reference must force GraphFirst \
-         (VectorFirst cannot bind edge aliases), got {strategy:?}"
-    );
-}
-
-#[test]
-fn test_planner_keeps_vector_first_without_edge_alias_reference() {
-    // The relationship HAS an alias, but neither WHERE nor RETURN uses it.
-    let match_clause = with_rel_alias(make_match_clause(true, Some(10)));
-
-    let strategy = MatchQueryPlanner::plan(&match_clause, &default_stats());
-    assert!(
-        matches!(strategy, MatchExecutionStrategy::VectorFirst { .. }),
-        "an unused relationship alias must not disable VectorFirst, got {strategy:?}"
-    );
-}
-
-#[test]
-fn test_planner_node_alias_column_does_not_force_graph_first() {
-    // `b.age` references a NODE alias — VectorFirst handles node aliases.
-    let mut match_clause = with_rel_alias(make_match_clause(true, Some(10)));
-    let sim = match_clause
-        .where_clause
-        .take()
-        .expect("test: similarity condition");
-    match_clause.where_clause = Some(Condition::And(
-        Box::new(sim),
-        Box::new(Condition::Comparison(crate::velesql::Comparison {
-            column: "b.age".to_string(),
-            operator: CompareOp::Gt,
-            value: crate::velesql::Value::Integer(18),
-        })),
-    ));
-
-    let strategy = MatchQueryPlanner::plan(&match_clause, &default_stats());
-    assert!(
-        matches!(strategy, MatchExecutionStrategy::VectorFirst { .. }),
-        "node-alias columns must not force GraphFirst, got {strategy:?}"
-    );
-}
-
-#[test]
-fn test_planner_is_null_on_edge_alias_forces_graph_first() {
+fn test_planner_seeds_a_walk_that_reads_an_edge_alias() {
     let mut match_clause = with_rel_alias(make_match_clause(true, Some(10)));
     let sim = match_clause
         .where_clause
@@ -314,12 +225,56 @@ fn test_planner_is_null_on_edge_alias_forces_graph_first() {
             is_null: true,
         })),
     ));
-
+    match_clause.return_clause.items = vec![crate::velesql::ReturnItem {
+        expression: "r.since".to_string(),
+        alias: None,
+    }];
     let strategy = MatchQueryPlanner::plan(&match_clause, &default_stats());
-    assert!(
-        matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
-        "IS NULL on an edge alias must force GraphFirst, got {strategy:?}"
-    );
+    assert!(is_vector_first(&strategy), "got {strategy:?}");
+}
+
+/// Every shape whose rows need not come from the nearest start nodes plans
+/// GraphFirst.
+#[test]
+fn test_planner_seeds_only_when_the_nearest_start_nodes_hold_the_rows() {
+    let graph_first = [
+        // No LIMIT: every qualifying row is wanted.
+        "MATCH (a:P) WHERE similarity(a.e, $v) > 0.8 RETURN a",
+        // Farther than the threshold: the nearest nodes fail it first.
+        "MATCH (a:P) WHERE similarity(a.e, $v) < 0.8 RETURN a LIMIT 5",
+        "MATCH (a:P) WHERE similarity(a.e, $v) = 0.8 RETURN a LIMIT 5",
+        // Not a top-level conjunct: a row need not satisfy it.
+        "MATCH (a:P) WHERE similarity(a.e, $v) > 0.8 OR a.x = 1 RETURN a LIMIT 5",
+        "MATCH (a:P) WHERE NOT (similarity(a.e, $v) > 0.8) RETURN a LIMIT 5",
+        // Scores another node than the start node.
+        "MATCH (a:P)-[:R]->(b:Q) WHERE similarity(b.e, $v) > 0.8 RETURN a LIMIT 5",
+        // Not the first similarity leaf, the one rows are scored by.
+        "MATCH (a:P)-[:R]->(b:Q) WHERE similarity(b.e, $w) > 0.1 \
+         AND similarity(a.e, $v) > 0.8 RETURN a LIMIT 5",
+        // Ordered by something else than the score, most similar first.
+        "MATCH (a:P) WHERE similarity(a.e, $v) > 0.8 RETURN a ORDER BY similarity() ASC LIMIT 5",
+        "MATCH (a:P) WHERE similarity(a.e, $v) > 0.8 RETURN a ORDER BY a.year DESC LIMIT 5",
+    ];
+    for sql in graph_first {
+        let strategy = plan_of(sql);
+        assert!(!is_vector_first(&strategy), "{sql}: {strategy:?}");
+    }
+    // Several patterns.
+    let mut several = make_match_clause(true, Some(10));
+    several.patterns.push(several.patterns[0].clone());
+    let strategy = MatchQueryPlanner::plan(&several, &default_stats());
+    assert!(!is_vector_first(&strategy), "two patterns: {strategy:?}");
+
+    let vector_first = [
+        "MATCH (a:P) WHERE similarity(a.e, $v) >= 0.8 RETURN a LIMIT 5",
+        "MATCH (a:P) WHERE a.x = 1 AND (similarity(a.e, $v) > 0.8) RETURN a LIMIT 5",
+        "MATCH (a:P)-[:R]->(b:Q) WHERE similarity(a.e, $v) > 0.8 \
+         RETURN a ORDER BY similarity() DESC LIMIT 5",
+    ];
+    for sql in vector_first {
+        let strategy = plan_of(sql);
+        assert!(is_vector_first(&strategy), "{sql}: {strategy:?}");
+    }
 }
 
 /// A similarity on a non-start alias over a large, dense graph plans

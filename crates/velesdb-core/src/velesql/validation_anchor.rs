@@ -14,6 +14,11 @@
 //! - **G3**: the anchor node must not carry a `@collection` override (its
 //!   rows would come from another collection, not the FROM rows).
 //!
+//! Whatever the binding, no node of a predicate may carry a `@collection`
+//! annotation: a predicate tests the FROM collection's own graph, and the
+//! annotated properties a standalone `MATCH` reads are not read there, so the
+//! annotation is refused rather than ignored.
+//!
 //! The runtime mirror (`resolve_anchor_alias` in `execution_paths.rs`)
 //! enforces G1/G3 only; G2 needs the whole WHERE tree and is validation-only.
 
@@ -109,10 +114,31 @@ fn check_graph_match_anchor(
         ));
     };
     // Explicit anchor — or a bare FROM, where any anchor is accepted.
-    if from_aliases.is_empty() || from_aliases.iter().any(|a| a == anchor) {
-        return Ok(());
+    if !from_aliases.is_empty() && from_aliases.iter().all(|a| a != anchor) {
+        check_implicit_anchor(predicate, anchor, from_aliases, shared_aliases)?;
     }
-    check_implicit_anchor(predicate, anchor, from_aliases, shared_aliases)
+    check_no_annotation(predicate)
+}
+
+/// No node of a predicate carries a `@collection` annotation (see the module
+/// docs).
+fn check_no_annotation(predicate: &GraphMatchPredicate) -> Result<(), ValidationError> {
+    let annotated = predicate.pattern.nodes.iter().find_map(|node| {
+        node.collection
+            .as_deref()
+            .map(|c| (node.alias.as_deref(), c))
+    });
+    match annotated {
+        None => Ok(()),
+        Some((alias, collection)) => Err(v011(
+            format!("MATCH ({}@{collection})", alias.unwrap_or("")),
+            format!(
+                "a MATCH predicate in SELECT WHERE tests the FROM collection's own \
+                 graph and cannot read @{collection}; use a standalone MATCH \
+                 statement to read an annotated collection's properties"
+            ),
+        )),
+    }
 }
 
 /// G1/G2/G3 guards for an anchor alias that is not declared in FROM/JOIN

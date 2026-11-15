@@ -219,7 +219,8 @@ impl Collection {
         memo: &super::PayloadMemo<'_>,
         projected: &mut HashMap<String, serde_json::Value>,
     ) {
-        if let Some(map) = memo.get(node_id).as_deref().and_then(|p| p.as_object()) {
+        let payload = memo.get_bound(Some(alias), node_id);
+        if let Some(map) = payload.as_deref().and_then(|p| p.as_object()) {
             for (key, value) in map.iter().filter(|(key, _)| key.as_str() != "id") {
                 projected.insert(format!("{alias}.{key}"), value.clone());
             }
@@ -239,7 +240,7 @@ impl Collection {
         let Some(&node_id) = bindings.get(alias) else {
             return;
         };
-        let payload = memo.get(node_id);
+        let payload = memo.get_bound(Some(alias), node_id);
         let value = super::where_eval::element_property(node_id, property, |path| {
             Self::get_nested_property(payload.as_deref()?.as_object()?, path)
         });
@@ -305,7 +306,6 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error on dimension mismatch or underlying storage errors.
-    #[allow(clippy::too_many_lines)]
     pub fn execute_match_with_similarity(
         &self,
         match_clause: &crate::velesql::MatchClause,
@@ -313,10 +313,34 @@ impl Collection {
         similarity_threshold: f32,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
+        self.execute_match_with_similarity_reading(
+            match_clause,
+            query_vector,
+            similarity_threshold,
+            params,
+            &super::MatchSources::default(),
+        )
+    }
+
+    /// [`Self::execute_match_with_similarity`] whose `@collection`-annotated
+    /// nodes read `sources` too: the database's entry point for REST
+    /// `/match` with a query vector.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::execute_match_with_similarity`].
+    pub(crate) fn execute_match_with_similarity_reading(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        query_vector: &[f32],
+        similarity_threshold: f32,
+        params: &HashMap<String, serde_json::Value>,
+        sources: &super::MatchSources,
+    ) -> Result<Vec<MatchResult>> {
         super::super::match_dispatch::validate_match_clause(match_clause)?;
         // Raw traversal results (no ORDER BY/LIMIT yet): the similarity score is
         // computed below, then the shared finalize step applies ORDER BY + LIMIT.
-        let results = self.execute_match_with_context(match_clause, params, None)?;
+        let results = self.execute_match_reading(match_clause, params, None, sources)?;
 
         if results.is_empty() {
             return Ok(results);
@@ -329,17 +353,16 @@ impl Collection {
 
         validate_dimension_match(expected_dimension, query_vector.len())?;
 
-        // Hoist both storage locks once for the entire scoring loop.
-        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
-        // reversed here. See tests/tokio_blocking_lock_contention_repro.rs.
-        let vector_storage = self.storage.vector_storage.read();
-        let payload_guard = self.storage.payload_storage.read();
-        let memo = super::PayloadMemo::new(&payload_guard);
+        // Hoist every storage lock once for the entire scoring loop, in the
+        // cross-collection order (vector_storage(2) before payload_storage(3)
+        // within a collection — see tests/tokio_blocking_lock_contention_repro.rs).
+        let reads = super::MatchReads::acquire(self, sources);
+        let memo = super::PayloadMemo::with_annotations(&reads.payload, reads.annotations());
         let higher_is_better = metric.higher_is_better();
 
         let mut scored_results = self.score_match_results(
             results,
-            &vector_storage,
+            &reads.vector,
             &memo,
             match_clause,
             query_vector,
@@ -349,21 +372,21 @@ impl Collection {
             higher_is_better,
         )?;
 
-        // Release both guards BEFORE ordering: the ORDER BY paths
+        // Release every guard BEFORE ordering: the ORDER BY paths
         // (`order_by.rs`) acquire `config`, `vector_storage` and
         // `payload_storage` themselves, so keeping these guards alive across
         // `apply_match_order_by` would re-acquire locks this thread already
         // holds — a deadlock as soon as one writer queues (parking_lot
         // task-fair semantics) — and take `config` (rank 1) under ranks 2/3.
-        drop(vector_storage);
-        drop(payload_guard);
+        drop(memo);
+        drop(reads);
 
         Self::sort_by_score(&mut scored_results, higher_is_better);
 
         // A RETURN ORDER BY (when present) overrides the implicit score sort;
         // then apply the shared post-sort LIMIT so this vector branch matches
         // the SQL `/query` pipeline instead of returning score-ordered results.
-        self.apply_match_order_by(&mut scored_results, match_clause, params)?;
+        self.apply_match_order_by(&mut scored_results, match_clause, params, sources)?;
         if let Some(limit) = super::super::match_dispatch::match_return_limit(match_clause) {
             scored_results.truncate(limit);
         }
@@ -452,11 +475,14 @@ impl Collection {
     /// Returns [`crate::error::Error::GraphNotSupported`] (VELES-018) when the
     /// expression is not a valid `alias.property` path, so an unsupported
     /// clause is reported instead of leaving the results unordered.
+    // The guards back the memo the whole sort reads through.
+    #[expect(clippy::significant_drop_tightening)]
     pub(super) fn order_match_results_by_property(
         &self,
         results: &mut [MatchResult],
         order_by: &str,
         descending: bool,
+        sources: &super::MatchSources,
     ) -> Result<()> {
         let Some((alias, property)) = parse_property_path(order_by) else {
             return Err(crate::error::Error::GraphNotSupported(format!(
@@ -464,13 +490,17 @@ impl Collection {
                  (use similarity(), depth, or alias.property)"
             )));
         };
-        let payload_storage = self.storage.payload_storage.read();
+        // The annotated alias sorts on the properties WHERE and RETURN read,
+        // through the same memo — which also reads each node once per query
+        // instead of once per comparison.
+        let reads = super::MatchReads::acquire(self, sources);
+        let memo = super::PayloadMemo::with_annotations(&reads.payload, reads.annotations());
         results.sort_by(|a, b| {
             let get_value = |r: &MatchResult| -> Option<serde_json::Value> {
                 let node_id = *r.bindings.get(alias)?;
-                let payload = payload_storage.retrieve(node_id).ok().flatten();
+                let payload = memo.get_bound(Some(alias), node_id);
                 super::where_eval::element_property(node_id, property, |path| {
-                    Self::get_nested_property(payload.as_ref()?.as_object()?, path)
+                    Self::get_nested_property(payload.as_deref()?.as_object()?, path)
                 })
                 .map(std::borrow::Cow::into_owned)
             };

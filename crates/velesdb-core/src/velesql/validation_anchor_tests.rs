@@ -118,6 +118,24 @@ fn test_g2_disjoint_aliases_across_predicates_accepted() {
 // G3: a @collection override on the anchor cannot bind to the FROM rows
 // =============================================================================
 
+/// A predicate tests the FROM collection's own graph, so an annotation on any
+/// of its nodes — explicit anchor or not — is refused instead of ignored.
+#[test]
+fn test_an_annotation_anywhere_in_a_predicate_is_rejected() {
+    for sql in [
+        "SELECT * FROM a AS x WHERE MATCH (x)-[:R]->(y@other) LIMIT 10",
+        "SELECT * FROM a AS x WHERE MATCH (x@other)-[:R]->(y) LIMIT 10",
+        "SELECT * FROM a WHERE MATCH (p)-[:R]->(:Q@other) LIMIT 10",
+    ] {
+        let err = validate(sql).expect_err("annotated predicate must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("V011") && msg.contains("@other"),
+            "{sql}: {msg}"
+        );
+    }
+}
+
 #[test]
 fn test_g3_collection_override_on_anchor_rejected() {
     let err = validate("SELECT * FROM a AS x WHERE MATCH (p@other)-[:R]->(y) LIMIT 10")

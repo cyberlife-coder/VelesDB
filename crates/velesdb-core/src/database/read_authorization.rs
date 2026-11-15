@@ -293,13 +293,24 @@ impl Database {
         target: Option<&str>,
         decisions: &GateDecisions,
     ) -> Result<()> {
+        self.authorize_match_clause(target, query.match_clause.as_ref(), decisions)
+    }
+
+    /// The MATCH gate itself, for a statement or a bare clause (REST
+    /// `/match`, see `match_query`): the target, then every `@collection`
+    /// a node names, each allowed unscoped.
+    pub(super) fn authorize_match_clause(
+        &self,
+        target: Option<&str>,
+        clause: Option<&crate::velesql::MatchClause>,
+        decisions: &GateDecisions,
+    ) -> Result<()> {
         let graph = QueryOperationKind::GraphTraversal;
         if let Some(name) = target {
             self.require_unscoped(name, graph, "MATCH queries", decisions)?;
         }
-        let annotated = query
-            .match_clause
-            .iter()
+        let annotated = clause
+            .into_iter()
             .flat_map(|clause| clause.patterns.iter())
             .flat_map(|pattern| pattern.nodes.iter())
             .filter_map(|node| node.collection.as_deref());

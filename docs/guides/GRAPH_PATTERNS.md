@@ -137,7 +137,7 @@ MATCH only sees edges in the current collection's edge store. If edges were crea
 
 ### 3. Expecting cross-collection traversal
 
-MATCH traversal is scoped to the primary collection. `@collection` annotations can enrich bound node payloads from another collection after traversal, but they do not make edges span multiple graph stores. **Fix**: keep edges in the primary graph collection, then use `alias@collection` for payload enrichment when needed.
+MATCH traversal is scoped to the primary collection. `@collection` annotations give a bound node the properties of another collection's point with the same id, but they do not make edges span multiple graph stores. **Fix**: keep edges in the primary graph collection, then use `alias@collection` to read properties stored elsewhere.
 
 ### 4. Label mismatch (case-sensitive)
 
@@ -152,7 +152,7 @@ Labels are case-sensitive. `"Product"` and `"product"` are different labels. Ens
 | **Scope** | Single collection | Single `GraphCollection` |
 | **Query style** | Declarative (SQL-like) | Imperative (method calls) |
 | **Vector + graph fusion** | Built-in (`similarity()` in WHERE) | Manual (search + traverse separately) |
-| **Cross-collection** | Payload enrichment via `@collection` | Possible via application code |
+| **Cross-collection** | Node properties from another collection via `@collection` | Possible via application code |
 
 **Use MATCH when**: you need graph patterns combined with vector similarity or metadata filtering in a single query within one collection.
 
@@ -208,7 +208,7 @@ let results = try graphStore.bfsTraverseParallel(sourceIds: [1, 5, 10], maxDepth
 ## Cross-Collection MATCH (`@collection`)
 
 By default, MATCH operates within a single collection. The `@collection` annotation
-lets you enrich results with data from other collections.
+gives a node the properties stored for it in another collection.
 
 ### Syntax
 
@@ -219,14 +219,14 @@ LIMIT 20
 ```
 
 - `p:Product` — resolved from the primary collection (the one with edges)
-- `w:Warehouse@inventory` — after traversal, node `w`'s payload is looked up from the `inventory` collection
+- `w:Warehouse@inventory` — a node of the primary collection whose properties also include those of the `inventory` point with the same id
 
 ### How it works
 
 1. The MATCH query executes on the primary collection (specified via `_collection` param or `\use` in REPL)
 2. Graph traversal follows edges in that collection
-3. After traversal, for each node annotated with `@collection`, the engine looks up the node's payload from the named collection
-4. Enriched fields are merged into the result, prefixed with the node alias
+3. Each annotated node's properties are the union of its own payload and its annotated point's, the node's own fields winning a collision; labels stay the graph's
+4. WHERE, ORDER BY, RETURN and inline pattern properties (`(w:Warehouse@inventory {stock: 0})`) read that union during the walk
 
 ### Example: E-commerce catalog
 
@@ -257,9 +257,9 @@ curl -X POST http://localhost:8080/query \
 ### Limitations
 
 - The graph traversal (edges) always runs on the primary collection
-- `@collection` only enriches payloads — it does not change which nodes are traversed
-- If the annotated collection doesn't exist, enrichment is silently skipped
-- Cross-collection vector search (`similarity()` on an annotated node) is not yet supported
+- `@collection` adds properties — it does not change which edges are traversed or which labels a node has
+- An annotation naming no collection refuses the query
+- Cross-collection vector search (`similarity()` on an annotated node) is not yet supported: `similarity()` scores the node's vector in the primary collection
 
 ---
 
@@ -287,7 +287,7 @@ grammar and parser; queries that violate them are rejected at parse time.
   `GROUP BY`) and bare names (a pattern alias, a `RETURN` alias, an unqualified
   property) are refused at validation with `V015` rather than silently ignored.
 - **`LIMIT`**.
-- **Cross-collection payload enrichment** via `alias@collection` (see above).
+- **Cross-collection node properties** via `alias@collection` (see above).
 
 ### Not supported
 
