@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `MATCH` read gate asks about every collection the query reads.** The
+  observer (`WasmObserver::on_query_request`) was asked about the first
+  `@collection` annotation found anywhere in the pattern, or `""`. It was
+  never asked about the graph actually walked when that differed, nor about a
+  second annotated collection whose payloads were merged in, so a
+  per-collection policy could be bypassed. The gate now resolves the graph
+  with the executor's own rule, then checks each annotated collection.
 - **`MATCH` runs patterns of any fixed length**: the executor hard-coded 0-,
   1- and 2-hop shapes and rejected longer ones ("more than 2 hops"), so the
   browser build could not answer a query the native build does. A single

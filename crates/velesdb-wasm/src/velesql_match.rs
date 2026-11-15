@@ -335,30 +335,37 @@ fn matches_label(node: &WasmGraphNode, label: Option<&str>) -> bool {
     node.labels.iter().any(|x| x == l)
 }
 
-/// Resolves the graph store a MATCH runs against.
+/// The collection (graph store name) a MATCH reads.
 ///
 /// In order: the first node's `@collection` annotation (it names the node's
 /// collection explicitly), then the `_collection` param — how core and the
 /// server name a MATCH target, since MATCH has no `FROM` — then the default
-/// `graph` store.
+/// `graph` store. The read gate and the executor both resolve the target
+/// here, so a policy is always asked about the graph actually read.
+///
+/// # Errors
+///
+/// Returns an error when `_collection` is present but not a string.
+pub(crate) fn match_target(pattern: &GraphPattern, params: &Params) -> Result<String, String> {
+    if let Some(name) = pattern.nodes.first().and_then(|n| n.collection.clone()) {
+        return Ok(name);
+    }
+    match params.get(MATCH_TARGET_PARAM) {
+        None => Ok(DEFAULT_GRAPH.to_string()),
+        Some(serde_json::Value::String(name)) => Ok(name.clone()),
+        Some(other) => Err(format!(
+            "MATCH param '{MATCH_TARGET_PARAM}' must be a collection name (string), got {other}"
+        )),
+    }
+}
+
+/// Resolves the graph store a MATCH runs against (see [`match_target`]).
 fn inferred_graph_store(
     db: &mut DatabaseInner,
     pattern: &GraphPattern,
     params: &Params,
 ) -> Result<std::rc::Rc<std::cell::RefCell<WasmGraphStore>>, String> {
-    let annotated = pattern.nodes.first().and_then(|n| n.collection.clone());
-    let name = match annotated {
-        Some(name) => name,
-        None => match params.get(MATCH_TARGET_PARAM) {
-            None => DEFAULT_GRAPH.to_string(),
-            Some(serde_json::Value::String(name)) => name.clone(),
-            Some(other) => {
-                return Err(format!(
-                    "MATCH param '{MATCH_TARGET_PARAM}' must be a collection name (string), got {other}"
-                ));
-            }
-        },
-    };
+    let name = match_target(pattern, params)?;
     db.get_graph_store(&name)
         .ok_or_else(|| format!("Graph '{name}' is empty; no data to match"))
 }
