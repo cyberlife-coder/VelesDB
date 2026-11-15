@@ -6,7 +6,6 @@
 //! DISTINCT / ORDER BY / OFFSET / LIMIT finalize.
 
 use super::{Collection, ExtractedComponents, Result, SearchResult};
-use crate::velesql::FusionConfig;
 
 impl Collection {
     /// Dispatches a `NEAR_FUSED` query through real multi-vector fusion.
@@ -32,7 +31,7 @@ impl Collection {
             return Ok(Vec::new());
         };
         let slices: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-        let strategy = Self::fused_config_to_strategy(config);
+        let strategy = config.near_fused_strategy();
         // Residual metadata predicate (the fused leaf is dropped by
         // extract_metadata_filter) becomes the pre-fusion filter.
         let filter = extracted
@@ -43,23 +42,6 @@ impl Collection {
         let results = self.multi_query_search(&slices, limit, strategy, filter.as_ref())?;
         self.check_guardrails_and_record(ctx, results.len())?;
         self.finalize_sparse_results(stmt, params, results)
-    }
-
-    /// Maps a `NEAR_FUSED` [`FusionConfig`] (string strategy + numeric params) to
-    /// a [`FusionStrategy`](crate::fusion::FusionStrategy).
-    ///
-    /// `rrf` (default), `average`, and `maximum` map directly. `weighted` / `rsf`
-    /// take per-branch dense/sparse weights that are ill-defined for N homogeneous
-    /// query vectors, so they — and any unknown strategy — fall back to RRF
-    /// (matching the parser's default strategy).
-    fn fused_config_to_strategy(config: &FusionConfig) -> crate::fusion::FusionStrategy {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let k = config.params.get("k").map_or(60, |v| *v as u32);
-        match config.strategy.to_lowercase().as_str() {
-            "average" => crate::fusion::FusionStrategy::Average,
-            "maximum" => crate::fusion::FusionStrategy::Maximum,
-            _ => crate::fusion::FusionStrategy::RRF { k },
-        }
     }
 }
 

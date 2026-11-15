@@ -2,9 +2,6 @@
 //!
 //! Extracted from query/mod.rs for complexity reduction (EPIC-044).
 
-// Reason: Numeric casts in similarity filtering are intentional:
-// - f64->f32 for similarity thresholds: precision loss acceptable for filtering
-
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -27,6 +24,10 @@ pub(crate) struct TrackedScan {
     pub(crate) unscanned_ids: usize,
 }
 
+/// One `similarity(field, vector) <op> threshold` leaf, its query vector
+/// resolved: `(field, query vector, operator, threshold)`.
+pub(crate) type SimilarityLeaf = (String, Vec<f32>, crate::velesql::CompareOp, f64);
+
 /// Per-scan invariants for the NOT-similarity loop, hoisted once.
 struct NotSimilarityScanCtx<'a> {
     vector_storage: &'a crate::storage::MmapStorage,
@@ -40,74 +41,69 @@ struct NotSimilarityScanCtx<'a> {
 }
 
 impl Collection {
-    /// Filter search results by similarity threshold.
+    /// Keeps the candidates every `similarity()` leaf of `leaves` holds for
+    /// (an AND cascade), each paired with its score against the FIRST leaf —
+    /// the score a row carries when no NEAR ranks it.
     ///
-    /// For similarity() function queries, we need to check if results meet the threshold.
+    /// Each leaf is recomputed against its own query vector and field, never
+    /// read from the candidates' NEAR scores (BUG-2): `similarity(vector, $v)`
+    /// reads the point's own vector, `similarity(field, $v)` the payload's
+    /// named vector. A candidate a leaf cannot score — no such named vector,
+    /// another dimension — is excluded rather than given a fabricated score
+    /// (a fake 0.0 used to read as a perfect match for distance metrics).
     ///
-    /// **BUG-2 FIX:** Recomputes similarity using `query_vec`, not the cached NEAR scores.
-    /// This is critical when NEAR and similarity() use different vectors.
-    ///
-    /// **Metric-aware semantics:**
-    /// - For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar
-    ///   - `similarity() > 0.8` keeps results with score > 0.8
-    /// - For distance metrics (Euclidean, Hamming): lower score = more similar
-    ///   - `similarity() > 0.8` is interpreted as "more similar than threshold"
-    ///   - which means distance < 0.8 (comparison inverted)
-    #[allow(clippy::too_many_arguments)]
+    /// The comparison is metric-aware ([`crate::velesql::similarity_holds`]):
+    /// under a distance metric `similarity() > t` keeps the candidates
+    /// closer than `t`.
     pub(crate) fn filter_by_similarity(
         &self,
         candidates: Vec<SearchResult>,
-        field: &str,
-        query_vec: &[f32],
-        op: crate::velesql::CompareOp,
-        threshold: f64,
+        leaves: &[SimilarityLeaf],
         limit: usize,
-    ) -> Vec<SearchResult> {
-        let config = self.storage.config.read();
-        let higher_is_better = config.metric.higher_is_better();
-        drop(config);
-
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        // Reason: threshold is a user-provided f64 similarity score in [0.0, 1.0] range;
-        // precision loss and truncation to f32 are acceptable for comparison purposes.
-        let threshold_f32 = threshold as f32;
-
+    ) -> Vec<(SearchResult, f32)> {
+        let higher_is_better = self.storage.config.read().metric.higher_is_better();
         candidates
             .into_iter()
-            .filter_map(|mut r| {
-                // Multi-vector support (P1-A): use named payload vector if field != "vector".
-                let candidate_vec: std::borrow::Cow<[f32]> = if field == "vector" {
-                    std::borrow::Cow::Borrowed(&r.point.vector)
-                } else {
-                    match self.get_vector_for_field(r.point.id, field) {
-                        Ok(Some(v)) => std::borrow::Cow::Owned(v),
-                        Ok(None) => return None,
-                        Err(e) => {
-                            tracing::warn!(
-                                point_id = r.point.id, field = field, error = %e,
-                                "filter_by_similarity: failed to retrieve named vector field; point skipped"
-                            );
-                            return None;
-                        }
-                    }
-                };
-
-                // BUG-2 FIX: Recompute similarity using the similarity() vector, not NEAR scores.
-                // A length mismatch can't be scored; exclude rather than fabricate a score
-                // (a fake 0.0 used to read as a perfect match for distance metrics).
-                let score = self.compute_metric_score(&candidate_vec, query_vec)?;
-                let passes = Self::compare_similarity(score, threshold_f32, op, higher_is_better);
-
-                if passes {
-                    // EPIC-044 US-001: Update score to reflect THIS similarity filter's score.
-                    r.score = score;
-                    Some(r)
-                } else {
-                    None
+            .filter_map(|r| {
+                let mut scores = leaves
+                    .iter()
+                    .map(|leaf| self.score_if_holds(&r, leaf, higher_is_better));
+                let first = scores.next()??;
+                if scores.any(|score| score.is_none()) {
+                    return None;
                 }
+                Some((r, first))
             })
             .take(limit)
             .collect()
+    }
+
+    /// The score of candidate `r` against `leaf` when the leaf holds for it;
+    /// `None` when it does not, or cannot be scored.
+    fn score_if_holds(
+        &self,
+        r: &SearchResult,
+        (field, query_vec, op, threshold): &SimilarityLeaf,
+        higher_is_better: bool,
+    ) -> Option<f32> {
+        let candidate_vec: std::borrow::Cow<[f32]> = if field
+            == crate::velesql::PRIMARY_VECTOR_FIELD
+        {
+            std::borrow::Cow::Borrowed(&r.point.vector)
+        } else {
+            match self.get_vector_for_field(r.point.id, field) {
+                Ok(vector) => std::borrow::Cow::Owned(vector?),
+                Err(e) => {
+                    tracing::warn!(
+                        point_id = r.point.id, field = field, error = %e,
+                        "filter_by_similarity: failed to retrieve named vector field; point skipped"
+                    );
+                    return None;
+                }
+            }
+        };
+        let score = self.compute_metric_score(&candidate_vec, query_vec)?;
+        crate::velesql::similarity_holds(*op, score, *threshold, higher_is_better).then_some(score)
     }
 
     /// EPIC-044 US-003: Execute a `NOT similarity()` query via full scan.
@@ -271,19 +267,6 @@ impl Collection {
             },
             score,
         )))
-    }
-
-    /// Compares a similarity score against a threshold using the given operator.
-    ///
-    /// Delegates to [`Self::compare_score`] in `where_eval.rs` for the shared
-    /// metric-aware comparison logic.
-    fn compare_similarity(
-        score: f32,
-        threshold: f32,
-        op: crate::velesql::CompareOp,
-        higher_is_better: bool,
-    ) -> bool {
-        Self::compare_score(score, threshold, op, higher_is_better)
     }
 
     /// Retrieves a vector for a given field, logging warnings on failure.
@@ -520,7 +503,7 @@ impl Collection {
                         payload,
                         sparse_vectors: None,
                     },
-                    1.0,
+                    crate::velesql::METADATA_MATCH_SCORE,
                 ));
             }
             if results.len() >= limit {

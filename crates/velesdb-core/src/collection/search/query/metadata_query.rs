@@ -113,7 +113,10 @@ impl Collection {
                 // `matches_point` only borrows the payload; a missing payload
                 // is treated as `Null` (unchanged semantics).
                 if filter.matches_point(point.id, point.payload.as_ref()) {
-                    results.push(SearchResult::new(point, 1.0));
+                    results.push(SearchResult::new(
+                        point,
+                        crate::velesql::METADATA_MATCH_SCORE,
+                    ));
                     if results.len() >= execution_limit {
                         break 'chunks;
                     }

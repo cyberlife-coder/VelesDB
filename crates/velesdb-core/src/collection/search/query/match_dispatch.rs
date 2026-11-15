@@ -207,17 +207,8 @@ impl Collection {
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         match strategy {
             crate::velesql::match_planner::MatchExecutionStrategy::VectorFirst {
-                top_k,
-                threshold,
-                ..
-            } => self.execute_match_vector_first(
-                match_clause,
-                params,
-                ctx,
-                *top_k,
-                *threshold,
-                sources,
-            ),
+                top_k, ..
+            } => self.execute_match_vector_first(match_clause, params, ctx, *top_k, sources),
             crate::velesql::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {
                 self.execute_match_reading(match_clause, params, Some(ctx), sources)
             }

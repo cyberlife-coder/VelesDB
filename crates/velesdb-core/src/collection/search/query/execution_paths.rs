@@ -164,30 +164,6 @@ impl Collection {
             .collect()
     }
 
-    /// Applies all similarity cascade filters sequentially.
-    fn apply_similarity_cascade(
-        &self,
-        candidates: Vec<SearchResult>,
-        first_similarity: &(String, Vec<f32>, crate::velesql::CompareOp, f64),
-        similarity_conditions: &[(String, Vec<f32>, crate::velesql::CompareOp, f64)],
-        filter_k: usize,
-    ) -> Vec<SearchResult> {
-        let (field, vec, op, threshold) = first_similarity;
-        let mut filtered =
-            self.filter_by_similarity(candidates, field, vec, *op, *threshold, filter_k);
-        for (sim_field, sim_vec, sim_op, sim_threshold) in similarity_conditions.iter().skip(1) {
-            filtered = self.filter_by_similarity(
-                filtered,
-                sim_field,
-                sim_vec,
-                *sim_op,
-                *sim_threshold,
-                filter_k,
-            );
-        }
-        filtered
-    }
-
     /// Handles the `(NEAR vector, no similarity(), optional metadata filter)` path.
     #[allow(clippy::too_many_arguments)] // All arguments come from dispatch_vector_query.
     fn dispatch_near_with_filter(
@@ -652,12 +628,22 @@ impl Collection {
             .min(MAX_LIMIT);
         let search_vec = search_vector.unwrap_or(&sim.1);
         let candidates = self.search_with_opts(search_vec, k, search_opts)?;
-        let filtered = self.apply_similarity_cascade(
+        let passing = self.filter_by_similarity(
             candidates,
-            sim,
             similarity_conditions,
             execution_limit.saturating_mul(2),
         );
+        // A NEAR ranks the rows and gives their score; without one, the first
+        // similarity() leaf does.
+        let filtered = passing
+            .into_iter()
+            .map(|(mut r, similarity)| {
+                if search_vector.is_none() {
+                    r.score = similarity;
+                }
+                r
+            })
+            .collect();
         Ok(Self::apply_optional_metadata_filter(
             filtered,
             filter_cond,

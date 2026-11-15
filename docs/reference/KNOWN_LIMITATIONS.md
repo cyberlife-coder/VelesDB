@@ -518,8 +518,9 @@ silently relied upon:
   delete by id.
 - **D008** — `UPDATE ... SET vector = ...` works on core; WASM refuses it and
   points to `UPSERT`. The fixture's `dml_cases` assign payload fields only.
-- **D009** — a row no vector ranked scores 1.0 on core and 0.0 on WASM; only
-  the vector cases assert scores.
+- ~~D009~~ — **fixed 2026-11-15**: a row no vector ranked scores
+  `velesql::METADATA_MATCH_SCORE` (1.0) on both engines. Locked by
+  `near_cases` N023.
 - ~~D010~~ — **fixed 2026-10-29**: the WASM executor now runs core's
   `QueryValidator`, so it refuses `USING FUSION` over a single `NEAR` and
   `NEAR_FUSED` with `weighted`/`rsf` (V012) instead of answering them. Locked

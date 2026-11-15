@@ -110,7 +110,7 @@ impl Collection {
                 .into_iter()
                 .skip(order_offset(stmt))
                 .take(limit)
-                .map(|point| SearchResult::new(point, 1.0))
+                .map(|point| SearchResult::new(point, crate::velesql::METADATA_MATCH_SCORE))
                 .collect(),
         )
     }
@@ -187,7 +187,7 @@ impl Collection {
             .get(&ids)
             .into_iter()
             .flatten()
-            .map(|point| SearchResult::new(point, 1.0))
+            .map(|point| SearchResult::new(point, crate::velesql::METADATA_MATCH_SCORE))
             .collect();
         if hydrated.len() != ids.len() {
             return None;
@@ -229,7 +229,10 @@ impl Collection {
                     skipped += 1;
                     continue;
                 }
-                out.push(SearchResult::new(point, 1.0));
+                out.push(SearchResult::new(
+                    point,
+                    crate::velesql::METADATA_MATCH_SCORE,
+                ));
                 if out.len() >= limit {
                     return out;
                 }

@@ -344,7 +344,7 @@ struct BatchAnswers {
 /// `WIDE_K` and `MULTI_K` are not the `K` of the other tests: each entry point
 /// overfetches by a `k`-dependent factor, and at `K` the final top-k agrees
 /// for `LOW_EF` and `HIGH_EF` even where the wider candidate pools differ.
-/// `Collection::overfetch_factor` is tiered (x20 up to 10, x10 up to 50, x5 up
+/// `velesdb_core::fusion::branch_depth` is tiered (x20 up to 10, x10 up to 50, x5 up
 /// to 100, x2 beyond), so a larger `k` does not always mean a wider window:
 /// 101 gives 202 where 50 gives 500, which is why `multi_query_search` uses
 /// `MULTI_K`. Both values were chosen by measurement, not derivation.

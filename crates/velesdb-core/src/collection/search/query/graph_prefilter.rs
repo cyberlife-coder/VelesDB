@@ -254,7 +254,10 @@ impl Collection {
                     None,
                 )?;
                 if passes {
-                    results.push(SearchResult::new(point, 1.0));
+                    results.push(SearchResult::new(
+                        point,
+                        crate::velesql::METADATA_MATCH_SCORE,
+                    ));
                 }
             }
         }

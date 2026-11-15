@@ -213,12 +213,25 @@ impl Collection {
         filter: Option<&crate::filter::Filter>,
     ) -> Result<Vec<SearchResult>> {
         let metric = self.validate_multi_query_inputs(vectors)?;
-        let overfetch_k = Self::overfetch_factor(top_k);
+        let depth = crate::fusion::branch_depth(top_k);
 
-        let restriction = PendingRestriction::NONE.post_filtered_if(filter.is_some());
-        let batch_results =
-            self.search_batch_merging_pending(vectors, overfetch_k, metric, restriction)?;
-        let filtered = self.apply_pre_fusion_filter(batch_results, filter);
+        // Each branch holds the `depth` best points that pass the filter:
+        // `search_with_filter` oversamples by the filter's selectivity and
+        // prefilters through the secondary indexes. Cutting each branch to
+        // its `depth` nearest points first and filtering after would leave a
+        // selective filter almost nothing to fuse.
+        let filtered = match filter {
+            None => {
+                self.search_batch_merging_pending(vectors, depth, metric, PendingRestriction::NONE)?
+            }
+            Some(filter) => vectors
+                .iter()
+                .map(|vector| {
+                    self.search_with_filter(vector, depth, filter)
+                        .map(|results| results.into_iter().map(|r| (r.point.id, r.score)).collect())
+                })
+                .collect::<Result<_>>()?,
+        };
 
         // Every branch carries this collection's metric scores, so score-level
         // strategies must honor the metric's polarity (#2102).
@@ -232,7 +245,7 @@ impl Collection {
 
     /// Validates inputs for `multi_query_search` and returns the distance metric.
     fn validate_multi_query_inputs(&self, vectors: &[&[f32]]) -> Result<crate::DistanceMetric> {
-        const MAX_VECTORS: usize = 10;
+        const MAX_VECTORS: usize = crate::fusion::MAX_FUSED_VECTORS;
 
         if vectors.is_empty() {
             return Err(Error::Config(
@@ -256,16 +269,6 @@ impl Collection {
         }
 
         Ok(metric)
-    }
-
-    /// Calculates the overfetch factor for better fusion quality.
-    fn overfetch_factor(top_k: usize) -> usize {
-        match top_k {
-            0..=10 => top_k * 20,
-            11..=50 => top_k * 10,
-            51..=100 => top_k * 5,
-            _ => top_k * 2,
-        }
     }
 
     /// Runs the batch index search and merges, per query, the points not yet
@@ -339,30 +342,6 @@ impl Collection {
             .collect())
     }
 
-    /// Applies metadata filter to batch results before fusion.
-    fn apply_pre_fusion_filter(
-        &self,
-        batch_results: Vec<Vec<(u64, f32)>>,
-        filter: Option<&crate::filter::Filter>,
-    ) -> Vec<Vec<(u64, f32)>> {
-        let Some(f) = filter else {
-            return batch_results;
-        };
-        let payload_storage = self.storage.payload_storage.read();
-        batch_results
-            .into_iter()
-            .map(|query_results| {
-                query_results
-                    .into_iter()
-                    .filter(|(id, _score)| {
-                        let payload = payload_storage.retrieve(*id).ok().flatten();
-                        f.matches_point(*id, payload.as_ref())
-                    })
-                    .collect()
-            })
-            .collect()
-    }
-
     /// Fetches full point data for the top-k fused results.
     fn hydrate_fused_results(&self, fused: &[(u64, f32)], top_k: usize) -> Vec<SearchResult> {
         let vector_storage = self.storage.vector_storage.read();
@@ -377,7 +356,7 @@ impl Collection {
     /// vector and payload data. Use when you only need document IDs.
     ///
     /// Reuses [`validate_multi_query_inputs`](Self::validate_multi_query_inputs),
-    /// [`overfetch_factor`](Self::overfetch_factor), and
+    /// [`crate::fusion::branch_depth`], and
     /// [`search_batch_merging_pending`](Self::search_batch_merging_pending) to eliminate
     /// duplication with `multi_query_search`.
     ///
@@ -402,11 +381,9 @@ impl Collection {
         fusion: crate::fusion::FusionStrategy,
     ) -> Result<Vec<(u64, f32)>> {
         let metric = self.validate_multi_query_inputs(vectors)?;
-        let overfetch_k = Self::overfetch_factor(top_k);
-
         let batch_results = self.search_batch_merging_pending(
             vectors,
-            overfetch_k,
+            crate::fusion::branch_depth(top_k),
             metric,
             PendingRestriction::NONE,
         )?;

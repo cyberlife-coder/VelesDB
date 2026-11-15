@@ -956,10 +956,33 @@ similarity(field, vector_expr) <operator> threshold
 
 | Parameter | Description |
 |-----------|-------------|
-| `field` | The vector field name (e.g., `vector`, `embedding`) |
+| `field` | `vector` for the point's own vector, or the payload field holding a named vector (e.g. `embedding`) |
 | `vector_expr` | A parameter (`$v`) or literal vector (`[0.1, 0.2, ...]`) |
-| `operator` | Comparison: `>`, `>=`, `<`, `<=`, `=` |
-| `threshold` | Similarity score (0.0 to 1.0 for cosine/dot) |
+| `operator` | Comparison: `>`, `>=`, `<`, `<=`, `=`, `!=` |
+| `threshold` | The metric's score: a similarity (cosine, dot) or a distance (euclidean, hamming) |
+
+#### Semantics
+
+One definition serves every engine (`velesql::similarity_holds`, core and
+WASM):
+
+- **Direction.** `>` means *more similar than*. Under a distance metric that
+  is *closer than*: `similarity(vector, $v) > 1.5` keeps the points at a
+  distance below 1.5.
+- **Equality** `=` / `!=` allows a tolerance of `0.001`
+  (`velesql::SIMILARITY_EQ_TOLERANCE`); scores compare in `f64`.
+- **Named vectors.** `similarity(embedding, $v)` scores the numeric array the
+  payload holds under `embedding`. A point with no such array, or one of
+  another dimension, cannot be scored: the predicate is UNKNOWN for it (see
+  three-valued logic above), so neither `similarity(...) > t` nor its `NOT`
+  keeps it.
+- **Several thresholds.** Under `AND` each `similarity()` filters with its
+  own field and query vector. Several under one `OR` are refused (V001): that
+  would be a union of vector searches.
+- **Score.** Without a `NEAR`, a row carries its similarity to the first
+  `similarity()` of the `WHERE`, and rows come back most similar first. With a
+  `NEAR`, the `NEAR` ranks the rows and gives their score; the threshold only
+  filters.
 
 #### Examples
 
