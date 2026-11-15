@@ -557,7 +557,8 @@ transparently. Results are identical in both paths.
 
 ### BETWEEN
 
-Test if a value falls within a range (inclusive):
+Test if a value falls within a range (inclusive). `x BETWEEN a AND b` is
+exactly `x >= a AND x <= b`, for number, string and date bounds alike:
 
 ```sql
 SELECT * FROM docs WHERE price BETWEEN 10 AND 100;
