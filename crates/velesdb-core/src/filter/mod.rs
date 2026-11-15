@@ -90,14 +90,24 @@ impl Filter {
         serde_json::from_value(value).map_err(|e| format!("Invalid filter: {e}"))
     }
 
-    /// Evaluates the filter against a point: its payload (`None` reads as
+    /// Whether the filter admits a point: its condition is known TRUE in
+    /// SQL's three-valued logic, so a comparison on a `null` or absent field
+    /// admits nothing, negated or not. The point's payload (`None` reads as
     /// `null`, the same on every path) and its id, which a `VelesQL` `id`
-    /// column reads. There is no payload-only evaluation outside the crate:
-    /// a scope or WHERE built from `VelesQL` and tested without the id could
-    /// let `id != x` match every row.
+    /// column reads, are what it tests. There is no payload-only evaluation
+    /// outside the crate: a scope or WHERE built from `VelesQL` and tested
+    /// without the id could let `id != x` match every row.
     #[must_use]
     pub fn matches_point(&self, id: u64, payload: Option<&Value>) -> bool {
         self.condition.matches_point(id, payload)
+    }
+
+    /// The filter's three-valued truth for a point: `None` is UNKNOWN. For a
+    /// caller that combines the filter with predicates of its own and must
+    /// apply their negations before folding UNKNOWN into "not admitted".
+    #[must_use]
+    pub(crate) fn evaluate_point(&self, id: u64, payload: Option<&Value>) -> Option<bool> {
+        self.condition.evaluate_point(id, payload)
     }
 
     /// Evaluates the filter against a payload alone; a `VelesQL` `id`

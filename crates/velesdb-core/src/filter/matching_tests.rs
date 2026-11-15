@@ -291,7 +291,8 @@ fn like_precompiled_matches_reference_over_batch() {
             let via_cache = like_match(text, pattern, ci);
             let expected = ref_like(text, pattern, ci);
             assert_eq!(
-                via_cache, expected,
+                via_cache,
+                Some(expected),
                 "cache path diverged from reference: pattern={pattern:?} ci={ci} text={text:?}"
             );
 
@@ -310,10 +311,10 @@ fn like_cache_switches_case_flag_for_same_pattern() {
     // Same pattern bytes, different case-sensitivity, alternated: the cache
     // key includes the case flag, so results must never bleed across.
     for _ in 0..8 {
-        assert!(!like_match("PARIS", "paris", false)); // LIKE: case matters
-        assert!(like_match("PARIS", "paris", true)); // ILIKE: case ignored
-        assert!(like_match("paris", "paris", false));
-        assert!(like_match("PaRiS", "paris", true));
+        assert_eq!(like_match("PARIS", "paris", false), Some(false)); // LIKE: case matters
+        assert_eq!(like_match("PARIS", "paris", true), Some(true)); // ILIKE: case ignored
+        assert_eq!(like_match("paris", "paris", false), Some(true));
+        assert_eq!(like_match("PaRiS", "paris", true), Some(true));
     }
 }
 

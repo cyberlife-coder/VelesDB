@@ -22,6 +22,15 @@
 //! were untranslatable; `exact` tracks this so `Not`/`Neq` complements are
 //! only ever taken over exact operands (a complemented superset would lose
 //! matches — a false negative).
+//!
+//! "Exact" is exact in two-valued logic, where a comparison on a `null` or
+//! absent field is false. The JSON filter is three-valued (that comparison
+//! is UNKNOWN, and `NOT UNKNOWN` stays UNKNOWN), and every row it admits is
+//! one the two-valued evaluation also admits: a formula known TRUE stays
+//! TRUE under any completion of its UNKNOWN leaves, false included (Kleene
+//! monotonicity). So a complement here may admit rows the filter will not —
+//! `Neq` keeps the `null` rows — which the post-filter drops: still a
+//! superset, never a false negative.
 
 use super::MirrorState;
 use crate::column_store::TypedColumn;
