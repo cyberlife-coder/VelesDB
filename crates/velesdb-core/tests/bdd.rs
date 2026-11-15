@@ -39,6 +39,8 @@ mod ddl_lifecycle;
 mod default_limit;
 #[path = "bdd/dml_enhanced.rs"]
 mod dml_enhanced;
+#[path = "bdd/edge_dml_any_collection.rs"]
+mod edge_dml_any_collection;
 #[path = "bdd/exact_numbers.rs"]
 mod exact_numbers;
 #[path = "bdd/explain_analyze.rs"]
