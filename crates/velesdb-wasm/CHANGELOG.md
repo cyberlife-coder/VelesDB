@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`velesqlContractVersion()`** returns the VelesQL contract version the
+  engine implements, which is core's `VELESQL_CONTRACT_VERSION`, the value REST
+  responses carry. A browser client can report the same `meta` without
+  copying the number.
 - **`WasmDatabase.addEdge(name, edgeJson)`, `getEdges(name, label?)`,
   `removeEdge(name, id)` and `edgeCount(name)`** behave like REST
   `/collections/{name}/graph/edges`, over the graph store a `MATCH` on that
