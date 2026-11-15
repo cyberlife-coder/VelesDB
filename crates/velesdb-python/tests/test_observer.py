@@ -6,11 +6,10 @@ fixture opens without an observer, so these tests build their own ``Database``
 with one attached.
 
 Scope note: ``collection_created`` / ``collection_deleted`` fire directly from
-the core engine, so they reach the embedded Python SDK. The ``upsert`` /
-``query`` events are emitted by callers that measure and call
-``notify_upsert`` / ``notify_query`` — in this ecosystem that is the REST
-server, whose end-to-end wiring is covered by
-``crates/velesdb-server/tests/observer_lifecycle_tests.rs``.
+the core engine, and the Python binding calls ``notify_upsert`` after direct
+data-plane upserts, so ``upsert`` reaches the embedded SDK too. The ``query``
+event fires on the VelesQL path (core-internal); the REST server's end-to-end
+wiring is covered by ``crates/velesdb-server/tests/observer_lifecycle_tests.rs``.
 """
 
 import shutil
@@ -194,3 +193,100 @@ def test_query_request_fields_carry_collection_and_operation():
         assert requests[0]["operation"] == "select"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Parity audit 2026-11: upsert events on direct writes, DDL/DML veto, strict
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_event_fires_on_direct_upsert():
+    """`Collection.upsert` (data-plane, not VelesQL) must reach the observer.
+
+    Core fires `on_upsert` internally only on the VelesQL DML path; the binding
+    calls the `notify_upsert` shim after a direct write, per the trait's
+    documented caller contract.
+    """
+    temp_dir = tempfile.mkdtemp()
+    try:
+        recorder = Recorder()
+        db = Database(temp_dir, observer=recorder)
+        col = db.create_collection("docs", dimension=DIM)
+        col.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
+        upserts = recorder.events_of("upsert")
+        assert len(upserts) == 1, f"expected one upsert event, got {upserts}"
+        assert upserts[0]["collection"] == "docs"
+        assert upserts[0]["point_count"] == 1
+        # VelesQL INSERT fires internally — exactly one event, no double count.
+        recorder.events.clear()
+        db.execute_query("INSERT INTO docs (id, vector) VALUES (2, $v)", params={"v": [0.0, 1.0, 0.0, 0.0]})
+        assert len(recorder.events_of("upsert")) == 1
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_ddl_request_veto_denies_drop():
+    """Returning ``False`` from ``ddl_request`` vetoes VelesQL DDL."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def deny_ddl(event, **fields):
+            if event == "ddl_request" and fields.get("operation", "").startswith("DROP"):
+                return "drops are forbidden"
+            return None
+
+        db = Database(temp_dir, observer=deny_ddl)
+        db.create_collection("docs", dimension=DIM)
+        with pytest.raises(Exception, match="forbidden"):
+            db.execute_query("DROP COLLECTION docs")
+        # the collection still exists
+        assert "docs" in db.list_collections()
+        # other DDL passes
+        db.execute_query("CREATE COLLECTION other (dimension=4)")
+        assert "other" in db.list_collections()
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_dml_mutation_request_veto_denies_insert():
+    """Returning ``False`` from ``dml_mutation_request`` vetoes VelesQL DML."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def deny_dml(event, **fields):
+            if event == "dml_mutation_request":
+                return False
+            return None
+
+        db = Database(temp_dir, observer=deny_dml)
+        db.create_collection("docs", dimension=DIM)
+        with pytest.raises(Exception):
+            db.execute_query("INSERT INTO docs (id, vector) VALUES (1, $v)", params={"v": [1.0, 0.0, 0.0, 0.0]})
+        col = db.get_collection("docs")
+        assert col.count() == 0
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_observer_strict_denies_on_callback_error():
+    """With ``observer_strict=True``, a raising policy callback fails closed."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def broken(event, **fields):
+            if event == "query_request":
+                raise RuntimeError("policy backend down")
+            return None
+
+        db = Database(temp_dir, observer=broken, observer_strict=True)
+        db.create_collection("docs", dimension=DIM)
+        with pytest.raises(Exception, match="strict"):
+            db.execute_query("SELECT * FROM docs")
+        # fail-open default: same broken callback allows the read
+        db2 = Database(temp_dir + "_2", observer=broken)
+        db2.create_collection("docs", dimension=DIM)
+        rows = db2.execute_query("SELECT * FROM docs")
+        assert isinstance(rows, list)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(temp_dir + "_2", ignore_errors=True)

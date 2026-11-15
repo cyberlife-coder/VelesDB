@@ -60,7 +60,8 @@ fn test_py_graph_schema_rejects_unknown_value_type() {
     props.insert("x".to_string(), "bogus".to_string());
     let err = PyGraphSchema::strict()
         .with_node_type("T", Some(props))
-        .unwrap_err();
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("unknown value type"));
 }
 

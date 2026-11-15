@@ -964,8 +964,12 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         match dml {
-            crate::velesql::DmlStatement::Insert(stmt)
-            | crate::velesql::DmlStatement::Upsert(stmt) => self.execute_insert(stmt, params),
+            crate::velesql::DmlStatement::Insert(stmt) => {
+                self.execute_insert(stmt, params, "INSERT")
+            }
+            crate::velesql::DmlStatement::Upsert(stmt) => {
+                self.execute_insert(stmt, params, "UPSERT")
+            }
             crate::velesql::DmlStatement::Update(stmt) => self.execute_update(stmt, params),
             crate::velesql::DmlStatement::InsertEdge(stmt) => self.execute_insert_edge(stmt),
             crate::velesql::DmlStatement::Delete(stmt) => self.execute_delete(stmt),

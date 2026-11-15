@@ -121,7 +121,7 @@ impl Database {
     ///
     /// Returns `Ok(())` if no observer is configured or if the observer
     /// allows the operation. Propagates the observer's error otherwise.
-    fn check_dml_mutation(&self, operation: &str, collection: &str) -> Result<()> {
+    pub(super) fn check_dml_mutation(&self, operation: &str, collection: &str) -> Result<()> {
         if let Some(ref observer) = self.observer {
             observer.on_dml_mutation_request(operation, collection)?;
         }
