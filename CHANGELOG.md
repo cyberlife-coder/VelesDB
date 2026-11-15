@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aggregations, `MATCH` and DDL/mutations are still `NOT_SUPPORTED` on WASM,
   and velesdb-wasm 8.0.0 keeps the previous behaviour.
 
+- **TypeScript SDK: graph edges and `matchQuery` on the WASM backend.** With a
+  velesdb-wasm binding that has the `WasmDatabase` edge API and
+  `executeMatch`, `addEdge`, `getEdges`, `removeEdge`, `getEdgeCount` and
+  `matchQuery` stop throwing `NOT_SUPPORTED` and return REST's shapes. The
+  edges sit in the graph store a MATCH on the collection reads, with its
+  points as nodes; an unknown collection or endpoint is `NOT_FOUND`, as on
+  REST. `matchQuery` refuses a query `vector` (the browser computes no
+  `similarity()`), and traversal stays server-only.
+
 - **`install-memory-daemon.sh` runs the shared daemon on Linux** as a
   systemd user unit (`~/.config/systemd/user/velesdb-memory.service`, logs in
   `journalctl --user -u velesdb-memory`), with the same environment and

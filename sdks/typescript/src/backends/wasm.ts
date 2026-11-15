@@ -58,6 +58,7 @@ import {
 
 // VelesQL executor over the attached stores
 import { WasmVelesQL } from './wasm-velesql';
+import type { WasmGraph } from './wasm-graph';
 
 // Search & query delegates
 import {
@@ -138,6 +139,9 @@ export class WasmBackend implements IVelesDBBackend {
   // VelesQL over the collections' stores, when the binding can share them
   // (`wasm-velesql.ts`); `null` on velesdb-wasm 8.0.0.
   private velesql: WasmVelesQL | null = null;
+  // Graph operations and matchQuery over the same database, when the binding
+  // has the edge API and executeMatch (`wasm-graph.ts`).
+  private graph: WasmGraph | null = null;
   private _initialized = false;
   // Memoized single-shot init promise. Subsequent concurrent calls to init()
   // await the same in-flight initialization instead of racing into duplicate
@@ -198,6 +202,7 @@ export class WasmBackend implements IVelesDBBackend {
       if (this._initGen !== gen) { return; }
       this.wasmModule = mod;
       this.velesql = WasmVelesQL.create(mod);
+      this.graph = this.velesql?.graph(mod, (name) => this.collections.has(name)) ?? null;
       this._initialized = true;
     } catch (error) {
       // Probed on 6.0.0: this loader rejects with a
@@ -221,6 +226,7 @@ export class WasmBackend implements IVelesDBBackend {
       freeSparse(data.sparseIds);
     }
     this.collections.clear();
+    this.graph = null;
     this.velesql?.free();
     this.velesql = null;
     this._initialized = false;
@@ -486,8 +492,8 @@ export class WasmBackend implements IVelesDBBackend {
   async listIndexes(c: string): Promise<IndexInfo[]> { this.ensureInitialized(); return wasmListIndexes(c); }
   async hasIndex(c: string, l: string, p: string): Promise<boolean> { this.ensureInitialized(); return wasmHasIndex(c, l, p); }
   async dropIndex(c: string, l: string, p: string): Promise<boolean> { this.ensureInitialized(); return wasmDropIndex(c, l, p); }
-  async addEdge(c: string, e: AddEdgeRequest): Promise<void> { this.ensureInitialized(); return wasmAddEdge(c, e); }
-  async getEdges(c: string, o?: GetEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return wasmGetEdges(c, o); }
+  async addEdge(c: string, e: AddEdgeRequest): Promise<void> { this.ensureInitialized(); return this.graph ? this.graph.addEdge(c, e) : wasmAddEdge(c, e); }
+  async getEdges(c: string, o?: GetEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return this.graph ? this.graph.getEdges(c, o) : wasmGetEdges(c, o); }
   async traverseGraph(c: string, r: TraverseRequest): Promise<TraverseResponse> { this.ensureInitialized(); return wasmTraverseGraph(c, r); }
   async traverseParallel(c: string, r: TraverseParallelRequest): Promise<TraverseResponse> { this.ensureInitialized(); return wasmTraverseParallel(c, r); }
   async getNodeDegree(c: string, n: number): Promise<DegreeResponse> { this.ensureInitialized(); return wasmGetNodeDegree(c, n); }
@@ -515,9 +521,9 @@ export class WasmBackend implements IVelesDBBackend {
   async getGuardrails(): Promise<import('../types').GuardRailsConfigResponse> { this.ensureInitialized(); return wasmGetGuardrails(); }
   async updateGuardrails(r: import('../types').GuardRailsUpdateRequest): Promise<import('../types').GuardRailsConfigResponse> { this.ensureInitialized(); return wasmUpdateGuardrails(r); }
   async aggregate(_q: string, _p?: Record<string, unknown>, _o?: import('../types').AggregateQueryOptions): Promise<import('../types').AggregateResponse> { this.ensureInitialized(); return wasmAggregate(_q, _p, _o); }
-  async matchQuery(c: string, q: string, p?: Record<string, unknown>, o?: import('../types').MatchQueryOptions): Promise<import('../types').MatchQueryResponse> { this.ensureInitialized(); return wasmMatchQuery(c, q, p, o); }
-  async removeEdge(c: string, id: number): Promise<boolean> { this.ensureInitialized(); return wasmRemoveEdge(c, id); }
-  async getEdgeCount(c: string): Promise<number> { this.ensureInitialized(); return wasmGetEdgeCount(c); }
+  async matchQuery(c: string, q: string, p?: Record<string, unknown>, o?: import('../types').MatchQueryOptions): Promise<import('../types').MatchQueryResponse> { this.ensureInitialized(); return this.graph ? this.graph.match(c, q, p, o) : wasmMatchQuery(c, q, p, o); }
+  async removeEdge(c: string, id: number): Promise<boolean> { this.ensureInitialized(); return this.graph ? this.graph.removeEdge(c, id) : wasmRemoveEdge(c, id); }
+  async getEdgeCount(c: string): Promise<number> { this.ensureInitialized(); return this.graph ? this.graph.edgeCount(c) : wasmGetEdgeCount(c); }
   async listNodes(c: string): Promise<import('../types').ListNodesResponse> { this.ensureInitialized(); return wasmListNodes(c); }
   async getNodeEdges(c: string, id: number, o?: import('../types').GetNodeEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return wasmGetNodeEdges(c, id, o); }
   async getNodePayload(c: string, id: number): Promise<import('../types').NodePayloadResponse> { this.ensureInitialized(); return wasmGetNodePayload(c, id); }

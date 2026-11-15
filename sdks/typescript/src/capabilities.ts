@@ -315,6 +315,11 @@ export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
  * read-only `SELECT`s through the binding's executor (`wasm-velesql.ts`);
  * aggregations, MATCH and DDL/mutations stay `NOT_SUPPORTED`, so full
  * VelesQL is not advertised.
+ *
+ * `graphTraversal` is `false`: a binding with the `WasmDatabase` edge API and
+ * `executeMatch` runs edge CRUD and `matchQuery` (`backends/wasm-graph.ts`),
+ * but traversal and node degree, which the flag also covers, stay
+ * server-only.
  */
 export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   vectorSearch: true,

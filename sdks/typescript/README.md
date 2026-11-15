@@ -801,6 +801,16 @@ await db.alterCollection('docs', { autoReindex: false });
 
 ### Knowledge Graph API
 
+> **WASM backend:** with a velesdb-wasm binding that has the `WasmDatabase` edge API and
+> `executeMatch`, `addEdge`, `getEdges`, `removeEdge`, `getEdgeCount` and `matchQuery` run in
+> the browser with REST's shapes. A collection's points are its nodes, labelled by their
+> `_labels` payload key, so an edge's `source` and `target` must be stored points, as on the
+> server. `matchQuery` names the collection for the MATCH and returns `{ bindings, depth,
+> projected }` rows without `score`: the browser computes no `similarity()`, so a query
+> `vector` is refused with `NOT_SUPPORTED`. Traversal (`traverseGraph`, `traverseParallel`)
+> and `getNodeDegree` stay server-only, so `capabilities().graphTraversal` is `false`. An older
+> binding refuses every graph method with `NOT_SUPPORTED`.
+
 #### `db.addEdge(collection, edge)`
 
 Add a directed edge between two nodes.

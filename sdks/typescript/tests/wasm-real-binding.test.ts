@@ -137,4 +137,34 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
       db.query('docs', 'SELECT category, COUNT(*) FROM docs GROUP BY category')
     ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
   });
+
+  it('graph: edges between stored points are listed, counted and matched with REST shapes', async () => {
+    await db.addEdge('docs', { id: 10, source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } });
+
+    expect(await db.getEdges('docs', { label: 'NEXT' })).toEqual([
+      { id: 10, source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } },
+    ]);
+    expect(await db.getEdgeCount('docs')).toBe(1);
+
+    // The collection's points are the MATCH's nodes: their payloads project.
+    const response = await db.matchQuery('docs', 'MATCH (a)-[r:NEXT]->(b) RETURN a.title, b.category, r.weight');
+    expect(response.results).toEqual([
+      {
+        bindings: { a: 1, b: 2 },
+        depth: 1,
+        projected: { 'a.title': 'hello rust', 'b.category': 'docs', 'r.weight': 0.5 },
+      },
+    ]);
+    expect(response.count).toBe(1);
+    expect(response.meta.velesqlContractVersion).toMatch(/^\d+\.\d+\.\d+$/);
+
+    expect(await db.removeEdge('docs', 10)).toBe(true);
+    expect(await db.getEdgeCount('docs')).toBe(0);
+  });
+
+  it('graph: an edge to a point that does not exist is NOT_FOUND, as on REST', async () => {
+    await expect(
+      db.addEdge('docs', { id: 11, source: 1, target: 99, label: 'NEXT' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
 });

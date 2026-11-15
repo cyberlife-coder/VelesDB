@@ -150,3 +150,13 @@ export function buildCollectionInfo(
     createdAt: data.createdAt,
   };
 }
+
+/** Serialize `params` for the executor: typed arrays become JSON arrays. */
+export function paramsJson(params: Record<string, unknown> | undefined): string | undefined {
+  if (params === undefined) { return undefined; }
+  return JSON.stringify(params, (_key, value: unknown) =>
+    ArrayBuffer.isView(value) && !(value instanceof DataView)
+      ? Array.from(value as unknown as ArrayLike<number>)
+      : value
+  );
+}
