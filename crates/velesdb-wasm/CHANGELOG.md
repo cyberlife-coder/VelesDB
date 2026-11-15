@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `graph` store, so a graph stored under any other name could not be matched
   without annotating the query. The annotation still wins; a `_collection`
   that is not a string is refused.
+
+- **`ParsedQuery.isAggregation`**: core's `is_aggregation_query`, the
+  predicate the server and the CLI route aggregations by, read from the AST.
+  A JavaScript caller can now classify a statement without scanning its
+  text, where a keyword inside a string literal, a comment or a quoted
+  identifier would be miscounted.
+
 - **`WasmDatabase.attachStore(name, store)`**: registers an existing
   `VectorStore` as a collection without copying it, so `executeQuery` and
   the store handle read and write the same points in both directions. A

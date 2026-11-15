@@ -152,6 +152,17 @@ impl ParsedQuery {
         self.inner.select.group_by.is_some()
     }
 
+    /// Whether this statement takes the aggregation path: aggregate functions
+    /// (`COUNT`, `SUM`, …) with or without `GROUP BY`, but not a vector-search
+    /// `NEAR … GROUP BY`. Core's `SelectStatement::is_aggregation_query`, the
+    /// predicate the server's `/query` handler and the CLI route by — read
+    /// from the AST, so a keyword inside a string literal or a comment does
+    /// not count.
+    #[wasm_bindgen(getter, js_name = isAggregation)]
+    pub fn is_aggregation(&self) -> bool {
+        self.inner.select.is_aggregation_query()
+    }
+
     /// Check if the query has JOINs.
     #[wasm_bindgen(getter, js_name = hasJoins)]
     pub fn has_joins(&self) -> bool {
