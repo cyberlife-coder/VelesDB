@@ -4,8 +4,8 @@
 //! payload filter, the very one the server runs: [`bind_condition`] binds its
 //! `$name` operands, [`Filter::try_from_where`] lowers it, and
 //! [`Filter::matches_point`] tests a point. A predicate therefore answers in
-//! the browser what it answers on the server — `x != 'a'` holds on a payload
-//! without `x`, LIKE honours `\` escapes and its guardrails, numbers compare
+//! the browser what it answers on the server — in SQL's three-valued logic,
+//! so `x != 'a'` excludes a payload without `x` as `x = 'a'` does, LIKE honours `\` escapes and its guardrails, numbers compare
 //! by exact value. This module only decides the WASM scope: the conditions
 //! the executor does not evaluate as a row filter are refused by name.
 //!

@@ -26,12 +26,27 @@ pub(crate) fn execute_match(
     query: &Query,
     params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
+    Ok(match_candidates_gated(db, query, params, None)?
+        .into_iter()
+        .map(|c| c.row)
+        .collect())
+}
+
+/// Runs a MATCH behind its read gate and returns the ordered, limited
+/// candidates. Both `executeQuery` and `executeMatch` read through here, so
+/// one gate covers every MATCH surface.
+pub(crate) fn match_candidates_gated(
+    db: &mut DatabaseInner,
+    query: &Query,
+    params: &Params,
+    scoring: Option<&crate::velesql_match_score::MatchScoring>,
+) -> Result<Vec<crate::velesql_match_orderby::MatchCandidate>, String> {
     // Read-path gate (audit F-5.4, #1392), asked about every collection the
     // MATCH reads. Zero-overhead without an observer.
     for collection in match_gate_collections(query, params)? {
         db.check_query_access(&collection, WasmQueryOperationKind::GraphTraversal)?;
     }
-    crate::velesql_match::execute_match(db, query, params)
+    crate::velesql_match::match_candidates(db, query, params, scoring)
 }
 
 /// Every collection a MATCH reads, for its read gate, in first-read order:
@@ -78,9 +93,13 @@ pub(crate) fn insert_node(
 
 /// Splits a user-supplied node payload into `(value_payload, labels)`.
 ///
-/// When the payload is a JSON object with a `labels` array, those strings
-/// are extracted and the remaining fields form the value payload. Any
-/// other shape is stored verbatim with no labels.
+/// When the payload is a JSON object with a `_labels` array (core's key) or
+/// a `labels` array (accepted for payloads written before), those strings
+/// become the node's labels. `_labels` also stays in the payload, as it does
+/// on a collection point and in core, so `RETURN n._labels` and `IS NULL`
+/// read it; the legacy `labels` key is dropped, `labels` being the reserved
+/// key a MATCH row writes the node's labels under. Any other shape is stored
+/// verbatim with no labels.
 fn split_node_payload_and_labels(
     payload: &serde_json::Value,
 ) -> (Option<serde_json::Value>, Vec<String>) {
@@ -90,9 +109,11 @@ fn split_node_payload_and_labels(
     let mut labels = Vec::new();
     let mut remainder = serde_json::Map::new();
     for (k, v) in obj {
-        if k == "labels" {
+        if k == "labels" || k == crate::velesql_match_nodes::LABELS_KEY {
             extend_labels_from_value(v, &mut labels);
-            continue;
+            if k == "labels" {
+                continue;
+            }
         }
         remainder.insert(k.clone(), v.clone());
     }

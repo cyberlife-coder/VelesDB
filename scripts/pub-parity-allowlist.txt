@@ -1,2 +1,8 @@
 # Deliberate public-API removals, one `path kind name` per line.
 # Regenerate the snapshot with: python3 scripts/check-pub-parity.py --write-snapshot
+# Moved to velesdb-core/src/velesql/projection_item.rs (VelesQL language,
+# needed without `persistence` by the WASM executor) and re-exported from
+# match_exec by `pub use`: the public path is unchanged, not a removal.
+crates/velesdb-core/src/collection/search/query/match_exec/mod.rs enum ProjectionItem
+crates/velesdb-core/src/collection/search/query/match_exec/mod.rs fn parse_projection_item
+crates/velesdb-core/src/collection/search/query/match_exec/mod.rs fn parse_property_path

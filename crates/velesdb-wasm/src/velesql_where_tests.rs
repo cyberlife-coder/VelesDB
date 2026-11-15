@@ -140,18 +140,19 @@ fn test_matches_missing_field_returns_false_for_comparisons() {
 
 /// GIVEN a payload without the field a negative predicate reads
 /// WHEN WASM evaluates `!=` or `NOT IN` on it
-/// THEN it matches, as core's filter and the server answer: the field is not
-///      the value, so `x != 'a'` holds (only `=`/`IN` need the field).
+/// THEN it does not match, as core's filter and the server answer: a missing
+///      field makes the predicate UNKNOWN, and WHERE admits only TRUE.
 #[test]
 fn test_negative_predicates_on_a_missing_field_match_like_core() {
     let payload = serde_json::json!({"other": "x"});
     for sql in [
         "SELECT * FROM t WHERE cat != 'tech'",
         "SELECT * FROM t WHERE cat NOT IN ('tech', 'sport')",
+        "SELECT * FROM t WHERE NOT (cat = 'tech')",
     ] {
         let c = parse_where(sql);
         assert!(
-            matches(&c, 0, Some(&payload), &empty_params()).expect("test: eval"),
+            !matches(&c, 0, Some(&payload), &empty_params()).expect("test: eval"),
             "{sql}"
         );
     }

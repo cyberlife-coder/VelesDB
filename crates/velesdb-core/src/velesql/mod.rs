@@ -96,6 +96,7 @@ mod parser_tests;
 mod planner;
 #[cfg(test)]
 mod planner_tests;
+mod projection_item;
 #[cfg(test)]
 mod projection_parser_tests;
 mod query_stats;
@@ -310,4 +311,5 @@ pub use parser::Parser;
 pub use planner::{
     Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats, SelectivityMethod,
 };
+pub use projection_item::{parse_projection_item, parse_property_path, ProjectionItem};
 pub use validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};

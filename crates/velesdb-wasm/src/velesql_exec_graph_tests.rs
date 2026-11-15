@@ -783,8 +783,8 @@ fn test_eval_in_missing_column_returns_false() {
 
 /// GIVEN Persons none of which carries `city`
 /// WHEN a MATCH WHERE applies `NOT IN` or `!=` to `a.city`
-/// THEN every Person matches, as in core's MATCH and SELECT: a missing
-///      property is not any listed value (only `=` / `IN` need it present).
+/// THEN no Person matches, as in core's MATCH and SELECT: a missing property
+///      makes the predicate UNKNOWN, and WHERE admits only TRUE.
 #[test]
 fn test_eval_negative_predicates_on_a_missing_column_match_like_core() {
     let mut db = DatabaseInner::new();
@@ -796,9 +796,10 @@ fn test_eval_negative_predicates_on_a_missing_column_match_like_core() {
     for sql in [
         "MATCH (a:Person) WHERE a.city NOT IN ('Paris','Lyon') RETURN a LIMIT 10",
         "MATCH (a:Person) WHERE a.city != 'Paris' RETURN a LIMIT 10",
+        "MATCH (a:Person) WHERE NOT (a.city = 'Paris') RETURN a LIMIT 10",
     ] {
         let r = execute(&mut db, sql, None).expect("test: negative predicate");
-        assert_eq!(r.row_count(), persons, "{sql}: {}", r.rows_json());
+        assert_eq!(r.row_count(), 0, "{sql}: {}", r.rows_json());
     }
 }
 

@@ -72,6 +72,41 @@ console.log(plan.rowsJson);
 `createMetadataCollection` exists precisely so payload-only workloads can run
 VelesQL without declaring a `vector` column.
 
+### Graph patterns: `executeMatch`
+
+A `MATCH` reads one graph: the first node's `@collection` annotation, else the
+`_collection` param, else the default `graph` (MATCH has no `FROM`). As in core,
+the points of the collection with that name are its nodes (payload as
+properties, `_labels` as labels), and its edges come from `INSERT EDGE`.
+
+`executeQuery` returns one alias-keyed object per MATCH row. `executeMatch`
+runs the same MATCH and returns a JSON string of rows in core's
+`MatchResult` shape, the rows of REST `POST /collections/{name}/match`:
+
+```javascript
+// Edges as data (like REST /graph/edges); VelesQL INSERT EDGE takes literals only.
+db.addEdge('docs', JSON.stringify({ source: 1, target: 2, label: 'CITES', properties: { weight: 0.5 } }));
+
+const rows = JSON.parse(db.executeMatch(
+  "MATCH (a)-[:CITES]->(b) RETURN b.title AS cited, b.id",
+  JSON.stringify({ _collection: 'docs' })
+));
+// [{ "bindings": { "a": 1, "b": 2 }, "depth": 1,
+//    "projected": { "cited": "world", "b.id": 2 } }]
+```
+
+`projected` follows core's RETURN rules: `alias.property` under its `AS` alias or
+its text, `alias.id` for the element id, a bare alias as every `alias.key` plus
+`alias.id`, and `*` for every bound node.
+
+The nodes' vectors score `similarity()` as in core. `WHERE similarity(b.embedding,
+$v) > 0.8` scores the node `b` binds (a bare field: the row's last node), and
+under a distance metric "more similar" means "closer". `ORDER BY similarity()`
+is most-similar-first and `RETURN similarity()` projects the score, which the
+row also carries as `score`. `executeMatch(sql, params, vector, threshold)`
+takes REST `/match`'s query vector and threshold: it scores each row's last
+node, drops rows past the threshold and orders by score.
+
 ## What runs in WASM
 
 | Feature | WASM | REST server |
@@ -146,13 +181,14 @@ reference from `@wiscale/velesdb-wasm@4.0.0`.
 | Geospatial conditions | `Geospatial conditions are not supported in WASM` |
 | Inline vectors in `INSERT` | `… inline vectors are not supported in WASM INSERT` |
 | `ORDER BY similarity(field, $v)` | `ORDER BY similarity(field, $vec) is not supported in WASM: named/secondary …` |
-| `ORDER BY` in a `MATCH` | `MATCH ORDER BY <form> is not supported in WASM (use depth or alias.property)` |
+| `ORDER BY similarity(field, $v)`, arithmetic or an aggregate in a `MATCH` | `MATCH ORDER BY <form> is not supported in WASM (use depth, alias.property or similarity())` |
 
 Two cases deserve more than a one-liner:
 
-- **Cross-collection `MATCH` (`@collection`)** — the `@` form is not even in
-  the WASM grammar; it fails at parse time (`expected identifier`), not at
-  execution. It requires Database-level query routing that only the server has.
+- **Cross-collection `MATCH` (`@collection`)** — the annotation parses (WASM
+  runs core's parser). The first node's annotation picks the graph a `MATCH`
+  reads, and any other annotated, aliased node merges in the payload of the
+  same-named vector collection. Multi-pattern `MATCH` stays server-only.
 - **`TRAIN QUANTIZER`** — recognized for API parity but unavailable: training
   needs `ndarray`/`persistence`, which are compiled out for WASM. Product
   Quantization has the same constraint (it needs `rayon`).
@@ -176,10 +212,9 @@ Both rules, and the ranking of every accepted shape, are pinned against core by
 
 WASM stores only the **primary** vector, so the named/secondary form
 `ORDER BY similarity(field, $v)` is rejected on both the `SELECT` and `MATCH`
-paths. Use `ORDER BY similarity()` (the search score itself) or a payload
-column. The `MATCH` path does no vector scoring at all, so it additionally
-rejects bare `similarity()` and arithmetic `ORDER BY` — order by `depth` or
-`alias.property` there.
+paths. Use `ORDER BY similarity()` (the search score itself, or a `MATCH` row's
+score) or a payload column. The `MATCH` path also rejects arithmetic `ORDER BY`;
+order by `depth`, `alias.property` or `similarity()` there.
 
 ## Error surface: mixed, coerce before reading
 

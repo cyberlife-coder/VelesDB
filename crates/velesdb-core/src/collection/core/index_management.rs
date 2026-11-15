@@ -382,13 +382,14 @@ impl Collection {
             crate::filter::Condition::Neq { .. } => {
                 // NEQ cannot be safely pre-filtered from this index. A `universe
                 // - eq` complement would be built from `all_ids_bitmap`, which
-                // only contains points that HAVE a primitive value for the field
-                // — but NEQ semantics also match points where the field is
-                // ABSENT (see `Condition::Neq` in filter::matching, which is true
-                // for a missing field). Those points are not in the universe, so
-                // the complement is a strict subset and a bitmap-only caller
-                // (e.g. the JOIN pre-filter) would drop them. Return `None` to
-                // force a correct full-scan + post-filter.
+                // only contains points holding a primitive value for the field
+                // — but NEQ is also TRUE where the field holds an array or an
+                // object, a value of another type than any literal (a `null` or
+                // absent field is UNKNOWN, rightly outside the universe). Those
+                // points are not in the universe, so the complement is a strict
+                // subset and a bitmap-only caller (e.g. the JOIN pre-filter)
+                // would drop them. Return `None` to force a correct full-scan +
+                // post-filter.
                 None
             }
             crate::filter::Condition::Gt { field, value }
@@ -480,8 +481,9 @@ impl Collection {
     /// `Not` conditions cannot be safely pre-filtered from this index.
     ///
     /// Like NEQ, a `universe - in` complement is built from `all_ids_bitmap`,
-    /// which omits points whose field is absent — yet `NOT IN` matches those
-    /// absent-field points. The complement would be a strict subset, so a
+    /// which omits points whose field holds an array or an object — yet
+    /// `NOT IN` is TRUE for those (a `null` or absent field is UNKNOWN, and
+    /// rightly omitted). The complement would be a strict subset, so a
     /// bitmap-only caller (e.g. the JOIN pre-filter) would drop real matches.
     /// Always return `None` to force a correct full-scan + post-filter.
     #[allow(clippy::unnecessary_wraps)] // Reason: uniform Option return for bitmap_from_condition dispatch

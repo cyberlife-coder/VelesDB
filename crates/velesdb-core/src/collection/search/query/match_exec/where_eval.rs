@@ -201,22 +201,28 @@ impl Collection {
             params,
             guards,
         };
-        self.eval_match_condition(&ctx, condition)
+        // UNKNOWN excludes the binding, exactly as SQL's `WHERE` (and the
+        // SELECT path) does: only a condition known TRUE admits it.
+        Ok(self.eval_match_condition(&ctx, condition)? == Some(true))
     }
 
-    /// Recursively evaluates a single condition node of a MATCH WHERE tree.
+    /// Recursively evaluates a single condition node of a MATCH WHERE tree,
+    /// three-valued: `None` is SQL's UNKNOWN — a comparison on a property
+    /// that is `null` or absent, or a `similarity()` that cannot be scored.
+    /// It is kept apart from `false` until the root, because `NOT false`
+    /// admits a binding and `NOT UNKNOWN` does not.
     fn eval_match_condition(
         &self,
         ctx: &MatchWhereCtx<'_>,
         condition: &crate::velesql::Condition,
-    ) -> Result<bool> {
+    ) -> Result<Option<bool>> {
         use crate::velesql::Condition;
 
         match condition {
             Condition::Comparison(cmp) => self.evaluate_comparison_condition(ctx, cmp),
             Condition::And(left, right) => self.eval_match_and(ctx, left, right),
             Condition::Or(left, right) => self.eval_match_or(ctx, left, right),
-            Condition::Not(inner) => Ok(!self.eval_match_condition(ctx, inner)?),
+            Condition::Not(inner) => Ok(self.eval_match_condition(ctx, inner)?.map(|known| !known)),
             Condition::Group(inner) => self.eval_match_condition(ctx, inner),
             Condition::Similarity(sim) => {
                 // Audit 2026-06 F2: resolve the alias prefix of the similarity
@@ -241,34 +247,45 @@ impl Collection {
             Condition::VectorSearch(_)
             | Condition::VectorFusedSearch(_)
             | Condition::SparseVectorSearch(_)
-            | Condition::GraphMatch(_) => Ok(true),
+            | Condition::GraphMatch(_) => Ok(Some(true)),
         }
     }
 
-    /// Evaluates AND with short-circuit: returns false immediately if left is false.
+    /// Kleene AND, still short-circuiting on a known-false left: `false AND
+    /// UNKNOWN` is false, while an UNKNOWN left must let the right decide.
     fn eval_match_and(
         &self,
         ctx: &MatchWhereCtx<'_>,
         left: &crate::velesql::Condition,
         right: &crate::velesql::Condition,
-    ) -> Result<bool> {
-        if !self.eval_match_condition(ctx, left)? {
-            return Ok(false);
+    ) -> Result<Option<bool>> {
+        let left = self.eval_match_condition(ctx, left)?;
+        if left == Some(false) {
+            return Ok(Some(false));
         }
-        self.eval_match_condition(ctx, right)
+        Ok(match (left, self.eval_match_condition(ctx, right)?) {
+            (_, Some(false)) => Some(false),
+            (Some(true), Some(true)) => Some(true),
+            _ => None,
+        })
     }
 
-    /// Evaluates OR with short-circuit: returns true immediately if left is true.
+    /// Kleene OR, still short-circuiting on a known-true left.
     fn eval_match_or(
         &self,
         ctx: &MatchWhereCtx<'_>,
         left: &crate::velesql::Condition,
         right: &crate::velesql::Condition,
-    ) -> Result<bool> {
-        if self.eval_match_condition(ctx, left)? {
-            return Ok(true);
+    ) -> Result<Option<bool>> {
+        let left = self.eval_match_condition(ctx, left)?;
+        if left == Some(true) {
+            return Ok(Some(true));
         }
-        self.eval_match_condition(ctx, right)
+        Ok(match (left, self.eval_match_condition(ctx, right)?) {
+            (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        })
     }
 
     /// Evaluates a single comparison condition against a node's payload,
@@ -280,7 +297,7 @@ impl Collection {
         &self,
         ctx: &MatchWhereCtx<'_>,
         cmp: &crate::velesql::Comparison,
-    ) -> Result<bool> {
+    ) -> Result<Option<bool>> {
         // Relationship aliases resolve against edge properties with
         // ANY-element semantics (openCypher's `any(rel IN r WHERE ...)`);
         // a fixed-length alias is the one-element case.
@@ -296,12 +313,10 @@ impl Collection {
         let Some(actual) = element_property(target_id, column_path, |path| {
             Self::json_get_path(target_payload.as_deref()?, path)
         }) else {
-            // A property the node does not carry is "not equal" to any
-            // literal — the truth value a SELECT's filter `Neq` gives a
-            // missing field, so `WHERE n.prop != x` keeps the same rows in
-            // MATCH as in SELECT. Every other operator still fails: `=`,
-            // `>` and friends on nothing are UNKNOWN, excluded.
-            return Ok(matches!(cmp.operator, crate::velesql::CompareOp::NotEq));
+            // A property the node does not carry is SQL's NULL: every
+            // comparison on it, `!=` included, is UNKNOWN — as a SELECT's
+            // filter answers a missing field.
+            return Ok(None);
         };
 
         let resolved_value = crate::velesql::bind_value(&cmp.value, ctx.params)?;
@@ -315,17 +330,16 @@ impl Collection {
         edge_id: u64,
         cmp: &crate::velesql::Comparison,
         params: &HashMap<String, serde_json::Value>,
-    ) -> Result<bool> {
+    ) -> Result<Option<bool>> {
         let Some(edge) = self.graph.edge_store.get_edge(edge_id) else {
-            return Ok(false);
+            return Ok(None);
         };
         let property = cmp.column.split_once('.').map_or("", |(_, rest)| rest);
         let Some(actual) =
             element_property(edge_id, property, |path| edge_property_path(&edge, path))
         else {
-            // Same rule as the node path: an absent edge property is "not
-            // equal" to any literal, as a missing field is for `Neq`.
-            return Ok(matches!(cmp.operator, crate::velesql::CompareOp::NotEq));
+            // Same rule as the node path: an absent edge property is NULL.
+            return Ok(None);
         };
         let resolved_value = crate::velesql::bind_value(&cmp.value, params)?;
         Self::evaluate_comparison(cmp.operator, &actual, &resolved_value)
@@ -343,7 +357,7 @@ impl Collection {
         &self,
         ctx: &MatchWhereCtx<'_>,
         condition: &crate::velesql::Condition,
-    ) -> Result<bool> {
+    ) -> Result<Option<bool>> {
         // Fix #486: Resolve the target node ID from the condition's column
         // alias, mirroring what evaluate_comparison_condition does. Without
         // this, `WHERE a.category IN (...)` would evaluate against node_id
@@ -376,7 +390,7 @@ impl Collection {
         let key = (std::ptr::from_ref(condition) as usize, u8::from(stripped));
         ctx.guards
             .where_filters
-            .matches_with(key, target_id, payload.as_deref(), || {
+            .evaluate_with(key, target_id, payload.as_deref(), || {
                 let rewritten =
                     rewrite_condition_aliases(condition.clone(), &alias_in(ctx.bindings));
                 // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
@@ -386,20 +400,24 @@ impl Collection {
             })
     }
 
-    /// ANY-element fold over a resolved edge-id list: true when at least one
-    /// edge satisfies `check` (false for an empty list, e.g. zero-hop
-    /// variable-length matches).
+    /// ANY-element fold over a resolved edge-id list, three-valued: true
+    /// when one edge satisfies `check`, else UNKNOWN when one edge left it
+    /// undecided, else false (also for an empty list, e.g. zero-hop
+    /// variable-length matches) — the OR of the per-edge truths.
     fn any_edge(
         &self,
         edge_ids: &[u64],
-        check: impl Fn(&Self, u64) -> Result<bool>,
-    ) -> Result<bool> {
+        check: impl Fn(&Self, u64) -> Result<Option<bool>>,
+    ) -> Result<Option<bool>> {
+        let mut truth = Some(false);
         for &edge_id in edge_ids {
-            if check(self, edge_id)? {
-                return Ok(true);
+            match check(self, edge_id)? {
+                Some(true) => return Ok(Some(true)),
+                None => truth = None,
+                Some(false) => {}
             }
         }
-        Ok(false)
+        Ok(truth)
     }
 
     /// Mirrors `evaluate_metadata_condition_for_node` for relationship
@@ -409,9 +427,9 @@ impl Collection {
         edge_id: u64,
         condition: &crate::velesql::Condition,
         ctx: &MatchWhereCtx<'_>,
-    ) -> Result<bool> {
+    ) -> Result<Option<bool>> {
         let Some(edge) = self.graph.edge_store.get_edge(edge_id) else {
-            return Ok(false);
+            return Ok(None);
         };
         let payload = serde_json::Value::Object(
             edge.properties()
@@ -432,7 +450,7 @@ impl Collection {
         );
         ctx.guards
             .where_filters
-            .matches_with(key, edge_id, Some(&payload), || {
+            .evaluate_with(key, edge_id, Some(&payload), || {
                 // Strip the alias against the FULL edge-alias namespace (scalar
                 // AND variable-length). Using only the scalar map here left
                 // var-length columns like `r.w` unstripped, so the filter engine
@@ -461,18 +479,21 @@ impl Collection {
         sim: &crate::velesql::SimilarityCondition,
         params: &HashMap<String, serde_json::Value>,
         guards: &MatchStorageGuards<'_>,
-    ) -> Result<bool> {
+    ) -> Result<Option<bool>> {
+        // A vector that cannot be scored against the query — none, empty,
+        // or of another length — leaves the predicate UNKNOWN, as on the
+        // SELECT path: `NOT similarity(...)` must not admit it.
         let query_vector = resolve_query_vector(&sim.vector, params)?;
         if query_vector.is_empty() {
-            return Ok(false);
+            return Ok(None);
         }
 
         let Some(node_vector) = guards.vector_guard.retrieve(node_id)? else {
-            return Ok(false);
+            return Ok(None);
         };
 
         if node_vector.len() != query_vector.len() {
-            return Ok(false);
+            return Ok(None);
         }
 
         let metric = guards.metric;
@@ -483,24 +504,29 @@ impl Collection {
         #[allow(clippy::cast_possible_truncation)]
         let threshold = sim.threshold as f32;
 
-        Ok(compare_score(
+        Ok(Some(compare_score(
             sim.operator,
             score,
             threshold,
             higher_is_better,
-        ))
+        )))
     }
 
-    /// Evaluates a comparison operation.
+    /// Evaluates a comparison operation, three-valued: `None` (UNKNOWN)
+    /// when either side is `NULL` — a `null` property or a `NULL` literal,
+    /// as SQL's `x = NULL` is — and otherwise the comparison's truth.
     #[allow(clippy::unnecessary_wraps)] // Consistent with other evaluation methods
     pub(crate) fn evaluate_comparison(
         operator: crate::velesql::CompareOp,
         actual: &serde_json::Value,
         expected: &crate::velesql::Value,
-    ) -> Result<bool> {
+    ) -> Result<Option<bool>> {
         use crate::velesql::Value;
 
-        Ok(match (actual, expected) {
+        if actual.is_null() || matches!(expected, Value::Null) {
+            return Ok(None);
+        }
+        Ok(Some(match (actual, expected) {
             // Numbers compare by exact value on every path — a float
             // property and an integer literal included (`3.5 > 3`,
             // `2^53 + 1 > 9007199254740992.0`), with no tolerance.
@@ -519,16 +545,12 @@ impl Collection {
                         | (crate::velesql::CompareOp::NotEq, false)
                 )
             }
-            (serde_json::Value::Null, Value::Null) => {
-                matches!(operator, crate::velesql::CompareOp::Eq)
-            }
-            // Any pair the typed arms above does not cover — a cross-type
-            // comparison or a JSON `null` against a non-null literal — is
-            // never equal, so `!=` holds for it, exactly as the SELECT
-            // filter's `Neq` treats two values `values_equal` calls
-            // different. `=` and every ordering stay false (UNKNOWN).
+            // Any other pair is a cross-type comparison: never equal, so
+            // `!=` holds for it, exactly as the SELECT filter's `Neq` treats
+            // two values `values_equal` calls different; `=` and every
+            // ordering are known false.
             _ => matches!(operator, crate::velesql::CompareOp::NotEq),
-        })
+        }))
     }
 
     pub(super) fn json_get_path<'a>(

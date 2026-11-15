@@ -511,10 +511,31 @@ LIMIT 10
 #### Three-valued logic
 
 WHERE evaluates in SQL's three-valued logic: a predicate is true, false, or
-**unknown**. A `similarity()` predicate is unknown for a row whose vector
-cannot be scored against the query vector — different lengths, an empty
-vector, or no vector on that field. Unknown is not false, and the difference
-is only visible under negation:
+**unknown**, and WHERE admits only the rows whose condition is known true —
+on every path: a payload scan, an indexed field, the columnar mirror, a
+filtered vector search, a graph-predicate WHERE and a MATCH return the same
+rows.
+
+A comparison is unknown when either side is `NULL`: a field that is `null` or
+absent from the payload, or a `NULL` literal (`x = NULL` and `x != NULL` are
+unknown for every row; test with `IS [NOT] NULL`, which is never unknown).
+The same holds for `IN`, `BETWEEN`, `LIKE` / `ILIKE`, `CONTAINS` and the
+geospatial predicates, and `x IN ('a', NULL)` is unknown for any `x` other
+than `'a'`. A value of another type than the one compared is known
+different: `x != 'a'` holds, and `x = 'a'` fails, for `x = 5`. A
+`similarity()` predicate is unknown for a row whose vector cannot be scored
+against the query vector — different lengths, an empty vector, or no vector
+on that field. Unknown is not false, and the difference is only visible under
+negation:
+
+| Expression, for a row without `x` | Result |
+|---|---|
+| `x = 'a'` | unknown: row excluded |
+| `x != 'a'`, `NOT (x = 'a')`, `x NOT IN ('a')` | unknown: row excluded |
+| `NOT (x = 'a') OR x IS NULL` | true: row admitted |
+| `x = 'a' OR x != 'a'` | unknown: row excluded |
+
+The same rules, for `similarity()` and for any unknown predicate:
 
 | Expression | Result |
 |---|---|
