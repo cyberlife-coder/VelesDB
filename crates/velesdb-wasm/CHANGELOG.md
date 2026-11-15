@@ -29,19 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`velesqlContractVersion()`** returns the VelesQL contract version the
+- **`velesqlContractVersion()`** (#2797) returns the VelesQL contract version the
   engine implements, which is core's `VELESQL_CONTRACT_VERSION`, the value REST
   responses carry. A browser client can report the same `meta` without
   copying the number.
 - **`WasmDatabase.addEdge(name, edgeJson)`, `getEdges(name, label?)`,
-  `removeEdge(name, id)` and `edgeCount(name)`** behave like REST
+  `removeEdge(name, id)` and `edgeCount(name)`** (#2797) behave like REST
   `/collections/{name}/graph/edges`, over the graph store a `MATCH` on that
   collection reads. The collection must exist and both endpoints must be its
   nodes; without an explicit `id`, the id is core's (source, target, label)
   hash; properties can be any JSON. VelesQL `INSERT EDGE` takes literal
   scalars only, so before this a client building edges from data had to
   splice strings into a statement.
-- **`WasmDatabase.executeMatch(sql, paramsJson, vector?, threshold?)`**
+- **`WasmDatabase.executeMatch(sql, paramsJson, vector?, threshold?)`** (#2797)
   returns `MATCH` rows in core's `MatchResult` shape,
   `[{ bindings, depth, projected, score? }]`, which is what REST
   `POST /collections/{name}/match` returns. It projects RETURN with core's
@@ -49,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   REST `/match`'s. `executeQuery` returns alias-keyed objects and left the
   projection to the caller. Both run behind the same read gate, walk,
   `ORDER BY` and `LIMIT`.
-- **`similarity()` in a browser `MATCH`.** The nodes are the collection's
+- **`similarity()` in a browser `MATCH`** (#2797). The nodes are the collection's
   points, so their vectors are scored with core's MATCH semantics, where the
   executor used to refuse every form:
   - `WHERE similarity(alias.field, $v) <op> t` scores the node the alias
@@ -59,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `ORDER BY similarity()` is most-similar-first.
   - `RETURN similarity()` projects the score.
   - A query vector scores each row's last node and applies the threshold.
-- **`MATCH` binds the target collection's points as nodes**, as core does: a
+- **`MATCH` binds the target collection's points as nodes** (#2797), as core does: a
   point's payload is the node's properties and its `_labels` array the node's
   labels. Nodes lived only in the graph store, so points inserted through the
   collection, or a `VectorStore` attached to it, were invisible to `MATCH`
