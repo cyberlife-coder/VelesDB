@@ -403,9 +403,8 @@ describe('RestBackend', () => {
         'http://localhost:8080/collections/test/search',
         expect.objectContaining({
           body: JSON.stringify({
-            vector: [1.0, 0.0],
             top_k: 5,
-            filter: undefined,
+            vector: [1.0, 0.0],
           }),
         })
       );

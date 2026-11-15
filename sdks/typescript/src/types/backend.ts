@@ -11,7 +11,6 @@ import type {
   CollectionConfig,
   Collection,
   VectorDocument,
-  SearchQuality,
   SparseVector,
   PqTrainOptions,
 } from './core';
@@ -21,6 +20,8 @@ import type {
   TextSearchResult,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
+  BatchSearchItem,
+  HybridSearchOptions,
 } from './search';
 import type {
   GraphEdge,
@@ -138,20 +139,10 @@ export interface IVelesDBBackend {
   /** Get a vector by ID */
   get(collection: string, id: string | number): Promise<VectorDocument | null>;
 
-  /** Search for multiple vectors in batch */
+  /** Search for multiple vectors in batch (each entry is a full SearchRequest) */
   searchBatch(
     collection: string,
-    searches: Array<{
-      vector: number[] | Float32Array;
-      k?: number;
-      filter?: FilterInput;
-      /**
-       * Per-sub-request search quality preset. On the REST backend the server
-       * answers `400` for a preset it cannot parse, but applies none to a batch
-       * entry (#2267); the WASM backend ignores it.
-       */
-      quality?: SearchQuality;
-    }>
+    searches: BatchSearchItem[]
   ): Promise<SearchResult[][]>;
 
   /** Full-text search: BM25 on REST, unranked substring match on WASM */
@@ -166,7 +157,7 @@ export interface IVelesDBBackend {
     collection: string,
     vector: number[] | Float32Array,
     textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
+    options?: HybridSearchOptions
   ): Promise<SearchResult[]>;
 
   /** Execute VelesQL multi-model query (EPIC-031 US-011) */

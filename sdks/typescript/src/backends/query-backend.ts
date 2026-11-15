@@ -42,12 +42,18 @@ export interface QueryExplainApiResponse {
     limit: number | null;
     offset: number | null;
   };
+  cache_hit?: boolean | null;
+  plan_reuse_count?: number | null;
+  estimated_cost_ms?: number | null;
+  actual_time_ms?: number | null;
   actual_stats?: {
     actual_rows: number;
     actual_time_ms: number;
     loops: number;
     nodes_visited: number;
     edges_traversed: number;
+    traversal_counters_approximate?: boolean | null;
+    executed_filter_strategy?: string | null;
   } | null;
   node_stats?: Array<{
     node_label: string;
@@ -109,20 +115,31 @@ export async function query(
   queryString: string,
   params?: Record<string, unknown>
 ): Promise<QueryApiResponse> {
-  const endpoint = isLikelyDdlOrMutationQuery(queryString)
-    ? '/query'
-    : isLikelyAggregationQuery(queryString)
-    ? '/aggregate'
-    : '/query';
-  const response = await transport.requestJson<Record<string, unknown>>(
+  // `/aggregate` is an optimisation endpoint that only accepts aggregation
+  // queries; `/query` executes everything. The aggregation heuristic is a
+  // regex over the raw text, so a SELECT whose string literals merely contain
+  // "GROUP BY"/"COUNT(" would be misrouted and refused with a 422 — fall back
+  // to `/query` (which runs aggregations too) instead of surfacing that
+  // refusal as the query's error.
+  const useAggregate =
+    !isLikelyDdlOrMutationQuery(queryString) && isLikelyAggregationQuery(queryString);
+  const body = {
+    query: queryString,
+    params: params ?? {},
+    collection,
+  };
+  let response = await transport.requestJson<Record<string, unknown>>(
     'POST',
-    endpoint,
-    {
-      query: queryString,
-      params: params ?? {},
-      collection,
-    }
+    useAggregate ? '/aggregate' : '/query',
+    body
   );
+  if (useAggregate && response.error?.code === 'BAD_REQUEST') {
+    response = await transport.requestJson<Record<string, unknown>>(
+      'POST',
+      '/query',
+      body
+    );
+  }
 
   throwOnError(response, `Collection '${collection}'`);
 
@@ -139,6 +156,8 @@ export async function query(
   }
 
   // v3.0.0: Results are projected rows — shape depends on SELECT clause.
+  // `took_ms` (whole-ms compat helper) and `meta` are forwarded too — they are
+  // part of the server's QueryResponse and were previously dropped.
   return {
     results: ((rawData?.results ?? []) as Record<string, unknown>[]),
     stats: {
@@ -146,6 +165,15 @@ export async function query(
       strategy: 'select',
       scannedNodes: (rawData?.rows_returned as number | undefined) ?? 0,
     },
+    tookMs: (rawData?.took_ms as number | undefined) ?? undefined,
+    meta:
+      rawData?.meta != null
+        ? {
+            velesqlContractVersion: (rawData.meta as Record<string, unknown>)
+              .velesql_contract_version as string,
+            count: (rawData.meta as Record<string, unknown>).count as number,
+          }
+        : undefined,
   };
 }
 
@@ -200,6 +228,10 @@ export async function queryExplain(
       limit: data.features.limit,
       offset: data.features.offset,
     },
+    cacheHit: data.cache_hit ?? undefined,
+    planReuseCount: data.plan_reuse_count ?? undefined,
+    estimatedCostMs: data.estimated_cost_ms ?? undefined,
+    actualTimeMs: data.actual_time_ms ?? undefined,
     actualStats: data.actual_stats
       ? {
           actualRows: data.actual_stats.actual_rows,
@@ -207,6 +239,10 @@ export async function queryExplain(
           loops: data.actual_stats.loops,
           nodesVisited: data.actual_stats.nodes_visited,
           edgesTraversed: data.actual_stats.edges_traversed,
+          traversalCountersApproximate:
+            data.actual_stats.traversal_counters_approximate ?? undefined,
+          executedFilterStrategy:
+            data.actual_stats.executed_filter_strategy ?? undefined,
         }
       : data.actual_stats === null ? null : undefined,
     nodeStats: data.node_stats

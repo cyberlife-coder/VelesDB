@@ -31,6 +31,19 @@ export interface SparseSearchNamedOptions {
   vector?: number[] | Float32Array;
   /** Search quality preset */
   quality?: SearchQuality;
+  /** HNSW `ef_search` (REST only). */
+  efSearch?: number;
+  /** Per-request timeout budget in ms (REST only). */
+  timeoutMs?: number;
+}
+
+/**
+ * Fusion options for a single `/search` request
+ * (`SearchRequest.fusion` → `FusionRequest` on the wire).
+ */
+export interface SearchFusionOptions extends FusionParams {
+  /** Fusion strategy. */
+  strategy: FusionStrategy;
 }
 
 /** Search options */
@@ -54,8 +67,84 @@ export interface SearchOptions {
    * (`capabilities().namedSparseIndexes` is `false`).
    */
   sparseIndexName?: string;
+  /**
+   * Named sparse vectors map (`SearchRequest.sparse_vectors`), one entry per
+   * sparse index. Sends several sparse vectors in one request.
+   *
+   * **Backend support:** REST only (same reason as `sparseIndexName`).
+   */
+  sparseVectors?: Record<string, SparseVector>;
   /** Search quality preset (default: 'balanced'). */
   quality?: SearchQuality;
+  /**
+   * HNSW `ef_search`, in `[16, 4096]` — sent as `ef_search` on the wire. It
+   * wins over the `mode` derived from `quality` for a dense search without a
+   * filter. The server refuses an out-of-range value with a `400`.
+   *
+   * **Backend support:** REST only (the WASM binding expresses this through
+   * `quality: 'custom:<ef>'`).
+   */
+  efSearch?: number;
+  /**
+   * Per-request timeout budget in milliseconds, sent as `timeout_ms`. It can
+   * only shorten the server's own limit, never lengthen it; `0` keeps the
+   * server limit. Running out answers `408`/`503`.
+   *
+   * **Backend support:** REST only (there is no server-side budget on WASM).
+   */
+  timeoutMs?: number;
+  /**
+   * Fusion configuration sent as `fusion` on `/search`
+   * (`SearchRequest.fusion`).
+   *
+   * **Backend support:** REST only.
+   */
+  fusion?: SearchFusionOptions;
+}
+
+/**
+ * One entry of `searchBatch`: a full per-entry `SearchRequest` on the server
+ * (`BatchSearchRequest.searches: Vec<SearchRequest>`), so every field of
+ * {@link SearchOptions} applies per entry (the server validates but does not
+ * apply `mode`/`ef_search` for batch entries).
+ */
+export interface BatchSearchItem {
+  /** Query vector for this entry. */
+  vector: number[] | Float32Array;
+  /** Number of results to return for this entry (default: 10). */
+  k?: number;
+  /** Filter expression (optional). */
+  filter?: FilterInput;
+  /** Search quality preset. */
+  quality?: SearchQuality;
+  /** HNSW `ef_search` (REST only). */
+  efSearch?: number;
+  /** Per-request timeout budget in ms (REST only). */
+  timeoutMs?: number;
+  /** Sparse vector for hybrid search. */
+  sparseVector?: SparseVector;
+  /** Named sparse index (REST only). */
+  sparseIndexName?: string;
+  /** Named sparse vectors map (REST only). */
+  sparseVectors?: Record<string, SparseVector>;
+  /** Fusion configuration (REST only). */
+  fusion?: SearchFusionOptions;
+}
+
+/** Options for `hybridSearch` (`/search/hybrid`, `HybridSearchRequestWithRrf`). */
+export interface HybridSearchOptions {
+  /** Number of results to return (default: 10). */
+  k?: number;
+  /** Weight for vector similarity, 0.0-1.0 (text weight = 1 - this; default 0.5). */
+  vectorWeight?: number;
+  /** Filter expression (optional). */
+  filter?: FilterInput;
+  /**
+   * RRF `k` parameter, sent as `rrf_k` (`HybridSearchRequestWithRrf`).
+   *
+   * **Backend support:** REST only.
+   */
+  rrfK?: number;
 }
 
 /** Fusion strategy for multi-query search */

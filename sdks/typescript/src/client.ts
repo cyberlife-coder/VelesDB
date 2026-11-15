@@ -8,8 +8,9 @@ import type {
   Collection,
   VectorDocument,
   SearchOptions,
-  SearchQuality,
   SearchResult,
+  BatchSearchItem,
+  HybridSearchOptions,
   TextSearchResult,
   IVelesDBBackend,
   IVelesDBMaintenanceBackend,
@@ -249,13 +250,43 @@ export class VelesDB {
   // Search & Query -- delegates to client/search-methods.ts
   // ========================================================================
 
+  /**
+   * Refuse REST-only search options on a non-REST backend instead of letting
+   * the backend silently drop them (these fields have no WASM equivalent).
+   */
+  private refuseRestOnlyOptions(
+    options: object | undefined,
+    fields: readonly string[]
+  ): void {
+    if (this.config.backend === 'rest' || !options) {
+      return;
+    }
+    const bag = options as Record<string, unknown>;
+    for (const field of fields) {
+      if (bag[field] !== undefined) {
+        throw new VelesDBError(
+          `${field} is only supported by the REST backend (current backend: '${this.config.backend}')`,
+          'NOT_SUPPORTED'
+        );
+      }
+    }
+  }
+
   async search(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
+    this.refuseRestOnlyOptions(options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
     return searchMethods.search(this.backend, collection, query, options);
   }
 
-  async searchBatch(collection: string, searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: FilterInput; quality?: SearchQuality }>): Promise<SearchResult[][]> {
+  async searchBatch(collection: string, searches: BatchSearchItem[]): Promise<SearchResult[][]> {
     this.ensureInitialized();
+    // search-methods validates the array shape; guard the per-entry options
+    // only once it is one.
+    if (Array.isArray(searches)) {
+      for (const s of searches) {
+        this.refuseRestOnlyOptions(s, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors', 'sparseIndexName']);
+      }
+    }
     return searchMethods.searchBatch(this.backend, collection, searches);
   }
 
@@ -264,8 +295,9 @@ export class VelesDB {
     return searchMethods.textSearch(this.backend, collection, query, options);
   }
 
-  async hybridSearch(collection: string, vector: number[] | Float32Array, textQuery: string, options?: { k?: number; vectorWeight?: number; filter?: FilterInput }): Promise<SearchResult[]> {
+  async hybridSearch(collection: string, vector: number[] | Float32Array, textQuery: string, options?: HybridSearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
+    this.refuseRestOnlyOptions(options, ['rrfK']);
     return searchMethods.hybridSearch(this.backend, collection, vector, textQuery, options);
   }
 
@@ -288,6 +320,7 @@ export class VelesDB {
    */
   async sparseSearchNamed(collection: string, query: SparseVector, indexName: string, options?: SparseSearchNamedOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
+    this.refuseRestOnlyOptions(options, ['efSearch', 'timeoutMs']);
     return searchMethods.sparseSearchNamed(this.backend, collection, query, indexName, options);
   }
 
@@ -333,6 +366,7 @@ export class VelesDB {
 
   async searchIds(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<Array<{ id: number; score: number }>> {
     this.ensureInitialized();
+    this.refuseRestOnlyOptions(options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
     return searchMethods.searchIds(this.backend, collection, query, options);
   }
 

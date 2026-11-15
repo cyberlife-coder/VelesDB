@@ -81,6 +81,13 @@ export async function trainPq(
  * 3. **202 Accepted** — the endpoint may return 202 (enqueued, not yet
  *    persisted) as a success code; requestJson treats only 2xx as success
  *    but does not special-case 202 vs 200 for streaming semantics.
+ *
+ * 4. **No sparse vector** — the server's `StreamInsertRequest` is
+ *    `{id, vector, payload}` only, so a `sparse_vector` field sent here would
+ *    be silently ignored (serde drops unknown fields). Sparse vectors must
+ *    go through `upsert`/`upsertBatch` or the NDJSON `streamUpsertPoints`,
+ *    whose `Point` deserialiser accepts them; this function therefore does
+ *    not send the field at all rather than imply support the route lacks.
  */
 export async function streamInsert(
   transport: StreamingTransport,
@@ -96,10 +103,6 @@ export async function streamInsert(
       vector,
       payload: doc.payload ?? null,
     };
-
-    if (doc.sparseVector) {
-      body.sparse_vector = transport.sparseVectorToRestFormat(doc.sparseVector);
-    }
 
     const url = `${transport.baseUrl}${collectionPath(collection)}/stream/insert`;
     const headers: Record<string, string> = {
