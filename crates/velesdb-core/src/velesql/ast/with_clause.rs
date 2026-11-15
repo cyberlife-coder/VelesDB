@@ -282,11 +282,11 @@ pub enum WithValue {
 /// - An integer in decimal.
 /// - A float in decimal with a fractional part and never an exponent, which
 ///   the grammar has no form for: `1e20` renders as
-///   `100000000000000000000.0`. An infinite float renders as a literal too
-///   large for an `f64`, which the parser reads back as that infinity. `NaN`
-///   has no `VelesQL` form: the parser never produces one, and its display,
-///   `0.0/0.0`, does not parse, rather than reading back as another value
-///   (a bare `NaN` would read back as an identifier).
+///   `100000000000000000000.0`. `NaN` and the infinities have no `VelesQL`
+///   form: the parser never produces one (it refuses a literal too large for
+///   an `f64`), and their displays, `0.0/0.0`, `1.0/0.0` and `-1.0/0.0`, do
+///   not parse, rather than reading back as another value (a bare `NaN`
+///   would read back as an identifier).
 /// - `true` or `false`.
 /// - An identifier bare when the parser reads it back bare as that
 ///   identifier, and otherwise in double quotes, each double quote inside
@@ -310,6 +310,10 @@ impl std::fmt::Display for WithValue {
 /// literal reads back as `NaN`.
 const NAN_DISPLAY: &str = "0.0/0.0";
 
+/// What `+∞` displays as (`-∞` with a leading `-`): text the grammar
+/// refuses, since the parser rejects every literal too large for an `f64`.
+const INFINITY_DISPLAY: &str = "1.0/0.0";
+
 /// Writes `v` as a `VelesQL` float literal (`-`? digits `.` digits), see
 /// [`WithValue`]'s `Display`. `f64`'s own `Display` never uses an exponent
 /// and writes the shortest decimal that reads back as `v`, but drops the
@@ -320,9 +324,8 @@ fn write_float_literal(f: &mut std::fmt::Formatter<'_>, v: f64) -> std::fmt::Res
         return f.write_str(NAN_DISPLAY);
     }
     if v.is_infinite() {
-        // Ten times `f64::MAX`, which no `f64` holds: it reads back as infinity.
         let sign = if v.is_sign_negative() { "-" } else { "" };
-        return write!(f, "{sign}{}0.0", f64::MAX);
+        return write!(f, "{sign}{INFINITY_DISPLAY}");
     }
     let digits = v.to_string();
     if digits.contains('.') {
