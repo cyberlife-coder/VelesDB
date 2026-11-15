@@ -1893,7 +1893,7 @@ test('compileTranscript accepts path, refuses transcript+path, and returns the t
   }
 })
 
-test('rememberExtracted: openai without env config is INVALID_INPUT; unknown extractor names all backends; VELESDB_MEMORY_EXTRACTOR is the default', async (t) => {
+test('rememberExtracted: openai without env config is INVALID_INPUT; unknown extractor names all backends; VELESDB_MEMORY_EXTRACTOR is the default', async () => {
   const { store, cleanup } = freshStore()
   try {
     await assert.rejects(

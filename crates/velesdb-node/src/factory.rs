@@ -9,9 +9,10 @@ use std::sync::Arc;
 use napi_derive::napi;
 use velesdb_memory::context::ingest::IngestRoots;
 use velesdb_memory::{
-    embedder_env_endpoint, role_auth, select_embedder, DynEmbedder, EmbedderSelection,
-    MemoryService, OllamaEmbedder, OpenAiEmbedder, RemoteEndpoint, DEFAULT_OLLAMA_MODEL,
-    DEFAULT_OLLAMA_URL, HASH_EMBEDDER_NOTICE,
+    embedder_env_endpoint, role_auth, select_embedder, DynEmbedder, DynExtractor,
+    EmbedderSelection, MemoryService, OllamaEmbedder, OllamaExtractor, OpenAiEmbedder,
+    OpenAiExtractor, OutlineExtractor, RemoteEndpoint, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    HASH_EMBEDDER_NOTICE,
 };
 
 use crate::error::{internal, invalid_input, setting_error};
@@ -166,6 +167,53 @@ pub struct NodeMemoryService {
 /// (A free fn, not an inherent method: `binding_parity_bdd` parses the ONE
 /// `impl NodeMemoryService {` surface block, and a second inherent impl would
 /// truncate that scan.)
+/// Build the extraction backend named `backend` for one `rememberExtracted`
+/// call. Explicit `model`/`url` arguments win over the extraction role's
+/// environment (`VELESDB_MEMORY_EXTRACTOR_*`); the OpenAI credential comes
+/// from `VELESDB_MEMORY_EXTRACTOR_API_TOKEN` only — never from an argument,
+/// so no token lands in a source file.
+pub(crate) fn build_extractor(
+    backend: &str,
+    model: Option<String>,
+    url: Option<String>,
+) -> napi::Result<DynExtractor> {
+    match backend {
+        "outline" => Ok(Arc::new(OutlineExtractor)),
+        "ollama" => {
+            let env_endpoint = extractor_env_endpoint()?;
+            let url = url
+                .or(env_endpoint.url)
+                .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+            let model = model.or(env_endpoint.model).ok_or_else(|| {
+                invalid_input(
+                    "the 'ollama' extractor needs a `model` (argument or \
+                     VELESDB_MEMORY_EXTRACTOR_MODEL; or pass extractor: 'outline' \
+                     for the offline backend)",
+                )
+            })?;
+            Ok(Arc::new(OllamaExtractor::new(url, model)))
+        }
+        "openai" => {
+            let env_endpoint = extractor_env_endpoint()?;
+            let (url, model, auth) = RemoteEndpoint {
+                url: url.or(env_endpoint.url),
+                model: model.or(env_endpoint.model),
+                auth: env_endpoint.auth,
+            }
+            .require("VELESDB_MEMORY_EXTRACTOR")
+            .map_err(setting_error)?;
+            Ok(Arc::new(OpenAiExtractor::new(url, model, auth)))
+        }
+        "none" | "" => Err(invalid_input(
+            "extractor 'none' cannot extract a passage; pass 'outline' for the \
+             offline backend, or 'ollama'/'openai' with configuration",
+        )),
+        other => Err(invalid_input(format!(
+            "unknown extractor '{other}' (expected 'ollama', 'outline' or 'openai')"
+        ))),
+    }
+}
+
 pub(crate) fn anchor_allowlist(ingest_roots: Option<&IngestRoots>) -> Vec<std::path::PathBuf> {
     ingest_roots.map_or_else(Vec::new, |roots| roots.paths().to_vec())
 }

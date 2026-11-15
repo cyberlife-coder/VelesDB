@@ -3,8 +3,9 @@
 //! both worlds, so the dependency boundary is auditable by inspection.
 
 use serde_json::Value;
+use velesdb_memory::context::ingest::{resolve_transcript_path, IngestRoots};
 use velesdb_memory::context::CompileRequest;
-use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions, Link, Metadata};
+use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions, Link, MemoryError, Metadata};
 
 use crate::dto::{ColumnFilterJs, FusionOptionsJs, LinkJs};
 use crate::error::{internal, invalid_input, to_napi_err};
@@ -156,6 +157,40 @@ pub fn build_transcript_compile_request(
     let segmentation_value = serde_json::to_value(&report)
         .map_err(|err| internal(format!("segmentation report serialization: {err}")))?;
     Ok((request, segmentation_value))
+}
+
+/// Transcript-or-path resolution for `compileTranscript`: `path` is a
+/// transcript-level field, not part of the bridge's input struct, so it is
+/// pulled out here, resolved under the ingest allowlist, and fed back as
+/// `transcript` — exactly the MCP tool's resolution. Both fields at once, or
+/// a non-string `path`, is `INVALID_INPUT`; a `path` with ingestion disabled
+/// fails closed (`IngestDisabled`, mapped by [`to_napi_err`]). The
+/// containment check itself runs at the sink
+/// ([`velesdb_memory::context::ingest`]), never here.
+pub fn resolve_transcript_input(
+    request: Value,
+    roots: Option<&IngestRoots>,
+) -> napi::Result<Value> {
+    // A non-object request is handed through unchanged: the bridge's own
+    // deserialization rejects it with INVALID_INPUT.
+    let mut map = match request {
+        Value::Object(map) => map,
+        other => return Ok(other),
+    };
+    let has_transcript = map.contains_key("transcript");
+    match (has_transcript, map.remove("path")) {
+        (true, Some(_)) => Err(invalid_input(
+            "pass either `transcript` or `path`, not both",
+        )),
+        (false, Some(Value::String(path))) => {
+            let roots = roots.ok_or_else(|| to_napi_err(MemoryError::IngestDisabled))?;
+            let text = resolve_transcript_path(&path, roots).map_err(to_napi_err)?;
+            map.insert("transcript".to_owned(), Value::String(text));
+            Ok(Value::Object(map))
+        }
+        (false, Some(_)) => Err(invalid_input("`path` must be a string")),
+        (_, None) => Ok(Value::Object(map)),
+    }
 }
 
 /// Marshal a compiled context into its JS shape: serialize to the wire JSON,

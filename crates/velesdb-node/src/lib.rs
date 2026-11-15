@@ -62,18 +62,15 @@ use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::anchor::AnchorRoot;
-use velesdb_memory::context::ingest::{resolve_fragments, resolve_transcript_path};
+use velesdb_memory::context::ingest::resolve_fragments;
 use velesdb_memory::context::{
     suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, LoadedWorkingContext,
     WorkingContext,
 };
-use velesdb_memory::{
-    Embedder, MemoryError, MemoryService, OllamaExtractor, OpenAiExtractor, OutlineExtractor,
-    RemoteEndpoint, DEFAULT_OLLAMA_URL,
-};
+use velesdb_memory::{Embedder, MemoryError, MemoryService};
 
 use crate::factory::{
-    anchor_allowlist, build_embedder, extractor_env_endpoint, ingest_roots_from_env,
+    anchor_allowlist, build_embedder, build_extractor, ingest_roots_from_env,
     warn_hash_embedder_not_semantic, NodeMemoryService,
 };
 
@@ -709,30 +706,11 @@ impl NodeMemoryService {
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
-            let mut request = request;
             // `path` is a transcript-level field, not part of the bridge's
-            // input struct: pull it out before deserializing, resolve it
-            // under the allowlist, and feed the text back as `transcript` —
-            // exactly the MCP tool's transcript-or-path resolution.
-            if let Value::Object(map) = &mut request {
-                let has_transcript = map.contains_key("transcript");
-                match (has_transcript, map.remove("path")) {
-                    (true, Some(_)) => {
-                        return Err(invalid_input(
-                            "pass either `transcript` or `path`, not both",
-                        ))
-                    }
-                    (false, Some(Value::String(path))) => {
-                        let roots = ingest_roots
-                            .as_ref()
-                            .ok_or_else(|| to_napi_err(MemoryError::IngestDisabled))?;
-                        let text = resolve_transcript_path(&path, roots).map_err(to_napi_err)?;
-                        map.insert("transcript".to_owned(), Value::String(text));
-                    }
-                    (false, Some(_)) => return Err(invalid_input("`path` must be a string")),
-                    (_, None) => {}
-                }
-            }
+            // input struct: resolve it under the allowlist and feed the text
+            // back as `transcript` — exactly the MCP tool's
+            // transcript-or-path resolution.
+            let request = convert::resolve_transcript_input(request, ingest_roots.as_ref())?;
             let input: convert::CompileTranscriptInput =
                 serde_json::from_value(request).map_err(|err| {
                     invalid_input(format!("invalid compile_transcript request: {err}"))
@@ -937,53 +915,8 @@ impl NodeMemoryService {
                 .as_deref()
                 .or(env_backend.as_deref())
                 .unwrap_or("ollama");
-            let outcome = match backend {
-                "outline" => svc.remember_extracted(&text, &OutlineExtractor, metadata.as_ref()),
-                "ollama" => {
-                    let env_endpoint = extractor_env_endpoint()?;
-                    let url = url
-                        .or(env_endpoint.url)
-                        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-                    let model = model.or(env_endpoint.model).ok_or_else(|| {
-                        invalid_input(
-                            "the 'ollama' extractor needs a `model` (argument or \
-                             VELESDB_MEMORY_EXTRACTOR_MODEL; or pass extractor: 'outline' \
-                             for the offline backend)",
-                        )
-                    })?;
-                    svc.remember_extracted(
-                        &text,
-                        &OllamaExtractor::new(url, model),
-                        metadata.as_ref(),
-                    )
-                }
-                "openai" => {
-                    let env_endpoint = extractor_env_endpoint()?;
-                    let (url, model, auth) = RemoteEndpoint {
-                        url: url.or(env_endpoint.url),
-                        model: model.or(env_endpoint.model),
-                        auth: env_endpoint.auth,
-                    }
-                    .require("VELESDB_MEMORY_EXTRACTOR")
-                    .map_err(setting_error)?;
-                    svc.remember_extracted(
-                        &text,
-                        &OpenAiExtractor::new(url, model, auth),
-                        metadata.as_ref(),
-                    )
-                }
-                "none" | "" => {
-                    return Err(invalid_input(
-                        "extractor 'none' cannot extract a passage; pass 'outline' for the \
-                         offline backend, or 'ollama'/'openai' with configuration",
-                    ))
-                }
-                other => {
-                    return Err(invalid_input(format!(
-                        "unknown extractor '{other}' (expected 'ollama', 'outline' or 'openai')"
-                    )))
-                }
-            };
+            let extractor = build_extractor(backend, model, url)?;
+            let outcome = svc.remember_extracted(&text, &extractor, metadata.as_ref());
             Ok(RememberedExtractionJs::from(outcome.map_err(to_napi_err)?))
         }))
     }
