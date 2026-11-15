@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `VectorFirst` MATCH returns the rows a full walk returns** (core,
+  2026-11-15). The strategy the planner picks for a `similarity()` on the
+  start node replaced the MATCH walk with a shortcut: one row per start node
+  holding only the start binding (`RETURN d, r` lost `r` and collapsed every
+  path into one row), the target's labels and inline properties unchecked,
+  the threshold applied in the metric's direction whatever its operator
+  (`similarity(...) < 0.5` returned the near nodes), a `similarity()` under
+  `OR` taken as satisfied, and an implicit cap of 100 rows without a `LIMIT`.
+  It now only seeds the shared walk with the nodes nearest the query vector,
+  growing the seeds until the `LIMIT` is reached, and is chosen only when
+  those seeds hold the rows (an explicit `LIMIT`, a top-level `similarity() >`
+  or `>=` on the start node, any `ORDER BY` being `similarity() DESC`); every
+  other shape walks every start node. A relationship alias no longer forces
+  `GraphFirst`: the seeded walk binds it.
+
+- **BREAKING (behavior): a `@collection`-annotated MATCH node carries that
+  collection's properties everywhere the MATCH reads properties** (core,
+  server, 2026-11-15). The annotation was only a post-hoc pass merging the
+  annotated point into returned rows, so `WHERE w.price < 100`, `ORDER BY
+  w.price` and `(w:Warehouse@pricing {stock: 0})` never saw `pricing`, the
+  annotated node's labels were never checked, and a colliding field overwrote
+  the node's own. Now WHERE, ORDER BY, RETURN and inline pattern properties
+  read the union of the node's payload and its annotated point's, during the
+  walk; the node's own fields win a collision, and labels stay the graph's.
+  An annotation naming no collection refuses the query instead of being
+  skipped. The graph's property indexes no longer narrow an annotated alias
+  by a property they cannot see. A graph predicate in a SELECT WHERE
+  (`WHERE MATCH (...)`), which reads no other collection, refuses an
+  annotated node (`V011`) instead of ignoring it. The MATCH holds the annotated collections'
+  read guards next to its target's, taken in one total order across
+  collections (`docs/CONCURRENCY_MODEL.md`).
+
+  REST `/collections/{name}/match` runs through the new
+  `Database::match_query` (capped by `search.max_results`, and an expired,
+  unswept annotated point adds nothing): it gates every annotated collection, as `/query`
+  does, reads the annotations the same way, and orders rows through the same
+  planner as `/query` (guard rails included) instead of calling the
+  collection's unplanned entry points.
+
 - **BREAKING (behavior): WHERE follows SQL's three-valued logic for every
   predicate** (core, 2026-11-15). The spec promised it, yet only
   `similarity()` had an UNKNOWN: a comparison on a field that is `null` or

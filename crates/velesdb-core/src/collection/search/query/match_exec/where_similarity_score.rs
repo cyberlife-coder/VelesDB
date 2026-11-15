@@ -14,21 +14,8 @@ use super::{MatchResult, MatchStorageGuards};
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::VectorStorage;
-use crate::velesql::{Condition, MatchClause, SimilarityCondition};
+use crate::velesql::MatchClause;
 use std::collections::HashMap;
-
-/// The first `similarity()` leaf of a WHERE tree, left to right — the leaf
-/// both strategies score rows by.
-pub(super) fn first_similarity_condition(condition: &Condition) -> Option<&SimilarityCondition> {
-    match condition {
-        Condition::Similarity(sim) => Some(sim),
-        Condition::And(left, right) | Condition::Or(left, right) => {
-            first_similarity_condition(left).or_else(|| first_similarity_condition(right))
-        }
-        Condition::Not(inner) | Condition::Group(inner) => first_similarity_condition(inner),
-        _ => None,
-    }
-}
 
 impl Collection {
     /// Sets each row's score to the similarity of the node targeted by the
@@ -50,7 +37,7 @@ impl Collection {
         let Some(sim) = match_clause
             .where_clause
             .as_ref()
-            .and_then(first_similarity_condition)
+            .and_then(crate::velesql::match_planner::first_similarity)
         else {
             return Ok(());
         };

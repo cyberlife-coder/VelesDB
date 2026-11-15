@@ -90,18 +90,13 @@ fn test_match_query_response_with_projected_properties() {
 /// age-descending order.
 #[test]
 fn test_match_handler_applies_return_order_by() {
-    use velesdb_core::collection::VectorCollection;
-    use velesdb_core::{DistanceMetric, Point, StorageMode};
+    use velesdb_core::{Database, DistanceMetric, Point};
 
     let temp = tempfile::tempdir().expect("temp dir");
-    let coll = VectorCollection::create(
-        temp.path().to_path_buf(),
-        "people",
-        4,
-        DistanceMetric::Cosine,
-        StorageMode::default(),
-    )
-    .expect("create collection");
+    let db = Database::open(temp.path()).expect("open database");
+    db.create_collection("people", 4, DistanceMetric::Cosine)
+        .expect("create collection");
+    let coll = db.get_vector_collection("people").expect("people");
 
     let ages = [(1_u64, 30), (2, 10), (3, 50), (4, 20), (5, 40)];
     let points: Vec<Point> = ages
@@ -116,15 +111,11 @@ fn test_match_handler_applies_return_order_by() {
         .collect();
     coll.upsert(points).expect("upsert Person nodes");
 
-    let collection = MatchCollection::Vector(coll);
-    let request = MatchQueryRequest {
-        query: "MATCH (n:Person) RETURN n ORDER BY n.age DESC LIMIT 10".to_string(),
-        params: HashMap::new(),
-        vector: None,
-        threshold: None,
-    };
-    let clause = parse_match_clause(&request.query).expect("parse MATCH clause");
-    let results = execute_match(&collection, &clause, &request).expect("execute_match");
+    let clause = parse_match_clause("MATCH (n:Person) RETURN n ORDER BY n.age DESC LIMIT 10")
+        .expect("parse MATCH clause");
+    let results = db
+        .match_query("people", &clause, &HashMap::new(), None)
+        .expect("match_query");
 
     let ids: Vec<u64> = results
         .iter()

@@ -15,6 +15,7 @@ mod expand;
 mod index_prefilter;
 mod order_by;
 mod similarity;
+mod sources;
 mod start_nodes;
 mod vector_first;
 pub(in crate::collection::search::query) mod where_eval;
@@ -27,6 +28,9 @@ use crate::guardrails::QueryContext;
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage as _};
 use crate::velesql::{GraphPattern, MatchClause};
 use std::collections::{HashMap, HashSet};
+
+pub(in crate::collection::search::query) use sources::MatchReads;
+pub(crate) use sources::MatchSources;
 
 /// Storage guards hoisted once per MATCH execution, in the decreed lock
 /// order: `vector_storage` (rank 2) before `payload_storage` (rank 3) — the
@@ -78,6 +82,23 @@ pub(in crate::collection::search::query) struct WhereFilterMemo {
     cache: std::cell::RefCell<Vec<((usize, u8), crate::filter::Condition)>>,
 }
 
+impl<'a> MatchStorageGuards<'a> {
+    /// The guards bundle over `reads`, its memo reading each annotated
+    /// alias's collection too.
+    pub(in crate::collection::search::query) fn over(
+        metric: DistanceMetric,
+        reads: &'a MatchReads<'_>,
+    ) -> Self {
+        Self {
+            metric,
+            vector_guard: &reads.vector,
+            payload_guard: &reads.payload,
+            payload_memo: PayloadMemo::with_annotations(&reads.payload, reads.annotations()),
+            where_filters: WhereFilterMemo::default(),
+        }
+    }
+}
+
 impl WhereFilterMemo {
     /// Evaluates, three-valued, the (possibly cached) compiled filter for
     /// `key` against `payload`, building it with `build` exactly once per
@@ -117,21 +138,40 @@ impl WhereFilterMemo {
 /// guards bundle is `!Sync` by construction and never crosses threads).
 pub(in crate::collection::search::query) struct PayloadMemo<'a> {
     storage: &'a LogPayloadStorage,
-    cache:
-        std::cell::RefCell<rustc_hash::FxHashMap<u64, Option<std::sync::Arc<serde_json::Value>>>>,
+    cache: Memo<u64>,
+    /// The `@collection` annotations property reads also see (see
+    /// [`sources`]); empty when the MATCH has no annotation sources.
+    annotations: sources::Annotations<'a>,
+    /// `(annotation index, id)` → the memoized union payload.
+    united: Memo<(usize, u64)>,
 }
+
+/// A query-lifetime memo of loaded payloads (`None`: the node has none).
+type Memo<K> =
+    std::cell::RefCell<rustc_hash::FxHashMap<K, Option<std::sync::Arc<serde_json::Value>>>>;
 
 impl<'a> PayloadMemo<'a> {
     pub(in crate::collection::search::query) fn new(storage: &'a LogPayloadStorage) -> Self {
+        Self::with_annotations(storage, sources::Annotations::default())
+    }
+
+    /// A memo whose annotated nodes also read their annotation's storage.
+    pub(in crate::collection::search::query) fn with_annotations(
+        storage: &'a LogPayloadStorage,
+        annotations: sources::Annotations<'a>,
+    ) -> Self {
         Self {
             storage,
             cache: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
+            annotations,
+            united: std::cell::RefCell::new(rustc_hash::FxHashMap::default()),
         }
     }
 
-    /// Returns the payload for `id`, reading and deserializing at most once
-    /// per query. `None` (absent payload) is memoized too — repeat probes of
-    /// payload-less nodes are as common as hits during traversal.
+    /// Returns the node's OWN payload for `id`, reading and deserializing at
+    /// most once per query. `None` (absent payload) is memoized too — repeat
+    /// probes of payload-less nodes are as common as hits during traversal.
+    /// Labels are read here; properties through [`Self::get_bound`].
     pub(in crate::collection::search::query) fn get(
         &self,
         id: u64,
@@ -148,6 +188,80 @@ impl<'a> PayloadMemo<'a> {
         self.cache.borrow_mut().insert(id, loaded.clone());
         loaded
     }
+
+    /// The properties of node `id` as the alias `alias` binds it: its own
+    /// payload, united with its annotated collection's point when the node
+    /// `alias` names carries a `@collection` annotation (the node's own
+    /// fields win). WHERE, ORDER BY and RETURN read properties through here,
+    /// so all of them see the same node.
+    pub(in crate::collection::search::query) fn get_bound(
+        &self,
+        alias: Option<&str>,
+        id: u64,
+    ) -> Option<std::sync::Arc<serde_json::Value>> {
+        self.get_united(alias.and_then(|a| self.annotations.by_alias(a)), id)
+    }
+
+    /// The properties of node `id` for a pattern node annotated
+    /// `@collection` (`None`: not annotated), alias or not: what its inline
+    /// pattern properties are checked against.
+    pub(in crate::collection::search::query) fn get_annotated(
+        &self,
+        collection: Option<&str>,
+        id: u64,
+    ) -> Option<std::sync::Arc<serde_json::Value>> {
+        self.get_united(collection.and_then(|c| self.annotations.by_name(c)), id)
+    }
+
+    /// Node `id` read for a one-pass scan, without memoizing either read:
+    /// `(own payload, pattern-property payload)` — the second as
+    /// [`Self::get_annotated`] answers it for `collection`.
+    pub(in crate::collection::search::query) fn read_unmemoized(
+        &self,
+        collection: Option<&str>,
+        id: u64,
+    ) -> (
+        Option<std::sync::Arc<serde_json::Value>>,
+        Option<std::sync::Arc<serde_json::Value>>,
+    ) {
+        let own = self
+            .storage
+            .retrieve(id)
+            .ok()
+            .flatten()
+            .map(std::sync::Arc::new);
+        let properties = match collection.and_then(|c| self.annotations.by_name(c)) {
+            None => own.clone(),
+            Some(index) => sources::union_payload(own.clone(), self.annotations.point(index, id)),
+        };
+        (own, properties)
+    }
+
+    fn get_united(
+        &self,
+        annotation: Option<usize>,
+        id: u64,
+    ) -> Option<std::sync::Arc<serde_json::Value>> {
+        let Some(index) = annotation else {
+            return self.get(id);
+        };
+        if let Some(hit) = self.united.borrow().get(&(index, id)) {
+            return hit.clone();
+        }
+        let united = sources::union_payload(self.get(id), self.annotations.point(index, id));
+        self.united.borrow_mut().insert((index, id), united.clone());
+        united
+    }
+}
+
+/// Where a MATCH walk takes its start nodes from.
+#[derive(Clone, Copy)]
+pub(in crate::collection::search::query) enum StartNodes<'s> {
+    /// Every node the first pattern node matches (label index or scan).
+    Scan,
+    /// These ids, in this order, each kept when it matches the first pattern
+    /// node: `VectorFirst`'s nearest-first seeds.
+    Seeded(&'s [u64]),
 }
 
 /// Result of a MATCH query traversal.
@@ -284,7 +398,7 @@ impl Collection {
     ) -> Result<Vec<MatchResult>> {
         super::match_dispatch::validate_match_clause(match_clause)?;
         let mut results = self.execute_match_with_context(match_clause, params, None)?;
-        self.apply_match_order_by(&mut results, match_clause, params)?;
+        self.apply_match_order_by(&mut results, match_clause, params, &MatchSources::default())?;
         if let Some(limit) = super::match_dispatch::match_return_limit(match_clause) {
             results.truncate(limit);
         }
@@ -313,26 +427,54 @@ impl Collection {
     /// Returns an error if the query cannot be executed or a guard-rail is violated.
     // Both guards are lent by reference into MatchStorageGuards for the whole
     // match execution; the decree order (2 then 3) is recorded below.
-    #[expect(clippy::significant_drop_tightening)]
     pub fn execute_match_with_context(
         &self,
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
     ) -> Result<Vec<MatchResult>> {
-        // Metric snapshot (config, rank 1) BEFORE the guards, then both
-        // guards in decree order (2 then 3). See `MatchStorageGuards`.
+        self.execute_match_reading(match_clause, params, ctx, &MatchSources::default())
+    }
+
+    /// [`Self::execute_match_with_context`] whose `@collection`-annotated
+    /// aliases read `sources` too: every guard the walk needs is taken once,
+    /// in the cross-collection order [`MatchReads::acquire`] sets.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be executed or a guard-rail is violated.
+    pub(in crate::collection::search::query) fn execute_match_reading(
+        &self,
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        ctx: Option<&QueryContext>,
+        sources: &MatchSources,
+    ) -> Result<Vec<MatchResult>> {
+        self.execute_match_from(match_clause, params, ctx, sources, StartNodes::Scan)
+    }
+
+    /// [`Self::execute_match_reading`] whose walk starts from `starts`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be executed or a guard-rail is violated.
+    // Every guard is lent into MatchStorageGuards for the whole match
+    // execution, in the cross-collection order MatchReads sets.
+    #[expect(clippy::significant_drop_tightening)]
+    pub(in crate::collection::search::query) fn execute_match_from(
+        &self,
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        ctx: Option<&QueryContext>,
+        sources: &MatchSources,
+        starts: StartNodes<'_>,
+    ) -> Result<Vec<MatchResult>> {
+        // Metric snapshot (config, rank 1) BEFORE the guards. See
+        // `MatchStorageGuards`.
         let metric = self.storage.config.read().metric;
-        let vector_guard = self.storage.vector_storage.read();
-        let payload_guard = self.storage.payload_storage.read();
-        let guards = MatchStorageGuards {
-            metric,
-            vector_guard: &vector_guard,
-            payload_guard: &payload_guard,
-            payload_memo: PayloadMemo::new(&payload_guard),
-            where_filters: WhereFilterMemo::default(),
-        };
-        self.execute_match_with_guards(match_clause, params, ctx, &guards)
+        let reads = MatchReads::acquire(self, sources);
+        let guards = MatchStorageGuards::over(metric, &reads);
+        self.walk_match(match_clause, params, ctx, &guards, starts)
     }
 
     /// Guard-accepting MATCH execution: the body of
@@ -348,6 +490,20 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
         guards: &MatchStorageGuards<'_>,
+    ) -> Result<Vec<MatchResult>> {
+        self.walk_match(match_clause, params, ctx, guards, StartNodes::Scan)
+    }
+
+    /// The MATCH walk every strategy runs: each pattern from its start nodes,
+    /// WHERE evaluated on every row, rows scored by WHERE's first
+    /// `similarity()` leaf.
+    fn walk_match(
+        &self,
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        ctx: Option<&QueryContext>,
+        guards: &MatchStorageGuards<'_>,
+        starts: StartNodes<'_>,
     ) -> Result<Vec<MatchResult>> {
         if match_clause.patterns.is_empty() {
             return Err(Error::Query(
@@ -367,13 +523,14 @@ impl Collection {
             if all_results.len() >= limit {
                 break;
             }
+            let start_nodes = self.resolve_start_nodes(pattern, guards, starts)?;
             self.execute_single_pattern(
                 pattern,
+                &start_nodes,
                 match_clause,
                 params,
                 ctx,
                 guards,
-                &self.graph.edge_store,
                 limit,
                 &mut all_results,
                 &mut iteration_count,
@@ -399,23 +556,22 @@ impl Collection {
         Ok(all_results)
     }
 
-    /// Executes a single graph pattern: finds start nodes, then dispatches to
-    /// single-node collection or BFS traversal.
+    /// Executes a single graph pattern from its resolved start nodes:
+    /// dispatches to single-node collection or BFS traversal.
     #[allow(clippy::too_many_arguments)]
     fn execute_single_pattern(
         &self,
         pattern: &GraphPattern,
+        start_nodes: &[(u64, HashMap<String, u64>)],
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
         guards: &MatchStorageGuards<'_>,
-        edge_store: &crate::collection::graph::ConcurrentEdgeStore,
         limit: usize,
         all_results: &mut Vec<MatchResult>,
         iteration_count: &mut u32,
         reported_cardinality: &mut usize,
     ) -> Result<()> {
-        let start_nodes = self.find_start_nodes(pattern, guards)?;
         if start_nodes.is_empty() {
             return Ok(());
         }
@@ -441,7 +597,7 @@ impl Collection {
                 limit,
                 prefilter,
             };
-            return self.collect_single_node_results(&start_nodes, &mut sn_ctx);
+            return self.collect_single_node_results(start_nodes, &mut sn_ctx);
         }
 
         let mut trav_ctx = TraversalCtx {
@@ -455,7 +611,7 @@ impl Collection {
             reported_cardinality,
             seen_bindings: &mut HashSet::new(),
         };
-        self.traverse_pattern(pattern, &start_nodes, edge_store, &mut trav_ctx)
+        self.traverse_pattern(pattern, start_nodes, &self.graph.edge_store, &mut trav_ctx)
     }
 
     /// Collects results for single-node patterns (no relationships).

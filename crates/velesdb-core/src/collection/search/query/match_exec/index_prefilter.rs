@@ -59,6 +59,7 @@ pub(super) fn compute_index_prefilter(
     }
 
     let alias_to_labels = build_alias_label_map(pattern);
+    let annotated = annotated_aliases(pattern);
 
     let mut result_set: Option<HashSet<u64>> = None;
 
@@ -66,6 +67,13 @@ pub(super) fn compute_index_prefilter(
     // candidate, so it is skipped rather than discarding what the indexed
     // predicates found.
     for pred in &predicates {
+        // The graph's indexes hold its own payloads; an `@collection`-
+        // annotated node's properties also come from the annotated
+        // collection, which no graph index sees. Only its id, the node's
+        // own, may narrow.
+        if pred.property != "id" && annotated.contains(pred.alias.as_str()) {
+            continue;
+        }
         let Some(label) = resolve_label(&pred.alias, &alias_to_labels) else {
             continue;
         };
@@ -91,6 +99,16 @@ fn build_alias_label_map(pattern: &GraphPattern) -> HashMap<String, Vec<String>>
         }
     }
     map
+}
+
+/// The aliases of the pattern's `@collection`-annotated nodes.
+fn annotated_aliases(pattern: &GraphPattern) -> HashSet<&str> {
+    pattern
+        .nodes
+        .iter()
+        .filter(|node| node.collection.is_some())
+        .filter_map(|node| node.alias.as_deref())
+        .collect()
 }
 
 /// Resolves the first label for an alias, returning `None` if unmapped.

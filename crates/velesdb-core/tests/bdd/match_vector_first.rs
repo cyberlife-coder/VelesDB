@@ -16,12 +16,12 @@
 //! | Edge     |   2   |  33%  |
 //! | Negative |   1   |  17%  |
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::json;
-use velesdb_core::{Database, GraphEdge, Point};
+use velesdb_core::{Database, GraphEdge, Point, SearchResult};
 
-use super::helpers::create_test_db;
+use super::helpers::{create_test_db, execute_sql, execute_sql_with_params};
 
 // =========================================================================
 // Module-specific setup
@@ -109,6 +109,19 @@ fn setup_vector_first_collection(db: &Database) {
     vc.add_edge(edge2).expect("test: add edge 3->4 CITES");
 }
 
+/// The `doc` binding of each row: the Document a row starts from. A row's
+/// point id is the walk's target (the cited node), as for any MATCH.
+fn doc_bindings(results: &[velesdb_core::SearchResult]) -> Vec<u64> {
+    results
+        .iter()
+        .map(|r| {
+            r.point.payload.as_ref().expect("test: payload")["_bindings"]["doc"]
+                .as_u64()
+                .expect("test: doc binding")
+        })
+        .collect()
+}
+
 /// Builds a params map with `_collection` and a vector parameter.
 fn match_params(
     collection: &str,
@@ -164,7 +177,7 @@ fn test_match_vector_first_basic() {
         .expect("test: execute VectorFirst MATCH query");
 
     // Node 1 (Physics 101) should appear: high similarity AND has CITES edge.
-    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    let ids = doc_bindings(&results);
     assert!(
         ids.contains(&1),
         "Node 1 (Physics 101) should pass both similarity and graph filter, got: {ids:?}"
@@ -198,7 +211,7 @@ fn test_match_vector_first_filters_by_graph_pattern() {
         .execute_query(&query, &params)
         .expect("test: execute query");
 
-    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    let ids = doc_bindings(&results);
 
     // Node 5 has high similarity but no CITES edge -- must NOT appear.
     assert!(
@@ -234,7 +247,7 @@ fn test_match_vector_first_returns_multiple_candidates() {
 
     // Both node 1 (Physics 101) and node 3 (Rust Handbook) have CITES edges.
     // Node 1 has high similarity, node 3 has low similarity, but threshold is >0.0.
-    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    let ids = doc_bindings(&results);
     assert!(
         ids.contains(&1),
         "Node 1 (high sim + CITES edge) should appear, got: {ids:?}"
@@ -329,7 +342,7 @@ fn test_match_vector_first_high_threshold() {
     }
 
     // Node 5 (no CITES edge) must not appear even if its score is very high.
-    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    let ids = doc_bindings(&results);
     assert!(
         !ids.contains(&5),
         "Node 5 must not appear (no CITES edge), got: {ids:?}"
@@ -369,5 +382,215 @@ fn test_match_vector_first_missing_vector_param() {
             || msg.to_lowercase().contains("not found")
             || msg.to_lowercase().contains("missing"),
         "Error should indicate missing parameter, got: {msg}"
+    );
+}
+
+// =========================================================================
+// D. Exactness: a seeded walk returns what an unseeded one returns
+// =========================================================================
+//
+// `VectorFirst` seeds the shared MATCH walk from a vector search. It used to
+// replace the walk instead: one row per start node holding only the start
+// binding, a threshold applied whatever its operator, an `OR` with
+// `similarity()` taken as satisfied, the target's labels and properties
+// unchecked, and an implicit cap of 100 rows.
+
+/// `g` (graph, cosine, dim 2): document 1 at `[1, 0]` CITES references 10
+/// and 11; document 2 at `[0, 1]` CITES reference 12; node 20 is a `Note`
+/// cited by document 1.
+fn setup_exactness_graph(db: &Database) {
+    execute_sql(
+        db,
+        "CREATE GRAPH COLLECTION g (dimension = 2, metric = 'cosine') SCHEMALESS;",
+    )
+    .expect("test: CREATE g");
+    let gc = db.get_graph_collection("g").expect("test: g");
+    for (id, vector, payload) in [
+        (
+            1,
+            [1.0, 0.0],
+            json!({"_labels": ["Document"], "title": "near"}),
+        ),
+        (
+            2,
+            [0.0, 1.0],
+            json!({"_labels": ["Document"], "title": "far"}),
+        ),
+        (
+            10,
+            [1.0, 0.0],
+            json!({"_labels": ["Reference"], "year": 2020}),
+        ),
+        (
+            11,
+            [1.0, 0.0],
+            json!({"_labels": ["Reference"], "year": 2021}),
+        ),
+        (
+            12,
+            [1.0, 0.0],
+            json!({"_labels": ["Reference"], "year": 2022}),
+        ),
+        (20, [1.0, 0.0], json!({"_labels": ["Note"]})),
+    ] {
+        gc.upsert_node(id, &payload, Some(vector.to_vec()))
+            .expect("test: node");
+    }
+    for (id, source, target) in [(100, 1, 10), (101, 1, 11), (102, 2, 12), (103, 1, 20)] {
+        gc.add_edge(GraphEdge::new(id, source, target, "CITES").expect("test: edge"))
+            .expect("test: add edge");
+    }
+}
+
+fn run_on_g(db: &Database, sql: &str) -> Vec<SearchResult> {
+    let params = HashMap::from([
+        ("_collection".to_string(), json!("g")),
+        ("q".to_string(), json!([1.0, 0.0])),
+    ]);
+    execute_sql_with_params(db, sql, &params).expect("test: MATCH")
+}
+
+/// The `(alias → id)` binding pairs of each row, as a set of rows.
+fn binding_rows(results: &[SearchResult], aliases: &[&str]) -> HashSet<Vec<u64>> {
+    results
+        .iter()
+        .map(|r| {
+            let bindings = &r.point.payload.as_ref().expect("test: payload")["_bindings"];
+            aliases
+                .iter()
+                .map(|a| bindings[*a].as_u64().expect("test: binding"))
+                .collect()
+        })
+        .collect()
+}
+
+/// GIVEN a near document citing two references
+/// WHEN the start node's similarity filters a two-node pattern
+/// THEN each matching path is its own row, with both bindings.
+#[test]
+fn each_path_from_a_similar_start_node_is_a_row() {
+    let (_dir, db) = create_test_db();
+    setup_exactness_graph(&db);
+    let got = run_on_g(
+        &db,
+        "MATCH (d:Document)-[:CITES]->(r:Reference) WHERE similarity(d.embedding, $q) > 0.7 \
+         RETURN d, r LIMIT 10",
+    );
+    assert_eq!(
+        binding_rows(&got, &["d", "r"]),
+        HashSet::from([vec![1, 10], vec![1, 11]])
+    );
+}
+
+/// GIVEN a near document citing a `Note`
+/// WHEN the pattern asks for a target label the note lacks
+/// THEN the note's path is no row.
+#[test]
+fn the_target_still_checks_its_labels() {
+    let (_dir, db) = create_test_db();
+    setup_exactness_graph(&db);
+    let got = run_on_g(
+        &db,
+        "MATCH (d:Document)-[:CITES]->(r:Reference {year: 2021}) \
+         WHERE similarity(d.embedding, $q) > 0.7 RETURN d, r LIMIT 10",
+    );
+    assert_eq!(
+        binding_rows(&got, &["d", "r"]),
+        HashSet::from([vec![1, 11]])
+    );
+}
+
+/// GIVEN a near and a far document
+/// WHEN WHERE asks for the documents far from the query
+/// THEN only the far one matches: the operator is honoured.
+#[test]
+fn a_less_than_similarity_keeps_the_far_documents() {
+    let (_dir, db) = create_test_db();
+    setup_exactness_graph(&db);
+    let got = run_on_g(
+        &db,
+        "MATCH (d:Document) WHERE similarity(d.embedding, $q) < 0.5 RETURN d LIMIT 10",
+    );
+    assert_eq!(binding_rows(&got, &["d"]), HashSet::from([vec![2]]));
+}
+
+/// GIVEN a near and a far document
+/// WHEN a similarity sits in an OR with a payload predicate
+/// THEN the OR is evaluated, not assumed: the far document matches through
+///      its title, and nothing else is admitted.
+#[test]
+fn a_similarity_in_an_or_is_evaluated() {
+    let (_dir, db) = create_test_db();
+    setup_exactness_graph(&db);
+    let got = run_on_g(
+        &db,
+        "MATCH (d:Document) WHERE similarity(d.embedding, $q) > 0.9 OR d.title = 'far' \
+         RETURN d LIMIT 10",
+    );
+    assert_eq!(
+        binding_rows(&got, &["d"]),
+        HashSet::from([vec![1], vec![2]])
+    );
+    let negated = run_on_g(
+        &db,
+        "MATCH (d:Document) WHERE NOT (similarity(d.embedding, $q) > 0.9) RETURN d LIMIT 10",
+    );
+    assert_eq!(binding_rows(&negated, &["d"]), HashSet::from([vec![2]]));
+}
+
+/// GIVEN 150 documents all similar to the query
+/// WHEN a similarity MATCH has no LIMIT
+/// THEN every one of them is a row: no implicit cap applies.
+#[test]
+fn a_similarity_match_without_limit_returns_every_row() {
+    let (_dir, db) = create_test_db();
+    execute_sql(
+        &db,
+        "CREATE GRAPH COLLECTION g (dimension = 2, metric = 'cosine') SCHEMALESS;",
+    )
+    .expect("test: CREATE g");
+    let gc = db.get_graph_collection("g").expect("test: g");
+    for id in 1..=150_u64 {
+        gc.upsert_node(id, &json!({"_labels": ["Document"]}), Some(vec![1.0, 0.0]))
+            .expect("test: node");
+    }
+    let got = run_on_g(
+        &db,
+        "MATCH (d:Document) WHERE similarity(d.embedding, $q) > 0.5 RETURN d",
+    );
+    assert_eq!(got.len(), 150);
+}
+
+/// GIVEN 30 documents nearest the query that cite nothing, and one farther
+///      document that does
+/// WHEN a similarity MATCH asks for one citing document
+/// THEN the seeds grow past the first nearest ones until the walk finds it.
+#[test]
+fn the_seeds_grow_until_the_limit_is_reached() {
+    let (_dir, db) = create_test_db();
+    execute_sql(
+        &db,
+        "CREATE GRAPH COLLECTION g (dimension = 2, metric = 'cosine') SCHEMALESS;",
+    )
+    .expect("test: CREATE g");
+    let gc = db.get_graph_collection("g").expect("test: g");
+    for id in 1..=30_u64 {
+        gc.upsert_node(id, &json!({"_labels": ["Document"]}), Some(vec![1.0, 0.0]))
+            .expect("test: near node");
+    }
+    gc.upsert_node(40, &json!({"_labels": ["Document"]}), Some(vec![0.8, 0.6]))
+        .expect("test: farther node");
+    gc.upsert_node(41, &json!({"_labels": ["Reference"]}), Some(vec![0.0, 1.0]))
+        .expect("test: cited node");
+    gc.add_edge(GraphEdge::new(500, 40, 41, "CITES").expect("test: edge"))
+        .expect("test: add edge");
+    let got = run_on_g(
+        &db,
+        "MATCH (d:Document)-[:CITES]->(r) WHERE similarity(d.embedding, $q) > 0.5 \
+         RETURN d LIMIT 1",
+    );
+    assert_eq!(
+        binding_rows(&got, &["d", "r"]),
+        HashSet::from([vec![40, 41]])
     );
 }

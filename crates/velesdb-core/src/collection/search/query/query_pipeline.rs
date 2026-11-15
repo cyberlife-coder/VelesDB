@@ -22,6 +22,7 @@ impl Collection {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
+        sources: &super::match_exec::MatchSources,
     ) -> Result<Option<Vec<SearchResult>>> {
         let Some(match_clause) = query.match_clause.as_ref() else {
             return Ok(None);
@@ -35,6 +36,7 @@ impl Collection {
             match_clause,
             params,
             ctx,
+            sources,
         )?))
     }
 
@@ -52,6 +54,26 @@ impl Collection {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<CountedExecution> {
+        self.execute_query_counted_reading(
+            query,
+            params,
+            &super::match_exec::MatchSources::default(),
+        )
+    }
+
+    /// [`Self::execute_query_counted`] whose MATCH `@collection`-annotated
+    /// nodes read `sources` too: the database's entry point, which resolves
+    /// them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be executed.
+    pub(crate) fn execute_query_counted_reading(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        sources: &super::match_exec::MatchSources,
+    ) -> Result<CountedExecution> {
         // Only a standalone MATCH query carries traversal counters. Run it
         // through the same context + dispatch as execute_query, then read the
         // counters the executor recorded into the query context. is_match_query
@@ -59,7 +81,7 @@ impl Collection {
         if query.is_match_query() && query.compound.is_none() {
             let ctx = self.prepare_query_context(query, "default")?;
             let results = self
-                .try_dispatch_match(query, params, &ctx)?
+                .try_dispatch_match(query, params, &ctx, sources)?
                 .unwrap_or_default();
             return Ok(CountedExecution {
                 nodes_visited: ctx.traversal_nodes_visited(),

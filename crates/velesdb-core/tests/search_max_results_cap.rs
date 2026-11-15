@@ -194,6 +194,31 @@ fn execute_match_is_capped() {
     );
 }
 
+/// REST `/match`'s entry point, `Database::match_query`, honors the ceiling
+/// with and without a query vector.
+#[test]
+fn database_match_query_is_capped() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    let (db, _collection) = capped(&dir);
+
+    let query = Parser::parse("MATCH (n) RETURN n LIMIT 10").expect("test: parse");
+    let clause = query.match_clause.as_ref().expect("test: match clause");
+    let unscored = db
+        .match_query("docs", clause, &HashMap::new(), None)
+        .expect("test: match_query");
+    assert_eq!(unscored.len(), CAP);
+
+    let probe = vector(0);
+    let scoring = velesdb_core::MatchScoring {
+        vector: &probe,
+        threshold: 1_000.0,
+    };
+    let scored = db
+        .match_query("docs", clause, &HashMap::new(), Some(scoring))
+        .expect("test: scored match_query");
+    assert_eq!(scored.len(), CAP);
+}
+
 /// Control: the ceiling is a ceiling, not a floor — a smaller caller `k` /
 /// `LIMIT` still wins.
 #[test]

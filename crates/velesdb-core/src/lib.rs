@@ -310,7 +310,7 @@ mod database;
 pub mod observer;
 
 #[cfg(feature = "persistence")]
-pub use database::{Database, GatedRead};
+pub use database::{Database, GatedRead, MatchScoring};
 #[cfg(feature = "persistence")]
 pub use observer::DatabaseObserver;
 #[cfg(feature = "persistence")]
