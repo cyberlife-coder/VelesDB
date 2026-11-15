@@ -1236,7 +1236,9 @@ single `source`.
 Stream traversal results as Server-Sent Events (SSE). Query parameters:
 `start_node` (required), `algorithm` (`bfs`/`dfs`), `max_depth`, `limit`,
 `relationship_types` (comma-separated). Emits `node`, periodic `stats`, `done`,
-and `error` events.
+and `error` events; `error` is sent alone when the traversal worker fails.
+Before any stream opens, it answers like `POST .../graph/traverse`: 404 for
+a missing collection, 409 for a non-graph one, 400 for an unknown `algorithm`.
 
 ### POST /collections/:name/graph/search
 
