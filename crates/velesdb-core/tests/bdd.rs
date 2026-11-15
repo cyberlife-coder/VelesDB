@@ -91,6 +91,8 @@ mod match_relationship_semantics;
 mod match_traversal_exact;
 #[path = "bdd/match_vector_first.rs"]
 mod match_vector_first;
+#[path = "bdd/match_where_similarity_score.rs"]
+mod match_where_similarity_score;
 #[path = "bdd/metrics_ranking_conformance.rs"]
 mod metrics_ranking_conformance;
 #[path = "bdd/near_exact_ranking.rs"]
