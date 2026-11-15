@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`MATCH` reads the graph named by the `_collection` param**, the way core
+  and the server name a MATCH target (MATCH has no `FROM`). The executor only
+  knew the first node's `@collection` annotation and otherwise read the
+  `graph` store, so a graph stored under any other name could not be matched
+  without annotating the query. The annotation still wins; a `_collection`
+  that is not a string is refused.
 - **`WasmDatabase.attachStore(name, store)`**: registers an existing
   `VectorStore` as a collection without copying it, so `executeQuery` and
   the store handle read and write the same points in both directions. A

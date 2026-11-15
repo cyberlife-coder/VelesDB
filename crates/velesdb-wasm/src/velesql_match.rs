@@ -109,7 +109,7 @@ pub(crate) fn execute_match(
     let pattern = &clause.patterns[0];
     validate_pattern(pattern)?;
     let cross = resolve_cross_refs(db, clause);
-    let store = inferred_graph_store(db, pattern)?;
+    let store = inferred_graph_store(db, pattern, params)?;
     let borrowed = store.borrow();
     let walk = PathWalk {
         pattern,
@@ -335,18 +335,38 @@ fn matches_label(node: &WasmGraphNode, label: Option<&str>) -> bool {
     node.labels.iter().any(|x| x == l)
 }
 
+/// Resolves the graph store a MATCH runs against.
+///
+/// In order: the first node's `@collection` annotation (it names the node's
+/// collection explicitly), then the `_collection` param — how core and the
+/// server name a MATCH target, since MATCH has no `FROM` — then the default
+/// `graph` store.
 fn inferred_graph_store(
     db: &mut DatabaseInner,
     pattern: &GraphPattern,
+    params: &Params,
 ) -> Result<std::rc::Rc<std::cell::RefCell<WasmGraphStore>>, String> {
-    let name = pattern
-        .nodes
-        .first()
-        .and_then(|n| n.collection.clone())
-        .unwrap_or_else(|| "graph".to_string());
+    let annotated = pattern.nodes.first().and_then(|n| n.collection.clone());
+    let name = match annotated {
+        Some(name) => name,
+        None => match params.get(MATCH_TARGET_PARAM) {
+            None => DEFAULT_GRAPH.to_string(),
+            Some(serde_json::Value::String(name)) => name.clone(),
+            Some(other) => {
+                return Err(format!(
+                    "MATCH param '{MATCH_TARGET_PARAM}' must be a collection name (string), got {other}"
+                ));
+            }
+        },
+    };
     db.get_graph_store(&name)
         .ok_or_else(|| format!("Graph '{name}' is empty; no data to match"))
 }
+
+/// Param naming the collection a MATCH targets (core's `_collection`).
+const MATCH_TARGET_PARAM: &str = "_collection";
+/// Graph store a MATCH reads when nothing names one.
+const DEFAULT_GRAPH: &str = "graph";
 
 fn first_label(n: &NodePattern) -> Option<String> {
     n.labels.first().cloned()
