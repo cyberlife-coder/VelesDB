@@ -204,3 +204,40 @@ fn test_parse_with_group_by() {
         Parser::parse("SELECT category, COUNT(*) FROM products GROUP BY category").unwrap();
     assert!(parsed.select.group_by.is_some());
 }
+
+// ---------------------------------------------------------------------------
+// ParsedQuery.isAggregation — the routing predicate core's server and CLI use
+// (`SelectStatement::is_aggregation_query`), exposed so a JS caller classifies
+// a statement from its AST instead of scanning its text for keywords.
+// ---------------------------------------------------------------------------
+
+fn parsed(sql: &str) -> super::ParsedQuery {
+    super::VelesQL::parse(sql).expect("test: parse")
+}
+
+#[test]
+fn given_a_grouped_count_when_parsed_then_it_is_an_aggregation() {
+    assert!(parsed("SELECT category, COUNT(*) FROM docs GROUP BY category").is_aggregation());
+}
+
+#[test]
+fn given_an_ungrouped_count_when_parsed_then_it_is_an_aggregation() {
+    assert!(parsed("SELECT COUNT(*) FROM docs").is_aggregation());
+}
+
+#[test]
+fn given_aggregate_words_inside_a_string_literal_when_parsed_then_it_is_not_an_aggregation() {
+    let query = parsed("SELECT * FROM docs WHERE title = 'Having fun with COUNT(x) and GROUP BY'");
+
+    assert!(!query.is_aggregation());
+    assert!(query.is_select());
+}
+
+#[test]
+fn given_a_vector_group_by_when_parsed_then_it_is_not_an_aggregation() {
+    // `NEAR ... GROUP BY` is post-processed by the search path, as core routes it.
+    assert!(
+        !parsed("SELECT * FROM docs WHERE vector NEAR $v GROUP BY category LIMIT 5")
+            .is_aggregation()
+    );
+}

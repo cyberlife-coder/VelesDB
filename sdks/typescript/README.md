@@ -639,12 +639,16 @@ Get detailed collection configuration (dimension, metric, storage mode, point co
 Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, ORDER BY, JOIN, UNION/INTERSECT/EXCEPT, and USING FUSION.
 
 > **Backend support:** full VelesQL execution requires the **REST backend** (`velesdb-server`).
-> The WASM backend only executes pure top-k vector queries of the form
-> `SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]` (`vector` is the
-> grammar keyword, not a column name) and throws a
-> `NOT_SUPPORTED` error for anything else (WHERE predicates, JOIN, GROUP BY, MATCH,
-> set operations, FUSION) instead of silently ignoring clauses. Accordingly,
-> `db.capabilities().velesqlQuery` is `false` on WASM.
+> On the WASM backend, `query()` executes:
+> - pure top-k vector queries, `SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]`
+>   (`vector` is the grammar keyword, not a column name), on every binding;
+> - with a velesdb-wasm binding that has `WasmDatabase.attachStore`,
+>   any other read-only `SELECT` — `WHERE` predicates, `ORDER BY`, and the rest of what
+>   velesdb-wasm's executor evaluates — over the points the SDK wrote, in REST's `/query` shape.
+>
+> Aggregations (`GROUP BY`, `COUNT`, …), `MATCH`, DDL and mutations through `query()`, and
+> every non-`NEAR` statement on a binding shipped before `attachStore`, throw `NOT_SUPPORTED`
+> instead of silently ignoring clauses. Accordingly, `db.capabilities().velesqlQuery` is `false` on WASM.
 
 ```typescript
 // Vector similarity search
