@@ -645,16 +645,16 @@ fn test_indexed_join_empty_bitmap_returns_empty() {
 /// GIVEN: a review row MISSING the `rating` field, with `rating` indexed
 /// WHEN: a `!=` (NEQ) predicate runs on the indexed field
 /// THEN: the indexed path returns the SAME rows as the unindexed scan path,
-///       INCLUDING the field-absent row.
+///       and neither returns the field-absent row: `!=` on an absent field is
+///       UNKNOWN (SQL three-valued logic), which WHERE does not admit.
 ///
 /// Regression: NEQ used to be pre-filtered as `universe - eq` where `universe`
-/// came from the secondary index, which only stores points that HAVE a value
-/// for the field. NEQ semantics also match field-absent rows, so the bitmap was
-/// a strict subset and the JOIN (which fetches only bitmap ids) dropped them.
-/// `build_prefilter_bitmap` now returns `None` for NEQ/NOT IN, forcing the
-/// correct full-scan + post-filter.
+/// came from the secondary index, which only stores points holding a
+/// primitive value for the field. The bitmap path and the scan path then
+/// disagreed. `build_prefilter_bitmap` returns `None` for NEQ/NOT IN, forcing
+/// the full-scan + post-filter, so both paths answer alike.
 #[test]
-fn test_indexed_join_neq_includes_field_absent_rows() {
+fn test_indexed_join_neq_matches_scan_and_excludes_field_absent_rows() {
     fn setup(index: bool) -> (TempDir, Database) {
         let (dir, db) = create_test_db();
         execute_sql(
@@ -704,12 +704,13 @@ fn test_indexed_join_neq_includes_field_absent_rows() {
     assert_eq!(
         result_ids(&indexed),
         result_ids(&scan),
-        "indexed NEQ path must equal scan path (field-absent rows included)"
+        "indexed NEQ path must equal scan path"
     );
-    // rating != 5: Bob(id=2, rating=3) and Charlie(id=3, rating absent); Alice(id=1, rating=5) excluded.
+    // rating != 5: Bob(id=2, rating=3); Alice(id=1, rating=5) is excluded, and
+    // Charlie(id=3, rating absent) is UNKNOWN, so excluded too.
     assert_eq!(
         result_ids(&indexed),
-        HashSet::from([2, 3]),
-        "NEQ must include the field-absent row (id=3)"
+        HashSet::from([2]),
+        "NEQ must not admit the field-absent row (id=3)"
     );
 }

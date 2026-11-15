@@ -212,6 +212,10 @@ impl Condition {
             Self::Not { condition } => condition.eval_record(record).map(|known| !known),
             Self::IsNull { field } => Some(operand(record, field).is_none()),
             Self::IsNotNull { field } => Some(operand(record, field).is_some()),
+            // An empty disjunction is false whatever the field holds: no
+            // comparison with it is made, so `null` cannot make it UNKNOWN.
+            Self::In { values, .. } if values.is_empty() => Some(false),
+            Self::ArrayContainsAny { values, .. } if values.is_empty() => Some(false),
             leaf => {
                 let field = leaf.leaf_field()?;
                 let value = operand(record, field)?;

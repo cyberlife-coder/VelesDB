@@ -756,10 +756,7 @@ impl NativeStore {
         // naming a reserved key.
         for (index, marker) in INTERNAL_MARKER_FIELDS.iter().enumerate() {
             let key = format!("m{index}");
-            let _ = write!(
-                predicate,
-                " AND ({marker} IS NULL OR {marker} != ${key})"
-            );
+            let _ = write!(predicate, " AND ({marker} IS NULL OR {marker} != ${key})");
             params.insert(key, json!(true));
         }
         let sql = format!(

@@ -40,8 +40,11 @@ use roaring::RoaringBitmap;
 /// A translated condition: matching live rows plus exactness.
 pub(super) struct Eval {
     pub(super) bits: RoaringBitmap,
-    /// `true` when `bits` is exactly the JSON-filter match set; required for
-    /// complement operations (`Not`, `Neq`).
+    /// `true` when `bits` is exactly the match set in two-valued logic (a
+    /// comparison on a `null` or absent field false); required for complement
+    /// operations (`Not`, `Neq`). It is NOT the JSON filter's three-valued
+    /// match set — a complement keeps the `null` / absent rows the filter
+    /// leaves UNKNOWN — so no caller may skip the post-filter on it.
     pub(super) exact: bool,
 }
 

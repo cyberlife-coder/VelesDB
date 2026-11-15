@@ -452,3 +452,24 @@ fn test_point_ids_accepts_an_integer_valued_float() {
         assert_eq!(cond.point_ids(), None);
     }
 }
+
+/// An empty `IN` / `CONTAINS ANY` list is an empty disjunction: false for
+/// every row, a `null` or absent field included, so its negation admits
+/// that row — it is not UNKNOWN, no comparison with the field being made.
+#[test]
+fn an_empty_disjunction_is_false_even_on_a_null_field() {
+    let empty_in = Condition::is_in("x", vec![]);
+    let empty_any = Condition::ArrayContainsAny {
+        field: "x".to_string(),
+        values: vec![],
+    };
+    for leaf in [empty_in, empty_any] {
+        let negated = Condition::Not {
+            condition: Box::new(leaf.clone()),
+        };
+        for row in [json!({"x": null}), json!({}), json!({"x": ["a"]})] {
+            assert!(!leaf.matches(&row), "{leaf:?} on {row}");
+            assert!(negated.matches(&row), "NOT {leaf:?} on {row}");
+        }
+    }
+}
