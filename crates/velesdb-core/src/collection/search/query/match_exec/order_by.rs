@@ -39,7 +39,8 @@ impl Collection {
     ) -> Result<()> {
         match expr {
             OrderByExpr::SimilarityBare => {
-                Self::sort_match_by_score(results, descending);
+                let higher_is_better = self.storage.config.read().metric.higher_is_better();
+                Self::sort_match_by_score(results, descending, higher_is_better);
                 Ok(())
             }
             OrderByExpr::Field(f) if f == "depth" => {
@@ -63,11 +64,19 @@ impl Collection {
     }
 
     /// Sorts by the pre-computed match score (zero-arg `similarity()`).
-    fn sort_match_by_score(results: &mut [MatchResult], descending: bool) {
-        results.sort_by(|a, b| {
-            let cmp = a.score.unwrap_or(0.0).total_cmp(&b.score.unwrap_or(0.0));
-            Self::apply_direction(cmp, descending)
-        });
+    ///
+    /// The score is the metric's raw value, so a distance (lower = closer,
+    /// `!higher_is_better`) is negated: a LARGER key always means "more
+    /// similar" and `DESC` is most-similar-first under every metric, as for
+    /// [`Self::sort_match_by_similarity`] and the SELECT-side
+    /// `ORDER BY similarity()`. An unscored row sorts as least similar.
+    fn sort_match_by_score(results: &mut [MatchResult], descending: bool, higher_is_better: bool) {
+        let key = |r: &MatchResult| match r.score {
+            Some(score) if higher_is_better => score,
+            Some(distance) => -distance,
+            None => f32::NEG_INFINITY,
+        };
+        results.sort_by(|a, b| Self::apply_direction(key(a).total_cmp(&key(b)), descending));
     }
 
     /// Sorts by traversal depth.
