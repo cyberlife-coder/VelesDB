@@ -12,6 +12,7 @@ import type {
   SearchResult,
   TextSearchResult,
   IVelesDBBackend,
+  IVelesDBMaintenanceBackend,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
   SparseVector,
@@ -53,10 +54,16 @@ import type {
   RelateRequest,
   RelateResponse,
   RelationsResponse,
+  AddEdgesBatchResponse,
+  HealthStatus,
+  VacuumResult,
+  CompactResult,
+  ReorderResult,
+  CollectionDiagnostics,
 } from './types';
 import type { FilterInput } from './filter';
 import type { CapabilityMap } from './capabilities';
-import { ValidationError } from './types';
+import { ValidationError, VelesDBError } from './types';
 import { WasmBackend } from './backends/wasm';
 import { RestBackend } from './backends/rest';
 import { AgentMemoryClient } from './agent-memory';
@@ -526,6 +533,79 @@ export class VelesDB {
   async setTtlDurable(collection: string, pointId: GraphNodeId, ttlSeconds: number): Promise<void> {
     this.ensureInitialized();
     return graphMethods.setTtlDurable(this.backend, collection, pointId, ttlSeconds);
+  }
+
+  // ========================================================================
+  // Maintenance / ops (REST routes; other backends refuse NOT_SUPPORTED)
+  // ========================================================================
+
+  /**
+   * Refuse an optional maintenance/ops route the connected backend does not
+   * implement, with the same typed `NOT_SUPPORTED` code the WASM stubs use.
+   * The method is invoked with the backend as receiver (class methods use
+   * `this.ensureInitialized()`).
+   */
+  private requireOps<K extends keyof IVelesDBMaintenanceBackend>(
+    method: K,
+    ...args: Parameters<NonNullable<IVelesDBMaintenanceBackend[K]>>
+  ): ReturnType<NonNullable<IVelesDBMaintenanceBackend[K]>> {
+    const impl = (this.backend as IVelesDBMaintenanceBackend)[method];
+    if (impl === undefined) {
+      throw new VelesDBError(
+        `${String(method)} is not supported by the '${this.config.backend}' backend. Use REST backend.`,
+        'NOT_SUPPORTED'
+      );
+    }
+    return (impl as (...a: unknown[]) => ReturnType<NonNullable<IVelesDBMaintenanceBackend[K]>>).apply(
+      this.backend,
+      args
+    ) as ReturnType<NonNullable<IVelesDBMaintenanceBackend[K]>>;
+  }
+
+  /** `POST /collections/{name}/graph/edges/batch` — insert many edges at once. */
+  async addEdgesBatch(collection: string, edges: AddEdgeRequest[]): Promise<AddEdgesBatchResponse> {
+    this.ensureInitialized();
+    return graphMethods.addEdgesBatch(this.backend, collection, edges);
+  }
+
+  /** `POST /collections/{name}/vacuum` — compact tombstoned index entries. */
+  async vacuumCollection(collection: string): Promise<VacuumResult> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.requireOps('vacuumCollection', collection);
+  }
+
+  /** `POST /collections/{name}/compact` — rewrite vector storage contiguously. */
+  async compactCollection(collection: string): Promise<CompactResult> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.requireOps('compactCollection', collection);
+  }
+
+  /** `POST /collections/{name}/locality/reorder` — cache-locality reordering. */
+  async reorderForLocality(collection: string): Promise<ReorderResult> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.requireOps('reorderForLocality', collection);
+  }
+
+  /** `GET /collections/{name}/diagnostics` — index health snapshot. */
+  async collectionDiagnostics(collection: string): Promise<CollectionDiagnostics> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.requireOps('collectionDiagnostics', collection);
+  }
+
+  /** `GET /health` — server liveness probe. */
+  async healthCheck(): Promise<HealthStatus> {
+    this.ensureInitialized();
+    return this.requireOps('healthCheck');
+  }
+
+  /** `GET /ready` — server readiness probe (throws SERVICE_UNAVAILABLE while not ready). */
+  async readyCheck(): Promise<HealthStatus> {
+    this.ensureInitialized();
+    return this.requireOps('readyCheck');
   }
 
   // ========================================================================

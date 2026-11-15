@@ -210,3 +210,12 @@ export interface GraphCollectionConfig {
   /** Edge types a `'strict'` graph accepts. Refused on a schemaless graph, which ignores them. */
   edgeTypes?: GraphEdgeType[];
 }
+
+/** Response of `POST /collections/{name}/graph/edges/batch` (`AddEdgesBatchResponse`). */
+export interface AddEdgesBatchResponse {
+  /**
+   * Number of edges actually inserted. May be less than the number submitted:
+   * edges whose ID already exists (in the request or the graph) are skipped.
+   */
+  added: number;
+}
