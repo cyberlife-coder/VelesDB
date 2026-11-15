@@ -309,11 +309,12 @@ export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
  * against the backend, so the two cannot drift apart unnoticed; the map
  * once said `sparseSearch: false` while sparse search ran (#2095).
  *
- * `velesqlQuery` is `false`: `query()` only executes pure top-k NEAR
- * statements (`SELECT * FROM <collection> WHERE vector NEAR $param
- * [LIMIT n]`) and throws `NOT_SUPPORTED` for any other VelesQL clause
- * (WHERE predicates, JOIN, GROUP BY, MATCH, set operations, FUSION),
- * so full VelesQL is not advertised.
+ * `velesqlQuery` is `false`: `query()` executes pure top-k NEAR statements
+ * (`SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]`) and, on
+ * a binding with `WasmDatabase.attachStore` (after velesdb-wasm 8.0.0), other
+ * read-only `SELECT`s through the binding's executor (`wasm-velesql.ts`);
+ * aggregations, MATCH and DDL/mutations stay `NOT_SUPPORTED`, so full
+ * VelesQL is not advertised.
  */
 export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   vectorSearch: true,
