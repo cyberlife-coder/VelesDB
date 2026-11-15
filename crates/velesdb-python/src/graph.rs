@@ -7,12 +7,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::HashMap;
 
-use crate::utils::{extract_vector, json_to_python, python_to_json_within};
-use velesdb_core::collection::graph::{GraphEdge, GraphNode, TraversalResult};
+use crate::utils::{json_to_python, python_to_json_within};
+use velesdb_core::collection::graph::{GraphEdge, TraversalResult};
 
 /// Parse a Python properties dict into a JSON properties map.
 ///
-/// Used by both [`dict_to_node`] and [`dict_to_edge`] to avoid duplicating
+/// Used by [`dict_to_edge`] to avoid duplicating
 /// the `Py<PyAny>` -> `HashMap<String, serde_json::Value>` conversion.
 fn parse_properties(
     py: Python<'_>,
@@ -24,37 +24,6 @@ fn parse_properties(
         // The properties map is the first level, as core counts it.
         .map(|(k, v)| python_to_json_within(py, &v, 1).map(|jv| (k, jv)))
         .collect()
-}
-
-/// Convert a Python dict to a GraphNode.
-pub fn dict_to_node(py: Python<'_>, dict: &HashMap<String, Py<PyAny>>) -> PyResult<GraphNode> {
-    let id: u64 = dict
-        .get("id")
-        .ok_or_else(|| PyValueError::new_err("Node missing 'id' field"))?
-        .extract(py)?;
-
-    let label: String = dict
-        .get("label")
-        .map(|l| l.extract(py))
-        .transpose()?
-        .unwrap_or_else(|| "Node".to_string());
-
-    let node = GraphNode::new(id, &label);
-
-    let node = if let Some(props) = dict.get("properties") {
-        node.with_properties(parse_properties(py, props)?)
-    } else {
-        node
-    };
-
-    let node = if let Some(vector) = dict.get("vector") {
-        let vec = extract_vector(py, vector)?;
-        node.with_vector(vec)
-    } else {
-        node
-    };
-
-    Ok(node)
 }
 
 /// Convert a Python dict to a GraphEdge.
@@ -90,32 +59,6 @@ pub fn dict_to_edge(py: Python<'_>, dict: &HashMap<String, Py<PyAny>>) -> PyResu
     };
 
     Ok(edge)
-}
-
-/// Convert a `GraphNode` to a Python dict, bypassing `HashMap` intermediary.
-///
-/// Uses `PyDict::new()` + `PyString::intern()` for static keys to avoid
-/// repeated string allocation.
-pub fn node_to_dict(py: Python<'_>, node: &GraphNode) -> Py<PyAny> {
-    let dict = PyDict::new(py);
-    let _ = dict.set_item(PyString::intern(py, "id"), node.id());
-    let _ = dict.set_item(PyString::intern(py, "label"), node.label());
-
-    let props = node.properties();
-    if !props.is_empty() {
-        let props_dict = PyDict::new(py);
-        for (k, v) in props {
-            let _ = props_dict.set_item(k.as_str(), json_to_python(py, v));
-        }
-        let _ = dict.set_item(PyString::intern(py, "properties"), props_dict);
-    }
-
-    if let Some(vec) = node.vector() {
-        let np_vector = numpy::PyArray1::from_slice(py, vec);
-        let _ = dict.set_item(PyString::intern(py, "vector"), np_vector);
-    }
-
-    dict.into_any().unbind()
 }
 
 /// Convert a `GraphEdge` to a Python dict, bypassing `HashMap` intermediary.

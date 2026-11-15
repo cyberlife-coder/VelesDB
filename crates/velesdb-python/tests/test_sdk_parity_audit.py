@@ -143,3 +143,142 @@ def test_hybrid_sparse_filter_sparse_only_still_rejected(tmp_path):
         col.search_request(
             velesdb.SearchOptions(sparse_vector={0: 1.0}, k=1, filter=filt)
         )
+
+
+# ---------------------------------------------------------------------------
+# 3. Graph parity: strict schema, edge reads, traversal options, fidelity
+# ---------------------------------------------------------------------------
+
+
+def _seed_graph(db, name="kg"):
+    g = db.create_graph_collection(name)
+    g.upsert_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
+    g.upsert_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
+    g.upsert_node_payload(30, {"_labels": ["Company"], "name": "Acme"})
+    g.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})
+    g.add_edge({"id": 2, "source": 20, "target": 30, "label": "WORKS_AT"})
+    return g
+
+
+def test_graph_strict_schema_declarable_from_python(tmp_path):
+    """GraphSchema.strict() can now declare node/edge types (was hollow)."""
+    db = velesdb.Database(str(tmp_path))
+    schema = (
+        velesdb.PyGraphSchema.strict()
+        .with_node_type("Person", {"name": "string", "age": "integer"})
+        .with_node_type("Company")
+        .with_edge_type("KNOWS", "Person", "Person")
+        .with_edge_type("WORKS_AT", "Person", "Company", {"since": "integer"})
+    )
+    g = db.create_graph_collection("strict_kg", schema=schema)
+
+    read_back = g.schema
+    assert read_back.is_schemaless is False
+    node_types = {t["name"]: t for t in read_back.node_types}
+    assert set(node_types) == {"Person", "Company"}
+    assert node_types["Person"]["properties"] == {"name": "string", "age": "integer"}
+    edge_types = {t["name"]: t for t in read_back.edge_types}
+    assert edge_types["KNOWS"]["from_type"] == "Person"
+    assert edge_types["WORKS_AT"]["to_type"] == "Company"
+    assert edge_types["WORKS_AT"]["properties"] == {"since": "integer"}
+
+    # Valid edges accepted, undeclared type rejected (VELES-017 -> ValueError).
+    g.upsert_node_payload(10, {"_labels": ["Person"], "name": "Alice"})
+    g.upsert_node_payload(20, {"_labels": ["Person"], "name": "Bob"})
+    g.upsert_node_payload(30, {"_labels": ["Company"], "name": "Acme"})
+    g.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})
+    g.add_edge({"id": 2, "source": 20, "target": 30, "label": "WORKS_AT"})
+    with pytest.raises(ValueError, match="not allowed"):
+        g.add_edge({"id": 3, "source": 10, "target": 30, "label": "LIKES"})
+
+
+def test_graph_schema_rejects_unknown_value_type():
+    with pytest.raises(ValueError, match="unknown value type"):
+        velesdb.PyGraphSchema.strict().with_node_type("T", {"x": "bogus"})
+
+
+def test_graph_collection_edge_reads_and_mutations(tmp_path):
+    db = velesdb.Database(str(tmp_path))
+    g = _seed_graph(db)
+
+    edge = g.get_edge(1)
+    assert edge is not None and edge["label"] == "KNOWS" and edge["source"] == 10
+    assert g.get_edge(999) is None
+
+    bounded = g.get_outgoing_bounded(10, 1)
+    assert bounded["total"] == 1 and len(bounded["edges"]) == 1
+    bounded_in = g.get_incoming_bounded(20, 5)
+    assert bounded_in["total"] == 1 and bounded_in["edges"][0]["id"] == 1
+
+    # try_remove_edge: absent -> False, present -> True
+    assert g.try_remove_edge(999) is False
+    assert g.try_remove_edge(2) is True
+    assert g.remove_edge(2) is False  # already gone
+    assert g.edge_count() == 1
+
+    # batch payload upsert + scroll_batch + metrics
+    g.upsert_node_payloads([
+        {"id": 40, "payload": {"_labels": ["Person"], "name": "Carol"}},
+        {"id": 50, "payload": {"_labels": ["Person"], "name": "Dave"}},
+    ])
+    points, cursor = g.scroll_batch(batch_size=10)
+    assert {p["id"] for p in points} == {10, 20, 30, 40, 50}
+    assert cursor == 50  # last point's ID while a non-empty batch remains
+    points2, cursor2 = g.scroll_batch(cursor=cursor, batch_size=10)
+    assert points2 == [] and cursor2 is None
+    m = g.metrics()
+    assert m["edge_inserts_total"] >= 1 and m["edges_total"] >= 1
+
+    edges_removed, nodes_removed = g.truncate()
+    assert edges_removed == 1 and nodes_removed == 5
+    assert g.edge_count() == 0 and g.count() == 0
+
+
+def test_graph_traversal_min_depth_and_timeout(tmp_path):
+    db = velesdb.Database(str(tmp_path))
+    g = _seed_graph(db)
+    full = g.traverse_bfs(10, max_depth=2)
+    targets = {r["target_id"] for r in full}
+    assert targets == {20, 30}
+    # min_depth=2 skips the direct neighbour
+    deep_only = g.traverse_bfs(10, max_depth=2, min_depth=2)
+    assert {r["target_id"] for r in deep_only} == {30}
+    # a zero timeout still returns a partial (possibly empty) result, no error
+    partial = g.traverse_bfs(10, max_depth=2, timeout_ms=0)
+    assert isinstance(partial, list)
+    dfs = g.traverse_dfs(10, max_depth=2, min_depth=1, timeout_ms=1000)
+    assert {r["target_id"] for r in dfs} == {20, 30}
+
+
+def test_graph_store_direction_and_reads():
+    store = velesdb.GraphStore()
+    store.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})
+    store.add_edge({"id": 2, "source": 20, "target": 30, "label": "WORKS_AT"})
+
+    fwd = store.traverse_bfs(source=10, direction="forward")
+    assert {r.target for r in fwd} == {20, 30}
+    assert all(isinstance(r.path, list) and r.path for r in fwd)
+    assert fwd[0].path == [1] or fwd[1].path == [1]
+
+    rev = store.traverse_bfs(source=30, direction="reverse")
+    assert {r.target for r in rev} == {20, 10}
+
+    both = store.traverse_bfs(source=20, direction="both")
+    assert {r.target for r in both} == {10, 30}
+
+    with pytest.raises(Exception, match="unknown direction"):
+        store.traverse_bfs(source=10, direction="sideways")
+
+    assert store.get_edge(1)["label"] == "KNOWS"
+    assert store.get_edge(99) is None
+    assert len(store.all_edges()) == 2
+    assert [e["id"] for e in store.get_incoming_by_label(20, "KNOWS")] == [1]
+    assert store.out_degree(20) == 1 and store.in_degree(20) == 1
+
+    streaming = store.traverse_bfs_streaming(
+        10, velesdb.StreamingConfig(max_depth=2, max_visited=100, limit=1)
+    )
+    assert len(streaming) == 1  # explicit limit decoupled from max_visited
+
+    assert store.remove_node_edges(20) == 2
+    assert store.edge_count() == 0

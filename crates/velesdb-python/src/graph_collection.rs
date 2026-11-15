@@ -4,16 +4,22 @@
 //! as a `PyGraphCollection` pyclass.  Follows the same patterns as
 //! `crate::collection::Collection` (error handling, dict conversion).
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::collection::{deny_if_scoped, retain_by_filters};
 use crate::collection_helpers::{core_err, point_to_dict, search_result_to_dict};
 use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::collection::graph::TraversalConfig;
-use velesdb_core::{Database as CoreDatabase, GraphCollection, GraphSchema, QueryOperationKind};
+use velesdb_core::{
+    Database as CoreDatabase, EdgeType, GraphCollection, GraphSchema, NodeType, QueryOperationKind,
+    ValueType,
+};
 
 // ---------------------------------------------------------------------------
 // PyGraphSchema
@@ -72,13 +78,159 @@ impl PyGraphSchema {
         self.inner.is_schemaless()
     }
 
+    /// Declare a node type on a strict schema (builder — returns a new schema).
+    ///
+    /// Args:
+    ///     name: Node type name (used in the ``_labels`` payload field).
+    ///     properties: Optional mapping of property name to value type
+    ///         ("string", "integer", "float", "boolean", "vector").
+    ///
+    /// Returns:
+    ///     GraphSchema: A new schema with this node type added
+    ///
+    /// Example:
+    ///     >>> schema = GraphSchema.strict().with_node_type(
+    ///     ...     "Person", {"name": "string", "age": "integer"})
+    #[pyo3(signature = (name, properties=None))]
+    fn with_node_type(
+        &self,
+        name: &str,
+        properties: Option<HashMap<String, String>>,
+    ) -> PyResult<Self> {
+        let props = parse_property_types(properties)?;
+        let inner = self
+            .inner
+            .clone()
+            .with_node_type(NodeType::new(name).with_properties(props));
+        Ok(Self { inner })
+    }
+
+    /// Declare an edge type on a strict schema (builder — returns a new schema).
+    ///
+    /// Args:
+    ///     name: Edge type (label) name, e.g. "KNOWS".
+    ///     from_type: Node type of the source endpoint.
+    ///     to_type: Node type of the target endpoint.
+    ///     properties: Optional mapping of property name to value type.
+    ///
+    /// Returns:
+    ///     GraphSchema: A new schema with this edge type added
+    ///
+    /// Example:
+    ///     >>> schema = (GraphSchema.strict()
+    ///     ...     .with_node_type("Person")
+    ///     ...     .with_edge_type("KNOWS", "Person", "Person", {"since": "integer"}))
+    #[pyo3(signature = (name, from_type, to_type, properties=None))]
+    fn with_edge_type(
+        &self,
+        name: &str,
+        from_type: &str,
+        to_type: &str,
+        properties: Option<HashMap<String, String>>,
+    ) -> PyResult<Self> {
+        let props = parse_property_types(properties)?;
+        let inner = self
+            .inner
+            .clone()
+            .with_edge_type(EdgeType::new(name, from_type, to_type).with_properties(props));
+        Ok(Self { inner })
+    }
+
+    /// The declared node types, as a list of
+    /// ``{"name": str, "properties": {name: value_type}}`` dicts.
+    #[getter]
+    fn node_types(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let out: Vec<Py<PyAny>> = self
+            .inner
+            .node_types()
+            .iter()
+            .map(|nt| {
+                let d = PyDict::new(py);
+                let _ = d.set_item("name", nt.name());
+                let _ = d.set_item("properties", property_types_to_dict(py, nt.properties()));
+                d.into_any().unbind()
+            })
+            .collect();
+        Ok(out)
+    }
+
+    /// The declared edge types, as a list of
+    /// ``{"name": str, "from_type": str, "to_type": str, "properties": {...}}``.
+    #[getter]
+    fn edge_types(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let out: Vec<Py<PyAny>> = self
+            .inner
+            .edge_types()
+            .iter()
+            .map(|et| {
+                let d = PyDict::new(py);
+                let _ = d.set_item("name", et.name());
+                let _ = d.set_item("from_type", et.from_type());
+                let _ = d.set_item("to_type", et.to_type());
+                let _ = d.set_item("properties", property_types_to_dict(py, et.properties()));
+                d.into_any().unbind()
+            })
+            .collect();
+        Ok(out)
+    }
+
     fn __repr__(&self) -> String {
         if self.inner.is_schemaless() {
             "GraphSchema(schemaless=True)".to_string()
         } else {
-            "GraphSchema(schemaless=False)".to_string()
+            format!(
+                "GraphSchema(schemaless=False, node_types={}, edge_types={})",
+                self.inner.node_types().len(),
+                self.inner.edge_types().len()
+            )
         }
     }
+}
+
+/// Parse a ``{property: type_name}`` mapping into core `ValueType`s.
+fn parse_property_types(
+    properties: Option<HashMap<String, String>>,
+) -> PyResult<HashMap<String, ValueType>> {
+    let mut out = HashMap::new();
+    for (key, type_name) in properties.unwrap_or_default() {
+        out.insert(key, value_type_from_str(&type_name)?);
+    }
+    Ok(out)
+}
+
+/// Map a value-type name to core's `ValueType` (serde names plus a few aliases).
+fn value_type_from_str(name: &str) -> PyResult<ValueType> {
+    match name.to_ascii_lowercase().as_str() {
+        "string" | "str" | "text" => Ok(ValueType::String),
+        "integer" | "int" | "i64" => Ok(ValueType::Integer),
+        "float" | "double" | "f64" => Ok(ValueType::Float),
+        "boolean" | "bool" => Ok(ValueType::Boolean),
+        "vector" | "embedding" => Ok(ValueType::Vector),
+        other => Err(PyValueError::new_err(format!(
+            "unknown value type '{other}'; expected one of: string, integer, float, boolean, vector"
+        ))),
+    }
+}
+
+/// Render a `ValueType` as its canonical (serde) name.
+fn value_type_to_str(value_type: &ValueType) -> &'static str {
+    match value_type {
+        ValueType::String => "string",
+        ValueType::Integer => "integer",
+        ValueType::Float => "float",
+        ValueType::Boolean => "boolean",
+        ValueType::Vector => "vector",
+        _ => "unknown", // ValueType is #[non_exhaustive]
+    }
+}
+
+/// Build a Python ``{name: type_name}`` dict from a core property map.
+fn property_types_to_dict(py: Python<'_>, properties: &HashMap<String, ValueType>) -> Py<PyAny> {
+    let d = PyDict::new(py);
+    for (key, value_type) in properties {
+        let _ = d.set_item(key, value_type_to_str(value_type));
+    }
+    d.into_any().unbind()
 }
 
 impl PyGraphSchema {
@@ -294,6 +446,77 @@ impl PyGraphCollection {
         self.get_incoming(py, node_id)
     }
 
+    /// Get a single edge by its ID.
+    ///
+    /// Args:
+    ///     edge_id: The edge ID to look up
+    ///
+    /// Returns:
+    ///     Edge dict (id, source, target, label, properties), or None
+    #[pyo3(signature = (edge_id))]
+    fn get_edge(&self, py: Python<'_>, edge_id: u64) -> PyResult<Option<Py<PyAny>>> {
+        self.authorize("get_edge")?;
+        let edge = py.detach(|| self.inner.get_edge(edge_id));
+        Ok(edge.map(|e| edge_to_dict(py, &e)))
+    }
+
+    /// Bounded outgoing-edge read: at most ``cap`` edges plus the true total
+    /// out-degree, in O(cap) even for super-nodes (#1820).
+    ///
+    /// Returns:
+    ///     Dict with keys ``edges`` (list of edge dicts) and ``total`` (int)
+    #[pyo3(signature = (node_id, cap))]
+    fn get_outgoing_bounded(
+        &self,
+        py: Python<'_>,
+        node_id: u64,
+        cap: usize,
+    ) -> PyResult<Py<PyAny>> {
+        self.authorize("get_outgoing_bounded")?;
+        let (edges, total) = py.detach(|| self.inner.get_outgoing_bounded(node_id, cap));
+        bounded_edges_to_dict(py, edges, total)
+    }
+
+    /// Bounded incoming-edge read: at most ``cap`` edges plus the true total
+    /// in-degree, in O(cap) even for super-nodes (#1820).
+    ///
+    /// Returns:
+    ///     Dict with keys ``edges`` (list of edge dicts) and ``total`` (int)
+    #[pyo3(signature = (node_id, cap))]
+    fn get_incoming_bounded(
+        &self,
+        py: Python<'_>,
+        node_id: u64,
+        cap: usize,
+    ) -> PyResult<Py<PyAny>> {
+        self.authorize("get_incoming_bounded")?;
+        let (edges, total) = py.detach(|| self.inner.get_incoming_bounded(node_id, cap));
+        bounded_edges_to_dict(py, edges, total)
+    }
+
+    /// Remove every edge, then every node (the same rule VelesQL `TRUNCATE`
+    /// follows). Not atomic: removals that succeeded before a failure stay
+    /// applied, and the error reports the counts.
+    ///
+    /// Returns:
+    ///     Tuple of (edges_removed, nodes_removed)
+    fn truncate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
+        py.detach(|| self.inner.truncate().map_err(core_err))
+    }
+
+    /// Remove an edge by ID, distinguishing "absent" from "WAL refused".
+    ///
+    /// Unlike :py:meth:`remove_edge` (which returns False on both), this
+    /// raises `VelesDBError` (VELES-006) when the removal was attempted and
+    /// the write-ahead log refused it, leaving the edge in place.
+    ///
+    /// Returns:
+    ///     bool: True if the edge existed and was removed, False if absent
+    #[pyo3(signature = (edge_id))]
+    fn try_remove_edge(&self, py: Python<'_>, edge_id: u64) -> PyResult<bool> {
+        py.detach(|| self.inner.try_remove_edge(edge_id).map_err(core_err))
+    }
+
     /// Get the in-degree and out-degree of a node.
     ///
     /// Args:
@@ -333,6 +556,99 @@ impl PyGraphCollection {
                 .upsert_node_payload(node_id, &value)
                 .map_err(core_err)
         })
+    }
+
+    /// Batch node-payload upsert: one WAL barrier, and the whole batch is
+    /// validated before anything is written, so a rejected batch commits
+    /// nothing (#2153).
+    ///
+    /// Args:
+    ///     entries: List of dicts with keys ``id`` (int) and ``payload`` (dict)
+    ///
+    /// Example:
+    ///     >>> graph.upsert_node_payloads([
+    ///     ...     {"id": 10, "payload": {"name": "Alice"}},
+    ///     ...     {"id": 20, "payload": {"name": "Bob"}},
+    ///     ... ])
+    #[pyo3(signature = (entries))]
+    fn upsert_node_payloads(
+        &self,
+        py: Python<'_>,
+        entries: Vec<HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<()> {
+        let mut parsed: Vec<(u64, serde_json::Value)> = Vec::with_capacity(entries.len());
+        for (index, entry) in entries.iter().enumerate() {
+            let id = crate::collection_helpers::extract_point_id(py, entry, index)?;
+            let payload = crate::collection_helpers::parse_payload(py, entry.get("payload"))?
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "entry at index {index} must have a 'payload' field"
+                    ))
+                })?;
+            parsed.push((id, payload));
+        }
+        py.detach(|| {
+            let refs: Vec<(u64, &serde_json::Value)> =
+                parsed.iter().map(|(id, value)| (*id, value)).collect();
+            self.inner.upsert_node_payloads(&refs).map_err(core_err)
+        })
+    }
+
+    /// Scroll graph nodes in ascending-ID batches (stateless one-shot, same
+    /// shape as :py:meth:`Collection.scroll_batch`).
+    ///
+    /// Args:
+    ///     cursor: Resume after this node ID (None to start from the beginning)
+    ///     batch_size: Maximum nodes per batch (default: 100)
+    ///     filter: Optional metadata filter dict (same shape as search filters)
+    ///
+    /// Returns:
+    ///     Tuple ``(points, next_cursor)``: the batch as a list of point dicts
+    ///     and the cursor for the next call (the last point's ID; ``None`` once
+    ///     the batch is empty)
+    #[pyo3(signature = (cursor=None, batch_size=100, filter=None))]
+    fn scroll_batch(
+        &self,
+        py: Python<'_>,
+        cursor: Option<u64>,
+        batch_size: usize,
+        filter: Option<Py<PyAny>>,
+    ) -> PyResult<(Vec<Py<PyAny>>, Option<u64>)> {
+        self.authorize("scroll_batch")?;
+        let filter_obj = crate::collection_helpers::parse_optional_filter(py, filter)?;
+        let batch = py.detach(|| {
+            self.inner
+                .scroll_batch(cursor, batch_size, filter_obj.as_ref())
+                .map_err(core_err)
+        })?;
+        let points: Vec<Py<PyAny>> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
+        Ok((points, batch.next_cursor))
+    }
+
+    /// Operational graph metrics (edge/traversal counters).
+    ///
+    /// Returns:
+    ///     Dict with keys: edges_total, edge_inserts_total, edge_deletes_total,
+    ///     traversals_total, traversal_nodes_visited
+    fn metrics(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.authorize("metrics")?;
+        let (edges_total, inserts, deletes, traversals, visited) = py.detach(|| {
+            let m = self.inner.metrics();
+            (
+                m.edges_total(),
+                m.edge_inserts_total(),
+                m.edge_deletes_total(),
+                m.traversals_total(),
+                m.traversal_nodes_visited(),
+            )
+        });
+        let out = PyDict::new(py);
+        let _ = out.set_item("edges_total", edges_total);
+        let _ = out.set_item("edge_inserts_total", inserts);
+        let _ = out.set_item("edge_deletes_total", deletes);
+        let _ = out.set_item("traversals_total", traversals);
+        let _ = out.set_item("traversal_nodes_visited", visited);
+        Ok(out.into_any().unbind())
     }
 
     /// Upsert a node payload, optionally with an embedding vector.
@@ -396,6 +712,9 @@ impl PyGraphCollection {
     ///     limit: Maximum results to return (default: 100)
     ///     rel_types: Optional list of relationship types to follow.
     ///         Alias: ``relationship_types`` (same effect, either name works).
+    ///     min_depth: Minimum hops (inclusive) to include (default: 1)
+    ///     timeout_ms: Wall-clock budget in milliseconds; when it expires the
+    ///         partial result accumulated so far is returned (default: none)
     ///
     /// Returns:
     ///     List of traversal result dicts with keys: target_id, path, depth
@@ -404,7 +723,8 @@ impl PyGraphCollection {
     ///     >>> results = graph.traverse_bfs(source_id=1, max_depth=3)
     ///     >>> results = graph.traverse_bfs(1, rel_types=["KNOWS"])
     ///     >>> results = graph.traverse_bfs(1, relationship_types=["KNOWS"])  # alias
-    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None, relationship_types=None))]
+    #[allow(clippy::too_many_arguments)] // traversal knobs thread through one config
+    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None, relationship_types=None, min_depth=None, timeout_ms=None))]
     fn traverse_bfs(
         &self,
         py: Python<'_>,
@@ -413,10 +733,13 @@ impl PyGraphCollection {
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
         relationship_types: Option<Vec<String>>,
+        min_depth: Option<u32>,
+        timeout_ms: Option<u64>,
     ) -> PyResult<Vec<Py<PyAny>>> {
         self.authorize("traverse_bfs")?;
         let effective_rel_types = rel_types.or(relationship_types);
-        let config = build_traversal_config(max_depth, limit, effective_rel_types);
+        let config =
+            build_traversal_config(min_depth, max_depth, limit, effective_rel_types, timeout_ms);
         let results = py.detach(|| self.inner.traverse_bfs(source_id, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
@@ -437,7 +760,8 @@ impl PyGraphCollection {
     ///     >>> results = graph.traverse_dfs(source_id=1, max_depth=3)
     ///     >>> results = graph.traverse_dfs(1, rel_types=["KNOWS"])
     ///     >>> results = graph.traverse_dfs(1, relationship_types=["KNOWS"])  # alias
-    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None, relationship_types=None))]
+    #[allow(clippy::too_many_arguments)] // traversal knobs thread through one config
+    #[pyo3(signature = (source_id, max_depth=None, limit=None, rel_types=None, relationship_types=None, min_depth=None, timeout_ms=None))]
     fn traverse_dfs(
         &self,
         py: Python<'_>,
@@ -446,10 +770,13 @@ impl PyGraphCollection {
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
         relationship_types: Option<Vec<String>>,
+        min_depth: Option<u32>,
+        timeout_ms: Option<u64>,
     ) -> PyResult<Vec<Py<PyAny>>> {
         self.authorize("traverse_dfs")?;
         let effective_rel_types = rel_types.or(relationship_types);
-        let config = build_traversal_config(max_depth, limit, effective_rel_types);
+        let config =
+            build_traversal_config(min_depth, max_depth, limit, effective_rel_types, timeout_ms);
         let results = py.detach(|| self.inner.traverse_dfs(source_id, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
@@ -471,7 +798,8 @@ impl PyGraphCollection {
     ///
     /// Example:
     ///     >>> results = graph.traverse_bfs_parallel([1, 5, 10], max_depth=3)
-    #[pyo3(signature = (source_ids, max_depth=None, limit=None, rel_types=None, relationship_types=None))]
+    #[allow(clippy::too_many_arguments)] // traversal knobs thread through one config
+    #[pyo3(signature = (source_ids, max_depth=None, limit=None, rel_types=None, relationship_types=None, min_depth=None, timeout_ms=None))]
     fn traverse_bfs_parallel(
         &self,
         py: Python<'_>,
@@ -480,10 +808,13 @@ impl PyGraphCollection {
         limit: Option<usize>,
         rel_types: Option<Vec<String>>,
         relationship_types: Option<Vec<String>>,
+        min_depth: Option<u32>,
+        timeout_ms: Option<u64>,
     ) -> PyResult<Vec<Py<PyAny>>> {
         self.authorize("traverse_bfs_parallel")?;
         let effective_rel_types = rel_types.or(relationship_types);
-        let config = build_traversal_config(max_depth, limit, effective_rel_types);
+        let config =
+            build_traversal_config(min_depth, max_depth, limit, effective_rel_types, timeout_ms);
         let results = py.detach(|| self.inner.traverse_bfs_parallel(&source_ids, &config));
         Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
     }
@@ -719,18 +1050,40 @@ impl PyGraphCollection {
 // ---------------------------------------------------------------------------
 
 /// Build a `TraversalConfig` from optional Python parameters.
+///
+/// `timeout_ms` becomes a wall-clock deadline (`Instant::now() + timeout`);
+/// when it expires mid-traversal, core returns the partial result accumulated
+/// so far — the same convention as the `limit` guard.
 fn build_traversal_config(
+    min_depth: Option<u32>,
     max_depth: Option<u32>,
     limit: Option<usize>,
     rel_types: Option<Vec<String>>,
+    timeout_ms: Option<u64>,
 ) -> TraversalConfig {
     TraversalConfig {
-        min_depth: 1,
+        min_depth: min_depth.unwrap_or(1),
         max_depth: max_depth.unwrap_or(3),
         limit: limit.unwrap_or(100),
         rel_types: rel_types.unwrap_or_default(),
-        deadline: None,
+        deadline: timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms)),
     }
+}
+
+/// Render a bounded edge read as ``{"edges": [...], "total": n}``.
+fn bounded_edges_to_dict(
+    py: Python<'_>,
+    edges: Vec<velesdb_core::collection::graph::GraphEdge>,
+    total: usize,
+) -> PyResult<Py<PyAny>> {
+    let out = PyDict::new(py);
+    let list = PyList::empty(py);
+    for edge in &edges {
+        let _ = list.append(edge_to_dict(py, edge));
+    }
+    let _ = out.set_item("edges", list);
+    let _ = out.set_item("total", total);
+    Ok(out.into_any().unbind())
 }
 
 #[cfg(test)]

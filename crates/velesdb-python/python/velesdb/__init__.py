@@ -123,13 +123,19 @@ class GraphStore:
         max_depth: int = 3,
         limit: int = 10_000,
         relationship_types: list[str] | None = None,
+        direction: str = "forward",
+        timeout_ms: int | None = None,
     ) -> list[TraversalResult]:
         cfg = StreamingConfig(
             max_depth=max_depth,
             max_visited=limit,
             relationship_types=relationship_types,
+            deadline_ms=timeout_ms,
         )
-        return self._inner.traverse_bfs_streaming(source, cfg)
+        if direction == "forward":
+            return self._inner.traverse_bfs_streaming(source, cfg)
+        # reverse / both run core's eager direction-aware BFS
+        return self._inner.traverse_bfs(source, cfg, direction)
 
     def traverse_dfs(
         self,
@@ -138,11 +144,13 @@ class GraphStore:
         max_depth: int = 3,
         limit: int = 10_000,
         relationship_types: list[str] | None = None,
+        timeout_ms: int | None = None,
     ) -> list[TraversalResult]:
         cfg = StreamingConfig(
             max_depth=max_depth,
             max_visited=limit,
             relationship_types=relationship_types,
+            deadline_ms=timeout_ms,
         )
         return self._inner.traverse_dfs(source, cfg)
 

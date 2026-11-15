@@ -18,9 +18,11 @@ use crate::graph::{dict_to_edge, edge_to_dict};
 use velesdb_core::collection::graph::EdgeStore;
 
 // FLAG-1 FIX: Use core's traversals instead of re-implementing BFS or DFS.
+use std::time::{Duration, Instant};
 use velesdb_core::collection::graph::{
-    bfs_stream, dfs_traverse, StreamingConfig as CoreStreamingConfig,
-    TraversalConfig as CoreTraversalConfig, TraversalResult as CoreTraversalResult,
+    bfs_stream, bfs_traverse, bfs_traverse_both, bfs_traverse_reverse, dfs_traverse,
+    StreamingConfig as CoreStreamingConfig, TraversalConfig as CoreTraversalConfig,
+    TraversalResult as CoreTraversalResult,
 };
 
 /// Configuration for streaming BFS traversal.
@@ -34,24 +36,43 @@ pub struct StreamingConfig {
     /// Maximum traversal depth (default: 3).
     #[pyo3(get, set)]
     pub max_depth: usize,
-    /// Maximum number of results (default: 10000). The memory bound of a
-    /// traversal is core's own visited-set cap, `MAX_VISITED_SIZE`.
+    /// Memory bound of the visited set (default: 10000). Core's
+    /// `MAX_VISITED_SIZE` still applies on top.
     #[pyo3(get, set)]
     pub max_visited: usize,
     /// Optional filter by relationship types.
     #[pyo3(get, set)]
     pub relationship_types: Option<Vec<String>>,
+    /// Result cap (default: None = same as ``max_visited``, the historical
+    /// behavior). Set it explicitly to decouple the result cap from the
+    /// visited-set memory bound — core keeps the two separate
+    /// (`StreamingConfig.limit` vs `max_visited_size`).
+    #[pyo3(get, set)]
+    pub limit: Option<usize>,
+    /// Wall-clock budget in milliseconds; when it expires mid-traversal core
+    /// returns the partial result accumulated so far (default: None = no bound).
+    #[pyo3(get, set)]
+    pub deadline_ms: Option<u64>,
 }
 
 #[pymethods]
 impl StreamingConfig {
     #[new]
-    #[pyo3(signature = (max_depth=3, max_visited=10000, relationship_types=None))]
-    fn new(max_depth: usize, max_visited: usize, relationship_types: Option<Vec<String>>) -> Self {
+    #[pyo3(signature = (max_depth=3, max_visited=10000, relationship_types=None, limit=None, deadline_ms=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        max_depth: usize,
+        max_visited: usize,
+        relationship_types: Option<Vec<String>>,
+        limit: Option<usize>,
+        deadline_ms: Option<u64>,
+    ) -> Self {
         Self {
             max_depth,
             max_visited,
             relationship_types,
+            limit,
+            deadline_ms,
         }
     }
 }
@@ -72,9 +93,13 @@ pub struct TraversalResult {
     /// Edge label.
     #[pyo3(get)]
     pub label: String,
-    /// Edge ID.
+    /// Edge ID of the last hop.
     #[pyo3(get)]
     pub edge_id: u64,
+    /// Full edge-ID path from the start node to this target (core's
+    /// `TraversalResult.path`); empty for the start node itself.
+    #[pyo3(get)]
+    pub path: Vec<u64>,
 }
 
 #[pymethods]
@@ -234,15 +259,19 @@ impl GraphStore {
         start_node: u64,
         config: StreamingConfig,
     ) -> PyResult<Vec<TraversalResult>> {
-        // Convert Python config to core config
+        // Convert Python config to core config. `limit` defaults to the
+        // historical `Some(max_visited)`; set it explicitly to decouple the
+        // result cap from the visited-set memory bound.
         let rel_types: Vec<String> = config.relationship_types.unwrap_or_default();
         let core_config = CoreStreamingConfig {
             max_depth: u32::try_from(config.max_depth)
                 .map_err(|_| PyRuntimeError::new_err("max_depth exceeds u32::MAX"))?,
             max_visited_size: config.max_visited,
             rel_types,
-            limit: Some(config.max_visited),
-            deadline: None,
+            limit: config.limit.or(Some(config.max_visited)),
+            deadline: config
+                .deadline_ms
+                .map(|ms| Instant::now() + Duration::from_millis(ms)),
         };
 
         // Release GIL during traversal (no Py<PyAny> involved)
@@ -292,7 +321,7 @@ impl GraphStore {
         }))
     }
 
-    /// Gets the out-degree (number of outgoing edges) of a node.
+    /// Gets the out-degree (number of outgoing edges) of a node, in O(1).
     ///
     /// Args:
     ///     node_id: The node ID
@@ -303,11 +332,11 @@ impl GraphStore {
     fn out_degree(&self, py: Python<'_>, node_id: u64) -> PyResult<usize> {
         Ok(py.detach(|| {
             let store = self.inner.read();
-            store.get_outgoing(node_id).len()
+            store.outgoing_degree(node_id)
         }))
     }
 
-    /// Gets the in-degree (number of incoming edges) of a node.
+    /// Gets the in-degree (number of incoming edges) of a node, in O(1).
     ///
     /// Args:
     ///     node_id: The node ID
@@ -318,7 +347,7 @@ impl GraphStore {
     fn in_degree(&self, py: Python<'_>, node_id: u64) -> PyResult<usize> {
         Ok(py.detach(|| {
             let store = self.inner.read();
-            store.get_incoming(node_id).len()
+            store.incoming_degree(node_id)
         }))
     }
 
@@ -349,9 +378,11 @@ impl GraphStore {
             min_depth: 1,
             max_depth: u32::try_from(config.max_depth)
                 .map_err(|_| PyRuntimeError::new_err("max_depth exceeds u32::MAX"))?,
-            limit: config.max_visited,
+            limit: config.limit.unwrap_or(config.max_visited),
             rel_types: config.relationship_types.clone().unwrap_or_default(),
-            deadline: None,
+            deadline: config
+                .deadline_ms
+                .map(|ms| Instant::now() + Duration::from_millis(ms)),
         };
 
         py.detach(|| {
@@ -361,6 +392,116 @@ impl GraphStore {
                 .filter_map(|r| to_py_result(&store, source_id, r))
                 .collect())
         })
+    }
+
+    /// Eager BFS traversal from a source node (core's `bfs_traverse` family).
+    ///
+    /// Args:
+    ///     source_id: Starting node ID
+    ///     config: StreamingConfig (max_depth, max_visited, relationship_types,
+    ///         limit, deadline_ms)
+    ///     direction: "forward" (outgoing edges, default), "reverse" (incoming
+    ///         edges), or "both" (forward then reverse, deduplicated)
+    ///
+    /// Returns:
+    ///     List of TraversalResult objects (each carries the full edge-ID
+    ///     `path` from the start node)
+    #[pyo3(signature = (source_id, config=None, direction="forward"))]
+    fn traverse_bfs(
+        &self,
+        py: Python<'_>,
+        source_id: u64,
+        config: Option<StreamingConfig>,
+        direction: &str,
+    ) -> PyResult<Vec<TraversalResult>> {
+        let config = config.unwrap_or_else(|| StreamingConfig::new(3, 10_000, None, None, None));
+        let core_config = CoreTraversalConfig {
+            min_depth: 1,
+            max_depth: u32::try_from(config.max_depth)
+                .map_err(|_| PyRuntimeError::new_err("max_depth exceeds u32::MAX"))?,
+            limit: config.limit.unwrap_or(config.max_visited),
+            rel_types: config.relationship_types.clone().unwrap_or_default(),
+            deadline: config
+                .deadline_ms
+                .map(|ms| Instant::now() + Duration::from_millis(ms)),
+        };
+        let direction = direction.to_ascii_lowercase();
+        py.detach(|| {
+            let store = self.inner.read();
+            let results = match direction.as_str() {
+                "forward" | "out" | "outgoing" => bfs_traverse(&store, source_id, &core_config),
+                "reverse" | "in" | "incoming" => {
+                    bfs_traverse_reverse(&store, source_id, &core_config)
+                }
+                "both" | "bidirectional" => bfs_traverse_both(&store, source_id, &core_config),
+                other => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "unknown direction '{other}'; expected 'forward', 'reverse' or 'both'"
+                    )))
+                }
+            };
+            Ok(results
+                .iter()
+                .filter_map(|r| to_py_result(&store, source_id, r))
+                .collect())
+        })
+    }
+
+    /// Get a single edge by its ID.
+    ///
+    /// Returns:
+    ///     Edge dict, or None if no edge with that ID exists
+    #[pyo3(signature = (edge_id))]
+    fn get_edge(&self, py: Python<'_>, edge_id: u64) -> PyResult<Option<Py<PyAny>>> {
+        let edge = py.detach(|| {
+            let store = self.inner.read();
+            store.get_edge(edge_id).cloned()
+        });
+        Ok(edge.map(|e| edge_to_dict(py, &e)))
+    }
+
+    /// List all edges in the store.
+    #[pyo3(signature = ())]
+    fn all_edges(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let edges = py.detach(|| {
+            let store = self.inner.read();
+            store.all_edges().into_iter().cloned().collect::<Vec<_>>()
+        });
+        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+    }
+
+    /// Gets incoming edges to a node filtered by label.
+    #[pyo3(signature = (node_id, label))]
+    fn get_incoming_by_label(
+        &self,
+        py: Python<'_>,
+        node_id: u64,
+        label: &str,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let label_owned = label.to_string();
+        let edges = py.detach(|| {
+            let store = self.inner.read();
+            store
+                .get_incoming_by_label(node_id, &label_owned)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+    }
+
+    /// Remove all edges touching a node (both directions).
+    ///
+    /// Returns:
+    ///     Number of edges removed
+    #[pyo3(signature = (node_id))]
+    fn remove_node_edges(&self, py: Python<'_>, node_id: u64) -> PyResult<usize> {
+        Ok(py.detach(|| {
+            let mut store = self.inner.write();
+            let before = store.edge_count();
+            store.remove_node_edges(node_id);
+            before - store.edge_count()
+        }))
     }
 }
 
@@ -387,6 +528,7 @@ fn to_py_result(
         target: r.target_id,
         label,
         edge_id,
+        path: r.path.clone(),
     })
 }
 

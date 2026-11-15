@@ -51,7 +51,10 @@ pub use collection::search_options::SearchOptions;
 pub use collection::Collection;
 pub use database::Database;
 pub use fusion::FusionStrategy;
-pub use graph::{dict_to_edge, dict_to_node, edge_to_dict, node_to_dict, traversal_to_dict};
+// The graph converters stay crate-internal: they were previously `pub use`d
+// here but never registered as Python functions, so they were unreachable from
+// Python and dangling in the rlib's public API. Modules import them via
+// `crate::graph::...` directly.
 pub use graph_collection::{PyGraphCollection, PyGraphSchema};
 pub use graph_store::{GraphStore, StreamingConfig, TraversalResult};
 pub use options::{
