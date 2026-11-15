@@ -308,7 +308,8 @@ fn test_let_with_offset_and_limit() {
     );
 }
 
-/// LET + NOT similarity() returns explicit error (not silent wrong results).
+/// LET + NOT similarity() (the exhaustive scan) returns an explicit error
+/// (not silent wrong results).
 #[test]
 fn test_let_with_not_similarity_returns_error() {
     let (_dir, col) = setup_let_collection();
@@ -323,12 +324,13 @@ fn test_let_with_not_similarity_returns_error() {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("NOT similarity()"),
-        "expected NOT similarity() error, got: {msg}"
+        msg.contains("exhaustive similarity() scan"),
+        "expected the similarity scan refusal, got: {msg}"
     );
 }
 
-/// LET + OR/union query returns explicit error.
+/// LET + a similarity() OR-ed with metadata (the exhaustive scan) returns
+/// an explicit error.
 #[test]
 fn test_let_with_union_query_returns_error() {
     let (_dir, col) = setup_let_collection();
@@ -344,8 +346,8 @@ fn test_let_with_union_query_returns_error() {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("OR/union"),
-        "expected OR/union error, got: {msg}"
+        msg.contains("exhaustive similarity() scan"),
+        "expected the similarity scan refusal, got: {msg}"
     );
 }
 
@@ -665,4 +667,24 @@ fn test_let_binding_in_qualified_wildcard_mixed_select() {
             "idx (from wildcard expansion) should be present"
         );
     }
+}
+
+/// LET + a threshold no index bounds (a named vector) takes the same scan,
+/// so it is refused too rather than answered without the LET.
+#[test]
+fn test_let_with_named_vector_threshold_returns_error() {
+    let (_dir, col) = setup_let_collection();
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
+
+    let result = col.execute_query_str(
+        "LET s = 1.0 SELECT * FROM docs WHERE similarity(title_embedding, $v) > 0.5 LIMIT 5",
+        &params,
+    );
+
+    let msg = result.expect_err("refused").to_string();
+    assert!(
+        msg.contains("exhaustive similarity() scan"),
+        "expected the similarity scan refusal, got: {msg}"
+    );
 }

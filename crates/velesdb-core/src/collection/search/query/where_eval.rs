@@ -284,9 +284,7 @@ impl Collection {
                 .eval_condition(inner, ctx, graph_cache)?
                 .map(|known| !known)),
             Condition::Group(inner) => self.eval_condition(inner, ctx, graph_cache),
-            Condition::Similarity(sim) => {
-                self.evaluate_similarity(sim, ctx.vector, ctx.params, graph_cache)
-            }
+            Condition::Similarity(sim) => self.evaluate_similarity(sim, ctx, graph_cache),
             Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(Some(true)),
             // #904: reuse the per-query cached `Filter` for this metadata leaf
             // instead of rebuilding it (and cloning the AST) on every row.
@@ -351,17 +349,20 @@ impl Collection {
         })
     }
 
-    /// Evaluates a similarity condition against a record's vector.
+    /// Evaluates a similarity condition against the record's vector for the
+    /// leaf's field: its own vector for `similarity(vector, …)`, the payload's
+    /// named vector otherwise ([`crate::velesql::payload_vector`]). A record
+    /// with no such vector leaves the predicate UNKNOWN.
     fn evaluate_similarity(
         &self,
         sim: &crate::velesql::SimilarityCondition,
-        vector: Option<&[f32]>,
-        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &WhereEvalCtx<'_>,
         graph_cache: &mut GraphMatchEvalCache,
     ) -> Result<Option<bool>> {
-        let Some(record_vector) = vector else {
+        let Some(record_vector) = record_vector_for(&sim.field, ctx) else {
             return Ok(None);
         };
+        let params = ctx.params;
         // Per-query invariants come from the eval cache: the resolved query
         // vector (was one alloc+copy or `$param` re-parse per row) and the
         // metric snapshot (was TWO `config` read-lock acquisitions per row —
@@ -376,7 +377,7 @@ impl Collection {
         if record_vector.len() != query_vec.len() || record_vector.is_empty() {
             return Ok(None);
         }
-        let score = metric.calculate(record_vector, query_vec);
+        let score = metric.calculate(&record_vector, query_vec);
         Ok(Some(crate::velesql::similarity_holds(
             sim.operator,
             score,
@@ -384,6 +385,23 @@ impl Collection {
             metric.higher_is_better(),
         )))
     }
+}
+
+/// The record's vector for a `similarity(field, …)` leaf: its own for
+/// [`crate::velesql::PRIMARY_VECTOR_FIELD`], else the payload's named vector;
+/// `None` when it has none (a named field that is absent or not numeric).
+fn record_vector_for<'a>(
+    field: &str,
+    ctx: &WhereEvalCtx<'a>,
+) -> Option<std::borrow::Cow<'a, [f32]>> {
+    if field == crate::velesql::PRIMARY_VECTOR_FIELD {
+        return ctx.vector.map(std::borrow::Cow::Borrowed);
+    }
+    let payload = ctx.payload?;
+    crate::velesql::payload_vector(payload, field)
+        .ok()
+        .flatten()
+        .map(std::borrow::Cow::Owned)
 }
 
 #[cfg(test)]
