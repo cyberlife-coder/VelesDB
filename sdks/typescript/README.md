@@ -191,7 +191,8 @@ await memory.init();
 const pr = await memory.remember('PR #42 swaps the mutex for parking_lot');
 const decision = await memory.remember(
   'we chose parking_lot to avoid lock poisoning',
-  { links: [{ target: pr, relation: 'decided_in' }] }
+  // links take the target's decimal-string id, not the RememberOutcome
+  { links: [{ target: pr.id, relation: 'decided_in' }] }
 );
 
 // recall: vector similarity.
@@ -219,9 +220,11 @@ of which backend raised it.
 
 > **In-memory only in this release.** Unlike the Node/Python bindings, the
 > WASM store has no filesystem access, so `MemoryService` does not persist to
-> disk — memory is lost when the page/process ends. Durable browser storage
-> (IndexedDB) and `rememberExtracted` (auto-extraction, which needs a
-> model/network call) are both out of scope for this release; track
+> disk — memory is lost when the page/process ends. `rememberExtracted` IS
+> available: it runs the deterministic `outline` extractor in-process, and
+> generative extractor names are refused rather than trigger a network call.
+> `feedback` (RL re-ranking) stays absent on purpose — it needs the
+> `persistence` feature the WASM build does not enable. Track
 > `@wiscale/velesdb-memory-node` or the Python binding if you need a
 > persistent store today.
 
@@ -338,7 +341,9 @@ Get collection info. Returns `null` if not found.
 
 #### `db.listCollections()`
 
-List all collections. Returns an array of `Collection` objects.
+List all collections. Returns an array of `Collection` objects. The wire
+carries names only (`string[]`); the SDK hydrates each name into a rich
+`Collection` via `GET /collections/{name}` (same shape as `getCollection`).
 
 ---
 
@@ -353,7 +358,9 @@ await db.upsert('docs', {
   id: 'unique-id',
   vector: [0.1, 0.2, 0.3],    // number[] or Float32Array
   payload: { key: 'value' },   // optional metadata
-  sparseVector: { 42: 0.8, 99: 0.3 }  // optional sparse vector for hybrid search
+  sparseVector: { 42: 0.8, 99: 0.3 },  // optional sparse vector (default index)
+  // named sparse vectors, one per sparse index (REST only):
+  sparseVectors: { keywords: { 7: 0.9, 42: 0.4 } }
 });
 ```
 
@@ -413,8 +420,13 @@ Vector similarity search.
 |--------|------|---------|-------------|
 | `k` | `number` | `10` | Number of results |
 | `filter` | `Filter` | - | Payload filter, core-shaped (`{ condition: ... }`); see [Filters](#filters) |
-| `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search |
+| `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search (default sparse index) |
+| `sparseIndexName` | `string` | - | Named sparse index to combine with the dense query (REST only) |
+| `sparseVectors` | `Record<string, SparseVector>` | - | Named sparse vectors map, one per sparse index (REST only) |
 | `quality` | `SearchQuality` | - | Search quality mode (e.g., `'fast'`, `'balanced'`, `'custom:256'`, `'adaptive:32:512'`) |
+| `efSearch` | `number` | - | HNSW `ef_search` in `[16, 4096]`; wins over `quality` for a dense unfiltered search (REST only) |
+| `timeoutMs` | `number` | - | Per-request server timeout budget in ms; can only shorten the server limit, `0` keeps it (REST only) |
+| `fusion` | `SearchFusionOptions` | - | Fusion config sent as `fusion` on `/search`: `{ strategy, k, avgWeight, maxWeight, hitWeight, denseWeight, sparseWeight }` (REST only) |
 
 > **WASM backend:** `filter` applies to dense search only (filtered results need the fix shipped in velesdb-wasm 8.0.0, see [Binding version](#wasm-backend-browser--nodejs)). Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so is `sparseIndexName`; neither is silently ignored. `quality` goes to velesdb-wasm's own parser, so a preset it cannot read (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`) is refused with `BAD_REQUEST` instead of being accepted and dropped — and `searchBatch` refuses in its pre-loop, before any entry searches. A preset it can read has nothing to tune, since WASM search scans every stored vector; as core states of the same field on REST, it "applies only to a dense search with neither a `filter` nor `ef_search`", so a filtered or sparse-only search validates the preset without applying it. `k` must be an integer from 0 to 2^32 - 1: non-negative as core's is, and at most 2^32 - 1 because velesdb-wasm's `usize` is 32-bit (`BAD_REQUEST` otherwise, a value that is not a number included); 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`).
 
@@ -449,7 +461,10 @@ as "no filter".
 
 #### `db.searchBatch(collection, searches)`
 
-Execute multiple search queries in parallel.
+Execute multiple search queries in parallel. Each entry is a full `BatchSearchItem` —
+a `SearchRequest` server-side — so every `search()` option applies per entry
+(`k`, `filter`, `quality`, `efSearch`, `timeoutMs`, `sparseVector`,
+`sparseIndexName`, `sparseVectors`, `fusion`).
 
 ```typescript
 const batchResults = await db.searchBatch('docs', [
@@ -521,7 +536,7 @@ const results = await db.hybridSearch(
   'docs',
   queryVector,
   'machine learning',
-  { k: 10, vectorWeight: 0.7 }  // 70% vector, 30% text
+  { k: 10, vectorWeight: 0.7, rrfK: 60 }  // 70% vector, 30% text; RRF k (REST only)
 );
 ```
 
@@ -620,11 +635,14 @@ Compute and return collection statistics.
 ```typescript
 const stats = await db.analyzeCollection('docs');
 console.log(stats.totalPoints, stats.totalSizeBytes);
+// stats.indexStats: per-index { name, indexType, entryCount, depth, sizeBytes }
+// stats.lastAnalyzedEpochMs: epoch ms of the last ANALYZE, or null
 ```
 
 #### `db.getCollectionStats(collection)`
 
-Get previously computed statistics. Returns `null` if the collection has not been analyzed yet.
+Get previously computed statistics (same `CollectionStatsResponse` shape,
+including `indexStats` and `lastAnalyzedEpochMs`). Returns `null` if the collection has not been analyzed yet.
 
 #### `db.getCollectionConfig(collection)`
 
@@ -632,9 +650,34 @@ Get detailed collection configuration (dimension, metric, storage mode, point co
 
 ---
 
+### Maintenance & Operations
+
+Housekeeping routes, all **REST only** — on any other backend these throw a
+typed `NOT_SUPPORTED` error.
+
+```typescript
+// Reclaim space from deleted points
+await db.vacuumCollection('docs');        // => VacuumResult
+
+// Compact the storage segments
+await db.compactCollection('docs');         // => CompactResult
+
+// Reorder points on disk for locality (faster cold reads)
+await db.reorderForLocality('docs');        // => ReorderResult
+
+// Diagnostics snapshot of one collection
+await db.collectionDiagnostics('docs');     // => CollectionDiagnostics
+
+// Process-level health probes
+await db.healthCheck();                     // => HealthStatus (GET /health)
+await db.readyCheck();                      // => HealthStatus (GET /ready)
+```
+
+---
+
 ### VelesQL Queries
 
-#### `db.query(collection, queryString, params?, options?)`
+#### `db.query(collection, queryString, params?)`
 
 Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, ORDER BY, JOIN, UNION/INTERSECT/EXCEPT, and USING FUSION.
 
@@ -700,18 +743,25 @@ const fused = await db.query('docs',
 
 > **WASM backend:** The number of rows is the statement's `LIMIT`, capped at core's 100,000, or core's default of 10: `params.k` is not read, as on REST. A `LIMIT` value core's u64 parser refuses — `LIMIT -1`, `LIMIT +5`, `LIMIT 1e3`, or one too large for a u64 — is refused with `BAD_REQUEST`, as core's parser refuses it; clauses the backend does not evaluate stay `NOT_SUPPORTED`.
 
-#### `db.queryExplain(queryString, params?)`
+#### `db.queryExplain(queryString, params?, options?)`
 
-Get the execution plan for a VelesQL query without running it. Returns plan steps, estimated cost, index usage, and detected features.
+Get the execution plan for a VelesQL query without running it. Returns plan steps, estimated cost, index usage, and detected features. With `options.analyze: true` the server also executes the query and reports actual timings.
 
 ```typescript
 const plan = await db.queryExplain(
   'SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10',
-  { v: queryVector }
+  { v: queryVector },
+  { analyze: true }
 );
-console.log(plan.plan);           // step-by-step execution plan
-console.log(plan.estimatedCost);  // { usesIndex, selectivity, complexity }
-console.log(plan.features);       // { hasVectorSearch, hasFilter, hasJoin, ... }
+console.log(plan.plan);            // step-by-step execution plan
+console.log(plan.estimatedCost);   // { usesIndex, selectivity, complexity }
+console.log(plan.features);        // { hasVectorSearch, hasFilter, hasJoin, ... }
+console.log(plan.cacheHit);        // served from the compiled plan cache?
+console.log(plan.planReuseCount);  // cached-plan reuse counter
+console.log(plan.estimatedCostMs); // estimate, for comparison with actual
+console.log(plan.actualTimeMs);    // actual ms, only with analyze: true
+console.log(plan.actualStats);     // { actualRows, nodesVisited, edgesTraversed, traversalCountersApproximate?, executedFilterStrategy? }
+console.log(plan.nodeStats);       // per-node actuals, only with analyze: true
 ```
 
 #### `db.collectionSanity(collection)`
@@ -743,7 +793,7 @@ const builder = velesql()
   .limit(10);
 
 const queryString = builder.toVelesQL();
-// => "SELECT * FROM documents WHERE vector NEAR $queryVector AND d.category = $cat ORDER BY similarity() DESC LIMIT 10"
+// => "SELECT * FROM documents AS d WHERE vector NEAR $queryVector AND d.category = $cat ORDER BY similarity() DESC LIMIT 10"
 const params = builder.getParams();
 const results = await db.query('documents', queryString, params);
 
@@ -778,9 +828,12 @@ const fused = velesql()
 ```
 
 > **Mode matters.** Call `from(collection)` for vector / hybrid / fused
-> SELECT queries; call `match(alias, label)` for graph patterns. MATCH mode
-> always emits a `RETURN` (defaulting to `RETURN *`) and supports no
-> `OFFSET`. `nearVector({ topK })` maps to `LIMIT` (VelesQL has no `TOP`
+> SELECT queries; call `match(alias, label)` for graph patterns. `from(col, alias)`
+> emits `FROM col AS alias`. MATCH mode always emits a `RETURN` (defaulting to
+> `RETURN *`) and supports no `OFFSET`, `FUSION`, or `select()` — calling those on
+> a MATCH-mode builder throws at `toVelesQL()` instead of emitting a query the
+> engine would misread. `orderBy()` accumulates: repeated calls emit a multi-key
+> `ORDER BY`. `nearVector({ topK })` maps to `LIMIT` (VelesQL has no `TOP`
 > keyword). `nearFused()` only accepts `rrf` / `average` / `maximum` —
 > `weighted` / `relative_score` are a compile error because the engine
 > would silently degrade them to RRF.
@@ -813,6 +866,20 @@ await db.addEdge('social', {
   label: 'FOLLOWS',
   properties: { since: '2024-01-01' }
 });
+```
+
+#### `db.addEdgesBatch(collection, edges)`
+
+Add many edges in one call (`POST .../graph/edges/batch`). Returns
+`AddEdgesBatchResponse`: `{ added: number }` — `added` may be less than the
+number submitted, because edges whose ID already exists (in the request or
+in the graph) are skipped. **REST backend only**.
+
+```typescript
+const { added } = await db.addEdgesBatch('social', [
+  { id: 2, source: 100, target: 300, label: 'FOLLOWS' },
+  { id: 3, source: 200, target: 300, label: 'KNOWS' },
+]);
 ```
 
 #### `db.getEdges(collection, options?)`
@@ -872,6 +939,26 @@ for (const node of result.results) {
 
 A traversal has no cursor: `result.hasMore` is `true` when it stopped at
 `limit`, and a larger `limit` reaches further.
+
+#### `db.streamTraverse(collection, request)`
+
+Stream a graph traversal over SSE (`GET .../graph/traverse/stream`) as an
+async iterable of `TraverseStreamEvent` — `node` (one per visited node, with
+`depth` and `path`), `stats` (progress), `done` (totals), and `error`.
+**REST backend only** (the WASM backend throws `NOT_SUPPORTED`).
+
+```typescript
+for await (const event of db.streamTraverse('social', {
+  startNode: 100,
+  algorithm: 'bfs',
+  maxDepth: 3,
+  limit: 100,
+  relationshipTypes: ['FOLLOWS'],
+})) {
+  if (event.type === 'node') console.log(event.id, 'at depth', event.depth);
+  if (event.type === 'done') console.log('visited', event.totalNodes);
+}
+```
 
 #### `db.relate(collection, request)`
 
@@ -1190,18 +1277,34 @@ import {
   type VectorDocument,
   type SearchOptions,
   type SearchQuality,
+  type SearchFusionOptions,
+  type BatchSearchItem,
+  type HybridSearchOptions,
   type SearchResult,
   type TextSearchResult,
   type SparseVector,
   type MultiQuerySearchOptions,
   type GraphEdge,
   type AddEdgeRequest,
+  type AddEdgesBatchResponse,
   type TraverseRequest,
   type TraverseResponse,
+  type StreamTraverseRequest,
+  type TraverseStreamEvent,
   type RelateRequest,
   type RelateResponse,
   type RelationsResponse,
   type QueryApiResponse,
+  type QueryResponseMeta,
+  type ExplainResponse,
+  type CollectionStatsResponse,
+  type IndexStatsDetail,
+  type HealthStatus,
+  type VacuumResult,
+  type CompactResult,
+  type ReorderResult,
+  type CollectionDiagnostics,
+  type IVelesDBMaintenanceBackend,
   type AgentMemoryConfig,
   type SemanticEntry,
   type EpisodicEvent,
