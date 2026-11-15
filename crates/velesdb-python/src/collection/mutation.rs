@@ -9,6 +9,7 @@ use crate::collection_helpers::{
     core_err, core_err_with_collection, dict_to_json_map, extract_point_id, extract_point_vector,
     parse_payload, parse_point_dicts,
 };
+use crate::utils::reject_nan_vector;
 
 use super::Collection;
 
@@ -158,6 +159,9 @@ impl Collection {
 
         // Copy the flat data so we can release the GIL (numpy buffer is Py<PyAny>-backed).
         let flat_owned: Vec<f32> = flat.to_vec();
+        // Same finiteness gate as the dict-based paths (`extract_vector`): the raw
+        // path must not store a NaN/Inf the other ingest paths reject.
+        reject_nan_vector(&flat_owned)?;
         let payloads_ref = json_payloads.as_deref();
 
         py.detach(|| {
@@ -230,6 +234,9 @@ impl Collection {
             .collect::<PyResult<Vec<_>>>()?;
 
         let flat_owned: Vec<f32> = flat.to_vec();
+        // Same finiteness gate as the dict-based paths (`extract_vector`): the raw
+        // path must not store a NaN/Inf the other ingest paths reject.
+        reject_nan_vector(&flat_owned)?;
         let payload_vec: Vec<Option<serde_json::Value>> = parsed_payloads;
 
         py.detach(|| {

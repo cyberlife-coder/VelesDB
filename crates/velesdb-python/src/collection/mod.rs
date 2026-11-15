@@ -246,8 +246,9 @@ impl Collection {
     }
 
     /// Runs a sparse-only or hybrid dense+sparse search after the read gate has
-    /// authorized it, applying the caller filter and any observer scope filter
-    /// via post-filtering (neither leaf accepts a metadata filter natively).
+    /// authorized it. Hybrid dense+sparse pre-filters both fusion branches via
+    /// core's `_filtered` leaf (caller filter ANDed with any observer scope);
+    /// sparse-only has no filtered leaf, so a scope filter still post-filters.
     #[allow(clippy::too_many_arguments)] // scope threading is intrinsic to the gate
     fn run_sparse_gated(
         &self,
@@ -263,15 +264,22 @@ impl Collection {
         use pyo3::exceptions::PyValueError;
 
         match dense {
-            // Hybrid dense+sparse: no filtered leaf — run unfiltered then
-            // post-filter by the caller filter AND the observer scope filter.
+            // Hybrid dense+sparse: filter BOTH branches before RRF fusion, like
+            // core's `hybrid_sparse_search_filtered`. Post-filtering after fusion
+            // can return fewer than k rows even when >= k points match, because
+            // the fused top-k was computed over unfiltered candidates.
             Some(d) => {
-                let mut results = self
-                    .inner
-                    .hybrid_sparse_search(d, sparse, top_k, index_name, fusion)
-                    .map_err(core_err)?;
-                retain_by_filters(&mut results, caller_filter, scope_filter);
-                Ok(results)
+                let combined = and_scope(caller_filter.cloned(), scope_filter.cloned());
+                self.inner
+                    .hybrid_sparse_search_filtered(
+                        d,
+                        sparse,
+                        top_k,
+                        index_name,
+                        fusion,
+                        combined.as_ref(),
+                    )
+                    .map_err(core_err)
             }
             // Sparse-only: a caller filter was never supported here (preserved
             // error). A governance scope filter still applies via post-filter,
