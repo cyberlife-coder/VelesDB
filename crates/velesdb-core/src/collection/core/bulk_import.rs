@@ -7,7 +7,7 @@
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::VectorStorage;
-use crate::validation::validate_dimension_match;
+use crate::validation::{validate_dimension_match, validate_vector_is_finite};
 
 use std::collections::HashMap;
 
@@ -27,6 +27,8 @@ impl Collection {
     /// # Errors
     ///
     /// - Returns [`crate::error::Error::InvalidVector`] if `vectors.len() != ids.len() * dimension`.
+    /// - Returns [`crate::error::Error::InvalidVector`] if any vector component is NaN or infinite
+    ///   (same gate as the `Point` path — a stored NaN corrupts HNSW ordering persistently).
     /// - Returns [`crate::error::Error::DimensionMismatch`] if `dimension` does not match the collection.
     pub fn upsert_bulk_from_raw(
         &self,
@@ -170,6 +172,16 @@ impl Collection {
         let collection_dim = self.storage.config.read().dimension;
         validate_dimension_match(collection_dim, dimension)?;
         self.enforce_raw_upsert_limits(ids, payloads)?;
+        // Same finiteness gate as the `Point` path (`validate_vector_upsert_batch`):
+        // a stored NaN makes HNSW ordering arbitrary for every later query, and
+        // the raw FFI path must not trust its caller more than the typed path
+        // does. Runs after `validate_dimension_match`, so `dimension >= 1` here.
+        for (row, chunk) in vectors.chunks_exact(dimension).enumerate() {
+            validate_vector_is_finite(chunk).map_err(|e| match e {
+                Error::InvalidVector(msg) => Error::InvalidVector(format!("row {row}: {msg}")),
+                other => other,
+            })?;
+        }
         Ok(())
     }
 
