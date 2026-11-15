@@ -123,24 +123,10 @@ impl MatchQueryPlanner {
     /// `None` means the plan is `GraphFirst`.
     #[must_use]
     pub(crate) fn seeding_similarity(match_clause: &MatchClause) -> Option<&SimilarityCondition> {
-        let [pattern] = match_clause.patterns.as_slice() else {
-            return None;
-        };
-        match_clause.return_clause.limit?;
-        if !orders_most_similar_first(&match_clause.return_clause) {
-            return None;
-        }
-        let start = pattern.nodes.first()?.alias.as_deref()?;
+        let start = seedable_start_alias(match_clause)?;
         let condition = match_clause.where_clause.as_ref()?;
-        let seed = top_level_conjuncts(condition).find_map(|leaf| match leaf {
-            Condition::Similarity(sim)
-                if matches!(sim.operator, CompareOp::Gt | CompareOp::Gte)
-                    && sim.field.split_once('.').map(|(alias, _)| alias) == Some(start) =>
-            {
-                Some(sim)
-            }
-            _ => None,
-        })?;
+        let seed = top_level_conjuncts(condition)
+            .find_map(|leaf| closer_than_threshold_on(leaf, start))?;
         first_similarity(condition)
             .is_some_and(|first| std::ptr::eq(first, seed))
             .then_some(seed)
@@ -229,6 +215,33 @@ impl MatchQueryPlanner {
             }
         }
     }
+}
+
+/// The start node alias of a clause whose shape a seeded walk can serve: one
+/// pattern, an explicit `LIMIT`, and any `ORDER BY` the similarity score,
+/// most similar first (see [`MatchQueryPlanner::seeding_similarity`]).
+fn seedable_start_alias(match_clause: &MatchClause) -> Option<&str> {
+    let [pattern] = match_clause.patterns.as_slice() else {
+        return None;
+    };
+    match_clause.return_clause.limit?;
+    if !orders_most_similar_first(&match_clause.return_clause) {
+        return None;
+    }
+    pattern.nodes.first()?.alias.as_deref()
+}
+
+/// `leaf` when it is a `similarity()` on node `start` asking for nodes closer
+/// than its threshold (`>` / `>=`, "closer" under a distance metric too).
+fn closer_than_threshold_on<'c>(
+    leaf: &'c Condition,
+    start: &str,
+) -> Option<&'c SimilarityCondition> {
+    let Condition::Similarity(sim) = leaf else {
+        return None;
+    };
+    let on_start = sim.field.split_once('.').map(|(alias, _)| alias) == Some(start);
+    (on_start && matches!(sim.operator, CompareOp::Gt | CompareOp::Gte)).then_some(sim)
 }
 
 /// Whether the RETURN `ORDER BY`, if any, is the rows' similarity score,
