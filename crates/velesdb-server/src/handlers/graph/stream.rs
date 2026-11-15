@@ -54,7 +54,7 @@ const STATS_INTERVAL: usize = 100;
 /// - `node`: each node reached
 /// - `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event
 /// - `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last
-/// - `error`: sent alone instead, when the traversal cannot run
+/// - `error`: sent alone instead, when the traversal worker fails
 #[utoipa::path(
     get,
     path = "/collections/{name}/graph/traverse/stream",
@@ -65,7 +65,9 @@ const STATS_INTERVAL: usize = 100;
     ),
     responses(
         (status = 200, description = "SSE stream of traversal events (node, stats, done, error)"),
-        (status = 400, description = "Invalid algorithm (use 'bfs' or 'dfs')", body = ErrorResponse)
+        (status = 400, description = "Invalid algorithm (use 'bfs' or 'dfs'), a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 409, description = "Collection exists but is not a graph collection", body = ErrorResponse)
     )
 )]
 pub async fn stream_traverse(
@@ -74,45 +76,41 @@ pub async fn stream_traverse(
     Query(params): Query<StreamTraverseParams>,
 ) -> axum::response::Response {
     let start_time = Instant::now();
-    state.onboarding_metrics.record_graph_request();
 
-    // The read gate decides the traversal like every other graph read: a
-    // denial refuses the request outright, and a scope — edges carry no
-    // payload a filter could narrow — refuses it too (fail closed).
-    if let Err(refusal) = crate::handlers::helpers::authorize_unscoped_read(
+    // Resolved and gated like every other graph read: a missing collection
+    // answers 404 and a non-graph one 409, as `POST /graph/traverse` does,
+    // rather than a 200 stream carrying only an `error` event; a denial or
+    // a scope refuses the request (fail closed).
+    let coll = match super::handlers::graph_read_preamble(
         &state,
         &collection,
         velesdb_core::observer::QueryOperationKind::GraphTraversal,
-        "graph traversal streaming",
     ) {
-        return crate::handlers::helpers::auto_core_error_response(&refusal);
-    }
+        Ok(coll) => coll,
+        Err(refusal) => return refusal.into_response(),
+    };
 
     // An unknown algorithm must be rejected with the same 400 the
     // non-streaming traverse endpoint returns for its strategy, not silently
     // streamed as BFS (#2755).
-    let algorithm = params.algorithm.to_lowercase();
-    if !matches!(algorithm.as_str(), "bfs" | "dfs") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!(
-                    "Invalid algorithm '{}'. Use 'bfs' or 'dfs'.",
-                    params.algorithm
-                ),
-                code: None,
-            }),
-        )
-            .into_response();
-    }
-
-    // Snapshot the parameters and state needed by the blocking worker.
-    let coll_handle = state.db.get_graph_collection(&collection);
-    // Counted once the read is admitted, as on the other graph handlers: an
-    // unknown collection is not a graph query.
-    if coll_handle.is_some() {
-        state.operational_metrics.record_graph_query();
-    }
+    let use_bfs = match params.algorithm.to_lowercase().as_str() {
+        "bfs" => true,
+        "dfs" => false,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Invalid algorithm '{}'. Use 'bfs' or 'dfs'.",
+                        params.algorithm
+                    ),
+                    code: None,
+                }),
+            )
+                .into_response();
+        }
+    };
+    state.operational_metrics.record_graph_query();
 
     // F-17 fix: execute the synchronous traversal and event
     // construction on a blocking worker so the Tokio async runtime
@@ -121,8 +119,8 @@ pub async fn stream_traverse(
     // wrapper as a lazy iterator, so individual events are still
     // pushed to the wire progressively under back-pressure.
     let events = tokio::task::spawn_blocking(move || {
-        let traversal_result = run_traversal_blocking(coll_handle, collection.as_str(), &params);
-        build_sse_events(traversal_result, start_time)
+        let results = run_traversal_blocking(&coll, use_bfs, &params);
+        build_success_events(results, start_time)
     })
     .await
     .unwrap_or_else(|e| {
@@ -144,17 +142,11 @@ pub async fn stream_traverse(
 /// thread. Factored out of the handler so it can be invoked from
 /// `tokio::task::spawn_blocking` without leaking async internals.
 fn run_traversal_blocking(
-    coll_handle: Option<velesdb_core::GraphCollection>,
-    collection_name: &str,
+    coll: &velesdb_core::GraphCollection,
+    use_bfs: bool,
     params: &StreamTraverseParams,
-) -> Result<Vec<TraversalResultItem>, String> {
+) -> Vec<TraversalResultItem> {
     use velesdb_core::collection::graph::TraversalConfig;
-
-    let Some(coll) = coll_handle else {
-        return Err(format!(
-            "Collection '{collection_name}' not found or is not a graph collection."
-        ));
-    };
 
     let rel_types: Vec<String> = params
         .relationship_types
@@ -166,38 +158,19 @@ fn run_traversal_blocking(
         .with_limit(params.limit)
         .with_rel_types(rel_types);
 
-    let raw = match params.algorithm.to_lowercase().as_str() {
-        "bfs" => coll.traverse_bfs(params.start_node, &config),
-        "dfs" => coll.traverse_dfs(params.start_node, &config),
-        // The handler rejects unknown algorithms with a 400 before this
-        // runs; keep an explicit error arm so a future caller cannot
-        // silently stream BFS for a typo'd algorithm (#2755).
-        other => {
-            return Err(format!("Invalid algorithm '{other}'. Use 'bfs' or 'dfs'."));
-        }
+    let raw = if use_bfs {
+        coll.traverse_bfs(params.start_node, &config)
+    } else {
+        coll.traverse_dfs(params.start_node, &config)
     };
 
-    Ok(raw
-        .into_iter()
+    raw.into_iter()
         .map(|r| TraversalResultItem {
             target_id: r.target_id,
             depth: r.depth,
             path: r.path,
         })
-        .collect())
-}
-
-/// Converts a traversal result into a sequence of SSE events.
-///
-/// Extracted to keep the handler thin and the logic testable.
-fn build_sse_events(
-    traversal_result: Result<Vec<TraversalResultItem>, String>,
-    start_time: Instant,
-) -> Vec<Result<Event, Infallible>> {
-    match traversal_result {
-        Ok(results) => build_success_events(results, start_time),
-        Err(e) => build_error_events(e),
-    }
+        .collect()
 }
 
 /// Serializes an SSE event payload to JSON, logging a warning if serialization fails.
