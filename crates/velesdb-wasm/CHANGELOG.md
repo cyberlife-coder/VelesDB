@@ -29,6 +29,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`velesqlContractVersion()`** (#2797) returns the VelesQL contract version the
+  engine implements, which is core's `VELESQL_CONTRACT_VERSION`, the value REST
+  responses carry. A browser client can report the same `meta` without
+  copying the number.
+- **`WasmDatabase.addEdge(name, edgeJson)`, `getEdges(name, label?)`,
+  `removeEdge(name, id)` and `edgeCount(name)`** (#2797) behave like REST
+  `/collections/{name}/graph/edges`, over the graph store a `MATCH` on that
+  collection reads. The collection must exist and both endpoints must be its
+  nodes; without an explicit `id`, the id is core's (source, target, label)
+  hash; properties can be any JSON. VelesQL `INSERT EDGE` takes literal
+  scalars only, so before this a client building edges from data had to
+  splice strings into a statement.
+- **`WasmDatabase.executeMatch(sql, paramsJson, vector?, threshold?)`** (#2797)
+  returns `MATCH` rows in core's `MatchResult` shape,
+  `[{ bindings, depth, projected, score? }]`, which is what REST
+  `POST /collections/{name}/match` returns. It projects RETURN with core's
+  rules through core's own RETURN item parser, and `vector`/`threshold` are
+  REST `/match`'s. `executeQuery` returns alias-keyed objects and left the
+  projection to the caller. Both run behind the same read gate, walk,
+  `ORDER BY` and `LIMIT`.
+- **`similarity()` in a browser `MATCH`** (#2797). The nodes are the collection's
+  points, so their vectors are scored with core's MATCH semantics, where the
+  executor used to refuse every form:
+  - `WHERE similarity(alias.field, $v) <op> t` scores the node the alias
+    binds; a bare field scores the row's last node. Under a distance metric,
+    "more similar" means "closer".
+  - The row's score comes from the first such leaf.
+  - `ORDER BY similarity()` is most-similar-first.
+  - `RETURN similarity()` projects the score.
+  - A query vector scores each row's last node and applies the threshold.
+- **`MATCH` binds the target collection's points as nodes** (#2797), as core does: a
+  point's payload is the node's properties and its `_labels` array the node's
+  labels. Nodes lived only in the graph store, so points inserted through the
+  collection, or a `VectorStore` attached to it, were invisible to `MATCH`
+  even with edges between them, and a collection with points but no edge
+  answered "Graph is empty". A node written with `INSERT NODE` still wins over
+  the point with its id.
+- **`INSERT NODE` reads core's `_labels` key.** It read only `labels`, so the
+  same statement labelled a node in core and left it unlabelled in the
+  browser. `labels` is still accepted. `_labels` also stays a property of the
+  node, as on a collection point, so `RETURN n._labels` reads it.
 - **`MATCH` reads the graph named by the `_collection` param**, the way core
   and the server name a MATCH target (MATCH has no `FROM`). The executor only
   knew the first node's `@collection` annotation and otherwise read the

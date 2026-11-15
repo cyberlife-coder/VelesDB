@@ -205,6 +205,16 @@ fn test_parse_with_group_by() {
     assert!(parsed.select.group_by.is_some());
 }
 
+#[test]
+fn test_contract_version_is_cores() {
+    // The version a browser engine reports in `meta.velesqlContractVersion`
+    // is core's, as REST reports it — one source, no copy to drift.
+    assert_eq!(
+        super::velesql_contract_version(),
+        velesdb_core::api_types::VELESQL_CONTRACT_VERSION
+    );
+}
+
 // ---------------------------------------------------------------------------
 // ParsedQuery.isAggregation — the routing predicate core's server and CLI use
 // (`SelectStatement::is_aggregation_query`), exposed so a JS caller classifies

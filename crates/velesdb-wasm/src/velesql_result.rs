@@ -154,6 +154,14 @@ impl QueryResultRow {
         })
     }
 
+    /// This row with `score` set: a MATCH row's similarity score, computed
+    /// after the row's JSON was built.
+    #[must_use]
+    pub(crate) fn with_score(mut self, score: f32) -> Self {
+        self.score = score;
+        self
+    }
+
     /// Returns the JSON payload of this row (for native-target tests).
     #[cfg(test)]
     pub(crate) fn data_json_ref(&self) -> &str {
