@@ -425,10 +425,11 @@ fn fusion_branch_from_residual(
     let Some(cond) = cond else {
         return Ok(Vec::new());
     };
+    let filter = velesql_where::WhereFilter::compile(cond, params)?;
     let mut out = Vec::new();
     for (idx, &id) in store.ids.iter().enumerate() {
         let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
-        if velesql_where::matches(cond, id, payload, params)? {
+        if filter.matches(id, payload) {
             out.push((id, 1.0));
         }
     }

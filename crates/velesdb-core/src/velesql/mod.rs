@@ -88,6 +88,8 @@ mod match_planner_tests;
 mod orderby_multi_tests;
 #[cfg(test)]
 mod parallel_aggregation_tests;
+mod param_binding;
+pub use param_binding::{bind_condition, bind_value};
 mod parser;
 #[cfg(test)]
 mod parser_tests;

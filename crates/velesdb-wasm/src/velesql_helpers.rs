@@ -34,14 +34,13 @@ pub(crate) fn collect_matching_indices(
     params: &Params,
 ) -> Result<Vec<usize>, String> {
     let borrowed = store.borrow();
+    let filter = where_clause
+        .map(|cond| velesql_where::WhereFilter::compile(cond, params))
+        .transpose()?;
     let mut out = Vec::new();
     for (idx, &id) in borrowed.ids.iter().enumerate() {
         let payload = borrowed.payloads.get(idx).and_then(|p| p.as_ref());
-        let matched = match where_clause {
-            Some(cond) => velesql_where::matches(cond, id, payload, params)?,
-            None => true,
-        };
-        if matched {
+        if filter.as_ref().is_none_or(|f| f.matches(id, payload)) {
             out.push(idx);
         }
     }

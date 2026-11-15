@@ -282,7 +282,7 @@ impl Collection {
         let Some(cond) = stmt.where_clause.as_ref() else {
             return Ok(None);
         };
-        let resolved = Self::resolve_condition_params(cond, params)?;
+        let resolved = crate::velesql::bind_condition(cond, params)?;
         let mut resolved_stmt = stmt.clone();
         resolved_stmt.where_clause = Some(resolved);
         Ok(Some(resolved_stmt))

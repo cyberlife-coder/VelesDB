@@ -126,10 +126,11 @@ fn passing_ids(
     let Some(cond) = residual else {
         return Ok(None);
     };
+    let filter = velesql_where::WhereFilter::compile(cond, params)?;
     let mut keep = std::collections::HashSet::new();
     for (idx, &id) in store.ids.iter().enumerate() {
         let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
-        if velesql_where::matches(cond, id, payload, params)? {
+        if filter.matches(id, payload) {
             keep.insert(id);
         }
     }

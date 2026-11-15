@@ -194,6 +194,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`LIKE`/`ILIKE` `_` matches one character, not one byte.** The matcher
+  compiled patterns and scanned text byte by byte, so on UTF-8 text `'caf_'`
+  did not match `"café"`, and `'__'` matched the single character `"é"` (two
+  bytes). Patterns and text are now matched character by character, as the
+  WASM executor already did. ILIKE compares each character's own lowercase
+  mapping instead of lowercasing the whole string first, which turned `İ`
+  into two scalars that filled two `_`.
+
+- **WASM `WHERE` answers as the server does.** The WASM executor evaluated
+  `WHERE` with its own copy of the predicate logic, which had drifted from
+  core: it was two-valued, so `NOT (x = 'a')` admitted a payload without `x`
+  that core's three-valued `WHERE` excludes, `LIKE` ignored `\` escapes and
+  core's guardrails, and a `$param` bound to an array was compared instead of
+  refused. It now binds parameters with core's binder
+  (`velesql::bind_condition`, moved out of the persistence-only `Collection`
+  so both builds share it) and matches with core's payload filter, compiled
+  once per query. The `similarity()` SELECT and the MATCH `WHERE`, which
+  score some leaves themselves, fold them with core's leaves in Kleene logic
+  over the now-public `Filter::evaluate_point`, so a `NOT` above an UNKNOWN
+  leaf no longer admits the row.
+
 - **`BETWEEN` with string or date bounds matches the range.** It converted
   its bounds with a numbers-only converter, so a string bound became `null`:
   `date BETWEEN '2024-01-01' AND '2024-12-31'`, the example in

@@ -103,12 +103,13 @@ impl Filter {
     }
 
     /// The filter's three-valued truth for a point: `None` is UNKNOWN. For a
-    /// caller that combines the filter with predicates of its own and must
-    /// apply their negations before folding UNKNOWN into "not admitted".
-    /// Its one such caller, the graph-predicate WHERE, needs `persistence`.
-    #[cfg(feature = "persistence")]
+    /// caller that combines the filter with predicates of its own — the
+    /// graph-predicate WHERE, a `similarity()` WHERE, a browser MATCH — and
+    /// must apply their negations before folding UNKNOWN into "not admitted":
+    /// `NOT` over a [`Self::matches_point`] answer would admit the rows whose
+    /// condition is UNKNOWN. [`Self::matches_point`] is `== Some(true)`.
     #[must_use]
-    pub(crate) fn evaluate_point(&self, id: u64, payload: Option<&Value>) -> Option<bool> {
+    pub fn evaluate_point(&self, id: u64, payload: Option<&Value>) -> Option<bool> {
         self.condition.evaluate_point(id, payload)
     }
 

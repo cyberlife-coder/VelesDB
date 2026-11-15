@@ -60,6 +60,37 @@ fn test_similarity_combined_with_payload_filter() {
     assert_eq!(r.row(0).expect("test: row").id(), 3);
 }
 
+/// GIVEN a row without `cat` beside rows that carry it
+/// WHEN a `similarity()` WHERE negates a predicate on `cat`
+/// THEN the row without `cat` is excluded, as on the server: the predicate
+///      is UNKNOWN there, `NOT UNKNOWN` is UNKNOWN, and WHERE admits only
+///      TRUE (three-valued logic).
+#[test]
+fn test_similarity_where_negation_is_three_valued_like_core() {
+    let mut db = db_with_vectors();
+    execute(
+        &mut db,
+        "INSERT INTO vecs (id, vector) VALUES (5, $v)",
+        Some(r#"{"v": [0.5, 0.5, 0.0, 0.0]}"#),
+    )
+    .expect("test: seed a row without cat");
+    for sql in [
+        "SELECT * FROM vecs WHERE similarity(vector, $q) > 0.0 AND NOT (cat = 'a') LIMIT 10",
+        "SELECT * FROM vecs WHERE similarity(vector, $q) > 0.0 AND cat != 'a' LIMIT 10",
+        "SELECT * FROM vecs WHERE NOT (similarity(vector, $q) < 0.0 OR cat = 'a') LIMIT 10",
+        "SELECT * FROM vecs WHERE similarity(vector, $q) > 0.0 AND NOT (cat LIKE 'a%') LIMIT 10",
+        "SELECT * FROM vecs WHERE similarity(vector, $q) > 0.0 AND NOT (cat IN ('a')) LIMIT 10",
+        "SELECT * FROM vecs WHERE similarity(vector, $q) > 0.0 AND NOT (NOT (cat = 'b') AND cat != 'b') LIMIT 10",
+    ] {
+        let r = execute(&mut db, sql, Some(r#"{"q": [1.0, 1.0, 1.0, 0.0]}"#)).expect("test: query");
+        let mut ids: Vec<u64> = (0..r.row_count() as usize)
+            .map(|i| r.row(i).expect("test: row").id())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![3, 4], "{sql}");
+    }
+}
+
 // =========================================================================
 // FUSION — nominal
 // =========================================================================

@@ -594,7 +594,7 @@ Case-sensitive pattern matching with wildcards:
 | Wildcard | Meaning |
 |----------|---------|
 | `%` | Any sequence of characters (including empty) |
-| `_` | Exactly one character |
+| `_` | Exactly one character (a Unicode character, not a byte: `'caf_'` matches `café`) |
 
 ```sql
 -- Suffix match

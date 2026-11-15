@@ -366,8 +366,10 @@ impl SimilarityEvaluator {
 /// similarity out + AND with evaluator" composition got wrong (it
 /// always conjoined, so `OR sim` collapsed to `AND sim`).
 ///
-/// Non-similarity leaves delegate to [`crate::velesql_where::matches`]
-/// for identical semantics. The input `cond` is expected to already
+/// Non-similarity leaves delegate to [`crate::velesql_where::truth`] for
+/// identical semantics, and the tree folds in SQL's three-valued logic, as
+/// core's WHERE does: a row is admitted only when the whole condition is
+/// known TRUE, so `NOT (x LIKE 'a%')` excludes a row without `x`. The input `cond` is expected to already
 /// be De-Morgan-normalized via [`push_not_inward`]; callers that build
 /// the condition through [`find_similarity`] / [`strip_similarity`]
 /// do this automatically.
@@ -379,23 +381,32 @@ pub(crate) fn evaluate_where_with_similarity(
     eval: Option<&SimilarityEvaluator>,
     params: &Params,
 ) -> Result<bool, String> {
+    Ok(where_truth(cond, id, payload, idx, eval, params)? == Some(true))
+}
+
+/// The three-valued truth behind [`evaluate_where_with_similarity`].
+fn where_truth(
+    cond: &Condition,
+    id: u64,
+    payload: Option<&serde_json::Value>,
+    idx: usize,
+    eval: Option<&SimilarityEvaluator>,
+    params: &Params,
+) -> Result<Option<bool>, String> {
+    use crate::velesql_where::{and, or, truth};
     match cond {
-        Condition::And(l, r) => Ok(evaluate_where_with_similarity(
-            l, id, payload, idx, eval, params,
-        )? && evaluate_where_with_similarity(
-            r, id, payload, idx, eval, params,
-        )?),
-        Condition::Or(l, r) => Ok(evaluate_where_with_similarity(
-            l, id, payload, idx, eval, params,
-        )? || evaluate_where_with_similarity(
-            r, id, payload, idx, eval, params,
-        )?),
-        Condition::Not(inner) => Ok(!evaluate_where_with_similarity(
-            inner, id, payload, idx, eval, params,
-        )?),
-        Condition::Group(inner) => {
-            evaluate_where_with_similarity(inner, id, payload, idx, eval, params)
+        Condition::And(l, r) => Ok(and(
+            where_truth(l, id, payload, idx, eval, params)?,
+            where_truth(r, id, payload, idx, eval, params)?,
+        )),
+        Condition::Or(l, r) => Ok(or(
+            where_truth(l, id, payload, idx, eval, params)?,
+            where_truth(r, id, payload, idx, eval, params)?,
+        )),
+        Condition::Not(inner) => {
+            Ok(where_truth(inner, id, payload, idx, eval, params)?.map(|known| !known))
         }
+        Condition::Group(inner) => where_truth(inner, id, payload, idx, eval, params),
         Condition::Similarity(sim) => {
             // No evaluator => no vector collection context; this should
             // never happen when the query was validated upstream, but we
@@ -404,9 +415,11 @@ pub(crate) fn evaluate_where_with_similarity(
             let evaluator = eval.ok_or_else(|| {
                 "similarity() predicate found without a vector-collection evaluator".to_string()
             })?;
-            Ok(evaluator.passes_with_cond(sim, idx))
+            // Every row of a vector collection has a vector: its score is
+            // always known.
+            Ok(Some(evaluator.passes_with_cond(sim, idx)))
         }
-        other => crate::velesql_where::matches(other, id, payload, params),
+        other => truth(other, id, payload, params),
     }
 }
 

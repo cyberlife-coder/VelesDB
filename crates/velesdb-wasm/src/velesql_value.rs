@@ -111,25 +111,6 @@ pub(crate) fn json_values_equal(left: &serde_json::Value, right: &serde_json::Va
     }
 }
 
-/// Compares two JSON values in core's ORDER BY order, when they are of the
-/// same ordered type (both numbers, or both strings).
-///
-/// Returns `None` when either value is not ordered against the other —
-/// the caller decides what "false" means for such operands on a `>`/`<`
-/// comparison.
-pub(crate) fn json_values_cmp(
-    left: &serde_json::Value,
-    right: &serde_json::Value,
-) -> Option<std::cmp::Ordering> {
-    match (left, right) {
-        (serde_json::Value::Number(_), serde_json::Value::Number(_))
-        | (serde_json::Value::String(_), serde_json::Value::String(_)) => Some(
-            velesdb_core::velesql::compare_json_values(Some(left), Some(right)),
-        ),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 #[path = "velesql_value_tests.rs"]
 mod tests;

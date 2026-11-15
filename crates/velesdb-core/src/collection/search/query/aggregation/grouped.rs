@@ -130,7 +130,7 @@ impl Collection {
         }
         where_clause
             .map(|cond| {
-                let resolved = Self::resolve_condition_params(cond, params)?;
+                let resolved = crate::velesql::bind_condition(cond, params)?;
                 Ok(crate::filter::Filter::new(crate::filter::Condition::from(
                     resolved,
                 )))
