@@ -22,12 +22,16 @@ pub(crate) struct MatchNodes<'a> {
     /// Points of the same-named collection that the graph store does not
     /// already hold as nodes, keyed by id.
     points: HashMap<u64, WasmGraphNode>,
+    /// The collection itself, for node vectors (`similarity()`).
+    collection: Option<&'a StoreState>,
+    /// Row index of every point id in `collection`.
+    rows: HashMap<u64, usize>,
 }
 
 impl<'a> MatchNodes<'a> {
     /// Builds the node set from the graph store and, when one exists, the
     /// collection sharing its name.
-    pub(crate) fn new(graph: &'a WasmGraphStore, collection: Option<&StoreState>) -> Self {
+    pub(crate) fn new(graph: &'a WasmGraphStore, collection: Option<&'a StoreState>) -> Self {
         let points = collection
             .map(|state| {
                 state
@@ -39,7 +43,41 @@ impl<'a> MatchNodes<'a> {
                     .collect()
             })
             .unwrap_or_default();
-        Self { graph, points }
+        let rows = collection
+            .map(|state| {
+                state
+                    .ids
+                    .iter()
+                    .enumerate()
+                    .map(|(row, &id)| (id, row))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            graph,
+            points,
+            collection,
+            rows,
+        }
+    }
+
+    /// The vector of node `id`: the point's, when the collection holds one
+    /// (a node written only with `INSERT NODE` has none). A metadata-only
+    /// collection has no vectors.
+    pub(crate) fn vector(&self, id: u64) -> Option<&[f32]> {
+        let state = self.collection?;
+        if state.dimension == 0 {
+            return None;
+        }
+        let start = self.rows.get(&id)? * state.dimension;
+        state.data.get(start..start + state.dimension)
+    }
+
+    /// The collection's dimension and metric, when it has vectors.
+    pub(crate) fn vector_space(&self) -> Option<(usize, crate::DistanceMetric)> {
+        self.collection
+            .filter(|state| state.dimension > 0)
+            .map(|state| (state.dimension, state.metric))
     }
 
     /// The graph store, whose edges the walk follows.

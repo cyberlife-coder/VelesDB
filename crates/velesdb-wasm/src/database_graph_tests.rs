@@ -54,6 +54,7 @@ fn an_added_edge_is_listed_counted_and_matched() {
         &mut db,
         "MATCH (a)-[r:CITES]->(b) RETURN b.title, r.tags",
         Some(r#"{"_collection": "docs"}"#),
+        None,
     )
     .expect("MATCH");
     assert_eq!(

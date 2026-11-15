@@ -12,8 +12,9 @@
 //!   edge's properties; an absent property leaves the key out.
 //! - a bare node alias projects every payload property as `alias.key`, plus
 //!   `alias.id`; `*` does so for every bound node.
-//! - `similarity()` projects nothing: the browser path computes no scores,
-//!   so rows carry no `score` either.
+//! - `similarity()` projects the row's score under `similarity()`, and the
+//!   row carries it as `score`, when the MATCH computes one: a WHERE
+//!   `similarity()` leaf or a query vector ([`crate::velesql_match_score`]).
 //!
 //! `bindings` holds the explicitly aliased nodes only, and `depth` the number
 //! of relationships walked, as in core.
@@ -25,20 +26,23 @@ use velesdb_core::velesql::{
 };
 
 use crate::database::DatabaseInner;
-use crate::velesql_match_orderby::{BoundElement, MatchBinding};
+use crate::velesql_match_orderby::{BoundElement, MatchBinding, MatchCandidate};
+pub(crate) use crate::velesql_match_score::MatchScoring;
 use crate::velesql_value::parse_params;
 
-/// Runs the MATCH in `sql` and returns its rows in core's shape.
+/// Runs the MATCH in `sql` and returns its rows in core's shape; with
+/// `scoring`, as REST `/match` does with a query vector and threshold.
 ///
 /// # Errors
 ///
 /// Returns an error when `sql` does not parse or validate, is not a MATCH,
-/// `params_json` is not a JSON object, the read gate denies a collection, or
-/// the MATCH itself fails.
+/// `params_json` is not a JSON object, the read gate denies a collection,
+/// `scoring` is invalid for the collection, or the MATCH itself fails.
 pub(crate) fn execute_match_rows(
     db: &mut DatabaseInner,
     sql: &str,
     params_json: Option<&str>,
+    scoring: Option<MatchScoring>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let query = Parser::parse(sql).map_err(|e| {
         format!(
@@ -51,15 +55,17 @@ pub(crate) fn execute_match_rows(
         return Err("executeMatch runs MATCH statements only; use executeQuery".to_string());
     };
     let params = parse_params(params_json)?;
-    let candidates = crate::velesql_graph::match_candidates_gated(db, &query, &params)?;
+    let candidates =
+        crate::velesql_graph::match_candidates_gated(db, &query, &params, scoring.as_ref())?;
     Ok(candidates
         .iter()
-        .map(|c| core_row(&c.binding, &clause.return_clause))
+        .map(|c| core_row(c, &clause.return_clause))
         .collect())
 }
 
 /// One row in core's shape.
-fn core_row(binding: &MatchBinding, return_clause: &ReturnClause) -> serde_json::Value {
+fn core_row(candidate: &MatchCandidate, return_clause: &ReturnClause) -> serde_json::Value {
+    let binding = &candidate.binding;
     let bindings: serde_json::Map<String, serde_json::Value> = binding
         .nodes
         .iter()
@@ -67,17 +73,22 @@ fn core_row(binding: &MatchBinding, return_clause: &ReturnClause) -> serde_json:
         .collect();
     let mut projected = HashMap::new();
     for item in &return_clause.items {
-        project_item(binding, item, &mut projected);
+        project_item(binding, candidate.score, item, &mut projected);
     }
-    serde_json::json!({
+    let mut row = serde_json::json!({
         "bindings": bindings,
         "depth": binding.edges.len(),
         "projected": projected,
-    })
+    });
+    if let Some(score) = candidate.score {
+        row["score"] = serde_json::json!(score);
+    }
+    row
 }
 
 fn project_item(
     binding: &MatchBinding,
+    score: Option<f32>,
     item: &ReturnItem,
     projected: &mut HashMap<String, serde_json::Value>,
 ) {
@@ -85,6 +96,13 @@ fn project_item(
         ProjectionItem::Wildcard => {
             for node in binding.nodes.iter().filter(|n| n.alias.is_some()) {
                 project_all(node, projected);
+            }
+        }
+        // Core inserts the score under `similarity()`, whatever the item's
+        // alias; other functions project nothing.
+        ProjectionItem::FunctionCall("similarity") => {
+            if let Some(score) = score {
+                projected.insert("similarity()".to_string(), serde_json::json!(score));
             }
         }
         ProjectionItem::FunctionCall(_) => {}

@@ -97,8 +97,15 @@ const rows = JSON.parse(db.executeMatch(
 
 `projected` follows core's RETURN rules: `alias.property` under its `AS` alias or
 its text, `alias.id` for the element id, a bare alias as every `alias.key` plus
-`alias.id`, and `*` for every bound node. Rows carry no `score`, because the
-browser MATCH path computes no `similarity()`.
+`alias.id`, and `*` for every bound node.
+
+The nodes' vectors score `similarity()` as in core. `WHERE similarity(b.embedding,
+$v) > 0.8` scores the node `b` binds (a bare field: the row's last node), and
+under a distance metric "more similar" means "closer". `ORDER BY similarity()`
+is most-similar-first and `RETURN similarity()` projects the score, which the
+row also carries as `score`. `executeMatch(sql, params, vector, threshold)`
+takes REST `/match`'s query vector and threshold: it scores each row's last
+node, drops rows past the threshold and orders by score.
 
 ## What runs in WASM
 
@@ -168,13 +175,14 @@ reference from `@wiscale/velesdb-wasm@4.0.0`.
 | Geospatial conditions | `Geospatial conditions are not supported in WASM` |
 | Inline vectors in `INSERT` | `… inline vectors are not supported in WASM INSERT` |
 | `ORDER BY similarity(field, $v)` | `ORDER BY similarity(field, $vec) is not supported in WASM: named/secondary …` |
-| `ORDER BY` in a `MATCH` | `MATCH ORDER BY <form> is not supported in WASM (use depth or alias.property)` |
+| `ORDER BY similarity(field, $v)`, arithmetic or an aggregate in a `MATCH` | `MATCH ORDER BY <form> is not supported in WASM (use depth, alias.property or similarity())` |
 
 Two cases deserve more than a one-liner:
 
-- **Cross-collection `MATCH` (`@collection`)** — the `@` form is not even in
-  the WASM grammar; it fails at parse time (`expected identifier`), not at
-  execution. It requires Database-level query routing that only the server has.
+- **Cross-collection `MATCH` (`@collection`)** — the annotation parses (WASM
+  runs core's parser). The first node's annotation picks the graph a `MATCH`
+  reads, and any other annotated, aliased node merges in the payload of the
+  same-named vector collection. Multi-pattern `MATCH` stays server-only.
 - **`TRAIN QUANTIZER`** — recognized for API parity but unavailable: training
   needs `ndarray`/`persistence`, which are compiled out for WASM. Product
   Quantization has the same constraint (it needs `rayon`).
@@ -198,10 +206,9 @@ Both rules, and the ranking of every accepted shape, are pinned against core by
 
 WASM stores only the **primary** vector, so the named/secondary form
 `ORDER BY similarity(field, $v)` is rejected on both the `SELECT` and `MATCH`
-paths. Use `ORDER BY similarity()` (the search score itself) or a payload
-column. The `MATCH` path does no vector scoring at all, so it additionally
-rejects bare `similarity()` and arithmetic `ORDER BY` — order by `depth` or
-`alias.property` there.
+paths. Use `ORDER BY similarity()` (the search score itself, or a `MATCH` row's
+score) or a payload column. The `MATCH` path also rejects arithmetic `ORDER BY`;
+order by `depth`, `alias.property` or `similarity()` there.
 
 ## Error surface: mixed, coerce before reading
 

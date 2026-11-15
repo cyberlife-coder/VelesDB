@@ -26,7 +26,7 @@ pub(crate) fn execute_match(
     query: &Query,
     params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
-    Ok(match_candidates_gated(db, query, params)?
+    Ok(match_candidates_gated(db, query, params, None)?
         .into_iter()
         .map(|c| c.row)
         .collect())
@@ -39,13 +39,14 @@ pub(crate) fn match_candidates_gated(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
+    scoring: Option<&crate::velesql_match_score::MatchScoring>,
 ) -> Result<Vec<crate::velesql_match_orderby::MatchCandidate>, String> {
     // Read-path gate (audit F-5.4, #1392), asked about every collection the
     // MATCH reads. Zero-overhead without an observer.
     for collection in match_gate_collections(query, params)? {
         db.check_query_access(&collection, WasmQueryOperationKind::GraphTraversal)?;
     }
-    crate::velesql_match::match_candidates(db, query, params)
+    crate::velesql_match::match_candidates(db, query, params, scoring)
 }
 
 /// Every collection a MATCH reads, for its read gate, in first-read order:

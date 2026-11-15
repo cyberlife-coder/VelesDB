@@ -42,7 +42,7 @@ fn docs(db: &mut DatabaseInner) {
 }
 
 fn run(db: &mut DatabaseInner, sql: &str) -> Vec<serde_json::Value> {
-    execute_match_rows(db, sql, ON_DOCS).expect("test: MATCH")
+    execute_match_rows(db, sql, ON_DOCS, None).expect("test: MATCH")
 }
 
 /// Rows sorted by the `b` binding, for order-independent comparison.
@@ -139,7 +139,7 @@ fn a_statement_that_is_not_a_match_is_refused() {
     let mut db = DatabaseInner::new();
     docs(&mut db);
 
-    let err =
-        execute_match_rows(&mut db, "SELECT * FROM docs LIMIT 1", None).expect_err("not a MATCH");
+    let err = execute_match_rows(&mut db, "SELECT * FROM docs LIMIT 1", None, None)
+        .expect_err("not a MATCH");
     assert!(err.contains("MATCH"), "{err}");
 }

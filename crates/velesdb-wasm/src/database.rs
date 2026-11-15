@@ -477,38 +477,47 @@ impl WasmDatabase {
     }
 
     /// Runs a VelesQL `MATCH` and returns its rows in core's `MatchResult`
-    /// shape, as a JSON array string: `[{ bindings, depth, projected }]` —
-    /// the rows of REST `POST /collections/{name}/match`.
+    /// shape, as a JSON array string: `[{ bindings, depth, projected, score? }]`
+    /// — the rows of REST `POST /collections/{name}/match`.
     ///
     /// `executeQuery` runs the same MATCH (same read gate, walk, ORDER BY and
     /// LIMIT) but returns alias-keyed objects and leaves RETURN to the
     /// caller. Name the collection with `_collection` in `params_json` (MATCH
-    /// has no `FROM`). No row carries a `score`: the browser MATCH path
-    /// computes no `similarity()`.
+    /// has no `FROM`); its points are the nodes, so `similarity()` scores
+    /// their vectors. `vector` and `threshold` are REST `/match`'s: each row's
+    /// last node is scored, rows past the threshold (default `0.0`) are
+    /// dropped and the rest ordered by score. A row carries `score` when the
+    /// MATCH computes one.
     ///
     /// # Example (JavaScript)
     /// ```javascript
     /// const rows = JSON.parse(db.executeMatch(
-    ///     "MATCH (a:Doc)-[:CITES]->(b:Doc) RETURN b.title",
-    ///     JSON.stringify({ _collection: "docs" })
+    ///     "MATCH (a:Doc)-[:CITES]->(b:Doc) WHERE similarity(b.embedding, $v) > 0.8 RETURN b.title",
+    ///     JSON.stringify({ _collection: "docs", v: [1, 0] })
     /// ));
-    /// // [{ bindings: { a: 1, b: 2 }, depth: 1, projected: { "b.title": "…" } }]
+    /// // [{ bindings: { a: 1, b: 2 }, depth: 1, projected: { "b.title": "…" }, score: 0.97 }]
     /// ```
     ///
     /// # Errors
     /// Returns a `JsValue` error string when parsing or validation fails, the
     /// statement is not a MATCH, parameters are invalid, the read gate denies
-    /// a collection, or the MATCH fails.
+    /// a collection, `vector` has another dimension than the collection,
+    /// `threshold` is outside `[0, 1]`, or the MATCH fails.
     #[wasm_bindgen(js_name = executeMatch)]
     pub fn execute_match(
         &mut self,
         sql: &str,
         params_json: Option<String>,
+        vector: Option<Vec<f32>>,
+        threshold: Option<f32>,
     ) -> Result<String, JsValue> {
+        let scoring =
+            vector.map(|vector| crate::velesql_match_core::MatchScoring { vector, threshold });
         let rows = crate::velesql_match_core::execute_match_rows(
             &mut self.inner,
             sql,
             params_json.as_deref(),
+            scoring,
         )
         .map_err(|e| JsValue::from_str(&e))?;
         serde_json::to_string(&rows).map_err(|e| JsValue::from_str(&e.to_string()))

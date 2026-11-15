@@ -15,6 +15,7 @@ use crate::database::{DatabaseInner, SharedStore};
 use crate::graph_store::{WasmEdge, WasmGraphNode, WasmGraphStore};
 use crate::velesql_match_nodes::MatchNodes;
 use crate::velesql_match_orderby::{order_and_limit, BoundElement, MatchBinding, MatchCandidate};
+use crate::velesql_match_score::{where_holds, where_score, BoundNode, MatchScoring};
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
 
@@ -96,6 +97,7 @@ pub(crate) fn match_candidates(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
+    scoring: Option<&MatchScoring>,
 ) -> Result<Vec<MatchCandidate>, String> {
     let Some(clause) = query.match_clause.as_ref() else {
         return Err("MATCH clause missing".to_string());
@@ -118,19 +120,40 @@ pub(crate) fn match_candidates(
     let graph = store.borrow();
     let points = collection.as_ref().map(|c| c.borrow());
     let nodes = MatchNodes::new(&graph, points.as_deref());
+    if let Some(scoring) = scoring {
+        scoring.validate(&nodes)?;
+    }
     let walk = PathWalk {
         pattern,
         labels: pattern.nodes.iter().map(first_label).collect(),
         where_clause: clause.where_clause.as_ref(),
         params,
         cross,
+        scoring,
     };
     let mut out = Vec::new();
     let mut path = PathState::default();
     for start in nodes.candidates(walk.labels[0].as_deref()) {
         walk.start_from(&nodes, start, &mut path, &mut out)?;
     }
-    finalize_candidates(out, clause)
+    let higher_is_better = nodes
+        .vector_space()
+        .is_none_or(|(_, metric)| metric.higher_is_better());
+    if scoring.is_some() {
+        // REST `/match` with a query vector: rows by score, before ORDER BY.
+        sort_by_score(&mut out, higher_is_better);
+    }
+    finalize_candidates(out, clause, higher_is_better)
+}
+
+/// Most similar first: descending score, ascending distance.
+fn sort_by_score(candidates: &mut [MatchCandidate], higher_is_better: bool) {
+    let key = |c: &MatchCandidate| match c.score {
+        Some(score) if higher_is_better => score,
+        Some(distance) => -distance,
+        None => f32::NEG_INFINITY,
+    };
+    candidates.sort_by(|a, b| key(b).total_cmp(&key(a)));
 }
 
 /// Rejects pattern shapes this executor would otherwise misread.
@@ -164,6 +187,8 @@ struct PathWalk<'p> {
     where_clause: Option<&'p Condition>,
     params: &'p Params,
     cross: Vec<CrossRef>,
+    /// REST `/match`'s query vector and threshold, when given.
+    scoring: Option<&'p MatchScoring>,
 }
 
 /// The path being built: bound node ids and the edges walked to reach them.
@@ -250,9 +275,26 @@ impl PathWalk<'_> {
                 make_binding(pattern, *id, data, &positional_alias(position))
             })
             .collect();
-        if !matches_where_in_match_scope(self.where_clause, &bindings, self.params)? {
+        if !self.where_holds(nodes, &bindings)? {
             return Ok(());
         }
+        let bound_nodes: Vec<BoundNode<'_>> = bindings
+            .iter()
+            .map(|b| BoundNode {
+                alias: &b.alias,
+                id: b.id,
+            })
+            .collect();
+        let score = match self.scoring {
+            Some(scoring) => {
+                let last = *path.nodes.last().ok_or("MATCH row binds no node")?;
+                let Some(score) = scoring.score(nodes, last) else {
+                    return Ok(());
+                };
+                Some(score)
+            }
+            None => where_score(self.where_clause, &bound_nodes, nodes, self.params)?,
+        };
         let edges = path
             .edges
             .iter()
@@ -268,8 +310,37 @@ impl PathWalk<'_> {
                     .and_then(|e| e.payload.clone()),
             })
             .collect();
-        out.push(build_match_row(&bound, edges, &self.cross)?);
+        let mut candidate = build_match_row(&bound, edges, &self.cross)?;
+        candidate.score = score;
+        out.push(candidate);
         Ok(())
+    }
+
+    /// The WHERE clause over this row: `similarity()` leaves scored on node
+    /// vectors, every other leaf on the alias-scoped payload.
+    fn where_holds(
+        &self,
+        nodes: &MatchNodes<'_>,
+        bindings: &[AliasBinding],
+    ) -> Result<bool, String> {
+        let Some(cond) = self.where_clause else {
+            return Ok(true);
+        };
+        let Some(first) = bindings.first() else {
+            // Defensive: a MATCH always has at least one bound node.
+            return Ok(false);
+        };
+        let merged = build_merged_payload(bindings, &first.payload, first.id);
+        let bound: Vec<BoundNode<'_>> = bindings
+            .iter()
+            .map(|b| BoundNode {
+                alias: &b.alias,
+                id: b.id,
+            })
+            .collect();
+        where_holds(cond, &bound, nodes, self.params, &|leaf| {
+            crate::velesql_where::matches(leaf, first.id, Some(&merged), self.params)
+        })
     }
 }
 
@@ -287,11 +358,13 @@ fn positional_alias(position: usize) -> String {
 fn finalize_candidates(
     mut candidates: Vec<MatchCandidate>,
     clause: &MatchClause,
+    higher_is_better: bool,
 ) -> Result<Vec<MatchCandidate>, String> {
     order_and_limit(
         &mut candidates,
         clause.return_clause.order_by.as_deref(),
         clause.return_clause.limit,
+        higher_is_better,
     )?;
     Ok(candidates)
 }
@@ -426,42 +499,6 @@ struct AliasBinding {
     payload: serde_json::Value,
 }
 
-/// Evaluates a MATCH WHERE clause in a scope where multiple node aliases
-/// are bound.
-///
-/// Strategy: build a merged JSON payload keyed by alias
-/// (`{"a": <a_payload>, "b": <b_payload>, ...}`) and reuse
-/// [`crate::velesql_where::matches`]. Dotted column references like
-/// `b.name` resolve naturally via `get_nested_field` (which splits on
-/// `.`). Bare column references (no alias prefix) fall back to the
-/// first-bound node — backward compatible with pre-fix tests that write
-/// `WHERE name = ...` without a prefix.
-///
-/// An unbound alias prefix (`z.x` with no binding `z`) silently yields
-/// `false` via the same "missing column" semantics that
-/// `velesql_where::matches` already applies to missing payload fields.
-///
-/// `params` is the query-level parameter map, threaded through the MATCH
-/// executor so `$param` placeholders inside the WHERE clause resolve to
-/// their bound JSON value. An unbound `$param` surfaces as an `Err` from
-/// the inner matcher and is propagated up to the caller of
-/// `execute_match` (no silent zero-row result).
-fn matches_where_in_match_scope(
-    where_clause: Option<&Condition>,
-    bindings: &[AliasBinding],
-    params: &Params,
-) -> Result<bool, String> {
-    let Some(cond) = where_clause else {
-        return Ok(true);
-    };
-    let Some(first) = bindings.first() else {
-        // Defensive: a MATCH always has at least one bound node.
-        return Ok(false);
-    };
-    let merged = build_merged_payload(bindings, &first.payload, first.id);
-    crate::velesql_where::matches(cond, first.id, Some(&merged), params)
-}
-
 /// Builds a flat JSON object suitable for alias-scoped WHERE evaluation.
 ///
 /// Layout:
@@ -544,6 +581,7 @@ fn candidate_from_map(
         value,
         row,
         binding,
+        score: None,
     })
 }
 
