@@ -152,7 +152,6 @@ impl WasmGraphStore {
     }
 
     /// Returns every edge (immutable view).
-    #[allow(dead_code)] // Used by tests + prepared for DESCRIBE GRAPH.
     pub(crate) fn edges(&self) -> &[WasmEdge] {
         &self.edges
     }

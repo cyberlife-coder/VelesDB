@@ -13,7 +13,9 @@ use velesdb_core::velesql::{
 
 use crate::database::{DatabaseInner, SharedStore};
 use crate::graph_store::{WasmEdge, WasmGraphNode, WasmGraphStore};
-use crate::velesql_match_orderby::{order_and_limit, MatchCandidate};
+use crate::velesql_match_nodes::MatchNodes;
+use crate::velesql_match_orderby::{order_and_limit, BoundElement, MatchBinding, MatchCandidate};
+use crate::velesql_match_score::{where_holds, where_score, BoundNode, MatchScoring};
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
 
@@ -50,49 +52,54 @@ fn resolve_cross_refs(db: &DatabaseInner, clause: &MatchClause) -> Vec<CrossRef>
         .collect()
 }
 
-/// Merges cross-collection payloads into a freshly built MATCH row.
+/// A bound node's payload with its `@collection` point's fields merged in.
 ///
-/// For each cross-reference, the node id is read back from the alias object's
-/// `id` field (every row builder writes it), the referenced collection's
-/// payload for that id is looked up, and its fields are merged into the alias
-/// object. The graph node's own fields — including the reserved `id`/`labels` —
-/// win on collision, so enrichment never overwrites graph identity.
-fn enrich_row(map: &mut serde_json::Map<String, serde_json::Value>, cross: &[CrossRef]) {
-    for (alias, store) in cross {
-        let Some(id) = map
-            .get(alias)
-            .and_then(|v| v.get("id"))
-            .and_then(serde_json::Value::as_u64)
-        else {
-            continue;
-        };
-        let borrowed = store.borrow();
-        let Some(serde_json::Value::Object(cross_obj)) = borrowed.payload_for_id(id) else {
-            continue;
-        };
-        let Some(serde_json::Value::Object(alias_obj)) = map.get_mut(alias) else {
-            continue;
-        };
-        for (key, value) in cross_obj {
-            alias_obj
-                .entry(key.clone())
-                .or_insert_with(|| value.clone());
-        }
+/// The one place a cross-collection annotation enriches a node, so every
+/// view of the row — `executeQuery`'s alias object, `executeMatch`'s RETURN
+/// projection, ORDER BY — reads the same properties. As in core, it runs on
+/// a row WHERE already admitted. The node's own fields win on collision
+/// (the reserved `id` / `labels` included), so enrichment never overwrites
+/// graph identity; an alias without an annotation, or a point without an
+/// object payload, leaves the node's payload as it is.
+fn enriched_payload(
+    alias: Option<&str>,
+    id: u64,
+    payload: Option<&serde_json::Value>,
+    cross: &[CrossRef],
+) -> Option<serde_json::Value> {
+    let Some((_, store)) = alias.and_then(|a| cross.iter().find(|(c, _)| c == a)) else {
+        return payload.cloned();
+    };
+    let borrowed = store.borrow();
+    let Some(serde_json::Value::Object(extra)) = borrowed.payload_for_id(id) else {
+        return payload.cloned();
+    };
+    let mut merged = match payload {
+        Some(serde_json::Value::Object(own)) => own.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in extra {
+        merged.entry(key.clone()).or_insert_with(|| value.clone());
     }
+    Some(serde_json::Value::Object(merged))
 }
 
-/// Executes a MATCH query.
+/// Runs a MATCH and returns its rows as ordered, limited candidates — the
+/// alias-keyed row together with what it binds ([`MatchBinding`]). Callers
+/// go through [`crate::velesql_graph::match_candidates_gated`], which puts
+/// the read gate in front.
 ///
 /// Only single-pattern MATCH is supported in the WASM executor. A query
 /// with multiple comma-separated patterns (e.g.
 /// `MATCH (a:X), (b:Y) RETURN a, b`) surfaces a clear error so callers
 /// know to use the persistent core backend (Devin Review Finding K) —
 /// rather than silently dropping all patterns after the first.
-pub(crate) fn execute_match(
+pub(crate) fn match_candidates(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
+    scoring: Option<&MatchScoring>,
+) -> Result<Vec<MatchCandidate>, String> {
     let Some(clause) = query.match_clause.as_ref() else {
         return Err("MATCH clause missing".to_string());
     };
@@ -109,21 +116,45 @@ pub(crate) fn execute_match(
     let pattern = &clause.patterns[0];
     validate_pattern(pattern)?;
     let cross = resolve_cross_refs(db, clause);
-    let store = inferred_graph_store(db, pattern, params)?;
-    let borrowed = store.borrow();
+    let (name, store) = inferred_graph_store(db, pattern, params)?;
+    let collection = db.get_shared_store(&name).ok();
+    let graph = store.borrow();
+    let points = collection.as_ref().map(|c| c.borrow());
+    let nodes = MatchNodes::new(&graph, points.as_deref());
+    if let Some(scoring) = scoring {
+        scoring.validate(&nodes)?;
+    }
     let walk = PathWalk {
         pattern,
         labels: pattern.nodes.iter().map(first_label).collect(),
         where_clause: clause.where_clause.as_ref(),
         params,
         cross,
+        scoring,
     };
     let mut out = Vec::new();
     let mut path = PathState::default();
-    for start in borrowed.candidate_nodes(walk.labels[0].as_deref()) {
-        walk.start_from(&borrowed, start, &mut path, &mut out)?;
+    for start in nodes.candidates(walk.labels[0].as_deref()) {
+        walk.start_from(&nodes, start, &mut path, &mut out)?;
     }
-    finalize_candidates(out, clause)
+    let higher_is_better = nodes
+        .vector_space()
+        .is_none_or(|(_, metric)| metric.higher_is_better());
+    if scoring.is_some() {
+        // REST `/match` with a query vector: rows by score, before ORDER BY.
+        sort_by_score(&mut out, higher_is_better);
+    }
+    finalize_candidates(out, clause, higher_is_better)
+}
+
+/// Most similar first: descending score, ascending distance.
+fn sort_by_score(candidates: &mut [MatchCandidate], higher_is_better: bool) {
+    let key = |c: &MatchCandidate| match c.score {
+        Some(score) if higher_is_better => score,
+        Some(distance) => -distance,
+        None => f32::NEG_INFINITY,
+    };
+    candidates.sort_by(|a, b| key(b).total_cmp(&key(a)));
 }
 
 /// Rejects pattern shapes this executor would otherwise misread.
@@ -157,6 +188,17 @@ struct PathWalk<'p> {
     where_clause: Option<&'p Condition>,
     params: &'p Params,
     cross: Vec<CrossRef>,
+    /// REST `/match`'s query vector and threshold, when given.
+    scoring: Option<&'p MatchScoring>,
+}
+
+/// What scoring decides for a row.
+enum RowScore {
+    /// The row stays, with its score if it has one.
+    Kept(Option<f32>),
+    /// The row's last node cannot be scored against REST `/match`'s query
+    /// vector, or falls short of its threshold.
+    Dropped,
 }
 
 /// The path being built: bound node ids and the edges walked to reach them.
@@ -169,18 +211,18 @@ struct PathState {
 impl PathWalk<'_> {
     fn start_from(
         &self,
-        store: &WasmGraphStore,
+        nodes: &MatchNodes<'_>,
         start: u64,
         path: &mut PathState,
         out: &mut Vec<MatchCandidate>,
     ) -> Result<(), String> {
         // A lone node must exist to be returned; as a path anchor an id known
         // only through its edges still starts a walk, as it always has.
-        if self.pattern.nodes.len() == 1 && store.get_node(start).is_none() {
+        if self.pattern.nodes.len() == 1 && nodes.get(start).is_none() {
             return Ok(());
         }
         path.nodes.push(start);
-        let result = self.extend(store, path, out);
+        let result = self.extend(nodes, path, out);
         path.nodes.pop();
         result
     }
@@ -189,23 +231,23 @@ impl PathWalk<'_> {
     /// edge of the current one, or emits the row once all nodes are bound.
     fn extend(
         &self,
-        store: &WasmGraphStore,
+        nodes: &MatchNodes<'_>,
         path: &mut PathState,
         out: &mut Vec<MatchCandidate>,
     ) -> Result<(), String> {
         let depth = path.nodes.len();
         if depth == self.pattern.nodes.len() {
-            return self.emit(store, path, out);
+            return self.emit(nodes, path, out);
         }
         let anchor = path.nodes[depth - 1];
         let rel = &self.pattern.relationships[depth - 1];
-        for edge in directed_filter_edges(store, anchor, rel) {
+        for edge in directed_filter_edges(nodes.graph(), anchor, rel) {
             // Relationship isomorphism (Cypher, and core's `follow_edge`).
             if path.edges.contains(&edge.id) {
                 continue;
             }
             let next = other_endpoint(&edge, anchor);
-            let Some(next_node) = store.get_node(next) else {
+            let Some(next_node) = nodes.get(next) else {
                 continue;
             };
             if !matches_label(next_node, self.labels[depth].as_deref()) {
@@ -213,7 +255,7 @@ impl PathWalk<'_> {
             }
             path.nodes.push(next);
             path.edges.push(edge.id);
-            let result = self.extend(store, path, out);
+            let result = self.extend(nodes, path, out);
             path.edges.pop();
             path.nodes.pop();
             result?;
@@ -224,7 +266,7 @@ impl PathWalk<'_> {
     /// Evaluates WHERE with every alias bound, then builds the row.
     fn emit(
         &self,
-        store: &WasmGraphStore,
+        nodes: &MatchNodes<'_>,
         path: &PathState,
         out: &mut Vec<MatchCandidate>,
     ) -> Result<(), String> {
@@ -234,7 +276,7 @@ impl PathWalk<'_> {
             .nodes
             .iter()
             .zip(&path.nodes)
-            .map(|(pattern, &id)| (pattern, id, store.get_node(id).unwrap_or(&default_node)))
+            .map(|(pattern, &id)| (pattern, id, nodes.get(id).unwrap_or(&default_node)))
             .collect();
         let bindings: Vec<AliasBinding> = bound
             .iter()
@@ -243,11 +285,84 @@ impl PathWalk<'_> {
                 make_binding(pattern, *id, data, &positional_alias(position))
             })
             .collect();
-        if !matches_where_in_match_scope(self.where_clause, &bindings, self.params)? {
+        if !self.where_holds(nodes, &bindings)? {
             return Ok(());
         }
-        out.push(build_match_row(&bound, &self.cross)?);
+        let RowScore::Kept(score) = self.row_score(nodes, path, &bindings)? else {
+            return Ok(());
+        };
+        let edges = self.bound_edges(nodes, path);
+        out.push(build_match_row(&bound, edges, &self.cross, score)?);
         Ok(())
+    }
+
+    /// The row's score: REST `/match`'s query vector on the row's last node
+    /// when one is given, else the first WHERE `similarity()` leaf's.
+    fn row_score(
+        &self,
+        nodes: &MatchNodes<'_>,
+        path: &PathState,
+        bindings: &[AliasBinding],
+    ) -> Result<RowScore, String> {
+        let Some(scoring) = self.scoring else {
+            let bound: Vec<BoundNode<'_>> = bindings
+                .iter()
+                .map(|b| BoundNode {
+                    alias: &b.alias,
+                    id: b.id,
+                })
+                .collect();
+            return where_score(self.where_clause, &bound, nodes, self.params).map(RowScore::Kept);
+        };
+        let last = *path.nodes.last().ok_or("MATCH row binds no node")?;
+        Ok(scoring
+            .score(nodes, last)
+            .map_or(RowScore::Dropped, |score| RowScore::Kept(Some(score))))
+    }
+
+    /// The row's relationships, each with its alias and properties.
+    fn bound_edges(&self, nodes: &MatchNodes<'_>, path: &PathState) -> Vec<BoundElement> {
+        path.edges
+            .iter()
+            .zip(&self.pattern.relationships)
+            .map(|(&id, rel)| BoundElement {
+                alias: rel.alias.clone(),
+                id,
+                payload: nodes
+                    .graph()
+                    .edges()
+                    .iter()
+                    .find(|e| e.id == id)
+                    .and_then(|e| e.payload.clone()),
+            })
+            .collect()
+    }
+
+    /// The WHERE clause over this row: `similarity()` leaves scored on node
+    /// vectors, every other leaf on the alias-scoped payload.
+    fn where_holds(
+        &self,
+        nodes: &MatchNodes<'_>,
+        bindings: &[AliasBinding],
+    ) -> Result<bool, String> {
+        let Some(cond) = self.where_clause else {
+            return Ok(true);
+        };
+        let Some(first) = bindings.first() else {
+            // Defensive: a MATCH always has at least one bound node.
+            return Ok(false);
+        };
+        let merged = build_merged_payload(bindings, &first.payload, first.id);
+        let bound: Vec<BoundNode<'_>> = bindings
+            .iter()
+            .map(|b| BoundNode {
+                alias: &b.alias,
+                id: b.id,
+            })
+            .collect();
+        where_holds(cond, &bound, nodes, self.params, &|leaf| {
+            crate::velesql_where::matches(leaf, first.id, Some(&merged), self.params)
+        })
     }
 }
 
@@ -261,17 +376,19 @@ fn positional_alias(position: usize) -> String {
 }
 
 /// Sorts the collected candidates per the RETURN `ORDER BY` (Finding 8: sort
-/// BEFORE LIMIT), truncates to LIMIT, then projects to result rows.
+/// BEFORE LIMIT), then truncates to LIMIT.
 fn finalize_candidates(
     mut candidates: Vec<MatchCandidate>,
     clause: &MatchClause,
-) -> Result<Vec<QueryResultRow>, String> {
+    higher_is_better: bool,
+) -> Result<Vec<MatchCandidate>, String> {
     order_and_limit(
         &mut candidates,
         clause.return_clause.order_by.as_deref(),
         clause.return_clause.limit,
+        higher_is_better,
     )?;
-    Ok(candidates.into_iter().map(|c| c.row).collect())
+    Ok(candidates)
 }
 
 /// Returns edges incident to `anchor` that are compatible with the
@@ -359,15 +476,25 @@ pub(crate) fn match_target(pattern: &GraphPattern, params: &Params) -> Result<St
     }
 }
 
-/// Resolves the graph store a MATCH runs against (see [`match_target`]).
+/// Resolves the graph store a MATCH runs against (see [`match_target`]),
+/// returned with its name: the collection of that name supplies the points
+/// MATCH binds as nodes ([`MatchNodes`]).
 fn inferred_graph_store(
     db: &mut DatabaseInner,
     pattern: &GraphPattern,
     params: &Params,
-) -> Result<std::rc::Rc<std::cell::RefCell<WasmGraphStore>>, String> {
+) -> Result<(String, std::rc::Rc<std::cell::RefCell<WasmGraphStore>>), String> {
     let name = match_target(pattern, params)?;
-    db.get_graph_store(&name)
-        .ok_or_else(|| format!("Graph '{name}' is empty; no data to match"))
+    // A collection with points and no edge yet still has nodes to bind; it
+    // gets an empty, unregistered graph store for this MATCH.
+    let store = match db.get_graph_store(&name) {
+        Some(store) => store,
+        None if db.contains(&name) => {
+            std::rc::Rc::new(std::cell::RefCell::new(WasmGraphStore::new()))
+        }
+        None => return Err(format!("Graph '{name}' is empty; no data to match")),
+    };
+    Ok((name, store))
 }
 
 /// Param naming the collection a MATCH targets (core's `_collection`).
@@ -392,42 +519,6 @@ struct AliasBinding {
     alias: String,
     id: u64,
     payload: serde_json::Value,
-}
-
-/// Evaluates a MATCH WHERE clause in a scope where multiple node aliases
-/// are bound.
-///
-/// Strategy: build a merged JSON payload keyed by alias
-/// (`{"a": <a_payload>, "b": <b_payload>, ...}`) and reuse
-/// [`crate::velesql_where::matches`]. Dotted column references like
-/// `b.name` resolve naturally via `get_nested_field` (which splits on
-/// `.`). Bare column references (no alias prefix) fall back to the
-/// first-bound node — backward compatible with pre-fix tests that write
-/// `WHERE name = ...` without a prefix.
-///
-/// An unbound alias prefix (`z.x` with no binding `z`) silently yields
-/// `false` via the same "missing column" semantics that
-/// `velesql_where::matches` already applies to missing payload fields.
-///
-/// `params` is the query-level parameter map, threaded through the MATCH
-/// executor so `$param` placeholders inside the WHERE clause resolve to
-/// their bound JSON value. An unbound `$param` surfaces as an `Err` from
-/// the inner matcher and is propagated up to the caller of
-/// `execute_match` (no silent zero-row result).
-fn matches_where_in_match_scope(
-    where_clause: Option<&Condition>,
-    bindings: &[AliasBinding],
-    params: &Params,
-) -> Result<bool, String> {
-    let Some(cond) = where_clause else {
-        return Ok(true);
-    };
-    let Some(first) = bindings.first() else {
-        // Defensive: a MATCH always has at least one bound node.
-        return Ok(false);
-    };
-    let merged = build_merged_payload(bindings, &first.payload, first.id);
-    crate::velesql_where::matches(cond, first.id, Some(&merged), params)
 }
 
 /// Builds a flat JSON object suitable for alias-scoped WHERE evaluation.
@@ -503,30 +594,52 @@ fn make_binding(node: &NodePattern, id: u64, data: &WasmGraphNode, fallback: &st
 fn candidate_from_map(
     baseline: Vec<u64>,
     map: serde_json::Map<String, serde_json::Value>,
+    binding: MatchBinding,
+    score: Option<f32>,
 ) -> Result<MatchCandidate, String> {
     let value = serde_json::Value::Object(map);
-    let row = QueryResultRow::synthetic(value.clone())?;
+    // The row `executeQuery` returns carries the score its ordering used.
+    let row = QueryResultRow::synthetic(value.clone())?.with_score(score.unwrap_or(0.0));
     Ok(MatchCandidate {
         baseline,
         value,
         row,
+        binding,
+        score,
     })
 }
 
 fn build_match_row(
     bound: &[(&NodePattern, u64, &WasmGraphNode)],
+    edges: Vec<BoundElement>,
     cross: &[CrossRef],
+    score: Option<f32>,
 ) -> Result<MatchCandidate, String> {
     let mut map = serde_json::Map::new();
+    let mut nodes = Vec::with_capacity(bound.len());
     for (position, (pattern, id, data)) in bound.iter().enumerate() {
+        let enriched = WasmGraphNode {
+            payload: enriched_payload(pattern.alias.as_deref(), *id, data.payload.as_ref(), cross),
+            labels: data.labels.clone(),
+        };
         let alias = pattern
             .alias
             .clone()
             .unwrap_or_else(|| positional_alias(position));
-        map.insert(alias, node_json(*id, data));
+        map.insert(alias, node_json(*id, &enriched));
+        nodes.push(BoundElement {
+            alias: pattern.alias.clone(),
+            id: *id,
+            payload: enriched.payload,
+        });
     }
-    enrich_row(&mut map, cross);
-    candidate_from_map(bound.iter().map(|(_, id, _)| *id).collect(), map)
+    let binding = MatchBinding { nodes, edges };
+    candidate_from_map(
+        bound.iter().map(|(_, id, _)| *id).collect(),
+        map,
+        binding,
+        score,
+    )
 }
 
 /// Builds the JSON shape returned for a single MATCH-bound node.
@@ -562,3 +675,7 @@ fn node_json(id: u64, data: &WasmGraphNode) -> serde_json::Value {
 #[cfg(test)]
 #[path = "velesql_match_path_tests.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "velesql_match_points_tests.rs"]
+mod points_tests;

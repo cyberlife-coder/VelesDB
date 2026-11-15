@@ -352,6 +352,15 @@ impl ParsedQuery {
     }
 }
 
+/// The VelesQL contract version this engine implements — core's
+/// `VELESQL_CONTRACT_VERSION`, the value REST responses carry in
+/// `meta.velesql_contract_version`, so a browser client can report the same.
+#[wasm_bindgen(js_name = velesqlContractVersion)]
+#[must_use]
+pub fn velesql_contract_version() -> String {
+    velesdb_core::api_types::VELESQL_CONTRACT_VERSION.to_string()
+}
+
 // Tests use velesdb_core::velesql::Parser directly to avoid wasm_bindgen issues in native tests
 #[cfg(test)]
 #[path = "velesql_tests.rs"]
