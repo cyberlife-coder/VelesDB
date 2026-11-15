@@ -436,3 +436,7 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
+
+#[cfg(test)]
+#[path = "relations_tests.rs"]
+mod tests;
