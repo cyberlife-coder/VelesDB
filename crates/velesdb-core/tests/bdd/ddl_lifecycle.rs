@@ -477,42 +477,45 @@ fn test_delete_with_in_clause() {
 // Scenario 10: Cross-type Operations Error
 // =========================================================================
 
+/// Edge statements accept every collection type (they share one edge store);
+/// on a vector collection the edge's endpoints must still exist as points.
 #[test]
-fn test_insert_edge_into_vector_collection_errors() {
+fn test_insert_edge_into_vector_collection_requires_existing_endpoints() {
     let (_dir, db) = create_test_db();
 
     execute_sql(
         &db,
-        "CREATE COLLECTION not_a_graph (dimension = 4, metric = 'cosine');",
+        "CREATE COLLECTION docs (dimension = 4, metric = 'cosine');",
     )
     .expect("test: CREATE vector");
 
-    // INSERT EDGE into a vector collection should error
     let err = execute_sql(
         &db,
-        "INSERT EDGE INTO not_a_graph (source = 1, target = 2, label = 'REL');",
+        "INSERT EDGE INTO docs (source = 1, target = 2, label = 'REL');",
     )
-    .expect_err("INSERT EDGE into vector collection should fail");
-    let msg = err.to_string();
+    .expect_err("an edge between points that do not exist must be refused");
     assert!(
-        msg.contains("not_a_graph") || msg.contains("not found") || msg.contains("NotFound"),
-        "Error should indicate collection is not a graph, got: {msg}"
+        matches!(err, velesdb_core::Error::NodeNotFound(_)),
+        "the refusal is referential integrity, not the collection type: {err:?}"
     );
 }
 
 #[test]
-fn test_delete_edge_from_metadata_collection_errors() {
+fn test_delete_edge_from_metadata_collection_reports_absent_edge() {
     let (_dir, db) = create_test_db();
 
-    execute_sql(&db, "CREATE METADATA COLLECTION not_graph;").expect("test: CREATE metadata");
+    execute_sql(&db, "CREATE METADATA COLLECTION meta;").expect("test: CREATE metadata");
 
-    // DELETE EDGE from a metadata collection should error
-    let err = execute_sql(&db, "DELETE EDGE 42 FROM not_graph;")
-        .expect_err("DELETE EDGE from metadata should fail");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("not_graph") || msg.contains("not found") || msg.contains("NotFound"),
-        "Error should indicate not a graph collection, got: {msg}"
+    let results = execute_sql(&db, "DELETE EDGE 42 FROM meta;")
+        .expect("DELETE EDGE runs on a metadata collection");
+    assert_eq!(
+        results[0]
+            .point
+            .payload
+            .as_ref()
+            .map(|p| p["deleted"].clone()),
+        Some(serde_json::json!(false)),
+        "edge 42 never existed"
     );
 }
 
