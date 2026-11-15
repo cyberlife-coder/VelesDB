@@ -91,10 +91,12 @@ mod parallel_aggregation_tests;
 mod param_binding;
 pub use param_binding::{bind_condition, bind_match_clause, bind_value};
 pub(crate) mod condition_tree;
+mod join_row;
 mod pattern_match;
 mod set_operation;
 mod similarity_threshold;
 mod vector_predicates;
+pub use join_row::{merge_side, scope_base, side_alias};
 pub use pattern_match::{element_property, has_every_label, inline_properties_hold};
 pub use set_operation::{
     compound_window, execute_compound, operand_queries, row_key, CompoundWindow,

@@ -50,7 +50,9 @@ pub(crate) fn execute(
         return Err("LET bindings are not supported in WASM".to_string());
     }
     if !query.select.joins.is_empty() {
-        return crate::velesql_join::execute(db, &query.select, params);
+        let rows = crate::velesql_join::joined_rows(db, &query.select, params)?;
+        let higher_is_better = metric_direction(db, &query.select)?;
+        return finalize(&query.select, rows, params, higher_is_better);
     }
 
     let rows = scan(db, &query.select, params)?;

@@ -48,14 +48,15 @@ impl Database {
         let point_map: std::collections::HashMap<u64, crate::Point> =
             fetched.into_iter().flatten().map(|p| (p.id, p)).collect();
 
+        let alias = crate::velesql::side_alias(join.alias.as_deref(), &join.table);
         let mut output = Vec::with_capacity(results.len());
         for left in results {
             if let Some(right_point) = point_map.get(&left.point.id) {
                 let score = left.score;
-                let merged = Self::merge_payloads_owned(left.point, right_point);
+                let merged = Self::merge_payloads_owned(left.point, right_point, alias);
                 output.push(SearchResult::new(merged, score));
             } else if matches!(join.join_type, crate::velesql::JoinType::Left) {
-                output.push(left);
+                output.push(Self::unmatched_left(left, alias));
             }
         }
         output
@@ -66,8 +67,12 @@ impl Database {
     /// Borrowing variant for callers that emit several rows from one left
     /// point (the indexed 1:N path); the by-value twin below moves the left
     /// point — vector included — instead of cloning it.
-    pub(super) fn merge_payloads(left: &crate::Point, right: &crate::Point) -> crate::Point {
-        Self::merge_payloads_owned(left.clone(), right)
+    pub(super) fn merge_payloads(
+        left: &crate::Point,
+        right: &crate::Point,
+        alias: &str,
+    ) -> crate::Point {
+        Self::merge_payloads_owned(left.clone(), right, alias)
     }
 
     /// By-value twin of [`Self::merge_payloads`]: consumes the left point so
@@ -75,21 +80,32 @@ impl Database {
     pub(super) fn merge_payloads_owned(
         mut left: crate::Point,
         right: &crate::Point,
+        alias: &str,
     ) -> crate::Point {
-        let mut payload = left
+        let empty = serde_json::Map::new();
+        let fields = right
             .payload
-            .take()
-            .and_then(|p| match p {
-                serde_json::Value::Object(map) => Some(map),
-                _ => None,
-            })
-            .unwrap_or_default();
-        if let Some(right_obj) = right.payload.as_ref().and_then(|p| p.as_object()) {
-            for (k, v) in right_obj {
-                payload.insert(k.clone(), v.clone());
-            }
-        }
-        left.payload = Some(serde_json::Value::Object(payload));
+            .as_ref()
+            .and_then(|p| p.as_object())
+            .unwrap_or(&empty);
+        left.payload = Some(crate::velesql::merge_side(
+            left.payload.take(),
+            alias,
+            fields,
+            Some(right.id),
+        ));
+        left
+    }
+
+    /// A LEFT JOIN row whose join side found no match: the alias carries a
+    /// `null` id (`velesql::merge_side`).
+    pub(super) fn unmatched_left(mut left: SearchResult, alias: &str) -> SearchResult {
+        left.point.payload = Some(crate::velesql::merge_side(
+            left.point.payload.take(),
+            alias,
+            &serde_json::Map::new(),
+            None,
+        ));
         left
     }
 
@@ -178,7 +194,8 @@ impl Database {
             &column_store,
             row_budget,
         )?;
-        Ok(crate::collection::search::query::join::joined_to_search_results(joined))
+        let alias = crate::velesql::side_alias(join.alias.as_deref(), &join.table);
+        Ok(crate::collection::search::query::join::joined_to_search_results(joined, alias))
     }
 
     /// Answers an Inner/Left JOIN from a secondary index on the join-side
@@ -267,6 +284,7 @@ impl Database {
         };
         let index_column = &condition.left.column;
         let source_column = &condition.right.column;
+        let alias = crate::velesql::side_alias(join.alias.as_deref(), &join.table);
 
         // Phase 1: one key per left row (same payload->key conversion as
         // index maintenance); `id` is the point id, as in every clause.
@@ -294,11 +312,11 @@ impl Database {
                 Self::exact_matches(candidates, &point_map, index_column, value.as_ref());
             if match_ids.is_empty() {
                 if matches!(join.join_type, crate::velesql::JoinType::Left) {
-                    output.push(left);
+                    output.push(Self::unmatched_left(left, alias));
                 }
                 continue;
             }
-            Self::emit_indexed_rows(left, &match_ids, &point_map, row_budget, &mut output);
+            Self::emit_indexed_rows(left, &match_ids, &point_map, alias, row_budget, &mut output);
         }
         output
     }
@@ -351,6 +369,7 @@ impl Database {
         left: SearchResult,
         match_ids: &[u64],
         point_map: &std::collections::HashMap<u64, crate::Point>,
+        alias: &str,
         row_budget: usize,
         output: &mut Vec<SearchResult>,
     ) {
@@ -367,13 +386,13 @@ impl Database {
                 return;
             }
             output.push(SearchResult::new(
-                Self::merge_payloads(&left.point, right_point),
+                Self::merge_payloads(&left.point, right_point, alias),
                 score,
             ));
         }
         if output.len() < row_budget {
             output.push(SearchResult::new(
-                Self::merge_payloads_owned(left.point, last_right),
+                Self::merge_payloads_owned(left.point, last_right, alias),
                 score,
             ));
         }

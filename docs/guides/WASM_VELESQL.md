@@ -158,7 +158,9 @@ projection / aliases / window functions
 `ORDER BY` (payload columns, `similarity()`, arithmetic expressions, and
 aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
 `UNION` / `INTERSECT` / `EXCEPT` (core's semantics, `velesql::execute_compound`;
-an operand cannot join or aggregate), `INNER` / `LEFT JOIN`,
+an operand cannot join or aggregate), `INNER` / `LEFT JOIN` (core's joined row,
+each side under its alias; WHERE, DISTINCT, ORDER BY, GROUP BY and LIMIT over
+the joined rows),
 `INSERT` / `UPSERT` / `UPDATE` / `DELETE`, DDL
 (`CREATE` / `DROP` / `TRUNCATE COLLECTION`), introspection
 (`SHOW COLLECTIONS`, `DESCRIBE COLLECTION`), admin (`FLUSH`, a no-op), and

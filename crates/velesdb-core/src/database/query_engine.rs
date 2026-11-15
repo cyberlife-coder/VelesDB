@@ -841,31 +841,106 @@ impl Database {
             };
         }
 
-        let analysis = Self::prepare_join_pushdown(&mut single_query, params)?;
-        let pushed = analysis.column_store_filters.clone();
+        // SQL: DISTINCT, ORDER BY, OFFSET and LIMIT window the JOINED rows, so
+        // the base query runs without them (`JoinWindow`).
+        let window = JoinWindow::take(&mut single_query.select);
+        let rows = self.joined_rows(single_query, &query.select, params, probe)?;
+        window.apply(rows, &query.select.columns, &base_collection, params)
+    }
 
-        let row_budget = Self::join_row_budget(&query.select, &analysis);
-
-        let mut results = match probe {
-            Some(slot) => base_collection.execute_query_probed(&single_query, params, slot)?,
-            None => base_collection.execute_query(&single_query, params)?,
-        };
-        for join in &query.select.joins {
-            results = self.execute_single_join(results, join, &pushed, row_budget)?;
+    /// The joined rows of `query` (a SELECT with JOINs, its window removed),
+    /// WHERE applied, in base order. `budget_select` is the SELECT as written,
+    /// whose window bounds how many joined rows are needed.
+    pub(super) fn joined_rows(
+        &self,
+        mut query: crate::velesql::Query,
+        budget_select: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
+    ) -> Result<Vec<SearchResult>> {
+        let base_collection = self.resolve_collection(&query.select.from)?;
+        let joins = query.select.joins.clone();
+        let analysis = Self::prepare_join_pushdown(&mut query, params)?;
+        let row_budget = Self::join_row_budget(budget_select, &analysis);
+        let ceiling = crate::collection::search::query::JOIN_ROW_CEILING;
+        let bounded = row_budget < ceiling;
+        // A bounded window keeps the base order, so the first `row_budget`
+        // joined rows are the answer: fetch that many base rows, more while
+        // an INNER join or a filter drops some.
+        let mut fetch = if bounded { row_budget.max(1) } else { ceiling };
+        loop {
+            query.select.limit = Some(u64::try_from(fetch).unwrap_or(u64::MAX));
+            let base = match probe {
+                Some(slot) => base_collection.execute_query_probed(&query, params, slot)?,
+                None => base_collection.execute_query(&query, params)?,
+            };
+            let exhausted = base.len() < fetch || fetch >= ceiling;
+            let joined = self.join_base_rows(
+                base,
+                &JoinPlan {
+                    select: budget_select,
+                    joins: &joins,
+                    analysis: &analysis,
+                    row_budget,
+                    collection: &base_collection,
+                    params,
+                },
+            )?;
+            if !bounded || joined.len() >= row_budget || exhausted {
+                return Ok(joined);
+            }
+            fetch = fetch.saturating_mul(2).min(ceiling);
         }
+    }
 
-        // Apply post-join filters: cross-source predicates that reference
-        // columns from both the base collection and joined ColumnStore tables.
-        if !analysis.post_join_filters.is_empty() {
+    /// Joins the base rows of a SELECT: each scoped under the FROM alias
+    /// (`velesql::scope_base`), every JOIN in turn, then the cross-source
+    /// filters.
+    fn join_base_rows(
+        &self,
+        base: Vec<SearchResult>,
+        plan: &JoinPlan<'_>,
+    ) -> Result<Vec<SearchResult>> {
+        let select = plan.select;
+        let from_alias =
+            crate::velesql::side_alias(select.from_alias.first().map(String::as_str), &select.from);
+        let mut results: Vec<SearchResult> = base
+            .into_iter()
+            .map(|mut r| {
+                r.point.payload = Some(crate::velesql::scope_base(
+                    r.point.payload.take(),
+                    from_alias,
+                    r.point.id,
+                ));
+                r
+            })
+            .collect();
+        for join in plan.joins {
+            // Each join side is filtered by the pushed predicates on ITS
+            // columns only: another side's predicate would empty its store.
+            let sides = crate::collection::search::query::pushdown::extract_join_tables(
+                std::slice::from_ref(join),
+            );
+            let pushed: Vec<crate::velesql::Condition> = plan
+                .analysis
+                .column_store_filters
+                .iter()
+                .filter(|c| crate::collection::search::query::pushdown::reads_only(c, &sides))
+                .cloned()
+                .collect();
+            results = self.execute_single_join(results, join, &pushed, plan.row_budget)?;
+        }
+        // Cross-source predicates that reference columns from both the base
+        // collection and joined ColumnStore tables.
+        if !plan.analysis.post_join_filters.is_empty() {
             results = Self::apply_post_join_filters(
-                &base_collection,
+                plan.collection,
                 results,
-                &analysis.post_join_filters,
-                params,
-                &query.select.from_alias,
+                &plan.analysis.post_join_filters,
+                plan.params,
+                &select.from_alias,
             )?;
         }
-
         Ok(results)
     }
 
@@ -963,5 +1038,60 @@ impl Database {
             crate::velesql::DmlStatement::SelectEdges(stmt) => self.execute_select_edges(stmt),
             crate::velesql::DmlStatement::InsertNode(stmt) => self.execute_insert_node(stmt),
         }
+    }
+}
+
+/// What joining a SELECT's base rows reads ([`Database::joined_rows`]).
+struct JoinPlan<'a> {
+    /// The SELECT as written (its FROM alias, its window).
+    select: &'a crate::velesql::SelectStatement,
+    joins: &'a [crate::velesql::JoinClause],
+    analysis: &'a crate::collection::search::query::pushdown::PushdownAnalysis,
+    /// Joined rows needed at most.
+    row_budget: usize,
+    /// The base collection, which evaluates the cross-source filters.
+    collection: &'a crate::collection::Collection,
+    params: &'a std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// The clauses a JOIN applies to its joined rows rather than to the base
+/// collection: DISTINCT, ORDER BY, OFFSET, LIMIT (the SELECT default when
+/// absent).
+struct JoinWindow {
+    distinct: crate::velesql::DistinctMode,
+    order_by: Option<Vec<crate::velesql::SelectOrderBy>>,
+    offset: Option<u64>,
+    limit: Option<u64>,
+}
+
+impl JoinWindow {
+    /// Moves the window out of `select`, leaving the base query unwindowed.
+    fn take(select: &mut crate::velesql::SelectStatement) -> Self {
+        Self {
+            distinct: std::mem::take(&mut select.distinct),
+            order_by: select.order_by.take(),
+            offset: select.offset.take(),
+            limit: select.limit.take(),
+        }
+    }
+
+    /// The joined rows, deduplicated, ordered and windowed.
+    fn apply(
+        self,
+        mut rows: Vec<SearchResult>,
+        columns: &crate::velesql::SelectColumns,
+        collection: &crate::collection::Collection,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        if self.distinct == crate::velesql::DistinctMode::All {
+            rows = crate::velesql::distinct_evaluator::apply_distinct(rows, columns);
+        }
+        if let Some(order_by) = &self.order_by {
+            collection.apply_order_by(&mut rows, order_by, params)?;
+        }
+        let offset = usize::try_from(self.offset.unwrap_or(0)).unwrap_or(usize::MAX);
+        let limit = usize::try_from(self.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
+            .unwrap_or(usize::MAX);
+        Ok(rows.into_iter().skip(offset).take(limit).collect())
     }
 }

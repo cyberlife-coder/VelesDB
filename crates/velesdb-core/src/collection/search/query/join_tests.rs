@@ -181,7 +181,7 @@ fn test_joined_to_search_results() {
     let join = make_join_clause();
 
     let joined = execute_join(results.clone(), &join, &column_store, NO_LIMIT).unwrap();
-    let search_results = joined_to_search_results(joined);
+    let search_results = joined_to_search_results(joined, "inventory");
 
     assert_eq!(search_results.len(), 1);
     let payload = search_results[0].point.payload.as_ref().unwrap();

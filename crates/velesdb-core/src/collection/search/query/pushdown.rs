@@ -79,6 +79,28 @@ pub fn extract_join_tables(joins: &[JoinClause]) -> HashSet<String> {
     tables
 }
 
+/// The tables (and aliases) of the INNER joins: the only join sides a WHERE
+/// predicate may be pushed below. Under a LEFT, RIGHT or FULL join a
+/// predicate on the outer side must see the null-filled row — pushed below,
+/// `WHERE c.id IS NULL` would filter the join side before the join and the
+/// unmatched rows it means to find would all pass.
+#[must_use]
+pub fn pushable_join_tables(joins: &[JoinClause]) -> HashSet<String> {
+    let inner: Vec<JoinClause> = joins
+        .iter()
+        .filter(|join| matches!(join.join_type, crate::velesql::JoinType::Inner))
+        .cloned()
+        .collect();
+    extract_join_tables(&inner)
+}
+
+/// Whether `condition` reads only the columns of `tables` — the pushed
+/// predicates one join side's store is filtered by.
+#[must_use]
+pub fn reads_only(condition: &Condition, tables: &HashSet<String>) -> bool {
+    get_condition_source(condition, &HashSet::new(), tables) == Source::ColumnStore
+}
+
 /// Routes a condition clone into the appropriate analysis bucket by source.
 fn route_to_bucket(condition: &Condition, source: Source, analysis: &mut PushdownAnalysis) {
     match source {

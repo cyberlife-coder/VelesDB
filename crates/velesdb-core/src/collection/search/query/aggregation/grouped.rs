@@ -44,6 +44,63 @@ impl Collection {
         Ok(serde_json::Value::Array(results))
     }
 
+    /// Aggregates rows the caller produced — a JOIN's joined rows, WHERE
+    /// already applied — through the same [`Grouper`] as a scan: an array of
+    /// groups for a GROUP BY (ordered and paged as
+    /// [`Self::execute_grouped_aggregate`] pages them), else the one group's
+    /// object.
+    ///
+    /// # Errors
+    ///
+    /// An unbound HAVING parameter, an ORDER BY naming no grouped field, or
+    /// more groups than the query allows.
+    pub(crate) fn aggregate_rows(
+        query: &Query,
+        rows: &[crate::point::SearchResult],
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let stmt = &query.select;
+        let having = stmt
+            .having
+            .as_ref()
+            .map(|h| Self::resolve_having_params(h, params))
+            .transpose()?;
+        let mut grouper = Grouper::new(stmt, having.as_ref(), true)?;
+        // Id order, as a scan feeds the grouper (stable for 1:N joins).
+        let mut ordered: Vec<&crate::point::SearchResult> = rows.iter().collect();
+        ordered.sort_by_key(|row| row.point.id);
+        for row in ordered {
+            grouper.push(GroupInput::new(
+                row.point.id,
+                0.0,
+                row.point.payload.as_ref(),
+            ))?;
+        }
+        let groups: Vec<serde_json::Value> = grouper
+            .finish()
+            .into_iter()
+            .map(|group| group.row)
+            .collect();
+        if stmt.group_by.is_none() {
+            return Ok(groups
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())));
+        }
+        let sort_columns = if stmt.order_by.is_some() {
+            stmt.grouped_sort_keys()
+                .map_err(|e| crate::error::Error::Query(e.to_string()))?
+        } else {
+            Vec::new()
+        };
+        Ok(serde_json::Value::Array(Self::order_and_page(
+            groups,
+            &sort_columns,
+            stmt.limit,
+            stmt.offset,
+        )))
+    }
+
     /// Scans all points, applies WHERE filter, and feeds each kept row to
     /// `grouper`.
     // Both storage guards are lent by reference into MatchStorageGuards and

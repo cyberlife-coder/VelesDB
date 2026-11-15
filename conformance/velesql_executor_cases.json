@@ -276,6 +276,18 @@
       "query": "SELECT * FROM orders_u JOIN customers_u USING (id) ORDER BY orders_u.id ASC",
       "expect_ids": [10, 20],
       "note": "issue #1544: JOIN USING (single column); both engines resolve USING(id) against each row's primary id, order_u id=99 has no matching customer and is dropped"
+    },
+    {
+      "id": "J006",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY orders.amount DESC",
+      "expect_ids": [2, 3, 1],
+      "note": "ORDER BY sorts the JOINED rows, by a qualified column (core ordered the base rows first and could not read `orders.amount`; WASM ignored ORDER BY)"
+    },
+    {
+      "id": "J007",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY orders.id ASC LIMIT 2 OFFSET 1",
+      "expect_ids": [2, 3],
+      "note": "OFFSET and LIMIT window the joined rows"
     }
   ],
   "aggregate_cases": [
@@ -500,6 +512,18 @@
       "query": "SELECT x, COUNT(*) AS n FROM nums GROUP BY x HAVING MAX(x) = 0.3",
       "expect_groups": [],
       "note": "no tolerance: `0.30000000000000004` is not `0.3`"
+    },
+    {
+      "id": "G026",
+      "query": "SELECT customers.name, COUNT(*) AS n FROM orders JOIN customers ON orders.customer_id = customers.id GROUP BY customers.name ORDER BY customers.name ASC",
+      "expect_groups": [{"customers.name": "Alice", "n": 2}, {"customers.name": "Bob", "n": 1}],
+      "note": "a GROUP BY over a JOIN groups the joined rows, by a qualified column (core aggregated the base collection alone: one group, n = 4, name null)"
+    },
+    {
+      "id": "G027",
+      "query": "SELECT orders.customer_id, COUNT(*) AS n, SUM(orders.amount) AS total FROM orders LEFT JOIN customers ON orders.customer_id = customers.id WHERE customers.id IS NULL GROUP BY orders.customer_id",
+      "expect_groups": [{"orders.customer_id": 99, "n": 1, "total": 300.0}],
+      "note": "a LEFT JOIN row without a match carries its alias with a null id, so WHERE customers.id IS NULL finds order 4, whose customer 99 does not exist"
     }
   ],
   "setops_cases": [
@@ -1053,6 +1077,18 @@
       "query": "SELECT id, ROW_NUMBER() OVER (PARTITION BY x ORDER BY id) AS rn FROM nums WHERE id <= 4 ORDER BY id",
       "expect_rows": [{ "id": 1, "rn": 1 }, { "id": 2, "rn": 2 }, { "id": 3, "rn": 1 }, { "id": 4, "rn": 2 }],
       "note": "PARTITION BY keys numbers as GROUP BY does: `-0.0` with `0`, `1.0` with `1`"
+    },
+    {
+      "id": "P008",
+      "query": "SELECT orders.amount, customers.name FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY orders.id ASC",
+      "expect_rows": [{"orders.amount": 100, "customers.name": "Alice"}, {"orders.amount": 200, "customers.name": "Bob"}, {"orders.amount": 150, "customers.name": "Alice"}],
+      "note": "a joined row carries each side under its alias (velesql::merge_side), so qualified columns project (core returned null for both; WASM returned the whole joined object)"
+    },
+    {
+      "id": "P009",
+      "query": "SELECT DISTINCT customers.name FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY customers.name ASC",
+      "expect_rows": [{"customers.name": "Alice"}, {"customers.name": "Bob"}],
+      "note": "DISTINCT applies to the joined rows"
     }
   ],
   "vector_group_cases": [
