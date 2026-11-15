@@ -254,7 +254,7 @@ fn run_agent(
     save: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     let db = helpers::open_database(path)?;
-    let report = agent::run(&db, question, max);
+    let report = agent::run(&db, question, max, &agent::LlmEndpoint::from_env());
     let format = output::effective_format(format);
     if output::is_machine(&format) {
         output::print_machine(&agent::report_json(&report), &format)?;
