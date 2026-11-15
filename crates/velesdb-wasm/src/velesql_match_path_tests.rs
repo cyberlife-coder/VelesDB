@@ -109,8 +109,10 @@ fn given_a_three_hop_pattern_when_where_targets_the_last_node_then_it_filters() 
     assert_eq!(names(&found[0], &["a", "d"]), vec!["n2", "n5"]);
 }
 
+/// Unnamed nodes are walked but bound to no name, as in core: the row holds
+/// the named node only, and one row per distinct binding of it.
 #[test]
-fn given_unaliased_nodes_when_matching_four_nodes_then_aliases_follow_position() {
+fn given_unaliased_nodes_when_matching_four_nodes_then_only_named_nodes_are_bound() {
     let mut db = DatabaseInner::new();
     chain_of_five(&mut db);
 
@@ -120,10 +122,8 @@ fn given_unaliased_nodes_when_matching_four_nodes_then_aliases_follow_position()
     );
 
     assert_eq!(found.len(), 1);
-    assert_eq!(
-        names(&found[0], &["a", "b", "c", "d"]),
-        vec!["n1", "n2", "n3", "n4"]
-    );
+    assert_eq!(names(&found[0], &["a"]), vec!["n1"]);
+    assert!(found[0].get("b").is_none(), "{}", found[0]);
 }
 
 #[test]

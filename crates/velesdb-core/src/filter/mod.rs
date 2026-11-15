@@ -40,6 +40,10 @@ use serde_json::Value;
 #[cfg(feature = "persistence")]
 pub(crate) use point_ids::{exact_as_f64, value_as_point_id};
 
+// The WHERE `=` truth, for the inline pattern properties every MATCH engine
+// tests (`velesql::inline_properties_hold`).
+pub(crate) use matching::equality_truth;
+
 /// A filter for metadata-based search refinement.
 ///
 /// A filter is evaluated against a point — [`Filter::matches_point`] — so a

@@ -51,16 +51,16 @@ pub(crate) fn match_candidates_gated(
 
 /// Every collection a MATCH reads, for its read gate, in first-read order:
 /// the graph it walks ([`crate::velesql_match::match_target`], the rule the
-/// executor uses), then each `@collection` a node payload is merged from.
+/// executor uses), then each `@collection` a node reads properties from.
 /// A MATCH without patterns reads nothing and is asked about `""`.
 fn match_gate_collections(query: &Query, params: &Params) -> Result<Vec<String>, String> {
     let Some(clause) = query.match_clause.as_ref() else {
         return Ok(vec![String::new()]);
     };
-    let Some(pattern) = clause.patterns.first() else {
+    if clause.patterns.is_empty() {
         return Ok(vec![String::new()]);
-    };
-    let mut collections = vec![crate::velesql_match::match_target(pattern, params)?];
+    }
+    let mut collections = vec![crate::velesql_match::match_target(params)?];
     for name in clause
         .patterns
         .iter()

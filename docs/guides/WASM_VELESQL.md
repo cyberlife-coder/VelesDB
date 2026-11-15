@@ -74,10 +74,26 @@ VelesQL without declaring a `vector` column.
 
 ### Graph patterns: `executeMatch`
 
-A `MATCH` reads one graph: the first node's `@collection` annotation, else the
-`_collection` param, else the default `graph` (MATCH has no `FROM`). As in core,
-the points of the collection with that name are its nodes (payload as
-properties, `_labels` as labels), and its edges come from `INSERT EDGE`.
+A `MATCH` reads one graph: the `_collection` param, else the default `graph`
+(MATCH has no `FROM`). As in core, the points of the collection with that name
+are its nodes (payload as properties, `_labels` as labels), and its edges come
+from `INSERT EDGE`. The walk is core's:
+
+- a pattern node needs **every** label it lists, a relationship **any** type it
+  lists (`[:A|B]`);
+- inline properties `(n {k: v})` and `-[r {k: v}]->` filter as `n.k = v` would
+  in WHERE (three-valued, a `$name` bound from the params, `id` the element id);
+- an alias repeated in the pattern names one node (`(a)-[:R]->(b)-[:R]->(a)` is
+  a cycle), and an unnamed node is walked but bound to no name;
+- `WHERE r.prop` reads a named relationship's properties, and a bare column
+  reads the walk's target, the last node;
+- one row per distinct binding of the named nodes and relationships;
+- `(w:Warehouse@pricing)` gives `w` the properties of the `pricing` point with
+  the same id (the node's own win), seen by WHERE, the pattern, ORDER BY and
+  RETURN alike; an annotation naming no collection refuses the MATCH.
+
+An `executeQuery` MATCH row carries the walk's target as its id and, as its
+score, the `similarity()` score or else `1 / (hops + 1)`, as core's rows do.
 
 `executeQuery` returns one alias-keyed object per MATCH row. `executeMatch`
 runs the same MATCH and returns a JSON string of rows in core's
@@ -128,7 +144,7 @@ node, drops rows past the threshold and orders by score.
 | `UNION` / `INTERSECT` / `EXCEPT` | yes | yes |
 | `JOIN` | `INNER`, `LEFT` only | all |
 | `MATCH` graph traversal | one fixed-length pattern, any number of hops | any depth, multi-pattern, variable-length |
-| Cross-collection `MATCH` (`@collection`) | no | yes |
+| Cross-collection `MATCH` (`@collection`) | yes | yes |
 | `EXPLAIN` (core plan vocabulary) | yes | yes |
 | Persistence | IndexedDB | Disk (mmap) |
 | Practical ceiling | ~100 K vectors (browser RAM) | millions |
@@ -144,7 +160,7 @@ aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
 `INSERT` / `UPSERT` / `UPDATE` / `DELETE`, DDL
 (`CREATE` / `DROP` / `TRUNCATE COLLECTION`), introspection
 (`SHOW COLLECTIONS`, `DESCRIBE COLLECTION`), admin (`FLUSH`, a no-op), and
-1–2 hop `MATCH`.
+fixed-length `MATCH` of any number of hops.
 
 A `WHERE` predicate (comparisons, `IN`, `BETWEEN`, `LIKE` / `ILIKE`,
 `IS NULL`, through `AND` / `OR` / `NOT`) is evaluated by core's payload
@@ -183,12 +199,8 @@ reference from `@wiscale/velesdb-wasm@4.0.0`.
 | `ORDER BY similarity(field, $v)` | `ORDER BY similarity(field, $vec) is not supported in WASM: named/secondary …` |
 | `ORDER BY similarity(field, $v)`, arithmetic or an aggregate in a `MATCH` | `MATCH ORDER BY <form> is not supported in WASM (use depth, alias.property or similarity())` |
 
-Two cases deserve more than a one-liner:
+One case deserves more than a one-liner:
 
-- **Cross-collection `MATCH` (`@collection`)** — the annotation parses (WASM
-  runs core's parser). The first node's annotation picks the graph a `MATCH`
-  reads, and any other annotated, aliased node merges in the payload of the
-  same-named vector collection. Multi-pattern `MATCH` stays server-only.
 - **`TRAIN QUANTIZER`** — recognized for API parity but unavailable: training
   needs `ndarray`/`persistence`, which are compiled out for WASM. Product
   Quantization has the same constraint (it needs `rayon`).
@@ -248,7 +260,6 @@ try {
 Reach for the [REST server](https://github.com/cyberlife-coder/VelesDB) when you
 need:
 
-- **Cross-collection `MATCH`** — `@collection` routing lives on the server.
 - **Multi-pattern or variable-length `MATCH`** — `(a), (b)` patterns and `[*1..3]` ranges.
 - **More than ~100 K vectors** — browser RAM is the ceiling.
 - **`RIGHT`/`FULL JOIN`, quantizer training, geospatial or BM25 predicates.**

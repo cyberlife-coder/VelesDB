@@ -161,14 +161,16 @@ struct AggregateCase {
     expect_groups: Vec<Value>,
 }
 
-/// A MATCH golden case (issue #1544). WASM addresses its graph store via
-/// `@collection`-annotated standalone `MATCH ... RETURN` queries, which is
-/// why this carries its own `wasm_query` instead of reusing `core_query` —
-/// see `documented_divergences` D004 in the fixture.
+/// A MATCH conformance case: the same query text core runs, with
+/// `params`, compared on the `binding` alias of each row (D004 covers only
+/// where the shared topology is stored).
 #[derive(Deserialize)]
 struct MatchCase {
     id: String,
-    wasm_query: String,
+    query: String,
+    #[serde(default)]
+    params: serde_json::Map<String, Value>,
+    binding: String,
     expect_ids: Vec<u64>,
 }
 
@@ -415,12 +417,11 @@ fn test_wasm_velesql_executor_aggregate_cases() {
 
 /// MATCH (1- and 2-hop) conformance against the WASM executor (issue #1544).
 ///
-/// WASM keeps a graph store separate from vector collections, populated via
-/// `INSERT NODE`/`INSERT EDGE` and addressed by `@collection` annotations
-/// (see `documented_divergences` D004 in the fixture). Builds the SAME
-/// 4-node `KNOWS` chain topology as the core MATCH test
+/// WASM keeps its edges in a graph store beside the collection, populated
+/// via `INSERT NODE`/`INSERT EDGE` (`documented_divergences` D004). Builds
+/// the SAME 4-node `KNOWS` chain topology as the core MATCH test
 /// (`test_velesql_executor_conformance_match_cases`) and runs each case's
-/// `wasm_query`.
+/// shared `query` with its `params`.
 #[test]
 fn test_wasm_velesql_executor_match_cases() {
     let fixture = load_fixture();
@@ -441,7 +442,8 @@ fn test_wasm_velesql_executor_match_cases() {
     }
 
     for case in &fixture.match_cases {
-        let result = execute(&mut db, &case.wasm_query, None)
+        let params = Value::Object(case.params.clone()).to_string();
+        let result = execute(&mut db, &case.query, Some(&params))
             .unwrap_or_else(|e| panic!("match case {} failed to execute: {e}", case.id));
         let ids: Vec<u64> = result
             .rows_ref()
@@ -450,16 +452,18 @@ fn test_wasm_velesql_executor_match_cases() {
                 let parsed: Value =
                     serde_json::from_str(&row.data_json()).expect("test: parse row JSON");
                 parsed
-                    .get("a")
-                    .and_then(|a| a.get("id"))
+                    .get(&case.binding)
+                    .and_then(|node| node.get("id"))
                     .and_then(Value::as_u64)
-                    .unwrap_or_else(|| panic!("match case {}: row missing a.id", case.id))
+                    .unwrap_or_else(|| {
+                        panic!("match case {}: row missing {}", case.id, case.binding)
+                    })
             })
             .collect();
         assert_eq!(
             ids, case.expect_ids,
-            "WASM match conformance mismatch for case {}: wasm_query={:?}",
-            case.id, case.wasm_query
+            "WASM match conformance mismatch for case {}: query={:?}",
+            case.id, case.query
         );
     }
 }

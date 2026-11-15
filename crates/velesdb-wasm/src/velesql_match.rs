@@ -11,79 +11,14 @@ use velesdb_core::velesql::{
     Condition, Direction, GraphPattern, MatchClause, NodePattern, Query, RelationshipPattern,
 };
 
-use crate::database::{DatabaseInner, SharedStore};
+use crate::database::DatabaseInner;
 use crate::graph_store::{WasmEdge, WasmGraphNode, WasmGraphStore};
 use crate::velesql_match_nodes::MatchNodes;
 use crate::velesql_match_orderby::{order_and_limit, BoundElement, MatchBinding, MatchCandidate};
 use crate::velesql_match_score::{where_holds, where_score, BoundNode, MatchScoring};
+use crate::velesql_match_sources::Annotations;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
-
-/// A resolved `@collection` cross-reference: an aliased node's alias paired
-/// with the store of the collection it references for payload enrichment.
-type CrossRef = (String, SharedStore);
-
-/// Collects `@collection` cross-references from a MATCH clause.
-///
-/// Only nodes with **both** an explicit alias and a collection annotation are
-/// enriched, and a reference to a missing collection is silently skipped
-/// (the MATCH still returns its graph results) — unlike core, which reads an
-/// annotation during the walk and refuses a missing one (see
-/// `match_exec::sources` in `velesdb-core`). The referenced collection's store is resolved
-/// once here and reused for every result row.
-///
-/// WASM note: lacking a `FROM` clause, the executor also reuses the *first*
-/// node's `@collection` annotation to pick the graph store (see
-/// [`inferred_graph_store`]). Enrichment therefore applies to any annotated
-/// node that names an existing **vector** collection — in practice the
-/// non-anchor nodes (`b`, `c`); the anchor enriches only when a same-named
-/// vector collection also exists, otherwise its annotation just selects the
-/// graph and the lookup is skipped.
-fn resolve_cross_refs(db: &DatabaseInner, clause: &MatchClause) -> Vec<CrossRef> {
-    clause
-        .patterns
-        .iter()
-        .flat_map(|p| p.nodes.iter())
-        .filter_map(|n| {
-            let alias = n.alias.clone()?;
-            let coll = n.collection.as_deref()?;
-            let store = db.get_shared_store(coll).ok()?;
-            Some((alias, store))
-        })
-        .collect()
-}
-
-/// A bound node's payload with its `@collection` point's fields merged in.
-///
-/// The one place a cross-collection annotation enriches a node, so every
-/// view of the row — `executeQuery`'s alias object, `executeMatch`'s RETURN
-/// projection, ORDER BY — reads the same properties. As in core, it runs on
-/// a row WHERE already admitted. The node's own fields win on collision
-/// (the reserved `id` / `labels` included), so enrichment never overwrites
-/// graph identity; an alias without an annotation, or a point without an
-/// object payload, leaves the node's payload as it is.
-fn enriched_payload(
-    alias: Option<&str>,
-    id: u64,
-    payload: Option<&serde_json::Value>,
-    cross: &[CrossRef],
-) -> Option<serde_json::Value> {
-    let Some((_, store)) = alias.and_then(|a| cross.iter().find(|(c, _)| c == a)) else {
-        return payload.cloned();
-    };
-    let borrowed = store.borrow();
-    let Some(serde_json::Value::Object(extra)) = borrowed.payload_for_id(id) else {
-        return payload.cloned();
-    };
-    let mut merged = match payload {
-        Some(serde_json::Value::Object(own)) => own.clone(),
-        _ => serde_json::Map::new(),
-    };
-    for (key, value) in extra {
-        merged.entry(key.clone()).or_insert_with(|| value.clone());
-    }
-    Some(serde_json::Value::Object(merged))
-}
 
 /// Runs a MATCH and returns its rows as ordered, limited candidates — the
 /// alias-keyed row together with what it binds ([`MatchBinding`]). Callers
@@ -114,10 +49,13 @@ pub(crate) fn match_candidates(
             clause.patterns.len()
         ));
     }
+    // Inline pattern properties take the caller's `$name` values, as in core.
+    let clause =
+        &velesdb_core::velesql::bind_match_clause(clause, params).map_err(|e| e.to_string())?;
     let pattern = &clause.patterns[0];
     validate_pattern(pattern)?;
-    let cross = resolve_cross_refs(db, clause);
-    let (name, store) = inferred_graph_store(db, pattern, params)?;
+    let annotations = Annotations::resolve(db, clause)?;
+    let (name, store) = inferred_graph_store(db, params)?;
     let collection = db.get_shared_store(&name).ok();
     let graph = store.borrow();
     let points = collection.as_ref().map(|c| c.borrow());
@@ -127,15 +65,18 @@ pub(crate) fn match_candidates(
     }
     let walk = PathWalk {
         pattern,
-        labels: pattern.nodes.iter().map(first_label).collect(),
         where_clause: clause.where_clause.as_ref(),
         params,
-        cross,
+        annotations,
         scoring,
+        seen: std::cell::RefCell::default(),
     };
     let mut out = Vec::new();
     let mut path = PathState::default();
-    for start in nodes.candidates(walk.labels[0].as_deref()) {
+    // The label index narrows the start nodes; every pattern check is the
+    // full one ([`PathWalk::node_matches`]).
+    let first_label = pattern.nodes[0].labels.first().map(String::as_str);
+    for start in nodes.candidates(first_label) {
         walk.start_from(&nodes, start, &mut path, &mut out)?;
     }
     let higher_is_better = nodes
@@ -184,13 +125,15 @@ fn validate_pattern(pattern: &GraphPattern) -> Result<(), String> {
 /// The immutable inputs of one MATCH pattern walk.
 struct PathWalk<'p> {
     pattern: &'p GraphPattern,
-    /// First label of each pattern node, by position (`None` = any).
-    labels: Vec<Option<String>>,
     where_clause: Option<&'p Condition>,
     params: &'p Params,
-    cross: Vec<CrossRef>,
+    /// The collections the pattern's `@collection` annotations name.
+    annotations: Annotations,
     /// REST `/match`'s query vector and threshold, when given.
     scoring: Option<&'p MatchScoring>,
+    /// Signatures of the rows already emitted: one row per distinct binding
+    /// of the named elements, as core dedups (`binding_signature`).
+    seen: std::cell::RefCell<std::collections::HashSet<Vec<(u8, String, u64)>>>,
 }
 
 /// What scoring decides for a row.
@@ -222,6 +165,10 @@ impl PathWalk<'_> {
         if self.pattern.nodes.len() == 1 && nodes.get(start).is_none() {
             return Ok(());
         }
+        if !self.node_matches(&self.pattern.nodes[0], start, nodes.get(start)) {
+            return Ok(());
+        }
+
         path.nodes.push(start);
         let result = self.extend(nodes, path, out);
         path.nodes.pop();
@@ -247,11 +194,16 @@ impl PathWalk<'_> {
             if path.edges.contains(&edge.id) {
                 continue;
             }
+            if !edge_matches(&edge, rel) {
+                continue;
+            }
             let next = other_endpoint(&edge, anchor);
             let Some(next_node) = nodes.get(next) else {
                 continue;
             };
-            if !matches_label(next_node, self.labels[depth].as_deref()) {
+            if !self.node_matches(&self.pattern.nodes[depth], next, Some(next_node))
+                || !self.alias_consistent(path, depth, next)
+            {
                 continue;
             }
             path.nodes.push(next);
@@ -264,36 +216,87 @@ impl PathWalk<'_> {
         Ok(())
     }
 
-    /// Evaluates WHERE with every alias bound, then builds the row.
+    /// Whether node `id` (`data`, when a store holds it) satisfies the
+    /// pattern node `node`, as core decides it: every label, and every
+    /// inline property read on the node's annotated properties.
+    fn node_matches(&self, node: &NodePattern, id: u64, data: Option<&WasmGraphNode>) -> bool {
+        if node.labels.is_empty() && node.properties.is_empty() {
+            return true;
+        }
+        let Some(data) = data else {
+            return false;
+        };
+        if !velesdb_core::velesql::has_every_label(&node.labels, &data.labels) {
+            return false;
+        }
+        if node.properties.is_empty() {
+            return true;
+        }
+        let properties = self.annotations.properties(node, id, data.payload.as_ref());
+        velesdb_core::velesql::inline_properties_hold(&node.properties, |key| {
+            velesdb_core::velesql::element_property(id, key, |k| properties.as_ref()?.get(k))
+        })
+    }
+
+    /// Whether binding node `id` at `position` keeps every alias naming one
+    /// node: an alias repeated in the pattern (`(a)-[:R]->(b)-[:R]->(a)`)
+    /// requires a cycle, as in core (`bind_node_alias`).
+    fn alias_consistent(&self, path: &PathState, position: usize, id: u64) -> bool {
+        let Some(alias) = self.pattern.nodes[position].alias.as_deref() else {
+            return true;
+        };
+        self.pattern.nodes[..position]
+            .iter()
+            .zip(&path.nodes)
+            .all(|(node, &bound)| node.alias.as_deref() != Some(alias) || bound == id)
+    }
+
+    /// Evaluates WHERE with every element bound, keeps one row per distinct
+    /// binding of the named elements, then builds the row.
     fn emit(
         &self,
         nodes: &MatchNodes<'_>,
         path: &PathState,
         out: &mut Vec<MatchCandidate>,
     ) -> Result<(), String> {
-        let default_node = WasmGraphNode::default();
-        let bound: Vec<(&NodePattern, u64, &WasmGraphNode)> = self
+        // Each bound node as every clause reads it: its labels, and its
+        // properties united with its annotated collection's point.
+        let bound: Vec<(&NodePattern, u64, WasmGraphNode)> = self
             .pattern
             .nodes
             .iter()
             .zip(&path.nodes)
-            .map(|(pattern, &id)| (pattern, id, nodes.get(id).unwrap_or(&default_node)))
-            .collect();
-        let bindings: Vec<AliasBinding> = bound
-            .iter()
-            .enumerate()
-            .map(|(position, (pattern, id, data))| {
-                make_binding(pattern, *id, data, &positional_alias(position))
+            .map(|(pattern, &id)| {
+                let data = nodes.get(id);
+                let node = WasmGraphNode {
+                    payload: self.annotations.properties(
+                        pattern,
+                        id,
+                        data.and_then(|d| d.payload.as_ref()),
+                    ),
+                    labels: data.map(|d| d.labels.clone()).unwrap_or_default(),
+                };
+                (pattern, id, node)
             })
             .collect();
-        if !self.where_holds(nodes, &bindings)? {
+        let edges = self.bound_edges(nodes, path);
+        let scope: Vec<BoundNode<'_>> = bound
+            .iter()
+            .map(|(pattern, id, _)| BoundNode {
+                alias: pattern.alias.as_deref(),
+                id: *id,
+            })
+            .collect();
+        if !self.where_holds(nodes, &bound, &edges, &scope)? {
             return Ok(());
         }
-        let RowScore::Kept(score) = self.row_score(nodes, path, &bindings)? else {
+        if !self.seen.borrow_mut().insert(row_signature(&bound, &edges)) {
+            return Ok(());
+        }
+        let RowScore::Kept(score) = self.row_score(nodes, path, &scope)? else {
             return Ok(());
         };
-        let edges = self.bound_edges(nodes, path);
-        out.push(build_match_row(&bound, edges, &self.cross, score)?);
+        out.push(build_match_row(&bound, edges, score)?);
         Ok(())
     }
 
@@ -303,17 +306,10 @@ impl PathWalk<'_> {
         &self,
         nodes: &MatchNodes<'_>,
         path: &PathState,
-        bindings: &[AliasBinding],
+        scope: &[BoundNode<'_>],
     ) -> Result<RowScore, String> {
         let Some(scoring) = self.scoring else {
-            let bound: Vec<BoundNode<'_>> = bindings
-                .iter()
-                .map(|b| BoundNode {
-                    alias: &b.alias,
-                    id: b.id,
-                })
-                .collect();
-            return where_score(self.where_clause, &bound, nodes, self.params).map(RowScore::Kept);
+            return where_score(self.where_clause, scope, nodes, self.params).map(RowScore::Kept);
         };
         let last = *path.nodes.last().ok_or("MATCH row binds no node")?;
         Ok(scoring
@@ -340,39 +336,25 @@ impl PathWalk<'_> {
     }
 
     /// The WHERE clause over this row: `similarity()` leaves scored on node
-    /// vectors, every other leaf on the alias-scoped payload.
+    /// vectors, every other leaf on [`where_scope`]'s payload.
     fn where_holds(
         &self,
         nodes: &MatchNodes<'_>,
-        bindings: &[AliasBinding],
+        bound: &[(&NodePattern, u64, WasmGraphNode)],
+        edges: &[BoundElement],
+        scope: &[BoundNode<'_>],
     ) -> Result<bool, String> {
         let Some(cond) = self.where_clause else {
             return Ok(true);
         };
-        let Some(first) = bindings.first() else {
+        let Some((_, target, _)) = bound.last() else {
             // Defensive: a MATCH always has at least one bound node.
             return Ok(false);
         };
-        let merged = build_merged_payload(bindings, &first.payload, first.id);
-        let bound: Vec<BoundNode<'_>> = bindings
-            .iter()
-            .map(|b| BoundNode {
-                alias: &b.alias,
-                id: b.id,
-            })
-            .collect();
-        where_holds(cond, &bound, nodes, self.params, &|leaf| {
-            crate::velesql_where::truth(leaf, first.id, Some(&merged), self.params)
+        let payload = where_scope(bound, edges);
+        where_holds(cond, scope, nodes, self.params, &|leaf| {
+            crate::velesql_where::truth(leaf, *target, Some(&payload), self.params)
         })
-    }
-}
-
-/// The alias an unnamed pattern node gets: `a`, `b`, `c`… by position, then
-/// `n26`, `n27`… past `z`.
-fn positional_alias(position: usize) -> String {
-    match u8::try_from(position) {
-        Ok(offset) if offset < 26 => char::from(b'a' + offset).to_string(),
-        _ => format!("n{position}"),
     }
 }
 
@@ -392,8 +374,8 @@ fn finalize_candidates(
     Ok(candidates)
 }
 
-/// Returns edges incident to `anchor` that are compatible with the
-/// relationship's direction and (optionally) its type filter.
+/// Returns edges incident to `anchor` in the relationship's direction; its
+/// types and inline properties are [`edge_matches`]'s to decide.
 ///
 /// - `Outgoing`: edges where `source == anchor`.
 /// - `Incoming`: edges where `target == anchor`.
@@ -407,24 +389,22 @@ fn directed_filter_edges(
     anchor: u64,
     rel: &RelationshipPattern,
 ) -> Vec<WasmEdge> {
-    let label = first_type(rel);
-    let label_ref = label.as_deref();
     match rel.direction {
         Direction::Outgoing => store
-            .filter_edges(Some(anchor), None, label_ref)
+            .filter_edges(Some(anchor), None, None)
             .cloned()
             .collect(),
         Direction::Incoming => store
-            .filter_edges(None, Some(anchor), label_ref)
+            .filter_edges(None, Some(anchor), None)
             .cloned()
             .collect(),
         Direction::Both => {
             let mut edges: Vec<WasmEdge> = store
-                .filter_edges(Some(anchor), None, label_ref)
+                .filter_edges(Some(anchor), None, None)
                 .cloned()
                 .collect();
             let mut seen: std::collections::HashSet<u64> = edges.iter().map(|e| e.id).collect();
-            for e in store.filter_edges(None, Some(anchor), label_ref) {
+            for e in store.filter_edges(None, Some(anchor), None) {
                 if seen.insert(e.id) {
                     edges.push(e.clone());
                 }
@@ -432,7 +412,7 @@ fn directed_filter_edges(
             edges
         }
         _ => store
-            .filter_edges(Some(anchor), None, label_ref)
+            .filter_edges(Some(anchor), None, None)
             .cloned()
             .collect(),
     }
@@ -446,28 +426,30 @@ fn other_endpoint(edge: &WasmEdge, anchor: u64) -> u64 {
     }
 }
 
-fn matches_label(node: &WasmGraphNode, label: Option<&str>) -> bool {
-    let Some(l) = label else {
-        return true;
-    };
-    node.labels.iter().any(|x| x == l)
+/// Whether `edge` satisfies the relationship pattern `rel`, as core's
+/// `edge_matches` decides it: one of its types (`[:A|B]`), and every inline
+/// property read on the edge's properties.
+fn edge_matches(edge: &WasmEdge, rel: &RelationshipPattern) -> bool {
+    if !rel.types.is_empty() && !rel.types.contains(&edge.label) {
+        return false;
+    }
+    velesdb_core::velesql::inline_properties_hold(&rel.properties, |key| {
+        velesdb_core::velesql::element_property(edge.id, key, |k| edge.payload.as_ref()?.get(k))
+    })
 }
 
-/// The collection (graph store name) a MATCH reads.
-///
-/// In order: the first node's `@collection` annotation (it names the node's
-/// collection explicitly), then the `_collection` param — how core and the
-/// server name a MATCH target, since MATCH has no `FROM` — then the default
-/// `graph` store. The read gate and the executor both resolve the target
-/// here, so a policy is always asked about the graph actually read.
+/// The collection (graph store name) a MATCH reads: the `_collection`
+/// param — how core and the server name a MATCH target, since MATCH has no
+/// `FROM` — else the default `graph` store. A node's `@collection`
+/// annotation never selects it: it adds that collection's properties to the
+/// node ([`Annotations`]), as in core. The read gate and the executor both
+/// resolve the target here, so a policy is always asked about the graph
+/// actually read.
 ///
 /// # Errors
 ///
 /// Returns an error when `_collection` is present but not a string.
-pub(crate) fn match_target(pattern: &GraphPattern, params: &Params) -> Result<String, String> {
-    if let Some(name) = pattern.nodes.first().and_then(|n| n.collection.clone()) {
-        return Ok(name);
-    }
+pub(crate) fn match_target(params: &Params) -> Result<String, String> {
     match params.get(MATCH_TARGET_PARAM) {
         None => Ok(DEFAULT_GRAPH.to_string()),
         Some(serde_json::Value::String(name)) => Ok(name.clone()),
@@ -482,10 +464,9 @@ pub(crate) fn match_target(pattern: &GraphPattern, params: &Params) -> Result<St
 /// MATCH binds as nodes ([`MatchNodes`]).
 fn inferred_graph_store(
     db: &mut DatabaseInner,
-    pattern: &GraphPattern,
     params: &Params,
 ) -> Result<(String, std::rc::Rc<std::cell::RefCell<WasmGraphStore>>), String> {
-    let name = match_target(pattern, params)?;
+    let name = match_target(params)?;
     // A collection with points and no edge yet still has nodes to bind; it
     // gets an empty, unregistered graph store for this MATCH.
     let store = match db.get_graph_store(&name) {
@@ -503,151 +484,131 @@ const MATCH_TARGET_PARAM: &str = "_collection";
 /// Graph store a MATCH reads when nothing names one.
 const DEFAULT_GRAPH: &str = "graph";
 
-fn first_label(n: &NodePattern) -> Option<String> {
-    n.labels.first().cloned()
-}
-
-fn first_type(r: &RelationshipPattern) -> Option<String> {
-    r.types.first().cloned()
-}
-
-/// One alias → (id, payload) binding used during WHERE evaluation.
+/// The payload a MATCH WHERE leaf reads, as core resolves its columns:
 ///
-/// One binding exists per pattern node. Owned
-/// `String` alias avoids lifetime plumbing in the bindings slice; payload
-/// is a cloned `serde_json::Value` since the matcher consumes references.
-struct AliasBinding {
-    alias: String,
-    id: u64,
-    payload: serde_json::Value,
-}
-
-/// Builds a flat JSON object suitable for alias-scoped WHERE evaluation.
+/// - `alias.prop` reads the element `alias` binds — a named node, or a named
+///   relationship's properties (core's `edge_targets`);
+/// - a bare column reads the walk's target, the last node bound (core's
+///   `resolve_target_id`);
+/// - `id` reads the element's id, whatever its payload holds.
 ///
-/// Layout:
-/// - copies all top-level fields of the first-bound node at the root
-///   (enables bare `WHERE name = ...` to resolve against node `a`);
-/// - inserts each bound alias as a top-level key (enables
-///   `WHERE b.name = ...` to resolve via `get_nested_field` walking
-///   `b` → `name`). Aliases are inserted AFTER the first-node fields
-///   so an alias name always wins a collision.
-///
-/// Node-id injection: for every binding, the node `id` is injected as
-/// an `id` field inside its alias object so predicates like
-/// `WHERE a.id = 1` / `WHERE b.id = $x` resolve correctly. The bare
-/// root gets the first binding's id too, so `WHERE id = 1` (no alias
-/// prefix, backward-compatible) still matches the starting node. Node
-/// id always wins a collision with a payload field of the same name —
-/// a MATCH WHERE targets the graph node identifier, not an arbitrary
-/// user-defined "id" field.
-fn build_merged_payload(
-    bindings: &[AliasBinding],
-    first_payload: &serde_json::Value,
-    first_id: u64,
+/// Unnamed elements are not addressable. An alias wins a collision with a
+/// target property of the same name.
+fn where_scope(
+    bound: &[(&NodePattern, u64, WasmGraphNode)],
+    edges: &[BoundElement],
 ) -> serde_json::Value {
-    let mut map = serde_json::Map::new();
-    if let Some(obj) = first_payload.as_object() {
-        for (k, v) in obj {
-            map.insert(k.clone(), v.clone());
+    let mut map = match bound.last() {
+        Some((_, id, node)) => with_id(node.payload.as_ref(), *id),
+        None => serde_json::Map::new(),
+    };
+    for (pattern, id, node) in bound {
+        if let Some(alias) = &pattern.alias {
+            map.insert(
+                alias.clone(),
+                serde_json::Value::Object(with_id(node.payload.as_ref(), *id)),
+            );
         }
     }
-    // Bare `id` at the root resolves to the starting node's id (node
-    // id wins over any payload field called "id").
-    map.insert("id".to_string(), serde_json::json!(first_id));
-    for b in bindings {
-        map.insert(b.alias.clone(), payload_with_id(&b.payload, b.id));
+    for edge in edges {
+        if let Some(alias) = &edge.alias {
+            map.insert(
+                alias.clone(),
+                serde_json::Value::Object(with_id(edge.payload.as_ref(), edge.id)),
+            );
+        }
     }
     serde_json::Value::Object(map)
 }
 
-/// Clones `payload`, injecting the node `id` as a top-level field.
-///
-/// - `Null` / non-object payload → `{"id": <id>}`.
-/// - Object payload → same object with `"id"` set to the node id. Any
-///   pre-existing `"id"` field in the user payload is overwritten: the
-///   graph node identifier is the semantic anchor of a MATCH WHERE,
-///   never a coincidentally-named payload key.
-fn payload_with_id(payload: &serde_json::Value, id: u64) -> serde_json::Value {
-    let mut obj = match payload {
-        serde_json::Value::Object(map) => map.clone(),
+/// The object of `payload` with `id` set to the element's id (a non-object
+/// payload reads as empty).
+fn with_id(
+    payload: Option<&serde_json::Value>,
+    id: u64,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = match payload {
+        Some(serde_json::Value::Object(map)) => map.clone(),
         _ => serde_json::Map::new(),
     };
-    obj.insert("id".to_string(), serde_json::json!(id));
-    serde_json::Value::Object(obj)
+    map.insert("id".to_string(), serde_json::json!(id));
+    map
 }
 
-/// Builds a single binding from a `(NodePattern, id, data)` triple.
-///
-/// Falls back to the [`positional_alias`] when the pattern omits an explicit
-/// alias — the same convention [`build_match_row`] uses.
-fn make_binding(node: &NodePattern, id: u64, data: &WasmGraphNode, fallback: &str) -> AliasBinding {
-    let alias = node.alias.clone().unwrap_or_else(|| fallback.to_string());
-    let payload = data.payload.clone().unwrap_or(serde_json::Value::Null);
-    AliasBinding { alias, id, payload }
+/// What makes two rows the same row: the binding of every named node and
+/// named relationship, as core's `binding_signature` keys its dedup.
+fn row_signature(
+    bound: &[(&NodePattern, u64, WasmGraphNode)],
+    edges: &[BoundElement],
+) -> Vec<(u8, String, u64)> {
+    let mut signature: Vec<(u8, String, u64)> = bound
+        .iter()
+        .filter_map(|(pattern, id, _)| Some((0, pattern.alias.clone()?, *id)))
+        .chain(
+            edges
+                .iter()
+                .filter_map(|edge| Some((1, edge.alias.clone()?, edge.id))),
+        )
+        .collect();
+    signature.sort_unstable();
+    signature.dedup();
+    signature
 }
 
 // --- Row builders --------------------------------------------------------
 
-/// Builds a MATCH candidate (bound-node-id baseline + alias-keyed JSON + row)
-/// so ORDER BY can sort the full set before LIMIT truncation (Finding 8).
-/// `baseline` is the row's bound node ids in pattern order — a per-row-unique
-/// deterministic tie-break, mirroring core keying on the full match identity.
-fn candidate_from_map(
-    baseline: Vec<u64>,
-    map: serde_json::Map<String, serde_json::Value>,
-    binding: MatchBinding,
-    score: Option<f32>,
-) -> Result<MatchCandidate, String> {
-    let value = serde_json::Value::Object(map);
-    // The row `executeQuery` returns carries the score its ordering used.
-    let row = QueryResultRow::synthetic(value.clone())?.with_score(score.unwrap_or(0.0));
-    Ok(MatchCandidate {
-        baseline,
-        value,
-        row,
-        binding,
-        score,
-    })
-}
-
+/// The row of a match, keyed as core orders and returns it:
+///
+/// - the alias-keyed JSON holds each *named* node as every clause read it
+///   (its annotated properties included);
+/// - the `executeQuery` row carries the walk's target as its id and, as its
+///   score, the row's score or else `1 / (hops + 1)` (core's
+///   `match_results_to_search_results`);
+/// - the ORDER BY tie-break baseline is core's `(target id, hops, edge ids)`
+///   (`sort_match_baseline`).
 fn build_match_row(
-    bound: &[(&NodePattern, u64, &WasmGraphNode)],
+    bound: &[(&NodePattern, u64, WasmGraphNode)],
     edges: Vec<BoundElement>,
-    cross: &[CrossRef],
     score: Option<f32>,
 ) -> Result<MatchCandidate, String> {
     let mut map = serde_json::Map::new();
     let mut nodes = Vec::with_capacity(bound.len());
-    for (position, (pattern, id, data)) in bound.iter().enumerate() {
-        let enriched = WasmGraphNode {
-            payload: enriched_payload(pattern.alias.as_deref(), *id, data.payload.as_ref(), cross),
-            labels: data.labels.clone(),
-        };
-        let alias = pattern
-            .alias
-            .clone()
-            .unwrap_or_else(|| positional_alias(position));
-        map.insert(alias, node_json(*id, &enriched));
+    for (pattern, id, data) in bound {
+        if let Some(alias) = &pattern.alias {
+            map.insert(alias.clone(), node_json(*id, data));
+        }
         nodes.push(BoundElement {
             alias: pattern.alias.clone(),
             id: *id,
-            payload: enriched.payload,
+            payload: data.payload.clone(),
         });
     }
-    let binding = MatchBinding { nodes, edges };
-    candidate_from_map(
-        bound.iter().map(|(_, id, _)| *id).collect(),
-        map,
-        binding,
+    let target = bound.last().map_or(0, |(_, id, _)| *id);
+    let hops = edges.len();
+    let baseline: Vec<u64> = [target, hops as u64]
+        .into_iter()
+        .chain(edges.iter().map(|edge| edge.id))
+        .collect();
+    // A pattern's hop count fits a u16 exactly (and an f32 from it).
+    let walk_score = 1.0 / (f32::from(u16::try_from(hops).unwrap_or(u16::MAX)) + 1.0);
+    let value = serde_json::Value::Object(map);
+    let row = QueryResultRow::synthetic(value.clone())?
+        .with_id(target)
+        .with_score(score.unwrap_or(walk_score));
+    Ok(MatchCandidate {
+        baseline,
+        value,
+        row,
+        binding: MatchBinding { nodes, edges },
         score,
-    )
+    })
 }
 
 /// Builds the JSON shape returned for a single MATCH-bound node.
 ///
 /// Layout: payload fields are flattened at the alias root so the returned
 /// object is symmetric with the MATCH WHERE scope (where `a.name` resolves
-/// at the root of the alias — see [`build_merged_payload`]). Without this
+/// at the root of the alias — see [`where_scope`]). Without this
 /// symmetry, `WHERE a.name = 'Alice'` filtered by root-level `name` but
 /// the returned JSON required `a.payload.name` — a scope mismatch for JS
 /// callers (Devin Review Finding O).
@@ -676,6 +637,10 @@ fn node_json(id: u64, data: &WasmGraphNode) -> serde_json::Value {
 #[cfg(test)]
 #[path = "velesql_match_path_tests.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "velesql_match_parity_tests.rs"]
+mod parity_tests;
 
 #[cfg(test)]
 #[path = "velesql_match_points_tests.rs"]

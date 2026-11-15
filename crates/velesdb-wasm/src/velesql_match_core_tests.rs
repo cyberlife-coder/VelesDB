@@ -109,16 +109,16 @@ fn a_single_node_row_has_depth_zero_and_reads_id() {
     );
 }
 
+/// An unnamed node binds no name, so the two paths from `a` through it are
+/// one row, as core dedups on the named bindings.
 #[test]
 fn unnamed_nodes_are_not_bound() {
     let mut db = DatabaseInner::new();
     docs(&mut db);
 
     let rows = run(&mut db, "MATCH (a:Doc)-[:CITES]->(:Doc) RETURN a.title");
-    assert_eq!(rows.len(), 2);
-    for row in rows {
-        assert_eq!(row["bindings"], json!({"a": 1}));
-    }
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["bindings"], json!({"a": 1}));
 }
 
 #[test]

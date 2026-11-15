@@ -349,6 +349,14 @@ fn get_field<'a>(record: Record<'a>, field: &str) -> Option<Cow<'a, Value>> {
     Some(Cow::Borrowed(current))
 }
 
+/// The three-valued truth of `operand = literal`, as a WHERE `=` decides
+/// it: UNKNOWN (`None`) when the operand is absent or `null`, or the literal
+/// is `NULL`; else whether they are equal ([`values_equal`]).
+pub(crate) fn equality_truth(operand: Option<&Value>, literal: &Value) -> Option<bool> {
+    let operand = operand.filter(|v| !v.is_null())?;
+    known_literal(literal).map(|literal| values_equal(operand, literal))
+}
+
 /// Compares two JSON values for equality; numbers by exact value, as
 /// [`crate::velesql::compare_numbers`] orders them (`-0.0` is `0`, an
 /// integer beyond 2^53 is not the float it rounds to, and no tolerance
