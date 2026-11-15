@@ -163,9 +163,11 @@ before 8.0.0, records carrying a payload were ES2015 `Map`s (#2332).
   parity.
 - **~100 K vectors is the practical ceiling**, set by browser RAM. Beyond that,
   move to the REST server.
-- **Single collection per query.** Cross-collection `MATCH` (`@collection`)
-  needs Database-level routing and is server-only. `MATCH` is limited to 1–2
-  hops.
+- **One graph per `MATCH`.** A `MATCH` reads one graph store: the first
+  node's `@collection` annotation, else the `_collection` param (as in core and
+  on the server), else the default `graph`. Patterns of any fixed length run;
+  variable-length relationships (`[*1..3]`) and multi-pattern `MATCH` are
+  server-only, and the browser path computes no `similarity()` scores.
 - **No filesystem.** The agent-memory wedge (`MemoryService`) is in-memory
   only; nothing persists unless you persist it yourself.
 - **Storage modes save no memory.** `sq8`, `binary`, `pq` and `rabitq` return

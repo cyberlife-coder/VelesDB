@@ -548,7 +548,7 @@ impl Collection {
 }
 
 /// Resolves the target node ID from a column reference, using alias bindings if present.
-fn resolve_target_id(
+pub(super) fn resolve_target_id(
     column: &str,
     bindings: Option<&HashMap<String, u64>>,
     default_id: u64,

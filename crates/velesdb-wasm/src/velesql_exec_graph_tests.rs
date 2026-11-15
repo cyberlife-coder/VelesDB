@@ -1426,3 +1426,76 @@ fn test_bdd_truncate_preserves_storage_mode_sq8() {
         "TRUNCATE must preserve SQ8 storage mode, got {after_mode}"
     );
 }
+
+// =========================================================================
+// MATCH — target collection (`_collection` param, core parity)
+// =========================================================================
+
+/// Seeds Alice -KNOWS-> Bob into the graph named `kg`, not the default `graph`.
+fn seed_kg(db: &mut DatabaseInner) {
+    for (id, name) in [(1, "Alice"), (2, "Bob")] {
+        execute(
+            db,
+            &format!(
+                "INSERT NODE INTO kg (id = {id}, payload = '{{\"name\": \"{name}\", \"labels\": [\"Person\"]}}')"
+            ),
+            None,
+        )
+        .expect("test: kg node");
+    }
+    execute(
+        db,
+        "INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS')",
+        None,
+    )
+    .expect("test: kg edge");
+}
+
+/// GIVEN a graph stored under `kg`
+/// WHEN MATCH runs with `{"_collection": "kg"}` (how core and the server
+///      name a MATCH target: MATCH has no FROM)
+/// THEN it matches `kg`, not the default `graph`.
+#[test]
+fn test_match_targets_the_collection_named_by_the_collection_param() {
+    let mut db = DatabaseInner::new();
+    seed_kg(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b",
+        Some(r#"{"_collection": "kg"}"#),
+    )
+    .expect("test: match on kg");
+    assert_eq!(r.row_count(), 1);
+}
+
+/// GIVEN graphs `kg` and `graph`
+/// WHEN the first node carries an `@graph` annotation and the param names `kg`
+/// THEN the annotation wins, as it names the node's collection explicitly.
+#[test]
+fn test_match_node_annotation_wins_over_the_collection_param() {
+    let mut db = DatabaseInner::new();
+    seed_kg(&mut db);
+    seed_graph(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person@graph)-[:KNOWS]->(b:Person) RETURN a, b",
+        Some(r#"{"_collection": "kg"}"#),
+    )
+    .expect("test: annotated match");
+    assert_eq!(r.row_count(), 2, "the default graph holds two KNOWS edges");
+}
+
+/// WHEN `_collection` is not a string
+/// THEN MATCH says so instead of silently falling back to `graph`.
+#[test]
+fn test_match_rejects_a_non_string_collection_param() {
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let err = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b",
+        Some(r#"{"_collection": 7}"#),
+    )
+    .expect_err("a numeric _collection must be refused");
+    assert!(err.contains("_collection"), "{err}");
+}
