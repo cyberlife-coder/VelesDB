@@ -225,7 +225,7 @@ pub fn print_help() {
     );
     println!(
         "  {} Store payload",
-        ".graph store-payload <col> <node> <json>".yellow()
+        ".graph store-payload <col> <node> <json> [--vector <json>]".yellow()
     );
     println!(
         "  {}  Get payload",

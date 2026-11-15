@@ -662,3 +662,171 @@ fn test_repl_upsert_missing_args_shows_usage() {
 
     assert_continue(&result); // shows usage
 }
+
+// =========================================================================
+// I. .graph store-payload --vector — parity with `velesdb graph store-payload`
+// =========================================================================
+//
+// The one-shot command stores a node's embedding with `--vector`; the REPL
+// read everything after the node id as JSON, so the flag failed with
+// "Invalid JSON: trailing characters" and a REPL session could never give a
+// graph node an embedding — nor run a MATCH that filters on similarity().
+
+fn setup_db_with_embeddings() -> (TempDir, Database) {
+    let dir = TempDir::new().expect("test: create temp dir");
+    let db = Database::open(dir.path()).expect("test: open database");
+    db.create_graph_collection_with_embeddings(
+        "kg",
+        GraphSchema::schemaless(),
+        4,
+        velesdb_core::DistanceMetric::Cosine,
+    )
+    .expect("test: create graph collection with embeddings");
+    (dir, db)
+}
+
+#[test]
+fn given_embeddings_when_store_payload_has_a_vector_then_the_node_is_searchable_by_it() {
+    let (_dir, db) = setup_db_with_embeddings();
+
+    let parts: Vec<&str> = vec![
+        ".graph",
+        "store-payload",
+        "kg",
+        "7",
+        r#"{"name":"Ada"}"#,
+        "--vector",
+        "[1.0,0.0,0.0,0.0]",
+    ];
+    assert_continue(&cmd_graph(&db, &parts));
+
+    let col = graph_col(&db);
+    assert_eq!(col.get_node_payload(7).unwrap().unwrap()["name"], "Ada");
+    let hits = col.search_by_embedding(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+    assert_eq!(hits.first().map(|h| h.point.id), Some(7));
+}
+
+#[test]
+fn given_a_vector_with_spaces_when_store_payload_runs_then_it_is_read_whole() {
+    // The REPL splits on whitespace: `[1.0, 0.0, 0.0, 0.0]` arrives in pieces.
+    let (_dir, db) = setup_db_with_embeddings();
+
+    let parts: Vec<&str> = vec![
+        ".graph",
+        "store-payload",
+        "kg",
+        "8",
+        r#"{"name":"Grace"}"#,
+        "--vector",
+        "[0.0,",
+        "0.0,",
+        "1.0,",
+        "0.0]",
+    ];
+    assert_continue(&cmd_graph(&db, &parts));
+
+    let hits = graph_col(&db)
+        .search_by_embedding(&[0.0, 0.0, 1.0, 0.0], 1)
+        .unwrap();
+    assert_eq!(hits.first().map(|h| h.point.id), Some(8));
+}
+
+#[test]
+fn given_an_invalid_vector_when_store_payload_runs_then_it_errors_and_stores_nothing() {
+    let (_dir, db) = setup_db_with_embeddings();
+
+    let parts: Vec<&str> = vec![
+        ".graph",
+        "store-payload",
+        "kg",
+        "9",
+        r#"{"name":"X"}"#,
+        "--vector",
+        "[1.0,oops]",
+    ];
+    assert_error(&cmd_graph(&db, &parts));
+
+    assert!(graph_col(&db).get_node_payload(9).unwrap().is_none());
+}
+
+#[test]
+fn given_the_flag_without_a_value_when_store_payload_runs_then_it_errors() {
+    let (_dir, db) = setup_db_with_embeddings();
+
+    let parts: Vec<&str> = vec![
+        ".graph",
+        "store-payload",
+        "kg",
+        "10",
+        r#"{"name":"X"}"#,
+        "--vector",
+    ];
+    assert_error(&cmd_graph(&db, &parts));
+}
+
+#[test]
+fn given_a_payload_string_containing_the_flag_when_store_payload_runs_then_it_is_stored_whole() {
+    // The REPL splits on whitespace, so `--vector` inside a JSON string
+    // arrives as its own token; it is payload text, not the option.
+    let (_dir, db) = setup_db_with_embeddings();
+
+    let parts: Vec<&str> = vec![
+        ".graph",
+        "store-payload",
+        "kg",
+        "11",
+        r#"{"text":"use"#,
+        "--vector",
+        r#"here"}"#,
+    ];
+    assert_continue(&cmd_graph(&db, &parts));
+
+    assert_eq!(
+        graph_col(&db).get_node_payload(11).unwrap().unwrap()["text"],
+        "use --vector here"
+    );
+}
+
+#[test]
+fn given_a_payload_string_containing_the_flag_and_a_real_flag_then_both_are_read() {
+    let (_dir, db) = setup_db_with_embeddings();
+
+    let parts: Vec<&str> = vec![
+        ".graph",
+        "store-payload",
+        "kg",
+        "12",
+        r#"{"text":"use"#,
+        "--vector",
+        r#"here"}"#,
+        "--vector",
+        "[0.0,1.0,0.0,0.0]",
+    ];
+    assert_continue(&cmd_graph(&db, &parts));
+
+    let col = graph_col(&db);
+    assert_eq!(
+        col.get_node_payload(12).unwrap().unwrap()["text"],
+        "use --vector here"
+    );
+    let hits = col.search_by_embedding(&[0.0, 1.0, 0.0, 0.0], 1).unwrap();
+    assert_eq!(hits.first().map(|h| h.point.id), Some(12));
+}
+
+#[test]
+fn given_text_after_the_payload_that_is_not_the_flag_then_it_errors_and_stores_nothing() {
+    let (_dir, db) = setup_db_with_embeddings();
+
+    let parts: Vec<&str> = vec![
+        ".graph",
+        "store-payload",
+        "kg",
+        "13",
+        r#"{"name":"X"}"#,
+        "--vectors",
+        "[1.0,0.0,0.0,0.0]",
+    ];
+    assert_error(&cmd_graph(&db, &parts));
+
+    assert!(graph_col(&db).get_node_payload(13).unwrap().is_none());
+}

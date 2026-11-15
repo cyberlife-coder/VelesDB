@@ -1450,9 +1450,12 @@ def main(argv: "list[str] | None" = None) -> int:
 
     if args.embedder == "hash" and args.embedder_model:
         parser.error("--embedder-model needs --embedder=ollama")
+    try:
+        ollama_url = wizard_embedder.resolve_url(args.ollama_url, dict(os.environ))
+    except ValueError as e:
+        parser.error(str(e))
     plan = build_plan(Path(args.home), Path(args.store), args.mode, args.port, scan_cli=not args.no_cli_scan,
-                      embedder=(args.embedder, args.embedder_model),
-                      ollama_url=wizard_embedder.resolve_url(args.ollama_url, dict(os.environ)))
+                      embedder=(args.embedder, args.embedder_model), ollama_url=ollama_url)
     if args.json:
         print(json.dumps(plan, indent=2, ensure_ascii=False))
         return 0
