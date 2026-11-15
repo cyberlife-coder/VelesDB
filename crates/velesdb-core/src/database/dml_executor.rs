@@ -12,21 +12,22 @@ use super::Database;
 impl Database {
     /// Executes an INSERT EDGE statement.
     ///
-    /// Resolves the target graph collection and builds a `GraphEdge`
-    /// from the statement fields.
+    /// Resolves the target collection — any type: vector, graph and metadata
+    /// collections share one edge store — and builds a `GraphEdge` from the
+    /// statement fields.
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not a graph collection,
-    /// or if the edge insertion fails.
+    /// Returns `CollectionNotFound` if no collection has that name, or an
+    /// error if the edge insertion fails.
     pub(super) fn execute_insert_edge(
         &self,
         stmt: &crate::velesql::InsertEdgeStatement,
     ) -> Result<Vec<SearchResult>> {
         self.check_dml_mutation("INSERT_EDGE", &stmt.collection)?;
-        let graph = self.resolve_graph_collection(&stmt.collection)?;
+        let collection = self.resolve_edge_collection(&stmt.collection)?;
         let edge = build_graph_edge(stmt)?;
-        graph.add_edge(edge)?;
+        collection.add_edge(edge)?;
         Ok(Vec::new())
     }
 
@@ -52,20 +53,21 @@ impl Database {
 
     /// Executes a DELETE EDGE statement.
     ///
-    /// Resolves the target graph collection and removes the edge by ID.
+    /// Resolves the target collection (any type, see
+    /// [`Self::resolve_edge_collection`]) and removes the edge by ID.
     /// Returns a single `SearchResult` with `deleted: true/false` so the
     /// caller knows whether the edge actually existed.
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not a graph collection.
+    /// Returns `CollectionNotFound` if no collection has that name.
     pub(super) fn execute_delete_edge(
         &self,
         stmt: &crate::velesql::DeleteEdgeStatement,
     ) -> Result<Vec<SearchResult>> {
         self.check_dml_mutation("DELETE_EDGE", &stmt.collection)?;
-        let graph = self.resolve_graph_collection(&stmt.collection)?;
-        let removed = graph.remove_edge(stmt.edge_id);
+        let collection = self.resolve_edge_collection(&stmt.collection)?;
+        let removed = collection.remove_edge(stmt.edge_id);
         let payload = serde_json::json!({
             "deleted": removed,
             "edge_id": stmt.edge_id,
@@ -76,18 +78,20 @@ impl Database {
 
     /// Executes a SELECT EDGES statement.
     ///
-    /// Resolves the target graph collection and retrieves edges based on
+    /// Resolves the target collection (any type, see
+    /// [`Self::resolve_edge_collection`]) and retrieves edges based on
     /// optional WHERE filters (source, target, label).
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not a graph collection.
+    /// Returns `CollectionNotFound` if no collection has that name, or a
+    /// query error for an unsupported WHERE shape.
     pub(super) fn execute_select_edges(
         &self,
         stmt: &crate::velesql::SelectEdgesStatement,
     ) -> Result<Vec<SearchResult>> {
-        let graph = self.resolve_graph_collection(&stmt.collection)?;
-        let edges = resolve_edge_query(&graph, stmt.where_clause.as_ref())?;
+        let collection = self.resolve_edge_collection(&stmt.collection)?;
+        let edges = resolve_edge_query(&collection, stmt.where_clause.as_ref())?;
         let limit = resolve_edge_limit(stmt.limit, edges.len());
         Ok(edges_to_results(&edges[..limit]))
     }
@@ -99,8 +103,10 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not a graph collection,
-    /// or if the payload storage fails.
+    /// Returns `CollectionNotFound` if no collection has that name,
+    /// `GraphNotSupported` if it is not a graph collection (a node payload
+    /// there would be a point with no vector), or an error if the payload
+    /// storage fails.
     pub(super) fn execute_insert_node(
         &self,
         stmt: &crate::velesql::InsertNodeStatement,
@@ -122,12 +128,34 @@ impl Database {
         Ok(())
     }
 
+    /// Resolves the collection an edge statement reads or writes.
+    ///
+    /// Vector, graph and metadata collections share one edge store (the Rust
+    /// API, REST `/relations` and the agent-memory wedge add edges to all
+    /// three), so edge statements accept any of them.
+    fn resolve_edge_collection(&self, name: &str) -> Result<crate::collection::Collection> {
+        self.resolve_collection(name)
+    }
+
     /// Resolves a graph collection by name.
     ///
-    /// Returns `CollectionNotFound` if no graph collection exists with the given name.
+    /// Returns `CollectionNotFound` if no collection exists with the given
+    /// name, and `GraphNotSupported` if one exists but is not a graph
+    /// collection — so the error names the real reason.
     fn resolve_graph_collection(&self, name: &str) -> Result<crate::collection::GraphCollection> {
-        self.get_graph_collection(name)
-            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+        if let Some(graph) = self.get_graph_collection(name) {
+            return Ok(graph);
+        }
+        let kind = match self.get_any_collection(name) {
+            Some(crate::collection::AnyCollection::Vector(_)) => "vector",
+            Some(crate::collection::AnyCollection::Metadata(_)) => "metadata",
+            Some(crate::collection::AnyCollection::Graph(_)) | None => {
+                return Err(Error::CollectionNotFound(name.to_string()));
+            }
+        };
+        Err(Error::GraphNotSupported(format!(
+            "'{name}' is a {kind} collection; this statement needs a graph collection"
+        )))
     }
 }
 
@@ -240,23 +268,23 @@ fn value_to_u64(val: &crate::velesql::Value) -> Result<u64> {
 ///
 /// Supports: `source = N`, `target = N`, `label = 'X'`, and AND combinations.
 fn resolve_edge_query(
-    graph: &crate::collection::GraphCollection,
+    collection: &crate::collection::Collection,
     where_clause: Option<&crate::velesql::Condition>,
 ) -> Result<Vec<crate::collection::GraphEdge>> {
     let Some(condition) = where_clause else {
-        return Ok(graph.get_edges(None));
+        return Ok(collection.get_all_edges());
     };
-    dispatch_edge_condition(graph, condition)
+    dispatch_edge_condition(collection, condition)
 }
 
 /// Dispatches a single WHERE condition to the appropriate edge lookup.
 fn dispatch_edge_condition(
-    graph: &crate::collection::GraphCollection,
+    collection: &crate::collection::Collection,
     condition: &crate::velesql::Condition,
 ) -> Result<Vec<crate::collection::GraphEdge>> {
     match condition {
-        crate::velesql::Condition::Comparison(cmp) => dispatch_edge_comparison(graph, cmp),
-        crate::velesql::Condition::And(left, right) => dispatch_edge_and(graph, left, right),
+        crate::velesql::Condition::Comparison(cmp) => dispatch_edge_comparison(collection, cmp),
+        crate::velesql::Condition::And(left, right) => dispatch_edge_and(collection, left, right),
         _ => Err(Error::Query(
             "SELECT EDGES WHERE supports: source=N, target=N, label='X', and AND combinations"
                 .to_string(),
@@ -266,7 +294,7 @@ fn dispatch_edge_condition(
 
 /// Handles a single comparison: source=N, target=N, or label='X'.
 fn dispatch_edge_comparison(
-    graph: &crate::collection::GraphCollection,
+    collection: &crate::collection::Collection,
     cmp: &crate::velesql::Comparison,
 ) -> Result<Vec<crate::collection::GraphEdge>> {
     if cmp.operator != crate::velesql::CompareOp::Eq {
@@ -277,15 +305,15 @@ fn dispatch_edge_comparison(
     match cmp.column.as_str() {
         "source" => {
             let id = value_to_u64(&cmp.value)?;
-            Ok(graph.get_outgoing(id))
+            Ok(collection.get_outgoing_edges(id))
         }
         "target" => {
             let id = value_to_u64(&cmp.value)?;
-            Ok(graph.get_incoming(id))
+            Ok(collection.get_incoming_edges(id))
         }
         "label" => {
             let label = extract_string_value(&cmp.value)?;
-            Ok(graph.get_edges(Some(&label)))
+            Ok(collection.get_edges_by_label(&label))
         }
         col => Err(Error::Query(format!(
             "SELECT EDGES WHERE does not support column '{col}'. Use: source, target, label"
@@ -300,7 +328,7 @@ fn dispatch_edge_comparison(
 /// This means `label = 'KNOWS' AND source = 1` is as efficient as
 /// `source = 1 AND label = 'KNOWS'`.
 fn dispatch_edge_and(
-    graph: &crate::collection::GraphCollection,
+    collection: &crate::collection::Collection,
     left: &crate::velesql::Condition,
     right: &crate::velesql::Condition,
 ) -> Result<Vec<crate::collection::GraphEdge>> {
@@ -312,7 +340,7 @@ fn dispatch_edge_and(
     } else {
         (left, right)
     };
-    let mut edges = dispatch_edge_condition(graph, fetch)?;
+    let mut edges = dispatch_edge_condition(collection, fetch)?;
     let filter = extract_and_filter(filter_side)?;
     edges.retain(|e| edge_matches_filter(e, &filter));
     Ok(edges)

@@ -2770,7 +2770,10 @@ DELETE FROM events WHERE status = 'expired' AND created_at < 1000
 
 ### INSERT EDGE (v3.3+)
 
-Insert a labeled edge between two nodes in a graph collection.
+Insert a labeled edge between two nodes of a collection. Vector, graph and
+metadata collections share one edge store, so every collection type accepts
+`INSERT EDGE`, `DELETE EDGE` and `SELECT EDGES`; in a vector or metadata
+collection the nodes are its points.
 
 ```sql
 -- Basic edge insertion
@@ -2807,7 +2810,7 @@ WITH PROPERTIES accepts key-value pairs (strings, integers, or floats).
 
 ### DELETE EDGE (v3.3+)
 
-Remove an edge by its ID from a graph collection.
+Remove an edge by its ID from a collection of any type.
 
 ```sql
 DELETE EDGE 123 FROM knowledge;
@@ -2816,7 +2819,7 @@ DELETE EDGE 10 FROM kg;
 
 ### SELECT EDGES (v3.5+)
 
-Query edges from a graph collection with optional filtering by source node,
+Query edges from a collection of any type with optional filtering by source node,
 target node, or edge label.
 
 ```sql
@@ -2845,7 +2848,10 @@ and `properties` fields.
 
 ### INSERT NODE (v3.5+)
 
-Insert or update a node's payload in a graph collection.
+Insert or update a node's payload in a graph collection. `INSERT NODE` is
+graph-only: in a vector or metadata collection a node is a point, written with
+`INSERT INTO`/`UPSERT`; there it fails with `VELES-018` (graph not supported),
+naming the collection's type.
 
 ```sql
 -- With JSON payload
