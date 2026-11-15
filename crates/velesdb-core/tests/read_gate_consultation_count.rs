@@ -236,6 +236,28 @@ fn a_match_enriched_from_its_own_target_consults_it_once() {
     assert_once_each(&observer, "MATCH enriched from its own target");
 }
 
+/// REST `/match`'s entry point gates a bare clause as the statement path
+/// gates a `MATCH` statement: its target and each annotation, once each.
+#[test]
+fn the_match_api_consults_target_and_each_annotation_once() {
+    let (_dir, db, observer) = setup();
+    let clause = Parser::parse("MATCH (a:Person@c)-[:KNOWS]->(b:Person@d) RETURN a, b")
+        .expect("test: parse")
+        .match_clause
+        .expect("test: MATCH clause");
+    db.match_query("g", &clause, &HashMap::new(), None)
+        .expect("test: MATCH runs");
+    assert_once_each(&observer, "Database::match_query");
+    assert_eq!(
+        observer.per_collection(),
+        BTreeMap::from([
+            ("c".to_string(), 1),
+            ("d".to_string(), 1),
+            ("g".to_string(), 1)
+        ]),
+    );
+}
+
 #[test]
 fn select_edges_consults_its_collection_once() {
     let (_dir, db, observer) = setup();

@@ -39,7 +39,7 @@ fn ordering_holds(op: crate::velesql::CompareOp, ordering: std::cmp::Ordering) -
 }
 
 /// Compares a similarity score against a threshold, inverting for distance metrics.
-fn compare_score(
+pub(super) fn compare_score(
     op: crate::velesql::CompareOp,
     score: f32,
     threshold: f32,
@@ -308,7 +308,10 @@ impl Collection {
         }
 
         let target_id = resolve_target_id(&cmp.column, ctx.bindings, ctx.node_id);
-        let target_payload = ctx.guards.payload_memo.get(target_id);
+        let target_payload = ctx
+            .guards
+            .payload_memo
+            .get_bound(bound_alias(&cmp.column, ctx.bindings), target_id);
         let column_path = strip_alias(&cmp.column, &alias_in(ctx.bindings));
         let Some(actual) = element_property(target_id, column_path, |path| {
             Self::json_get_path(target_payload.as_deref()?, path)
@@ -362,7 +365,7 @@ impl Collection {
         // alias, mirroring what evaluate_comparison_condition does. Without
         // this, `WHERE a.category IN (...)` would evaluate against node_id
         // (the traversal target) instead of the node bound to alias `a`.
-        let column = crate::velesql::match_planner::column_of_metadata_condition(condition);
+        let column = column_of_metadata_condition(condition);
 
         // Audit 2026-06 F: a relationship alias resolves against the EDGE's
         // properties (ANY-element semantics; fixed-length = one element).
@@ -378,7 +381,10 @@ impl Collection {
 
         // A node without payload is tested with a `null` payload, as on
         // every path: `n.id` still reads its id.
-        let payload = ctx.guards.payload_memo.get(target_id);
+        let payload = ctx.guards.payload_memo.get_bound(
+            column.and_then(|col| bound_alias(col, ctx.bindings)),
+            target_id,
+        );
 
         // Compile-once per (leaf, strip-decision): the rewrite depends only
         // on whether the leaf column's alias prefix is bound — a bit, not a
@@ -440,7 +446,7 @@ impl Collection {
         // Compile-once per (leaf, strip-decision) — tag bit 1 separates the
         // edge-namespace rewrite from the node one. This also amortizes the
         // build across the ANY-element fold, which recompiled per edge id.
-        let column = crate::velesql::match_planner::column_of_metadata_condition(condition);
+        let column = column_of_metadata_condition(condition);
         let stripped = column
             .and_then(column_alias)
             .is_some_and(|a| ctx.is_edge_alias(a));
@@ -627,12 +633,38 @@ pub(super) fn resolve_target_id(
         .unwrap_or(default_id)
 }
 
-/// Builds an alias-membership predicate over an optional node-bindings map.
+/// Extracts the column name from a metadata condition variant.
+///
+/// Returns `Some(&str)` for condition types that carry a `column` field.
+/// Non-metadata variants return `None`.
+fn column_of_metadata_condition(condition: &crate::velesql::Condition) -> Option<&str> {
+    match condition {
+        crate::velesql::Condition::In(ic) => Some(&ic.column),
+        crate::velesql::Condition::Between(btw) => Some(&btw.column),
+        crate::velesql::Condition::Like(lk) => Some(&lk.column),
+        crate::velesql::Condition::IsNull(isn) => Some(&isn.column),
+        crate::velesql::Condition::Match(m) => Some(&m.column),
+        crate::velesql::Condition::ContainsText(ct) => Some(&ct.column),
+        crate::velesql::Condition::Contains(c) => Some(&c.column),
+        crate::velesql::Condition::GeoDistance(gd) => Some(&gd.column),
+        crate::velesql::Condition::GeoBbox(gb) => Some(&gb.column),
+        _ => None,
+    }
+}
+
 /// The alias prefix of a dotted column (`a.name` -> `a`), if any.
 fn column_alias(column: &str) -> Option<&str> {
     column.split_once('.').map(|(alias, _)| alias)
 }
 
+/// The node alias a column reads through, when its prefix is a bound node
+/// alias: what decides whether the read sees an `@collection` annotation.
+/// A bare column reads the traversal target's own payload.
+fn bound_alias<'c>(column: &'c str, bindings: Option<&HashMap<String, u64>>) -> Option<&'c str> {
+    column_alias(column).filter(|alias| alias_in(bindings)(alias))
+}
+
+/// Builds an alias-membership predicate over an optional node-bindings map.
 fn alias_in(bindings: Option<&HashMap<String, u64>>) -> impl Fn(&str) -> bool + '_ {
     move |alias| bindings.is_some_and(|b| b.contains_key(alias))
 }

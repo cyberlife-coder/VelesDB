@@ -77,6 +77,8 @@ mod index_management;
 mod introspection;
 #[path = "bdd/join_exact_conformance.rs"]
 mod join_exact_conformance;
+#[path = "bdd/match_cross_collection_properties.rs"]
+mod match_cross_collection_properties;
 #[path = "bdd/match_graph_first.rs"]
 mod match_graph_first;
 #[path = "bdd/match_id_semantics.rs"]
