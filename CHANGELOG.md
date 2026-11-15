@@ -147,6 +147,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persistence-only `Collection` so both builds share it) and matches with
   core's payload filter, compiled once per query.
 
+- **`INSERT EDGE`, `SELECT EDGES` and `DELETE EDGE` work on vector and
+  metadata collections.** The three collection types share one edge store,
+  and the Rust API, REST `/relations` and the agent-memory wedge already add
+  edges to all of them, but the VelesQL executor resolved only graph
+  collections: `INSERT EDGE INTO docs …` on a vector collection failed with
+  "Collection 'docs' not found". `INSERT NODE` stays graph-only, and now says
+  so (`VELES-018`, naming the collection's type) instead of claiming the
+  collection does not exist.
+
 - **`POST /collections/{name}/relations` no longer fails permanently after an
   edge with ID `u64::MAX` exists** (server, 2026-11-15). The handler picks the
   next edge ID as `max_edge_id + 1`, and that sum saturated at `u64::MAX`, an
