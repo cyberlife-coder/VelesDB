@@ -259,8 +259,8 @@ impl PathWalk<'_> {
         path: &PathState,
         out: &mut Vec<MatchCandidate>,
     ) -> Result<(), String> {
-        // Each bound node as every clause reads it: its labels, and its
-        // properties united with its annotated collection's point.
+        // Each bound node as WHERE, ORDER BY and RETURN read it: its labels,
+        // and its properties united with the annotation its alias carries.
         let bound: Vec<(&NodePattern, u64, WasmGraphNode)> = self
             .pattern
             .nodes
@@ -269,8 +269,8 @@ impl PathWalk<'_> {
             .map(|(pattern, &id)| {
                 let data = nodes.get(id);
                 let node = WasmGraphNode {
-                    payload: self.annotations.properties(
-                        pattern,
+                    payload: self.annotations.bound_properties(
+                        pattern.alias.as_deref(),
                         id,
                         data.and_then(|d| d.payload.as_ref()),
                     ),
@@ -290,12 +290,14 @@ impl PathWalk<'_> {
         if !self.where_holds(nodes, &bound, &edges, &scope)? {
             return Ok(());
         }
-        if !self.seen.borrow_mut().insert(row_signature(&bound, &edges)) {
-            return Ok(());
-        }
+        // Scored before the dedup: a path the query vector rejects must not
+        // reserve its binding against a later passing one.
         let RowScore::Kept(score) = self.row_score(nodes, path, &scope)? else {
             return Ok(());
         };
+        if !self.seen.borrow_mut().insert(row_signature(&bound, &edges)) {
+            return Ok(());
+        }
         out.push(build_match_row(&bound, edges, score)?);
         Ok(())
     }
@@ -351,7 +353,8 @@ impl PathWalk<'_> {
             // Defensive: a MATCH always has at least one bound node.
             return Ok(false);
         };
-        let payload = where_scope(bound, edges);
+        let own = nodes.get(*target).and_then(|d| d.payload.as_ref());
+        let payload = where_scope(bound, edges, own);
         where_holds(cond, scope, nodes, self.params, &|leaf| {
             crate::velesql_where::truth(leaf, *target, Some(&payload), self.params)
         })
@@ -489,7 +492,8 @@ const DEFAULT_GRAPH: &str = "graph";
 /// - `alias.prop` reads the element `alias` binds — a named node, or a named
 ///   relationship's properties (core's `edge_targets`);
 /// - a bare column reads the walk's target, the last node bound (core's
-///   `resolve_target_id`);
+///   `resolve_target_id`), by its own payload `target_own` — an annotation is
+///   read through an alias only (core's `bound_alias`);
 /// - `id` reads the element's id, whatever its payload holds.
 ///
 /// Unnamed elements are not addressable. An alias wins a collision with a
@@ -497,9 +501,10 @@ const DEFAULT_GRAPH: &str = "graph";
 fn where_scope(
     bound: &[(&NodePattern, u64, WasmGraphNode)],
     edges: &[BoundElement],
+    target_own: Option<&serde_json::Value>,
 ) -> serde_json::Value {
     let mut map = match bound.last() {
-        Some((_, id, node)) => with_id(node.payload.as_ref(), *id),
+        Some((_, id, _)) => with_id(target_own, *id),
         None => serde_json::Map::new(),
     };
     for (pattern, id, node) in bound {

@@ -3,11 +3,17 @@
 //! `(w:Warehouse@pricing)` binds a node of the MATCH's own graph whose
 //! properties are the union of its own payload and the payload of the
 //! `pricing` point with the same id — the node's own fields winning, so its
-//! identity and labels are never overwritten. WHERE, ORDER BY, RETURN and
-//! the pattern's inline properties all read that one union, through
-//! [`Annotations::properties`]. Labels stay the graph's. An annotation
-//! naming no collection refuses the MATCH, as in core (`match_exec::sources`
-//! in `velesdb-core`).
+//! identity and labels are never overwritten. Labels stay the graph's. As in
+//! core (`match_exec::sources` in `velesdb-core`):
+//!
+//! - a pattern node's inline properties read its own position's annotation
+//!   ([`Annotations::properties`]);
+//! - a named node read by WHERE, ORDER BY or RETURN (`w.price`) reads the
+//!   annotation its alias carries at any occurrence — the first annotated
+//!   one — so `(a@pricing)-[:R]->(a)` binds one `a`
+//!   ([`Annotations::bound_properties`]);
+//! - a bare WHERE column reads the target's own payload, no annotation;
+//! - an annotation naming no collection refuses the MATCH.
 
 use std::collections::HashMap;
 
@@ -26,6 +32,9 @@ struct Annotated {
 pub(crate) struct Annotations {
     /// `(annotation name, collection)`, one entry per distinct name.
     collections: Vec<(String, Annotated)>,
+    /// `(node alias, annotation name)`: each aliased annotated node's first
+    /// annotation, as core's `MatchSources::for_clause` records it.
+    aliases: Vec<(String, String)>,
 }
 
 impl Annotations {
@@ -37,12 +46,17 @@ impl Annotations {
     /// properties from it.
     pub(crate) fn resolve(db: &DatabaseInner, clause: &MatchClause) -> Result<Self, String> {
         let mut annotations = Self::default();
-        for name in clause
-            .patterns
-            .iter()
-            .flat_map(|p| p.nodes.iter())
-            .filter_map(|n| n.collection.as_deref())
-        {
+        for node in clause.patterns.iter().flat_map(|p| p.nodes.iter()) {
+            let Some(name) = node.collection.as_deref() else {
+                continue;
+            };
+            if let Some(alias) = node.alias.as_deref() {
+                if annotations.aliases.iter().all(|(a, _)| a != alias) {
+                    annotations
+                        .aliases
+                        .push((alias.to_string(), name.to_string()));
+                }
+            }
             if annotations.collections.iter().any(|(n, _)| n == name) {
                 continue;
             }
@@ -63,18 +77,46 @@ impl Annotations {
         Ok(annotations)
     }
 
-    /// The properties of node `id` as the pattern node `node` binds it: its
-    /// own payload `own`, united with its annotated collection's point when
-    /// `node` carries a `@collection` annotation (the node's own fields win).
+    /// The properties of node `id` as the pattern node `node` checks its
+    /// inline properties against: its own payload `own`, united with the
+    /// point of the collection `node` itself is annotated with (the node's
+    /// own fields win).
     pub(crate) fn properties(
         &self,
         node: &NodePattern,
         id: u64,
         own: Option<&serde_json::Value>,
     ) -> Option<serde_json::Value> {
-        let Some(annotated) = node
-            .collection
-            .as_deref()
+        self.united(node.collection.as_deref(), id, own)
+    }
+
+    /// The properties of node `id` as WHERE, ORDER BY and RETURN read the
+    /// node `alias` names: united with the annotation that alias carries at
+    /// any occurrence (core's `PayloadMemo::get_bound`); an unnamed node's
+    /// own payload.
+    pub(crate) fn bound_properties(
+        &self,
+        alias: Option<&str>,
+        id: u64,
+        own: Option<&serde_json::Value>,
+    ) -> Option<serde_json::Value> {
+        let name = alias.and_then(|alias| {
+            self.aliases
+                .iter()
+                .find(|(a, _)| a == alias)
+                .map(|(_, name)| name.as_str())
+        });
+        self.united(name, id, own)
+    }
+
+    /// `own` united with annotation `name`'s point `id`, when `name` is one.
+    fn united(
+        &self,
+        name: Option<&str>,
+        id: u64,
+        own: Option<&serde_json::Value>,
+    ) -> Option<serde_json::Value> {
+        let Some(annotated) = name
             .and_then(|name| self.collections.iter().find(|(n, _)| n == name))
             .map(|(_, annotated)| annotated)
         else {

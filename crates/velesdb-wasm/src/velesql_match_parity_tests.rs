@@ -177,3 +177,41 @@ fn an_annotation_naming_no_collection_is_refused() {
     let err = execute(&mut db, "MATCH (x@nowhere) RETURN x", ON_G).expect_err("test: refused");
     assert!(err.contains("nowhere"), "{err}");
 }
+
+/// A bare WHERE column reads the target's OWN payload, as core reads it
+/// (`bound_alias`: no alias, no annotation); `y.price` reads the annotation.
+#[test]
+fn a_bare_column_reads_the_targets_own_payload() {
+    let mut db = DatabaseInner::new();
+    priced(&mut db);
+    assert!(
+        ids(&mut db, "MATCH (y@pricing) WHERE price < 10 RETURN y", "y").is_empty(),
+        "`price` is the annotation's, not the node's"
+    );
+    assert_eq!(
+        ids(
+            &mut db,
+            "MATCH (y@pricing) WHERE y.price < 10 RETURN y",
+            "y"
+        ),
+        vec![2]
+    );
+}
+
+/// An alias reads the annotation any of its occurrences carries, as core
+/// registers annotations by alias: in `(b@pricing)-…->(b)` the unannotated
+/// last occurrence still reads `b`'s `price` from `pricing`.
+#[test]
+fn an_alias_reads_its_annotation_at_every_occurrence() {
+    let mut db = DatabaseInner::new();
+    priced(&mut db);
+    // 2 -S-> 3 -R-> 1 -R-> 2 is the only cycle through `a` = 2, the priced one.
+    assert_eq!(
+        ids(
+            &mut db,
+            "MATCH (b@pricing)-[:S]->(c)-[:R]->(d)-[:R]->(b) WHERE b.price < 10 RETURN b",
+            "b"
+        ),
+        vec![2]
+    );
+}

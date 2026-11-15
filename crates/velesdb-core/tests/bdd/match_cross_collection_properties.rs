@@ -339,3 +339,51 @@ fn an_expired_annotated_point_adds_nothing() {
         .expect("test: the graph node stays");
     assert_eq!(field(paris, "w.price"), None);
 }
+
+/// GIVEN warehouses priced only in `pricing`
+/// WHEN WHERE reads `price` bare, then through the alias
+/// THEN the bare column reads the target's own payload (no `price`), the
+///      alias the annotation — the rule the browser MATCH follows too.
+#[test]
+fn a_bare_column_reads_the_targets_own_payload() {
+    let (_dir, db) = create_test_db();
+    setup(&db);
+    let bare = run(
+        &db,
+        "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@pricing) WHERE price < 100 RETURN w.name",
+    );
+    assert!(bare.is_empty(), "{bare:?}");
+    let aliased = run(
+        &db,
+        "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@pricing) WHERE w.price < 100 RETURN w.name",
+    );
+    assert_eq!(warehouses(&aliased), vec![2]);
+}
+
+/// GIVEN a cycle 2 -> 3 -> 2 between the warehouses
+/// WHEN the alias `a` is annotated at its first occurrence only
+/// THEN `a.price` reads `pricing` wherever `a` is bound.
+#[test]
+fn an_alias_reads_its_annotation_at_every_occurrence() {
+    let (_dir, db) = create_test_db();
+    setup(&db);
+    let gc = db.get_graph_collection("catalog").expect("test: catalog");
+    for (id, source, target) in [(3, 2, 3), (4, 3, 2)] {
+        gc.add_edge(GraphEdge::new(id, source, target, "STORED_IN").expect("test: edge"))
+            .expect("test: add edge");
+    }
+    let rows = run(
+        &db,
+        "MATCH (a:Warehouse@pricing)-[:STORED_IN]->(b)-[:STORED_IN]->(a) \
+         WHERE a.price < 100 RETURN a.name",
+    );
+    let bound: Vec<u64> = rows
+        .iter()
+        .map(|r| {
+            r.point.payload.as_ref().expect("test: payload")["_bindings"]["a"]
+                .as_u64()
+                .expect("test: a binding")
+        })
+        .collect();
+    assert_eq!(bound, vec![2], "only warehouse 2 is priced below 100");
+}
