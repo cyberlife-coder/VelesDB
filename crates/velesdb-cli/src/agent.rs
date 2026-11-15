@@ -6,8 +6,10 @@
 //! the tool outputs it used.
 //!
 //! LLM backend is optional: when an Ollama instance answers
-//! `GET {VELESDB_AGENT_URL}/api/tags` the loop delegates reasoning to it
-//! (same extractor-style contract `velesdb-memory` uses: base URL + model).
+//! `GET {url}/api/tags` at the run's [`LlmEndpoint`] — read from
+//! `VELESDB_AGENT_URL` / `VELESDB_AGENT_MODEL` once, at the CLI boundary —
+//! the loop delegates reasoning to it (same extractor-style contract
+//! `velesdb-memory` uses: base URL + model).
 //! When no LLM is reachable the agent runs a deterministic offline router —
 //! keyword intents mapped to the same whitelisted tools — and says so in the
 //! transcript. No LLM is ever required.
@@ -16,6 +18,7 @@ use velesdb_core::Database;
 
 mod llm;
 mod offline;
+pub use llm::LlmEndpoint;
 pub(crate) mod tools;
 
 /// Default cap on Reason→Act cycles; the loop must terminate.
@@ -65,14 +68,27 @@ impl std::fmt::Display for MaxIterations {
     }
 }
 
-/// Per-REPL-session agent state: the cap `\agent max-iterations` set and
-/// the last report, which `\agent save` exports.
-#[derive(Debug, Clone, Default)]
+/// Per-REPL-session agent state: the cap `\agent max-iterations` set, the
+/// LLM endpoint the session runs against, and the last report, which
+/// `\agent save` exports.
+#[derive(Debug, Clone)]
 pub struct AgentSession {
     /// Cap applied to the next `\agent <question>`.
     pub max_iterations: MaxIterations,
+    /// The LLM endpoint, read from the environment when the session starts.
+    pub llm: LlmEndpoint,
     /// The most recent run, if any.
     pub last: Option<AgentReport>,
+}
+
+impl Default for AgentSession {
+    fn default() -> Self {
+        Self {
+            max_iterations: MaxIterations::default(),
+            llm: LlmEndpoint::from_env(),
+            last: None,
+        }
+    }
 }
 
 /// One logged Reason→Act cycle.
@@ -104,12 +120,17 @@ pub struct AgentReport {
     pub sources: Vec<String>,
 }
 
-/// Run the agent over `db`. Prefers the Ollama backend when reachable,
-/// otherwise the deterministic offline router. A reachable-but-broken
-/// LLM (model not pulled, dropped connection) also falls back to the
-/// router — the run never fails because of the LLM.
-pub fn run(db: &Database, question: &str, max: MaxIterations) -> AgentReport {
-    let outcome = llm::backend().and_then(|b| {
+/// Run the agent over `db`. Prefers the Ollama backend at `endpoint` when
+/// reachable, otherwise the deterministic offline router. A
+/// reachable-but-broken LLM (model not pulled, dropped connection) also
+/// falls back to the router — the run never fails because of the LLM.
+pub fn run(
+    db: &Database,
+    question: &str,
+    max: MaxIterations,
+    endpoint: &LlmEndpoint,
+) -> AgentReport {
+    let outcome = llm::backend(endpoint).and_then(|b| {
         llm::run_loop(db, question, &b, max).map_err(|why| format!("llm failed: {why}"))
     });
     outcome.unwrap_or_else(|why| {
