@@ -136,7 +136,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiled patterns and scanned text byte by byte, so on UTF-8 text `'caf_'`
   did not match `"café"`, and `'__'` matched the single character `"é"` (two
   bytes). Patterns and text are now matched character by character, as the
-  WASM executor already did.
+  WASM executor already did. ILIKE compares each character's own lowercase
+  mapping instead of lowercasing the whole string first, which turned `İ`
+  into two scalars that filled two `_`.
 
 - **WASM `WHERE` answers as the server does.** The WASM executor evaluated
   `WHERE` with its own copy of the predicate logic, which had drifted from
