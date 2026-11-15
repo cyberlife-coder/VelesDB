@@ -75,7 +75,7 @@ impl Database {
 
         // Resolve parameter placeholders before the filter conversion, which
         // would otherwise silently turn them into NULL (matching no rows).
-        let resolved = crate::collection::Collection::resolve_condition_params(condition, params)?;
+        let resolved = crate::velesql::bind_condition(condition, params)?;
         let filter_condition = crate::collection::Collection::extract_metadata_filter(&resolved)
             .ok_or_else(|| {
                 Error::Query("UPDATE WHERE produced empty metadata filter".to_string())

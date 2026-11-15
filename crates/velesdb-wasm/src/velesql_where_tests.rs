@@ -138,19 +138,45 @@ fn test_matches_missing_field_returns_false_for_comparisons() {
     assert!(!matches(&c, 0, Some(&payload), &empty_params()).expect("test: eval"));
 }
 
+/// GIVEN a payload without the field a negative predicate reads
+/// WHEN WASM evaluates `!=` or `NOT IN` on it
+/// THEN it matches, as core's filter and the server answer: the field is not
+///      the value, so `x != 'a'` holds (only `=`/`IN` need the field).
 #[test]
-fn test_like_match_empty_pattern() {
-    assert!(like_match("", "", false));
-    assert!(!like_match("x", "", false));
+fn test_negative_predicates_on_a_missing_field_match_like_core() {
+    let payload = serde_json::json!({"other": "x"});
+    for sql in [
+        "SELECT * FROM t WHERE cat != 'tech'",
+        "SELECT * FROM t WHERE cat NOT IN ('tech', 'sport')",
+    ] {
+        let c = parse_where(sql);
+        assert!(
+            matches(&c, 0, Some(&payload), &empty_params()).expect("test: eval"),
+            "{sql}"
+        );
+    }
 }
 
+/// GIVEN a LIKE pattern escaping a wildcard with a backslash
+/// WHEN WASM evaluates it
+/// THEN the escaped `%` / `_` matches itself only, as in core.
 #[test]
-fn test_like_match_only_wildcard() {
-    assert!(like_match("anything", "%", false));
-    assert!(like_match("", "%", false));
+fn test_like_escaped_wildcard_matches_itself_like_core() {
+    let c = parse_where(r"SELECT * FROM t WHERE code LIKE '100\%'");
+    let literal = serde_json::json!({"code": "100%"});
+    let longer = serde_json::json!({"code": "1000"});
+    assert!(matches(&c, 0, Some(&literal), &empty_params()).expect("test: eval"));
+    assert!(!matches(&c, 0, Some(&longer), &empty_params()).expect("test: eval"));
 }
 
+/// GIVEN a `$param` bound to an array, which no scalar comparison takes
+/// WHEN WASM evaluates the comparison
+/// THEN it refuses the parameter, as core does, instead of comparing it.
 #[test]
-fn test_like_match_double_wildcard() {
-    assert!(like_match("abcdef", "%%", false));
+fn test_array_bound_scalar_param_is_refused_like_core() {
+    let c = parse_where("SELECT * FROM t WHERE cat = $v");
+    let params = parse_params(Some(r#"{"v": ["tech"]}"#)).expect("test: parse");
+    let payload = serde_json::json!({"cat": ["tech"]});
+    let err = matches(&c, 0, Some(&payload), &params).expect_err("test: refused");
+    assert!(err.contains("Unsupported parameter type"), "{err}");
 }

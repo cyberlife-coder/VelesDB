@@ -888,9 +888,7 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<crate::collection::search::query::pushdown::PushdownAnalysis> {
         if let Some(cond) = single_query.select.where_clause.take() {
-            single_query.select.where_clause = Some(
-                crate::collection::Collection::resolve_condition_params(&cond, params)?,
-            );
+            single_query.select.where_clause = Some(crate::velesql::bind_condition(&cond, params)?);
         }
 
         let analysis = Self::analyze_join_pushdown_for_select(&single_query.select);

@@ -138,6 +138,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bytes). Patterns and text are now matched character by character, as the
   WASM executor already did.
 
+- **WASM `WHERE` answers as the server does.** The WASM executor evaluated
+  `WHERE` with its own copy of the predicate logic, which had drifted from
+  core: `!=` and `NOT IN` on a payload without the field matched nothing
+  (core matches it), `LIKE` ignored `\` escapes and core's guardrails, and a
+  `$param` bound to an array was compared instead of refused. It now binds
+  parameters with core's binder (`velesql::bind_condition`, moved out of the
+  persistence-only `Collection` so both builds share it) and matches with
+  core's payload filter, compiled once per query.
+
 - **`POST /collections/{name}/relations` no longer fails permanently after an
   edge with ID `u64::MAX` exists** (server, 2026-11-15). The handler picks the
   next edge ID as `max_edge_id + 1`, and that sum saturated at `u64::MAX`, an

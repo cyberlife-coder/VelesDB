@@ -214,7 +214,7 @@ fn comparison_to_predicate(
     params: &HashMap<String, serde_json::Value>,
 ) -> Option<ExtractedPredicate> {
     let (alias, property) = split_alias_property(&cmp.column)?;
-    let resolved = Collection::resolve_where_param(&cmp.value, params).ok()?;
+    let resolved = crate::velesql::bind_value(&cmp.value, params).ok()?;
     let kind = predicate_kind(cmp.operator, &resolved)?;
     // `alias.id` is the node id: only an exact integer narrows to one node.
     if property == "id" && node_id_candidates(&kind).is_none() {
@@ -261,8 +261,8 @@ fn between_to_predicate(
     if property == "id" {
         return None; // the node id, which no range index orders
     }
-    let low_resolved = Collection::resolve_where_param(&btw.low, params).ok()?;
-    let high_resolved = Collection::resolve_where_param(&btw.high, params).ok()?;
+    let low_resolved = crate::velesql::bind_value(&btw.low, params).ok()?;
+    let high_resolved = crate::velesql::bind_value(&btw.high, params).ok()?;
 
     Some(ExtractedPredicate {
         alias: alias.to_string(),

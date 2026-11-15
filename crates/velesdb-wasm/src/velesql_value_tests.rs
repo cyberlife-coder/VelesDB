@@ -124,24 +124,3 @@ fn test_json_values_equal_strings() {
         &serde_json::json!("b")
     ));
 }
-
-#[test]
-fn test_json_values_cmp_numeric() {
-    let a = serde_json::json!(1);
-    let b = serde_json::json!(2.5);
-    assert_eq!(json_values_cmp(&a, &b), Some(std::cmp::Ordering::Less));
-}
-
-#[test]
-fn test_json_values_cmp_strings() {
-    let a = serde_json::json!("apple");
-    let b = serde_json::json!("banana");
-    assert_eq!(json_values_cmp(&a, &b), Some(std::cmp::Ordering::Less));
-}
-
-#[test]
-fn test_json_values_cmp_incompatible_returns_none() {
-    let a = serde_json::json!(true);
-    let b = serde_json::json!(42);
-    assert_eq!(json_values_cmp(&a, &b), None);
-}

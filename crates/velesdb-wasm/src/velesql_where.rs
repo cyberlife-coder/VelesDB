@@ -1,42 +1,79 @@
 //! WHERE clause evaluation over JSON payloads for the WASM VelesQL executor.
 //!
-//! Evaluates [`velesdb_core::velesql::Condition`] trees against a
-//! `serde_json::Value` payload + a point id, returning a boolean match.
+//! A WHERE condition is bound and lowered by core, then matched by core's
+//! payload filter, the very one the server runs: [`bind_condition`] binds its
+//! `$name` operands, [`Filter::try_from_where`] lowers it, and
+//! [`Filter::matches_point`] tests a point. A predicate therefore answers in
+//! the browser what it answers on the server — `x != 'a'` holds on a payload
+//! without `x`, LIKE honours `\` escapes and its guardrails, numbers compare
+//! by exact value. This module only decides the WASM scope: the conditions
+//! the executor does not evaluate as a row filter are refused by name.
+//!
 //! Vector/graph/fusion conditions are NOT evaluated here — the executor
 //! dispatches them before calling this matcher (see `velesql_select.rs`).
 
-use std::cmp::Ordering;
+use velesdb_core::filter::Filter;
+use velesdb_core::velesql::{bind_condition, Condition};
 
-use velesdb_core::velesql::{CompareOp, Condition};
+use crate::velesql_value::Params;
 
-use crate::velesql_value::{json_values_cmp, json_values_equal, resolve_value, Params};
+/// A WHERE condition bound to a query's parameters and lowered to core's
+/// payload filter once, to test every point of a scan against.
+pub(crate) struct WhereFilter(Filter);
+
+impl WhereFilter {
+    /// Binds `cond` to `params` and lowers it to core's payload filter.
+    ///
+    /// # Errors
+    ///
+    /// Names a condition outside the WASM row-filter scope, a parameter that
+    /// is missing or bound to an array or object, or a construct core cannot
+    /// lower to a row filter.
+    pub(crate) fn compile(cond: &Condition, params: &Params) -> Result<Self, String> {
+        reject_out_of_scope(cond)?;
+        let bound = bind_condition(cond, params).map_err(|e| e.to_string())?;
+        Filter::try_from_where(bound).map(Self)
+    }
+
+    /// Whether the point `id`, with `payload` if it has one, matches. The
+    /// special `id` column reads `id`; any other column a payload field,
+    /// dot-nested access included.
+    pub(crate) fn matches(&self, id: u64, payload: Option<&serde_json::Value>) -> bool {
+        self.0.matches_point(id, payload)
+    }
+}
 
 /// Tests whether the given `id` and optional `payload` match the condition.
 ///
-/// `id` is the point id; the special `id` column is matched against it.
-/// Other columns are looked up in the `payload` JSON object (if any).
-/// Conditions that require vector/graph/fusion semantics are rejected with
-/// a descriptive error, matching the WASM scope.
+/// Compiles `cond` for this one point: a caller testing many points against
+/// the same condition compiles a [`WhereFilter`] once instead.
+///
+/// # Errors
+///
+/// See [`WhereFilter::compile`].
 pub(crate) fn matches(
     cond: &Condition,
     id: u64,
     payload: Option<&serde_json::Value>,
     params: &Params,
 ) -> Result<bool, String> {
+    Ok(WhereFilter::compile(cond, params)?.matches(id, payload))
+}
+
+/// Refuses, depth-first, the first condition the WASM executor does not
+/// evaluate as a row filter, by name.
+fn reject_out_of_scope(cond: &Condition) -> Result<(), String> {
     match cond {
-        Condition::Comparison(cmp) => eval_comparison(cmp, id, payload, params),
-        Condition::In(c) => eval_in(c, id, payload, params),
-        Condition::Between(c) => eval_between(c, id, payload, params),
-        Condition::Like(c) => eval_like(c, payload),
-        Condition::IsNull(c) => Ok(eval_is_null(c, id, payload)),
-        Condition::And(l, r) => {
-            Ok(matches(l, id, payload, params)? && matches(r, id, payload, params)?)
+        Condition::Comparison(_)
+        | Condition::In(_)
+        | Condition::Between(_)
+        | Condition::Like(_)
+        | Condition::IsNull(_) => Ok(()),
+        Condition::And(l, r) | Condition::Or(l, r) => {
+            reject_out_of_scope(l)?;
+            reject_out_of_scope(r)
         }
-        Condition::Or(l, r) => {
-            Ok(matches(l, id, payload, params)? || matches(r, id, payload, params)?)
-        }
-        Condition::Not(inner) => Ok(!matches(inner, id, payload, params)?),
-        Condition::Group(inner) => matches(inner, id, payload, params),
+        Condition::Not(inner) | Condition::Group(inner) => reject_out_of_scope(inner),
         Condition::VectorSearch(_)
         | Condition::VectorFusedSearch(_)
         | Condition::SparseVectorSearch(_) => Err(
@@ -61,217 +98,6 @@ pub(crate) fn matches(
         _ => Err(format!(
             "Unsupported condition variant in WASM WHERE clause: {cond:?}"
         )),
-    }
-}
-
-/// Looks up a column value:
-/// - `id` refers to the point id.
-/// - anything else is a payload field (supports dot-nested access).
-fn column_value(
-    column: &str,
-    id: u64,
-    payload: Option<&serde_json::Value>,
-) -> Option<serde_json::Value> {
-    if column == "id" {
-        return Some(serde_json::json!(id));
-    }
-    let payload = payload?;
-    crate::filter::get_nested_field(payload, column).cloned()
-}
-
-/// Evaluates a comparison (column op value).
-///
-/// Missing-column convention (shared across the whole WASM WHERE evaluator):
-/// when the column can't be resolved (no payload field, no such alias,
-/// missing special `id`), the predicate silently returns `false` — for
-/// ALL operators, including `!=`, `NOT IN`, `NOT LIKE`, `BETWEEN`. This
-/// deviates from SQL NULL three-valued logic (where `col != 'x'` on NULL
-/// would be NULL, not false) but is consistent within the WASM demo
-/// scope: "a row whose column is absent never matches, neither positively
-/// nor negatively". `IS NULL` is the only operator that treats absence
-/// as a positive match. See `eval_in` and `eval_between` for the matching
-/// behaviour on `IN/NOT IN` and `BETWEEN`.
-fn eval_comparison(
-    cmp: &velesdb_core::velesql::Comparison,
-    id: u64,
-    payload: Option<&serde_json::Value>,
-    params: &Params,
-) -> Result<bool, String> {
-    let right = resolve_value(&cmp.value, params)?;
-    let Some(left) = column_value(&cmp.column, id, payload) else {
-        // Missing column: see module-level convention above.
-        return Ok(false);
-    };
-    Ok(match cmp.operator {
-        CompareOp::Eq => json_values_equal(&left, &right),
-        CompareOp::NotEq => !json_values_equal(&left, &right),
-        CompareOp::Gt => json_values_cmp(&left, &right) == Some(Ordering::Greater),
-        CompareOp::Gte => matches!(
-            json_values_cmp(&left, &right),
-            Some(Ordering::Greater | Ordering::Equal)
-        ),
-        CompareOp::Lt => json_values_cmp(&left, &right) == Some(Ordering::Less),
-        CompareOp::Lte => matches!(
-            json_values_cmp(&left, &right),
-            Some(Ordering::Less | Ordering::Equal)
-        ),
-        // Reason: `CompareOp` is `#[non_exhaustive]`; new operators default to `false`
-        // rather than panicking, until explicitly mapped here.
-        _ => false,
-    })
-}
-
-/// Evaluates an IN / NOT IN condition.
-///
-/// Missing-column convention: when the column can't be resolved, both
-/// `IN` and `NOT IN` return `false`. This matches `eval_comparison`
-/// (where `col != 'x'` on a missing column also returns `false`) and
-/// keeps the WASM WHERE semantics uniform: a missing row never matches,
-/// regardless of operator polarity. See `eval_comparison` for the
-/// full rationale.
-fn eval_in(
-    c: &velesdb_core::velesql::InCondition,
-    id: u64,
-    payload: Option<&serde_json::Value>,
-    params: &Params,
-) -> Result<bool, String> {
-    let Some(left) = column_value(&c.column, id, payload) else {
-        // Missing column: see module-level convention. Both IN and NOT IN
-        // fail for that row, so returning `false` regardless of `negated`
-        // is the correct uniform behaviour.
-        return Ok(false);
-    };
-    let mut found = false;
-    for v in &c.values {
-        let rv = resolve_value(v, params)?;
-        if json_values_equal(&left, &rv) {
-            found = true;
-            break;
-        }
-    }
-    Ok(if c.negated { !found } else { found })
-}
-
-/// Evaluates `column BETWEEN low AND high` (inclusive).
-fn eval_between(
-    c: &velesdb_core::velesql::BetweenCondition,
-    id: u64,
-    payload: Option<&serde_json::Value>,
-    params: &Params,
-) -> Result<bool, String> {
-    let Some(left) = column_value(&c.column, id, payload) else {
-        return Ok(false);
-    };
-    let lo = resolve_value(&c.low, params)?;
-    let hi = resolve_value(&c.high, params)?;
-    let lo_ok = matches!(
-        json_values_cmp(&left, &lo),
-        Some(Ordering::Greater | Ordering::Equal)
-    );
-    let hi_ok = matches!(
-        json_values_cmp(&left, &hi),
-        Some(Ordering::Less | Ordering::Equal)
-    );
-    Ok(lo_ok && hi_ok)
-}
-
-/// Evaluates `column LIKE pattern` with `%` and `_` wildcards.
-fn eval_like(
-    c: &velesdb_core::velesql::LikeCondition,
-    payload: Option<&serde_json::Value>,
-) -> Result<bool, String> {
-    let Some(payload) = payload else {
-        return Ok(false);
-    };
-    let Some(field_value) = crate::filter::get_nested_field(payload, &c.column) else {
-        return Ok(false);
-    };
-    let Some(text) = field_value.as_str() else {
-        return Ok(false);
-    };
-    Ok(like_match(text, &c.pattern, c.case_insensitive))
-}
-
-/// Core LIKE matcher. `%` matches any sequence (including empty), `_` any
-/// single character. Case-insensitive when `ci == true`.
-fn like_match(text: &str, pattern: &str, ci: bool) -> bool {
-    let (text_vec, pat_vec): (Vec<char>, Vec<char>) = if ci {
-        (
-            text.chars().flat_map(char::to_lowercase).collect(),
-            pattern.chars().flat_map(char::to_lowercase).collect(),
-        )
-    } else {
-        (text.chars().collect(), pattern.chars().collect())
-    };
-    like_rec(&text_vec, 0, &pat_vec, 0)
-}
-
-/// Recursive LIKE matcher (handles `%` greedy matching via standard DP-like
-/// branching). Input is small (column values), so recursion is safe.
-fn like_rec(text: &[char], ti: usize, pat: &[char], pi: usize) -> bool {
-    if pi == pat.len() {
-        return ti == text.len();
-    }
-    let p = pat[pi];
-    if p == '%' {
-        // Skip consecutive % to avoid exponential blowup.
-        let mut next_pi = pi + 1;
-        while next_pi < pat.len() && pat[next_pi] == '%' {
-            next_pi += 1;
-        }
-        if next_pi == pat.len() {
-            return true; // trailing % matches rest.
-        }
-        for k in ti..=text.len() {
-            if like_rec(text, k, pat, next_pi) {
-                return true;
-            }
-        }
-        return false;
-    }
-    if ti == text.len() {
-        return false;
-    }
-    if p == '_' || text[ti] == p {
-        return like_rec(text, ti + 1, pat, pi + 1);
-    }
-    false
-}
-
-/// Evaluates `column IS [NOT] NULL`.
-fn eval_is_null(
-    c: &velesdb_core::velesql::IsNullCondition,
-    id: u64,
-    payload: Option<&serde_json::Value>,
-) -> bool {
-    let present = column_value(&c.column, id, payload).is_some_and(|v| !v.is_null());
-    if c.is_null {
-        !present
-    } else {
-        present
-    }
-}
-
-/// Guard used before executing a statement that must not contain vector /
-/// graph / fusion logic. Returns an error listing what was rejected.
-#[allow(dead_code)]
-pub(crate) fn reject_unsupported_where(cond: &Condition) -> Result<(), String> {
-    // Walk the condition tree once to catch any unsupported sub-condition.
-    match cond {
-        Condition::VectorSearch(_)
-        | Condition::VectorFusedSearch(_)
-        | Condition::SparseVectorSearch(_) => {
-            Err("Vector search clauses are not supported here".to_string())
-        }
-        Condition::GraphMatch(_) => {
-            Err("Graph MATCH predicates are not supported in WASM".to_string())
-        }
-        Condition::And(l, r) | Condition::Or(l, r) => {
-            reject_unsupported_where(l)?;
-            reject_unsupported_where(r)
-        }
-        Condition::Not(inner) | Condition::Group(inner) => reject_unsupported_where(inner),
-        _ => Ok(()),
     }
 }
 

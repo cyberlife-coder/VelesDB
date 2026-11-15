@@ -781,46 +781,25 @@ fn test_eval_in_missing_column_returns_false() {
     );
 }
 
+/// GIVEN Persons none of which carries `city`
+/// WHEN a MATCH WHERE applies `NOT IN` or `!=` to `a.city`
+/// THEN every Person matches, as in core's MATCH and SELECT: a missing
+///      property is not any listed value (only `=` / `IN` need it present).
 #[test]
-fn test_eval_not_in_missing_column_returns_false() {
-    // REGRESSION: before the fix this returned 3 rows (every Person,
-    // because `NOT IN` on a missing column was `true`). After the fix
-    // it returns 0 rows, consistent with `!=` on a missing column.
+fn test_eval_negative_predicates_on_a_missing_column_match_like_core() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
-    let r = execute(
-        &mut db,
+    let persons = execute(&mut db, "MATCH (a:Person) RETURN a LIMIT 10", None)
+        .expect("test: all persons")
+        .row_count();
+    assert!(persons > 0, "test: the seed has Persons");
+    for sql in [
         "MATCH (a:Person) WHERE a.city NOT IN ('Paris','Lyon') RETURN a LIMIT 10",
-        None,
-    )
-    .expect("test: not-in on missing col");
-    assert_eq!(
-        r.row_count(),
-        0,
-        "missing `city`: NOT IN must also return false (missing-column rule), got: {}",
-        r.rows_json()
-    );
-}
-
-#[test]
-fn test_eval_ne_missing_column_returns_false() {
-    // Backward-compat guard: `!=` on a missing column was already
-    // false and must remain false. This pins the convention that
-    // Finding B's fix aligns `NOT IN` with.
-    let mut db = DatabaseInner::new();
-    seed_graph(&mut db);
-    let r = execute(
-        &mut db,
         "MATCH (a:Person) WHERE a.city != 'Paris' RETURN a LIMIT 10",
-        None,
-    )
-    .expect("test: != on missing col");
-    assert_eq!(
-        r.row_count(),
-        0,
-        "missing `city`: != must return false, got: {}",
-        r.rows_json()
-    );
+    ] {
+        let r = execute(&mut db, sql, None).expect("test: negative predicate");
+        assert_eq!(r.row_count(), persons, "{sql}: {}", r.rows_json());
+    }
 }
 
 #[test]

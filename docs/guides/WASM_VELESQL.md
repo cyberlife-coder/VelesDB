@@ -111,6 +111,12 @@ aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
 (`SHOW COLLECTIONS`, `DESCRIBE COLLECTION`), admin (`FLUSH`, a no-op), and
 1–2 hop `MATCH`.
 
+A `WHERE` predicate (comparisons, `IN`, `BETWEEN`, `LIKE` / `ILIKE`,
+`IS NULL`, through `AND` / `OR` / `NOT`) is evaluated by core's payload
+filter, the one the server runs: its parameters bind as in core and it
+answers the same rows — `x != 'a'` and `x NOT IN (…)` hold on a payload
+without `x`, `LIKE` honours `\` escapes, numbers compare by exact value.
+
 ## What is rejected, and how
 
 Every query first goes through `velesdb-core`'s own `QueryValidator`, the one

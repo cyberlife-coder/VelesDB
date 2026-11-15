@@ -378,9 +378,9 @@ struct AliasBinding {
 /// first-bound node — backward compatible with pre-fix tests that write
 /// `WHERE name = ...` without a prefix.
 ///
-/// An unbound alias prefix (`z.x` with no binding `z`) silently yields
-/// `false` via the same "missing column" semantics that
-/// `velesql_where::matches` already applies to missing payload fields.
+/// An unbound alias prefix (`z.x` with no binding `z`) reads a missing
+/// field, which core's payload filter answers as for any missing field:
+/// `=`, `<`, `IN`, `LIKE` do not hold, `!=` and `NOT IN` do, `IS NULL` does.
 ///
 /// `params` is the query-level parameter map, threaded through the MATCH
 /// executor so `$param` placeholders inside the WHERE clause resolve to
