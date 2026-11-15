@@ -6,8 +6,10 @@
 //! the tool outputs it used.
 //!
 //! LLM backend is optional: when an Ollama instance answers
-//! `GET {VELESDB_AGENT_URL}/api/tags` the loop delegates reasoning to it
-//! (same extractor-style contract `velesdb-memory` uses: base URL + model).
+//! `GET {url}/api/tags` at the run's [`LlmEndpoint`] — read from
+//! `VELESDB_AGENT_URL` / `VELESDB_AGENT_MODEL` once, at the CLI boundary —
+//! the loop delegates reasoning to it (same extractor-style contract
+//! `velesdb-memory` uses: base URL + model).
 //! When no LLM is reachable the agent runs a deterministic offline router —
 //! keyword intents mapped to the same whitelisted tools — and says so in the
 //! transcript. No LLM is ever required.
