@@ -729,21 +729,11 @@ impl NativeStore {
         for (index, filter) in filters.iter().enumerate() {
             validate_column_filter(filter)?;
             let key = format!("p{index}");
-            // `ne` is spelled out rather than left to `!=` alone. Core's
-            // `Condition::Neq` is `is_none_or`, so a bare `field != $p` also
-            // matches a fact that HAS no such field — which made `ne` mean two
-            // different things on the two backends (#1759). Requiring the
-            // field first pins the published contract here, at the adapter,
-            // instead of redefining `!=` for all of `VelesQL` — that is a
-            // product-wide semantic break, deliberately out of scope.
-            //
-            // `IS NOT NULL` is false for an absent field AND for an explicit
-            // `null`, which is exactly the contract: a comparison against null
-            // is never true, as in SQL. `IsNull`/`IsNotNull` stay the operators
-            // dedicated to null-ness.
-            if matches!(filter.op, crate::model::ColumnOp::Ne) {
-                let _ = write!(predicate, " AND {} IS NOT NULL", filter.field);
-            }
+            // `ne` needs no spelling-out: `!=` is three-valued in VelesQL, so
+            // a fact without the field, or with an explicit `null`, is never
+            // selected by it — the published contract (#1759): a comparison
+            // against null is never true, as in SQL. `IsNull` / `IsNotNull`
+            // stay the operators dedicated to null-ness.
             let _ = write!(
                 predicate,
                 " AND {} {} ${key}",
@@ -756,24 +746,20 @@ impl NativeStore {
         // the engine applies `LIMIT k`, so a post-filter would quietly return
         // fewer than `k` caller facts whenever artefacts crowd the ranking.
         //
-        // `!=` is what excludes here, and it works for the same reason the
-        // leak existed: `Condition::Neq` is `is_none_or`, so a fact that has
-        // no such column at all MATCHES. Applied to a marker, that keeps every
-        // caller fact (none carries one) and drops exactly the class that
-        // does. These names are compile-time constants, never caller input,
-        // so they go straight into the text without passing through
+        // A marked fact carries `marker = true`; every caller fact carries no
+        // marker at all. `marker != true` alone would drop the caller facts
+        // too: on an absent field `!=` is UNKNOWN in VelesQL's three-valued
+        // logic, never true. So the exclusion admits the absent marker
+        // explicitly. These names are compile-time constants, never caller
+        // input, so they go straight into the text without passing through
         // `validate_column_filter` — whose job is to reject a CALLER filter
         // naming a reserved key.
-        //
-        // The asymmetry with the caller loop above is DELIBERATE and load-
-        // bearing: a caller's `ne` now carries an `IS NOT NULL`, this exclusion
-        // must NOT. It depends on the absent field matching — that is how it
-        // keeps every caller fact while dropping the marked ones. Giving these
-        // markers the same treatment would exclude every caller fact instead,
-        // since none of them carries a marker column at all.
         for (index, marker) in INTERNAL_MARKER_FIELDS.iter().enumerate() {
             let key = format!("m{index}");
-            let _ = write!(predicate, " AND {marker} != ${key}");
+            let _ = write!(
+                predicate,
+                " AND ({marker} IS NULL OR {marker} != ${key})"
+            );
             params.insert(key, json!(true));
         }
         let sql = format!(
