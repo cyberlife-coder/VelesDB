@@ -83,8 +83,8 @@ mod scan_cap_observability_tests;
 mod select_dispatch;
 pub(crate) mod set_operations;
 mod similarity_filter;
+mod similarity_scan;
 mod sparse_dispatch;
-mod union_query;
 mod validation;
 pub(crate) mod vector_group_by;
 mod where_eval;
@@ -396,10 +396,4 @@ impl Collection {
 
     // NOTE: apply_distinct and compute_distinct_key moved to distinct.rs
     // (EPIC-061/US-003 refactoring), then to velesql/distinct_evaluator.rs
-
-    // NOTE: filter_by_similarity, execute_not_similarity_query, extract_not_similarity_condition,
-    // execute_scan_query moved to similarity_filter.rs (Plan 04-04)
-
-    // NOTE: execute_union_query, matches_metadata_filter, split_or_condition_with_outer_filter
-    // moved to union_query.rs (Plan 04-04)
 }

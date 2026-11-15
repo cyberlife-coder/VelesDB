@@ -44,21 +44,6 @@ impl Collection {
         Self::vector_from_payload_field(&payload_storage, point_id, field)
     }
 
-    /// Guard-parameterized twin of [`Self::get_vector_for_field`] for the
-    /// `field == "vector"` = false case: scan loops hoist the storage guards
-    /// once instead of re-acquiring them per candidate row.
-    pub(crate) fn get_vector_for_field_in(
-        vector_storage: &crate::storage::MmapStorage,
-        payload_storage: &crate::storage::LogPayloadStorage,
-        point_id: u64,
-        field: &str,
-    ) -> Result<Option<Vec<f32>>> {
-        if field == crate::velesql::PRIMARY_VECTOR_FIELD {
-            return Ok(vector_storage.retrieve(point_id)?);
-        }
-        Self::vector_from_payload_field(payload_storage, point_id, field)
-    }
-
     /// Reads a named vector from a payload JSON field through an
     /// already-held payload guard ([`crate::velesql::payload_vector`]).
     fn vector_from_payload_field(

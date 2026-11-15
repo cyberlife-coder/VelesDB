@@ -125,6 +125,8 @@ mod scalar_subqueries;
 mod secondary_index_bitmap_in;
 #[path = "bdd/set_operations.rs"]
 mod set_operations;
+#[path = "bdd/similarity_threshold_exactness.rs"]
+mod similarity_threshold_exactness;
 #[path = "bdd/sparse_near_conformance.rs"]
 mod sparse_near_conformance;
 #[path = "bdd/temporal_computed_orderby.rs"]

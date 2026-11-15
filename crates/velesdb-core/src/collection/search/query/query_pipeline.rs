@@ -166,10 +166,8 @@ impl Collection {
             // bypasses — without this guard the fused vectors would be silently
             // dropped to a non-fused scan (same class as the SPARSE_NEAR guard).
             Some("NEAR_FUSED")
-        } else if extracted.is_not_similarity_query {
-            Some("NOT similarity()")
-        } else if extracted.is_union_query {
-            Some("OR/union")
+        } else if extracted.similarity_scan {
+            Some("exhaustive similarity() scan")
         } else {
             None
         };
@@ -325,15 +323,6 @@ impl Collection {
         let mut sparse_vector_search = None;
         let mut fused_search = None;
 
-        let is_union_query = stmt
-            .where_clause
-            .as_ref()
-            .is_some_and(Self::has_similarity_in_problematic_or);
-        let is_not_similarity_query = stmt
-            .where_clause
-            .as_ref()
-            .is_some_and(Self::has_similarity_under_not);
-
         if let Some(ref cond) = stmt.where_clause {
             Self::validate_similarity_query_structure(cond)?;
             Self::collect_graph_match_predicates(cond, &mut graph_match_predicates);
@@ -344,6 +333,13 @@ impl Collection {
             similarity_conditions = Self::extract_all_similarity_conditions(cond, params)?;
             filter_condition = Some(cond.clone());
         }
+        let similarity_scan = stmt.where_clause.as_ref().is_some_and(|cond| {
+            Self::needs_similarity_scan(
+                cond,
+                &similarity_conditions,
+                vector_search.is_some() || sparse_vector_search.is_some() || fused_search.is_some(),
+            )
+        });
 
         Ok(ExtractedComponents {
             vector_search,
@@ -352,8 +348,7 @@ impl Collection {
             graph_match_predicates,
             sparse_vector_search,
             fused_search,
-            is_union_query,
-            is_not_similarity_query,
+            similarity_scan,
         })
     }
 

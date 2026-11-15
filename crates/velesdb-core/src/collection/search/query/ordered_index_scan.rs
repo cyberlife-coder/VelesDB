@@ -374,15 +374,14 @@ fn route_metadata_filter(
 }
 
 /// Whether the extracted components carry a ranked / graph / set-op fetch
-/// (vector / similarity / sparse / graph MATCH / union / NOT-similarity), all of
+/// (vector / similarity / sparse / graph MATCH / similarity scan), all of
 /// which need the regular dispatch and disqualify the ordered-index route.
 fn has_non_metadata_fetch(extracted: &ExtractedComponents) -> bool {
     extracted.vector_search.is_some()
         || !extracted.similarity_conditions.is_empty()
         || !extracted.graph_match_predicates.is_empty()
         || extracted.sparse_vector_search.is_some()
-        || extracted.is_union_query
-        || extracted.is_not_similarity_query
+        || extracted.similarity_scan
 }
 
 /// Returns `true` when the projection is "plain" — `SELECT *` or a bare column
