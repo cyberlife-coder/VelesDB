@@ -165,12 +165,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **WASM `WHERE` answers as the server does.** The WASM executor evaluated
   `WHERE` with its own copy of the predicate logic, which had drifted from
-  core: `!=` and `NOT IN` on a payload without the field matched nothing
-  (core matches it), `LIKE` ignored `\` escapes and core's guardrails, and a
-  `$param` bound to an array was compared instead of refused. It now binds
-  parameters with core's binder (`velesql::bind_condition`, moved out of the
-  persistence-only `Collection` so both builds share it) and matches with
-  core's payload filter, compiled once per query.
+  core: it was two-valued, so `NOT (x = 'a')` admitted a payload without `x`
+  that core's three-valued `WHERE` excludes, `LIKE` ignored `\` escapes and
+  core's guardrails, and a `$param` bound to an array was compared instead of
+  refused. It now binds parameters with core's binder
+  (`velesql::bind_condition`, moved out of the persistence-only `Collection`
+  so both builds share it) and matches with core's payload filter, compiled
+  once per query. The `similarity()` SELECT and the MATCH `WHERE`, which
+  score some leaves themselves, fold them with core's leaves in Kleene logic
+  over the now-public `Filter::evaluate_point`, so a `NOT` above an UNKNOWN
+  leaf no longer admits the row.
 
 - **`GET /collections/{name}/graph/traverse/stream` answers 404 / 409 like
   `POST /graph/traverse`** (server, 2026-11-15). On a missing collection, or
