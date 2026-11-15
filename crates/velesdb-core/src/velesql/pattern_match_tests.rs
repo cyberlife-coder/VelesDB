@@ -75,3 +75,16 @@ fn every_label_is_required() {
     assert!(!has_every_label(&required, &["A"]));
     assert!(has_every_label(&[], &["A"]));
 }
+
+/// A property the element does not carry reads as absent, not `null`: the
+/// difference WHERE's three-valued `=` and `IS NULL` both depend on.
+#[test]
+fn a_missing_property_reads_absent() {
+    let payload = json!({"x": null});
+    assert!(element_property(7, "missing", |k| payload.get(k)).is_none());
+    assert_eq!(
+        element_property(7, "x", |k| payload.get(k)).as_deref(),
+        Some(&serde_json::Value::Null),
+        "a null property is present"
+    );
+}
