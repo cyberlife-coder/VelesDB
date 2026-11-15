@@ -141,6 +141,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   core carried three VelesQL-value-to-JSON converters; the payload filter,
   the MATCH index prefilter and DML writes now all use `Value::to_json`.
 
+- **`GET /collections/{name}/graph/traverse/stream` answers 404 / 409 like
+  `POST /graph/traverse`** (server, 2026-11-15). On a missing collection, or
+  one that is not a graph, it answered 200 with a stream whose only event was
+  an `error`, which a client checking the status never saw. It now resolves
+  and gates the collection with the same preamble as every other graph read:
+  404 `VELES-002` for a missing collection, 409 for a non-graph one, before
+  any stream opens. The OpenAPI spec lists both statuses.
+
 - **MATCH rows carry the score of a WHERE `similarity()` on any alias.** When
   the similarity targeted a node other than the pattern's start, e.g.
   `MATCH (a)-[:WROTE]->(d) WHERE similarity(d.embedding, $v) > 0.8`, the
