@@ -176,6 +176,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over the now-public `Filter::evaluate_point`, so a `NOT` above an UNKNOWN
   leaf no longer admits the row.
 
+- **`velesdb agent` takes its LLM endpoint as an argument** (cli,
+  2026-11-15). The Ollama URL and model were read from `VELESDB_AGENT_URL` /
+  `VELESDB_AGENT_MODEL` inside the backend probe, so two runs in one process
+  shared whichever values were set last; the agent tests mutated them and
+  failed 2–3 of 15 whenever they ran in parallel (CI only stayed green by
+  forcing `--test-threads=1`). `LlmEndpoint` is now read from the environment
+  once — at `velesdb agent`, or when a REPL session starts — and passed down;
+  no test touches the environment any more.
+
 - **`GET /collections/{name}/graph/traverse/stream` answers 404 / 409 like
   `POST /graph/traverse`** (server, 2026-11-15). On a missing collection, or
   one that is not a graph, it answered 200 with a stream whose only event was
