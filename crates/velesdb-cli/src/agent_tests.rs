@@ -4,6 +4,23 @@
 use super::*;
 use tempfile::TempDir;
 
+/// An endpoint nothing listens on: the run is always offline, whatever the
+/// environment says — no test reads or writes `VELESDB_AGENT_*`.
+fn offline() -> LlmEndpoint {
+    LlmEndpoint {
+        url: "http://127.0.0.1:1".to_string(),
+        model: LlmEndpoint::DEFAULT_MODEL.to_string(),
+    }
+}
+
+/// The endpoint of a fake Ollama listening on `port`, serving `model`.
+fn at(port: u16, model: &str) -> LlmEndpoint {
+    LlmEndpoint {
+        url: format!("http://127.0.0.1:{port}"),
+        model: model.to_string(),
+    }
+}
+
 fn demo_db() -> (TempDir, Database) {
     let dir = TempDir::new().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");
@@ -14,9 +31,8 @@ fn demo_db() -> (TempDir, Database) {
 
 #[test]
 fn offline_run_lists_collections_and_composes_a_sourced_answer() {
-    std::env::set_var("VELESDB_AGENT_URL", "http://127.0.0.1:1");
     let (_dir, db) = demo_db();
-    let report = run(&db, "describe docs", MaxIterations::default());
+    let report = run(&db, "describe docs", MaxIterations::default(), &offline());
     assert_eq!(report.backend, "offline");
     assert!(report.iterations.len() >= 2);
     assert_eq!(report.iterations[0].action, "list()");
@@ -26,11 +42,10 @@ fn offline_run_lists_collections_and_composes_a_sourced_answer() {
 
 #[test]
 fn iterations_never_exceed_the_bound() {
-    std::env::set_var("VELESDB_AGENT_URL", "http://127.0.0.1:1");
     let (_dir, db) = demo_db();
     for cap in ["1", "2", "8"] {
         let max: MaxIterations = cap.parse().expect("valid cap");
-        let report = run(&db, "describe docs and count by kind", max);
+        let report = run(&db, "describe docs and count by kind", max, &offline());
         assert!(report.iterations.len() <= max.get(), "cap {cap} exceeded");
     }
 }
@@ -50,9 +65,13 @@ fn max_iterations_parses_only_the_documented_range() {
 
 #[test]
 fn save_report_round_trips_report_json() {
-    std::env::set_var("VELESDB_AGENT_URL", "http://127.0.0.1:1");
     let (dir, db) = demo_db();
-    let report = run(&db, "what collections exist", MaxIterations::default());
+    let report = run(
+        &db,
+        "what collections exist",
+        MaxIterations::default(),
+        &offline(),
+    );
     let path = dir.path().join("transcript.json");
     save_report(&report, &path).expect("save");
     let saved: serde_json::Value =
@@ -83,12 +102,12 @@ fn every_whitelisted_tool_dispatches() {
 
 #[test]
 fn report_json_carries_answer_backend_sources_iterations() {
-    std::env::set_var("VELESDB_AGENT_URL", "http://127.0.0.1:1");
     let (_dir, db) = demo_db();
     let v = report_json(&run(
         &db,
         "what collections exist",
         MaxIterations::default(),
+        &offline(),
     ));
     assert!(v.get("answer").is_some());
     assert!(v.get("backend").is_some());
@@ -165,16 +184,6 @@ fn fake_ollama_with(
     port
 }
 
-fn agent_env(url_port: u16, model: &str) {
-    std::env::set_var("VELESDB_AGENT_URL", format!("http://127.0.0.1:{url_port}"));
-    std::env::set_var("VELESDB_AGENT_MODEL", model);
-}
-
-fn clear_agent_env() {
-    std::env::remove_var("VELESDB_AGENT_URL");
-    std::env::remove_var("VELESDB_AGENT_MODEL");
-}
-
 #[test]
 fn model_pulled_matches_tagged_and_latest_names() {
     let tags = serde_json::json!([
@@ -191,12 +200,11 @@ fn model_pulled_matches_tagged_and_latest_names() {
 #[test]
 fn backend_refuses_a_model_that_is_not_pulled() {
     let port = fake_ollama(r#"{"models":[{"name":"qwen3:14b"}]}"#, "200 OK");
-    agent_env(port, "no-such-model:9b");
-    let why = llm::backend()
+    let endpoint = at(port, "no-such-model:9b");
+    let why = llm::backend(&endpoint)
         .err()
         .expect("absent model must not select ollama");
     assert!(why.contains("not pulled") && why.contains("ollama pull no-such-model:9b"));
-    clear_agent_env();
 }
 
 /// Asserts the run fell back to the offline router, still answered, and
@@ -214,13 +222,17 @@ fn unreachable_llm_falls_back_with_a_notice() {
         let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         l.local_addr().expect("addr").port()
     }; // listener dropped: nothing answers on `port`
-    agent_env(port, "m:1");
+    let endpoint = at(port, "m:1");
     let (_dir, db) = demo_db();
     assert_offline_fallback(
-        &run(&db, "what collections exist", MaxIterations::default()),
+        &run(
+            &db,
+            "what collections exist",
+            MaxIterations::default(),
+            &endpoint,
+        ),
         "no LLM reachable",
     );
-    clear_agent_env();
 }
 
 #[test]
@@ -228,28 +240,36 @@ fn hung_llm_times_out_and_falls_back_with_a_notice() {
     // Bound but never accepted: the handshake completes in the backlog and
     // the probe hangs until its 400 ms budget expires.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    agent_env(listener.local_addr().expect("addr").port(), "m:1");
+    let endpoint = at(listener.local_addr().expect("addr").port(), "m:1");
     let (_dir, db) = demo_db();
     let started = std::time::Instant::now();
     assert_offline_fallback(
-        &run(&db, "what collections exist", MaxIterations::default()),
+        &run(
+            &db,
+            "what collections exist",
+            MaxIterations::default(),
+            &endpoint,
+        ),
         "no LLM reachable",
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
     drop(listener);
-    clear_agent_env();
 }
 
 #[test]
 fn probe_5xx_falls_back_with_a_notice() {
     let port = fake_ollama_with("503 Service Unavailable", "{}", "200 OK");
-    agent_env(port, "m:1");
+    let endpoint = at(port, "m:1");
     let (_dir, db) = demo_db();
     assert_offline_fallback(
-        &run(&db, "what collections exist", MaxIterations::default()),
+        &run(
+            &db,
+            "what collections exist",
+            MaxIterations::default(),
+            &endpoint,
+        ),
         "503",
     );
-    clear_agent_env();
 }
 
 #[test]
@@ -258,13 +278,17 @@ fn generate_500_falls_back_to_the_offline_router() {
         r#"{"models":[{"name":"m:1"}]}"#,
         "500 Internal Server Error",
     );
-    agent_env(port, "m:1");
+    let endpoint = at(port, "m:1");
     let (_dir, db) = demo_db();
     assert_offline_fallback(
-        &run(&db, "what collections exist", MaxIterations::default()),
+        &run(
+            &db,
+            "what collections exist",
+            MaxIterations::default(),
+            &endpoint,
+        ),
         "500",
     );
-    clear_agent_env();
 }
 
 #[test]
@@ -272,13 +296,51 @@ fn generate_404_falls_back_to_the_offline_router() {
     // tags lists the model (probe passes), /api/generate then 404s — the
     // documented gap: the run must still answer via the offline router.
     let port = fake_ollama(r#"{"models":[{"name":"m:1"}]}"#, "404 Not Found");
-    agent_env(port, "m:1");
+    let endpoint = at(port, "m:1");
     let (_dir, db) = demo_db();
-    let report = run(&db, "what collections exist", MaxIterations::default());
+    let report = run(
+        &db,
+        "what collections exist",
+        MaxIterations::default(),
+        &endpoint,
+    );
     assert_offline_fallback(&report, "404");
     assert!(report
         .fallback
         .unwrap_or_default()
         .contains("ollama pull m:1"));
-    clear_agent_env();
+}
+
+/// GIVEN two runs on threads at once, one against a live fake Ollama, one
+///       against a dead port
+/// WHEN both run concurrently
+/// THEN each is decided by the endpoint it was given — the endpoint is an
+///      argument, not process-global state one run could change under the
+///      other (the old `VELESDB_AGENT_*` reads raced under parallel tests).
+#[test]
+fn concurrent_runs_each_use_their_own_endpoint() {
+    let live = fake_ollama(r#"{"models":[{"name":"m:1"}]}"#, "404 Not Found");
+    let handles: Vec<_> = [at(live, "m:1"), offline()]
+        .into_iter()
+        .map(|endpoint| {
+            std::thread::spawn(move || {
+                let (_dir, db) = demo_db();
+                let report = run(
+                    &db,
+                    "what collections exist",
+                    MaxIterations::default(),
+                    &endpoint,
+                );
+                (endpoint, report.fallback.unwrap_or_default())
+            })
+        })
+        .collect();
+    for handle in handles {
+        let (endpoint, why) = handle.join().expect("test: run thread");
+        if endpoint == offline() {
+            assert!(why.contains("no LLM reachable"), "{why}");
+        } else {
+            assert!(why.contains("404"), "{why}");
+        }
+    }
 }

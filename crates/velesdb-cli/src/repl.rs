@@ -287,7 +287,8 @@ fn handle_dot_command(
     ))
 }
 
-/// Map a [`CommandResult`] to a [`LoopAction`], printing errors in red.
+/// Map a [`CommandResult`](crate::repl_commands::CommandResult) to a
+/// [`LoopAction`], printing errors in red.
 fn map_result(result: crate::repl_commands::CommandResult) -> LoopAction {
     match result {
         crate::repl_commands::CommandResult::Continue => LoopAction::Continue,
