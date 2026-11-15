@@ -210,3 +210,23 @@ fn a_node_without_a_vector_never_satisfies_similarity() {
     );
     assert!(!docs(&rows).contains(&7));
 }
+
+/// GIVEN docs a WHERE `similarity()` scores (cosine to `[1, 0]`: 1.0, 0.8)
+/// WHEN the MATCH runs through `executeQuery`
+/// THEN each returned row's `score` is that similarity, as the ordering
+///      used — not the 0 a row built before scoring carried.
+#[test]
+fn execute_query_rows_carry_the_where_similarity_score() {
+    let mut db = kg("cosine");
+    let result = execute(
+        &mut db,
+        "MATCH (a:Person)-[:WROTE]->(d:Doc) WHERE similarity(d.embedding, $v) > 0.7 \
+         RETURN d ORDER BY similarity() DESC",
+        Some(QUERY),
+    )
+    .expect("test: MATCH");
+    let scores: Vec<f32> = result.rows_ref().iter().map(|r| r.score()).collect();
+    assert_eq!(scores.len(), 2, "{scores:?}");
+    assert!((scores[0] - 1.0).abs() < 1e-5, "{scores:?}");
+    assert!((scores[1] - 0.8).abs() < 1e-5, "{scores:?}");
+}

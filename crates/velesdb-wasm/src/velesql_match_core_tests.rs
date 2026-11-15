@@ -143,3 +143,79 @@ fn a_statement_that_is_not_a_match_is_refused() {
         .expect_err("not a MATCH");
     assert!(err.contains("MATCH"), "{err}");
 }
+
+/// GIVEN a node inserted with `INSERT NODE` whose payload names its labels
+///       in core's `_labels` key
+/// WHEN a MATCH projects `n._labels`
+/// THEN the array comes back, as for a collection point: `_labels` is a
+///      property the node carries, not only its label filter.
+#[test]
+fn an_inserted_node_keeps_its_labels_property() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("people")
+        .expect("test: create people");
+    execute(
+        &mut db,
+        r#"INSERT NODE INTO people (id = 9, payload = '{"_labels": ["Person"], "name": "Ada"}')"#,
+        None,
+    )
+    .expect("test: insert node");
+    let rows = execute_match_rows(
+        &mut db,
+        "MATCH (n:Person) RETURN n._labels, n.name",
+        Some(r#"{"_collection": "people"}"#),
+        None,
+    )
+    .expect("test: MATCH");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["projected"]["n._labels"], json!(["Person"]));
+    assert_eq!(rows[0]["projected"]["n.name"], json!("Ada"));
+}
+
+/// GIVEN `b` annotated `@profiles`, whose point carries an `email` the graph
+///       node lacks
+/// WHEN a MATCH projects it
+/// THEN `executeMatch`'s projection and `executeQuery`'s alias object both
+///      carry it: one enrichment per row, after WHERE (as in core, whose
+///      WHERE sees the graph node's own properties).
+#[test]
+fn a_cross_collection_property_is_projected_by_both_match_apis() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("profiles")
+        .expect("test: create profiles");
+    {
+        let store = db.get_shared_store("profiles").expect("test: profiles");
+        crate::store_insert::insert_with_payload(
+            &mut store.borrow_mut(),
+            2,
+            &[],
+            Some(json!({"email": "bob@example.com"})),
+        );
+    }
+    for (id, name, label) in [(1u64, "Alice", "Person"), (2, "Bob", "Profile")] {
+        execute(
+            &mut db,
+            &format!(
+                r#"INSERT NODE INTO graph (id = {id}, payload = '{{"name": "{name}", "labels": ["{label}"]}}')"#
+            ),
+            None,
+        )
+        .expect("test: insert node");
+    }
+    execute(
+        &mut db,
+        "INSERT EDGE INTO graph (id = 1, source = 1, target = 2, label = 'HAS')",
+        None,
+    )
+    .expect("test: edge");
+    let sql = "MATCH (a:Person)-[:HAS]->(b:Profile@profiles) RETURN b.email, b.name";
+    let rows = execute_match_rows(&mut db, sql, None, None).expect("test: MATCH");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["projected"]["b.email"], json!("bob@example.com"));
+    assert_eq!(rows[0]["projected"]["b.name"], json!("Bob"));
+
+    let result = execute(&mut db, sql, None).expect("test: executeQuery");
+    let row: serde_json::Value =
+        serde_json::from_str(result.rows_ref()[0].data_json_ref()).expect("test: row json");
+    assert_eq!(row["b"]["email"], json!("bob@example.com"));
+}

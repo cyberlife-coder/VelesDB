@@ -95,8 +95,11 @@ pub(crate) fn insert_node(
 ///
 /// When the payload is a JSON object with a `_labels` array (core's key) or
 /// a `labels` array (accepted for payloads written before), those strings
-/// are extracted and the remaining fields form the value payload. Any
-/// other shape is stored verbatim with no labels.
+/// become the node's labels. `_labels` also stays in the payload, as it does
+/// on a collection point and in core, so `RETURN n._labels` and `IS NULL`
+/// read it; the legacy `labels` key is dropped, `labels` being the reserved
+/// key a MATCH row writes the node's labels under. Any other shape is stored
+/// verbatim with no labels.
 fn split_node_payload_and_labels(
     payload: &serde_json::Value,
 ) -> (Option<serde_json::Value>, Vec<String>) {
@@ -108,7 +111,9 @@ fn split_node_payload_and_labels(
     for (k, v) in obj {
         if k == "labels" || k == crate::velesql_match_nodes::LABELS_KEY {
             extend_labels_from_value(v, &mut labels);
-            continue;
+            if k == "labels" {
+                continue;
+            }
         }
         remainder.insert(k.clone(), v.clone());
     }

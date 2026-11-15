@@ -68,7 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the point with its id.
 - **`INSERT NODE` reads core's `_labels` key.** It read only `labels`, so the
   same statement labelled a node in core and left it unlabelled in the
-  browser. `labels` is still accepted.
+  browser. `labels` is still accepted. `_labels` also stays a property of the
+  node, as on a collection point, so `RETURN n._labels` reads it.
 - **`MATCH` reads the graph named by the `_collection` param**, the way core
   and the server name a MATCH target (MATCH has no `FROM`). The executor only
   knew the first node's `@collection` annotation and otherwise read the

@@ -52,35 +52,36 @@ fn resolve_cross_refs(db: &DatabaseInner, clause: &MatchClause) -> Vec<CrossRef>
         .collect()
 }
 
-/// Merges cross-collection payloads into a freshly built MATCH row.
+/// A bound node's payload with its `@collection` point's fields merged in.
 ///
-/// For each cross-reference, the node id is read back from the alias object's
-/// `id` field (every row builder writes it), the referenced collection's
-/// payload for that id is looked up, and its fields are merged into the alias
-/// object. The graph node's own fields — including the reserved `id`/`labels` —
-/// win on collision, so enrichment never overwrites graph identity.
-fn enrich_row(map: &mut serde_json::Map<String, serde_json::Value>, cross: &[CrossRef]) {
-    for (alias, store) in cross {
-        let Some(id) = map
-            .get(alias)
-            .and_then(|v| v.get("id"))
-            .and_then(serde_json::Value::as_u64)
-        else {
-            continue;
-        };
-        let borrowed = store.borrow();
-        let Some(serde_json::Value::Object(cross_obj)) = borrowed.payload_for_id(id) else {
-            continue;
-        };
-        let Some(serde_json::Value::Object(alias_obj)) = map.get_mut(alias) else {
-            continue;
-        };
-        for (key, value) in cross_obj {
-            alias_obj
-                .entry(key.clone())
-                .or_insert_with(|| value.clone());
-        }
+/// The one place a cross-collection annotation enriches a node, so every
+/// view of the row — `executeQuery`'s alias object, `executeMatch`'s RETURN
+/// projection, ORDER BY — reads the same properties. As in core, it runs on
+/// a row WHERE already admitted. The node's own fields win on collision
+/// (the reserved `id` / `labels` included), so enrichment never overwrites
+/// graph identity; an alias without an annotation, or a point without an
+/// object payload, leaves the node's payload as it is.
+fn enriched_payload(
+    alias: Option<&str>,
+    id: u64,
+    payload: Option<&serde_json::Value>,
+    cross: &[CrossRef],
+) -> Option<serde_json::Value> {
+    let Some((_, store)) = alias.and_then(|a| cross.iter().find(|(c, _)| c == a)) else {
+        return payload.cloned();
+    };
+    let borrowed = store.borrow();
+    let Some(serde_json::Value::Object(extra)) = borrowed.payload_for_id(id) else {
+        return payload.cloned();
+    };
+    let mut merged = match payload {
+        Some(serde_json::Value::Object(own)) => own.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in extra {
+        merged.entry(key.clone()).or_insert_with(|| value.clone());
     }
+    Some(serde_json::Value::Object(merged))
 }
 
 /// Runs a MATCH and returns its rows as ordered, limited candidates — the
@@ -191,6 +192,15 @@ struct PathWalk<'p> {
     scoring: Option<&'p MatchScoring>,
 }
 
+/// What scoring decides for a row.
+enum RowScore {
+    /// The row stays, with its score if it has one.
+    Kept(Option<f32>),
+    /// The row's last node cannot be scored against REST `/match`'s query
+    /// vector, or falls short of its threshold.
+    Dropped,
+}
+
 /// The path being built: bound node ids and the edges walked to reach them.
 #[derive(Default)]
 struct PathState {
@@ -278,25 +288,41 @@ impl PathWalk<'_> {
         if !self.where_holds(nodes, &bindings)? {
             return Ok(());
         }
-        let bound_nodes: Vec<BoundNode<'_>> = bindings
-            .iter()
-            .map(|b| BoundNode {
-                alias: &b.alias,
-                id: b.id,
-            })
-            .collect();
-        let score = match self.scoring {
-            Some(scoring) => {
-                let last = *path.nodes.last().ok_or("MATCH row binds no node")?;
-                let Some(score) = scoring.score(nodes, last) else {
-                    return Ok(());
-                };
-                Some(score)
-            }
-            None => where_score(self.where_clause, &bound_nodes, nodes, self.params)?,
+        let RowScore::Kept(score) = self.row_score(nodes, path, &bindings)? else {
+            return Ok(());
         };
-        let edges = path
-            .edges
+        let edges = self.bound_edges(nodes, path);
+        out.push(build_match_row(&bound, edges, &self.cross, score)?);
+        Ok(())
+    }
+
+    /// The row's score: REST `/match`'s query vector on the row's last node
+    /// when one is given, else the first WHERE `similarity()` leaf's.
+    fn row_score(
+        &self,
+        nodes: &MatchNodes<'_>,
+        path: &PathState,
+        bindings: &[AliasBinding],
+    ) -> Result<RowScore, String> {
+        let Some(scoring) = self.scoring else {
+            let bound: Vec<BoundNode<'_>> = bindings
+                .iter()
+                .map(|b| BoundNode {
+                    alias: &b.alias,
+                    id: b.id,
+                })
+                .collect();
+            return where_score(self.where_clause, &bound, nodes, self.params).map(RowScore::Kept);
+        };
+        let last = *path.nodes.last().ok_or("MATCH row binds no node")?;
+        Ok(scoring
+            .score(nodes, last)
+            .map_or(RowScore::Dropped, |score| RowScore::Kept(Some(score))))
+    }
+
+    /// The row's relationships, each with its alias and properties.
+    fn bound_edges(&self, nodes: &MatchNodes<'_>, path: &PathState) -> Vec<BoundElement> {
+        path.edges
             .iter()
             .zip(&self.pattern.relationships)
             .map(|(&id, rel)| BoundElement {
@@ -309,11 +335,7 @@ impl PathWalk<'_> {
                     .find(|e| e.id == id)
                     .and_then(|e| e.payload.clone()),
             })
-            .collect();
-        let mut candidate = build_match_row(&bound, edges, &self.cross)?;
-        candidate.score = score;
-        out.push(candidate);
-        Ok(())
+            .collect()
     }
 
     /// The WHERE clause over this row: `similarity()` leaves scored on node
@@ -573,15 +595,17 @@ fn candidate_from_map(
     baseline: Vec<u64>,
     map: serde_json::Map<String, serde_json::Value>,
     binding: MatchBinding,
+    score: Option<f32>,
 ) -> Result<MatchCandidate, String> {
     let value = serde_json::Value::Object(map);
-    let row = QueryResultRow::synthetic(value.clone())?;
+    // The row `executeQuery` returns carries the score its ordering used.
+    let row = QueryResultRow::synthetic(value.clone())?.with_score(score.unwrap_or(0.0));
     Ok(MatchCandidate {
         baseline,
         value,
         row,
         binding,
-        score: None,
+        score,
     })
 }
 
@@ -589,28 +613,33 @@ fn build_match_row(
     bound: &[(&NodePattern, u64, &WasmGraphNode)],
     edges: Vec<BoundElement>,
     cross: &[CrossRef],
+    score: Option<f32>,
 ) -> Result<MatchCandidate, String> {
     let mut map = serde_json::Map::new();
+    let mut nodes = Vec::with_capacity(bound.len());
     for (position, (pattern, id, data)) in bound.iter().enumerate() {
+        let enriched = WasmGraphNode {
+            payload: enriched_payload(pattern.alias.as_deref(), *id, data.payload.as_ref(), cross),
+            labels: data.labels.clone(),
+        };
         let alias = pattern
             .alias
             .clone()
             .unwrap_or_else(|| positional_alias(position));
-        map.insert(alias, node_json(*id, data));
+        map.insert(alias, node_json(*id, &enriched));
+        nodes.push(BoundElement {
+            alias: pattern.alias.clone(),
+            id: *id,
+            payload: enriched.payload,
+        });
     }
-    enrich_row(&mut map, cross);
-    let binding = MatchBinding {
-        nodes: bound
-            .iter()
-            .map(|(pattern, id, data)| BoundElement {
-                alias: pattern.alias.clone(),
-                id: *id,
-                payload: data.payload.clone(),
-            })
-            .collect(),
-        edges,
-    };
-    candidate_from_map(bound.iter().map(|(_, id, _)| *id).collect(), map, binding)
+    let binding = MatchBinding { nodes, edges };
+    candidate_from_map(
+        bound.iter().map(|(_, id, _)| *id).collect(),
+        map,
+        binding,
+        score,
+    )
 }
 
 /// Builds the JSON shape returned for a single MATCH-bound node.
