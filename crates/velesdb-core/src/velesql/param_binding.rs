@@ -8,6 +8,7 @@
 //! `persistence` (WASM) binds exactly as the server does.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 use crate::error::{Error, Result};
 use crate::velesql::{
@@ -24,7 +25,10 @@ use crate::velesql::{
 ///
 /// Returns [`Error::Query`] when the parameter is missing from `params`, or
 /// bound to an array or object, which no scalar operand takes.
-pub fn bind_value(value: &Value, params: &HashMap<String, serde_json::Value>) -> Result<Value> {
+pub fn bind_value<S: BuildHasher>(
+    value: &Value,
+    params: &HashMap<String, serde_json::Value, S>,
+) -> Result<Value> {
     let Value::Parameter(name) = value else {
         return Ok(value.clone());
     };
@@ -65,9 +69,9 @@ pub fn bind_value(value: &Value, params: &HashMap<String, serde_json::Value>) ->
 /// # Errors
 ///
 /// Returns the [`bind_value`] error of the first operand that fails.
-pub fn bind_condition(
+pub fn bind_condition<S: BuildHasher>(
     cond: &Condition,
-    params: &HashMap<String, serde_json::Value>,
+    params: &HashMap<String, serde_json::Value, S>,
 ) -> Result<Condition> {
     let boxed = |inner: &Condition| bind_condition(inner, params).map(Box::new);
     Ok(match cond {
@@ -100,9 +104,9 @@ pub fn bind_condition(
 }
 
 /// Binds every value of a list through [`bind_value`].
-fn bind_values(
+fn bind_values<S: BuildHasher>(
     values: &[Value],
-    params: &HashMap<String, serde_json::Value>,
+    params: &HashMap<String, serde_json::Value, S>,
 ) -> Result<Vec<Value>> {
     values.iter().map(|v| bind_value(v, params)).collect()
 }
