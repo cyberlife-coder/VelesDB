@@ -41,6 +41,49 @@ impl WhereFilter {
     pub(crate) fn matches(&self, id: u64, payload: Option<&serde_json::Value>) -> bool {
         self.0.matches_point(id, payload)
     }
+
+    /// The condition's three-valued truth for the point: `None` is UNKNOWN.
+    /// For a caller combining it with leaves of its own (see [`truth`]).
+    pub(crate) fn truth(&self, id: u64, payload: Option<&serde_json::Value>) -> Option<bool> {
+        self.0.evaluate_point(id, payload)
+    }
+}
+
+/// The three-valued truth of `cond` for one point: `None` is UNKNOWN.
+///
+/// For a WHERE that evaluates some leaves itself (`similarity()`) and hands
+/// the others here: it must combine the answers with [`and`], [`or`] and
+/// `Option::map(!)`, never with `bool` operators, or `NOT` over an UNKNOWN
+/// leaf would admit the row.
+///
+/// # Errors
+///
+/// See [`WhereFilter::compile`].
+pub(crate) fn truth(
+    cond: &Condition,
+    id: u64,
+    payload: Option<&serde_json::Value>,
+    params: &Params,
+) -> Result<Option<bool>, String> {
+    Ok(WhereFilter::compile(cond, params)?.truth(id, payload))
+}
+
+/// Kleene AND: FALSE wins, then UNKNOWN.
+pub(crate) fn and(left: Option<bool>, right: Option<bool>) -> Option<bool> {
+    match (left, right) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        _ => None,
+    }
+}
+
+/// Kleene OR: TRUE wins, then UNKNOWN.
+pub(crate) fn or(left: Option<bool>, right: Option<bool>) -> Option<bool> {
+    match (left, right) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        _ => None,
+    }
 }
 
 /// Tests whether the given `id` and optional `payload` match the condition.

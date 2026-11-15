@@ -7,7 +7,8 @@
 //!   binds; a bare field scores the row's last node (core's traversal
 //!   target). Comparison follows core's `compare_score`: under a distance
 //!   metric `similarity > t` means `distance < t`. A node without a vector,
-//!   or one of another dimension, never satisfies the leaf. The row's score
+//!   or one of another dimension, makes the leaf UNKNOWN: neither it nor its
+//!   negation admits the row. The row's score
 //!   is its first similarity leaf's (core #2787).
 //! - **Query vector** (`executeMatch`'s `vector`, REST `/match`'s): each
 //!   row's last node is scored, rows past the threshold are dropped
@@ -72,24 +73,45 @@ pub(crate) struct BoundNode<'b> {
 /// Evaluates a MATCH WHERE whose leaves may include `similarity()`.
 ///
 /// `similarity()` leaves are scored here; every other leaf goes to
-/// `other_leaf` (the payload evaluator), so the two never disagree on the
-/// rest of the grammar.
+/// `other_leaf` (the payload evaluator's three-valued truth), so the two
+/// never disagree on the rest of the grammar. The tree folds in SQL's
+/// three-valued logic, as core's MATCH WHERE does, and the row is admitted
+/// only when it is known TRUE.
 pub(crate) fn where_holds(
     cond: &Condition,
     bound: &[BoundNode<'_>],
     nodes: &MatchNodes<'_>,
     params: &Params,
-    other_leaf: &dyn Fn(&Condition) -> Result<bool, String>,
+    other_leaf: &dyn Fn(&Condition) -> Result<Option<bool>, String>,
 ) -> Result<bool, String> {
+    Ok(where_truth(cond, bound, nodes, params, other_leaf)? == Some(true))
+}
+
+/// The three-valued truth behind [`where_holds`]. A `similarity()` leaf
+/// whose node has no vector of the query's dimension is UNKNOWN, as in core.
+fn where_truth(
+    cond: &Condition,
+    bound: &[BoundNode<'_>],
+    nodes: &MatchNodes<'_>,
+    params: &Params,
+    other_leaf: &dyn Fn(&Condition) -> Result<Option<bool>, String>,
+) -> Result<Option<bool>, String> {
+    use crate::velesql_where::{and, or};
     match cond {
-        Condition::And(l, r) => Ok(where_holds(l, bound, nodes, params, other_leaf)?
-            && where_holds(r, bound, nodes, params, other_leaf)?),
-        Condition::Or(l, r) => Ok(where_holds(l, bound, nodes, params, other_leaf)?
-            || where_holds(r, bound, nodes, params, other_leaf)?),
-        Condition::Not(inner) => Ok(!where_holds(inner, bound, nodes, params, other_leaf)?),
-        Condition::Group(inner) => where_holds(inner, bound, nodes, params, other_leaf),
+        Condition::And(l, r) => Ok(and(
+            where_truth(l, bound, nodes, params, other_leaf)?,
+            where_truth(r, bound, nodes, params, other_leaf)?,
+        )),
+        Condition::Or(l, r) => Ok(or(
+            where_truth(l, bound, nodes, params, other_leaf)?,
+            where_truth(r, bound, nodes, params, other_leaf)?,
+        )),
+        Condition::Not(inner) => {
+            Ok(where_truth(inner, bound, nodes, params, other_leaf)?.map(|known| !known))
+        }
+        Condition::Group(inner) => where_truth(inner, bound, nodes, params, other_leaf),
         Condition::Similarity(sim) => Ok(leaf_score(sim, bound, nodes, params)?
-            .is_some_and(|(score, higher_is_better)| compare(sim, score, higher_is_better))),
+            .map(|(score, higher_is_better)| compare(sim, score, higher_is_better))),
         leaf => other_leaf(leaf),
     }
 }

@@ -361,7 +361,7 @@ impl PathWalk<'_> {
             })
             .collect();
         where_holds(cond, &bound, nodes, self.params, &|leaf| {
-            crate::velesql_where::matches(leaf, first.id, Some(&merged), self.params)
+            crate::velesql_where::truth(leaf, first.id, Some(&merged), self.params)
         })
     }
 }
