@@ -106,11 +106,12 @@ and let it split the text into atomic facts *and* wire the fact↔topic graph
 that `why()` later walks:
 
 ```js
-const { ids, skippedOverCap } = await store.rememberExtracted(
+const outcome = await store.rememberExtracted(
   longText,
   'qwen3',                   // the Ollama model doing the extraction
   'http://localhost:11434',  // optional; this is the default
 )
+// outcome.ids — the stored fact ids; outcome.skippedOverCap — how many were dropped
 ```
 
 The extractor is chosen per call with the `extractor` argument
@@ -134,12 +135,13 @@ With `VELESDB_MEMORY_INGEST_ROOTS` set at `open()` (a path-list of
 allowlisted directories), a fact can be tied to the files it is about:
 
 ```js
-const { id } = await store.remember(
+const outcome = await store.remember(
   'the deploy broke after the cache change',
   [], null, null,
   ['notes/runbook.md'],   // anchors: repo-relative paths, at most 8
   checkoutRoot,           // anchorRoot: absolute, must sit inside an ingest root
 )
+const id = outcome.id
 const hits = await store.recall('deploy broke', 5, null, checkoutRoot)
 // each anchored hit carries freshness: { state: 'fresh' | 'stale' | 'unverified', changed: [...] }
 ```

@@ -361,8 +361,8 @@ impl NodeMemoryService {
     /// each hit additionally carries `freshness` — `fresh` / `stale` (the
     /// changed paths in `changed`; stale hits are ranked lower, `score` stays
     /// the raw similarity) / `unverified` — exactly like the MCP `recall` tool.
-    /// Without `anchorRoot`, hits resolve to the plain `{id, score, content,
-    /// metadata}` shape with `freshness: null`.
+    /// Without `anchorRoot`, hits carry no freshness verdict (the field is
+    /// absent) — the plain recollection shape every other recall method returns.
     #[napi(ts_return_type = "Promise<Array<AnchoredRecollectionJs>>")]
     pub fn recall(
         &self,

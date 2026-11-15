@@ -134,10 +134,10 @@ import { MemoryService } from '@wiscale/velesdb-memory-node'
 const store = MemoryService.open(mkdtempSync(join(tmpdir(), 'velesdb-')))
 
 // An earlier session recorded a decision and the human reason behind it.
-// remember() resolves to {id, similar} — destructure the id for links.
-const { id: reason } = await store.remember(
+// remember() resolves to an envelope; take the id off it for links.
+const reason = (await store.remember(
   'field crews work from remote mining sites over satellite links',
-)
+)).id
 await store.remember('the default HTTP request timeout is 7 seconds', [
   { target: reason, relation: 'because' },
 ])
