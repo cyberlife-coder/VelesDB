@@ -395,3 +395,84 @@ fn test_where_vector_near_with_filter() {
         ids
     );
 }
+
+// =========================================================================
+// Scenario: BETWEEN on string and date bounds (docs/VELESQL_SPEC.md example)
+// =========================================================================
+
+/// `events`: four points with an ISO `date` and a `name`, in no sorted order.
+fn setup_events(db: &Database) {
+    db.create_vector_collection("events", 2, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create events");
+    let vc = db
+        .get_vector_collection("events")
+        .expect("test: get events");
+    vc.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0],
+            Some(json!({"date": "2023-12-31", "name": "delta"})),
+        ),
+        Point::new(
+            2,
+            vec![1.0, 0.0],
+            Some(json!({"date": "2024-03-15", "name": "alpha"})),
+        ),
+        Point::new(
+            3,
+            vec![1.0, 0.0],
+            Some(json!({"date": "2024-12-31", "name": "charlie"})),
+        ),
+        Point::new(
+            4,
+            vec![1.0, 0.0],
+            Some(json!({"date": "2025-01-01", "name": "bravo"})),
+        ),
+    ])
+    .expect("test: upsert events");
+}
+
+/// GIVEN dates stored as ISO strings
+/// WHEN the spec's `date BETWEEN '2024-01-01' AND '2024-12-31'` runs
+/// THEN it keeps the 2024 dates, bounds included — it used to match nothing,
+///      because BETWEEN turned string bounds into `null`.
+#[test]
+fn test_where_between_date_strings_keeps_the_range() {
+    let (_dir, db) = create_test_db();
+    setup_events(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM events WHERE date BETWEEN '2024-01-01' AND '2024-12-31' LIMIT 10;",
+    )
+    .expect("test: BETWEEN on dates");
+    assert_eq!(
+        result_ids(&results),
+        [2, 3].into_iter().collect::<HashSet<u64>>()
+    );
+}
+
+/// GIVEN string payloads
+/// WHEN BETWEEN and its definition `>= AND <=` run with the same bounds
+/// THEN they return the same rows.
+#[test]
+fn test_where_between_strings_equals_its_definition() {
+    let (_dir, db) = create_test_db();
+    setup_events(&db);
+
+    let between = execute_sql(
+        &db,
+        "SELECT * FROM events WHERE name BETWEEN 'alpha' AND 'charlie' LIMIT 10;",
+    )
+    .expect("test: BETWEEN on names");
+    let definition = execute_sql(
+        &db,
+        "SELECT * FROM events WHERE name >= 'alpha' AND name <= 'charlie' LIMIT 10;",
+    )
+    .expect("test: >= AND <= on names");
+    assert_eq!(
+        result_ids(&between),
+        [2, 3, 4].into_iter().collect::<HashSet<u64>>()
+    );
+    assert_eq!(result_ids(&between), result_ids(&definition));
+}
