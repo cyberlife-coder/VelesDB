@@ -132,6 +132,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MATCH rows carry the score of a WHERE `similarity()` on any alias.** When
+  the similarity targeted a node other than the pattern's start, e.g.
+  `MATCH (a)-[:WROTE]->(d) WHERE similarity(d.embedding, $v) > 0.8`, the
+  GraphFirst plan used it as a filter and dropped the score. Every row came
+  back with the depth fallback (`0.5` at one hop), `RETURN similarity()`
+  projected nothing, and `ORDER BY similarity()` kept traversal order, so ASC
+  and DESC returned the same rows. Rows now carry the similarity of the node
+  that leaf targets, the score VectorFirst already reported for a
+  similarity on the start node. And `ORDER BY similarity()` is
+  most-similar-first under a distance metric too: it sorted the raw score,
+  so on a Euclidean collection `DESC` put the farthest node first, unlike
+  `ORDER BY similarity(field, $v)` and the SELECT side.
+
 - **`INSERT EDGE`, `SELECT EDGES` and `DELETE EDGE` work on vector and
   metadata collections.** The three collection types share one edge store,
   and the Rust API, REST `/relations` and the agent-memory wedge already add
