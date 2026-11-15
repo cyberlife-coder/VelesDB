@@ -50,7 +50,7 @@ fn rows(db: &mut DatabaseInner, sql: &str) -> Vec<serde_json::Value> {
 }
 
 /// GIVEN points carrying `_labels` and edges between them
-/// WHEN MATCH filters on the label and RETURNs the target
+/// WHEN MATCH filters on the label and its RETURN projects the target
 /// THEN the points are the nodes, with their payload as properties.
 #[test]
 fn match_binds_the_collection_points_as_labelled_nodes() {
