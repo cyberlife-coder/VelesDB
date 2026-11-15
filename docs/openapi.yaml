@@ -910,7 +910,7 @@ paths:
       tags:
       - graph
       summary: Stream graph traversal results via SSE.
-      description: "The traversal runs to completion first, then its events are sent:\n- `node`: each node reached\n- `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event\n- `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last\n- `error`: sent alone instead, when the traversal cannot run"
+      description: "The traversal runs to completion first, then its events are sent:\n- `node`: each node reached\n- `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event\n- `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last\n- `error`: sent alone instead, when the traversal worker fails"
       operationId: stream_traverse
       parameters:
       - name: name
@@ -964,7 +964,19 @@ paths:
         "200":
           description: SSE stream of traversal events (node, stats, done, error)
         "400":
-          description: Invalid algorithm (use 'bfs' or 'dfs')
+          description: Invalid algorithm (use 'bfs' or 'dfs'), a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Collection exists but is not a graph collection
           content:
             application/json:
               schema:
