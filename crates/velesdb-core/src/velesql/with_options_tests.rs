@@ -132,13 +132,16 @@ fn assert_round_trips(value: &WithValue) {
     assert_eq!(reads_back_as(&shown, value), Ok(()));
 }
 
-/// `NaN` has no `VelesQL` form: its display must not parse at all, rather
-/// than read back as another value (a bare `NaN` reads back as an identifier).
+/// `NaN` and the infinities have no `VelesQL` form: their display must not
+/// parse at all, rather than read back as another value (a bare `NaN` reads
+/// back as an identifier, an oversized literal is refused as out of range).
 #[test]
-fn test_with_value_display_of_nan_does_not_parse() {
-    let shown = WithValue::Float(f64::NAN).to_string();
-    let back = parse_back(&shown);
-    assert!(back.is_err(), "{shown} read back as {back:?}");
+fn test_with_value_display_of_a_non_finite_float_does_not_parse() {
+    for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let shown = WithValue::Float(v).to_string();
+        let back = parse_back(&shown);
+        assert!(back.is_err(), "{shown} read back as {back:?}");
+    }
 }
 
 #[test]
@@ -161,8 +164,6 @@ fn test_with_value_display_reads_back_as_the_same_value() {
         WithValue::Float(1e-20),
         WithValue::Float(f64::MIN_POSITIVE),
         WithValue::Float(5e-324),
-        WithValue::Float(f64::INFINITY),
-        WithValue::Float(f64::NEG_INFINITY),
         WithValue::Boolean(true),
         WithValue::Boolean(false),
         string(""),
