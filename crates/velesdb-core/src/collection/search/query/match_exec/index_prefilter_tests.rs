@@ -284,3 +284,45 @@ fn a_predicate_no_index_covers_is_skipped_not_fatal() {
     let set = compute_index_prefilter(&coll, &mc.patterns[0], &where_clause, &HashMap::new());
     assert_eq!(set, Some(HashSet::from([2, 3])));
 }
+
+/// An `@collection`-annotated node's properties also come from the annotated
+/// collection, which the graph's indexes never see: its property predicates
+/// narrow nothing, while its id — the node's own — still does.
+#[cfg(feature = "persistence")]
+#[test]
+fn an_annotated_alias_narrows_by_id_only() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let coll = crate::collection::Collection::create(
+        dir.path().join("g"),
+        2,
+        crate::distance::DistanceMetric::Cosine,
+    )
+    .expect("test: create");
+    let points: Vec<crate::point::Point> = (1..=3_u64)
+        .map(|id| {
+            let payload = serde_json::json!({ "_labels": ["Person"], "age": id * 10 });
+            crate::point::Point::new(id, vec![1.0, 0.0], Some(payload))
+        })
+        .collect();
+    coll.upsert(points).expect("test: upsert");
+
+    let prefilter = |sql: &str| {
+        let query = crate::velesql::Parser::parse(sql).expect("test: parse");
+        let mc = query.match_clause.expect("test: a MATCH query");
+        let where_clause = mc.where_clause.expect("test: a WHERE clause");
+        compute_index_prefilter(&coll, &mc.patterns[0], &where_clause, &HashMap::new())
+    };
+    assert_eq!(
+        prefilter("MATCH (p:Person@people) WHERE p.age > 15 RETURN p"),
+        None
+    );
+    assert_eq!(
+        prefilter("MATCH (p:Person@people) WHERE p.id = 2 RETURN p"),
+        Some(HashSet::from([2]))
+    );
+    assert_eq!(
+        prefilter("MATCH (p:Person) WHERE p.age > 15 RETURN p"),
+        Some(HashSet::from([2, 3])),
+        "an unannotated alias still narrows by property"
+    );
+}

@@ -1149,6 +1149,11 @@ any other scalar conditions.
 
 `NOT MATCH` applies the same rule uniformly (exact dual of the positive case).
 
+**No `@collection` in a predicate (V011).** A predicate tests the FROM
+collection's own graph; it reads no other collection, so a `@collection`
+annotation on any of its nodes is refused rather than ignored. Read an
+annotated collection's properties with a standalone `MATCH` statement.
+
 > **Note.** Implicit binding is *not* Cypher's existential MATCH semantics:
 > the leftmost node always binds to the candidate row. `MATCH (ctx)-[:R]->(f)`
 > keeps the rows that have an outgoing `R` edge — it does not test whether the
@@ -1984,23 +1989,28 @@ A node is enclosed in parentheses with optional alias, labels, and properties:
 
 #### Cross-Collection Annotation (`@collection`)
 
-The `@collection` suffix on a node pattern specifies which collection the node's data
-should be resolved from. This enables cross-collection MATCH queries where the graph
-traversal runs on one collection (the primary/edge collection) and node payloads are
-enriched from other collections.
+The `@collection` suffix on a node pattern gives the node the properties of the
+point with the same id in another collection. The graph traversal runs on one
+collection (the primary/edge collection); the annotated node's properties are the
+union of its own payload and that point's.
 
 ```sql
--- Products in 'catalog' graph, enriched with pricing from 'inventory' collection
-MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@inventory)
-RETURN p.name, w.price, w.stock
+-- Products in the 'catalog' graph, priced and stocked in 'inventory'
+MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@inventory {stock: 0})
+WHERE w.price < 100
+RETURN p.name, w.name, w.price
+ORDER BY w.price DESC
 LIMIT 20
 ```
 
 When using `@collection`:
-- The graph traversal (edges) runs on the primary collection specified via `_collection` param or `FROM` clause
-- Node payloads are looked up from the annotated collection after traversal
-- Enriched fields are prefixed with the node alias (e.g., `w.price`, `w.stock`)
-- If the annotated collection doesn't exist, the enrichment is silently skipped
+- The graph traversal (edges) runs on the primary collection specified via the `_collection` param or the `FROM` clause.
+- **WHERE, ORDER BY, RETURN and the pattern's inline properties** all read the union, during the walk: `WHERE w.price < 100` filters on the annotated collection, and three-valued logic applies to it as to any property.
+- **The node's own fields win a collision**, so an annotation adds properties and never overwrites the node's identity. Labels are always the graph's own: `(w:Product@inventory)` matches only nodes labelled `Product` in the graph.
+- A column without an alias (`WHERE price < 100`) reads the traversal target's own payload; qualify it (`w.price`) to read the annotation.
+- RETURN projects with the alias prefix (`w.price`); `RETURN w` projects every property of the union.
+- An annotation naming no collection refuses the query (`VELES-002`), and the read gate decides every annotated collection as a graph-traversal read of its own. A denied one refuses the query.
+- REST `/collections/{name}/match` runs a bare clause the same way: the same gate, the same properties, the same ordering.
 
 #### Relationship Patterns
 

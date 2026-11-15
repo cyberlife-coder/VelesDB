@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior): a `@collection`-annotated MATCH node carries that
+  collection's properties everywhere the MATCH reads properties** (core,
+  server, 2026-11-15). The annotation was only a post-hoc pass merging the
+  annotated point into returned rows, so `WHERE w.price < 100`, `ORDER BY
+  w.price` and `(w:Warehouse@pricing {stock: 0})` never saw `pricing`, the
+  annotated node's labels were never checked, and a colliding field overwrote
+  the node's own. Now WHERE, ORDER BY, RETURN and inline pattern properties
+  read the union of the node's payload and its annotated point's, during the
+  walk; the node's own fields win a collision, and labels stay the graph's.
+  An annotation naming no collection refuses the query instead of being
+  skipped. The graph's property indexes no longer narrow an annotated alias
+  by a property they cannot see. A graph predicate in a SELECT WHERE
+  (`WHERE MATCH (...)`), which reads no other collection, refuses an
+  annotated node (`V011`) instead of ignoring it. The MATCH holds the annotated collections'
+  read guards next to its target's, taken in one total order across
+  collections (`docs/CONCURRENCY_MODEL.md`).
+
+  REST `/collections/{name}/match` runs through the new
+  `Database::match_query`: it gates every annotated collection, as `/query`
+  does, reads the annotations the same way, and orders rows through the same
+  planner as `/query` (guard rails included) instead of calling the
+  collection's unplanned entry points.
+
 - **BREAKING (behavior): WHERE follows SQL's three-valued logic for every
   predicate** (core, 2026-11-15). The spec promised it, yet only
   `similarity()` had an UNKNOWN: a comparison on a field that is `null` or

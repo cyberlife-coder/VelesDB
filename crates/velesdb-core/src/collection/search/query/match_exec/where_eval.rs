@@ -308,7 +308,10 @@ impl Collection {
         }
 
         let target_id = resolve_target_id(&cmp.column, ctx.bindings, ctx.node_id);
-        let target_payload = ctx.guards.payload_memo.get(target_id);
+        let target_payload = ctx
+            .guards
+            .payload_memo
+            .get_bound(bound_alias(&cmp.column, ctx.bindings), target_id);
         let column_path = strip_alias(&cmp.column, &alias_in(ctx.bindings));
         let Some(actual) = element_property(target_id, column_path, |path| {
             Self::json_get_path(target_payload.as_deref()?, path)
@@ -378,7 +381,10 @@ impl Collection {
 
         // A node without payload is tested with a `null` payload, as on
         // every path: `n.id` still reads its id.
-        let payload = ctx.guards.payload_memo.get(target_id);
+        let payload = ctx.guards.payload_memo.get_bound(
+            column.and_then(|col| bound_alias(col, ctx.bindings)),
+            target_id,
+        );
 
         // Compile-once per (leaf, strip-decision): the rewrite depends only
         // on whether the leaf column's alias prefix is bound — a bit, not a
@@ -627,12 +633,19 @@ pub(super) fn resolve_target_id(
         .unwrap_or(default_id)
 }
 
-/// Builds an alias-membership predicate over an optional node-bindings map.
 /// The alias prefix of a dotted column (`a.name` -> `a`), if any.
 fn column_alias(column: &str) -> Option<&str> {
     column.split_once('.').map(|(alias, _)| alias)
 }
 
+/// The node alias a column reads through, when its prefix is a bound node
+/// alias: what decides whether the read sees an `@collection` annotation.
+/// A bare column reads the traversal target's own payload.
+fn bound_alias<'c>(column: &'c str, bindings: Option<&HashMap<String, u64>>) -> Option<&'c str> {
+    column_alias(column).filter(|alias| alias_in(bindings)(alias))
+}
+
+/// Builds an alias-membership predicate over an optional node-bindings map.
 fn alias_in(bindings: Option<&HashMap<String, u64>>) -> impl Fn(&str) -> bool + '_ {
     move |alias| bindings.is_some_and(|b| b.contains_key(alias))
 }

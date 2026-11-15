@@ -511,6 +511,38 @@ to the copied vector; until the id's next write, a search reaches it at B
 while storage holds A. A per-entry write sequence would close it; it is
 not kept.
 
+### Locks of two collections: a MATCH reading `@collection`
+
+Every rule above orders the locks of **one** collection. A MATCH whose
+pattern annotates a node with another collection (`(w:Warehouse@pricing)`)
+reads that collection's properties during the walk, so it holds the
+`payload_storage` read guard of `pricing` next to its target's
+`vector_storage` and `payload_storage` guards — the only path that holds
+two collections' locks at once.
+
+**Rule**: those guards are taken by one function,
+`match_exec::sources::MatchReads::acquire`, in a total order over
+(collection instance, rank): instances by the address of their
+`payload_storage`, and within the target `vector_storage` (2) before
+`payload_storage` (3). Two MATCHes annotating each other's collections
+therefore take the shared locks in the same order, and with a writer queued
+on each the fair `RwLock` cannot park either behind the other. Ordering by
+*name* would not do: two racing opens of one name can briefly yield two
+instances.
+
+Two corollaries:
+
+- **Resolve first.** The annotated handles are resolved
+  (`Database::match_sources`) before any guard is taken: resolving a name
+  can take the database's collection registry lock, which precedes every
+  collection lock.
+- **Lock once.** An instance is locked once however many annotations name
+  it, and never when it is the target itself (`parking_lot`'s `RwLock` is
+  not re-entrant).
+
+`sources_tests::cross_annotating_matches_never_deadlock_against_queued_writers`
+pins the rule: it deadlocks within seconds under any other order.
+
 ### Collection locks and rayon
 
 The collection's own locks — every `RwLock` and `Mutex` field of

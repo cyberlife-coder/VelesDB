@@ -164,8 +164,8 @@ LIMIT 10;
 
 > **Cross-collection MATCH:** use `\use <collection>` to set the primary
 > collection (the one with graph edges) before running a MATCH query. Nodes
-> annotated with `@collection` have their payloads enriched from the named
-> collection after traversal:
+> annotated with `@collection` also carry the properties of the named
+> collection's point with the same id, in WHERE, ORDER BY and RETURN alike:
 >
 > ```
 > velesdb> \use catalog_graph

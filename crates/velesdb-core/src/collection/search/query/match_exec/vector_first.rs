@@ -21,7 +21,6 @@ use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::guardrails::QueryContext;
-use crate::storage::PayloadStorage;
 use crate::velesql::{Condition, MatchClause, SimilarityCondition};
 use std::collections::HashMap;
 
@@ -41,9 +40,9 @@ impl Collection {
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: &QueryContext,
-        _similarity_alias: &str,
         top_k: usize,
         threshold: f32,
+        sources: &super::MatchSources,
     ) -> Result<Vec<MatchResult>> {
         let sim_cond = extract_similarity_condition(match_clause.where_clause.as_ref())?;
         let query_vector = resolve_query_vector(&sim_cond.vector, params)?;
@@ -71,7 +70,15 @@ impl Collection {
             .and_then(|l| usize::try_from(l).ok())
             .unwrap_or(100);
 
-        self.filter_candidates_by_graph(&above_threshold, match_clause, params, ctx, limit, metric)
+        self.filter_candidates_by_graph(
+            &above_threshold,
+            match_clause,
+            params,
+            ctx,
+            limit,
+            metric,
+            sources,
+        )
     }
 
     /// Validates each vector candidate against the graph pattern and builds
@@ -81,8 +88,9 @@ impl Collection {
     /// (2) before `payload_storage` (3) — and passes them down so WHERE
     /// evaluation (including similarity re-checks) never re-acquires a
     /// storage lock under them.
-    // Both guards are lent by reference into MatchStorageGuards for the
-    // whole candidate walk, in decree order (2 then 3).
+    // Every guard is lent into MatchStorageGuards for the whole candidate
+    // walk, in the cross-collection order MatchReads sets.
+    #[allow(clippy::too_many_arguments)]
     #[expect(clippy::significant_drop_tightening)]
     fn filter_candidates_by_graph(
         &self,
@@ -92,16 +100,10 @@ impl Collection {
         ctx: &QueryContext,
         limit: usize,
         metric: crate::distance::DistanceMetric,
+        sources: &super::MatchSources,
     ) -> Result<Vec<MatchResult>> {
-        let vector_guard = self.storage.vector_storage.read();
-        let payload_guard = self.storage.payload_storage.read();
-        let guards = MatchStorageGuards {
-            metric,
-            vector_guard: &vector_guard,
-            payload_guard: &payload_guard,
-            payload_memo: super::PayloadMemo::new(&payload_guard),
-            where_filters: super::WhereFilterMemo::default(),
-        };
+        let reads = super::MatchReads::acquire(self, sources);
+        let guards = MatchStorageGuards::over(metric, &reads);
         let mut results = Vec::new();
         let mut examined = 0u64;
 
@@ -143,7 +145,10 @@ impl Collection {
             return Ok(None);
         };
 
-        if !self.candidate_matches_start_pattern(node_id, pattern, guards.payload_guard) {
+        let starts = pattern.nodes.first().is_none_or(|first| {
+            Self::node_matches_bound_pattern(node_id, first, &guards.payload_memo)
+        });
+        if !starts {
             return Ok(None);
         }
 
@@ -171,35 +176,6 @@ impl Collection {
             &guards.payload_memo,
         );
         Ok(Some(mr))
-    }
-
-    /// Checks whether a candidate node matches the start node pattern
-    /// (labels and properties) from the MATCH clause.
-    #[allow(clippy::unused_self)] // Method on Collection for API consistency with start_nodes.rs
-    fn candidate_matches_start_pattern(
-        &self,
-        node_id: u64,
-        pattern: &crate::velesql::GraphPattern,
-        payload_guard: &crate::storage::LogPayloadStorage,
-    ) -> bool {
-        let Some(first_node) = pattern.nodes.first() else {
-            return true;
-        };
-
-        if first_node.labels.is_empty() && first_node.properties.is_empty() {
-            return true;
-        }
-
-        let payload = payload_guard.retrieve(node_id).ok().flatten();
-
-        if !first_node.labels.is_empty()
-            && !Self::node_matches_labels(payload.as_ref(), &first_node.labels)
-        {
-            return false;
-        }
-
-        first_node.properties.is_empty()
-            || Self::node_matches_properties(payload.as_ref(), &first_node.properties)
     }
 
     /// Validates that a candidate node passes the non-similarity WHERE conditions.
