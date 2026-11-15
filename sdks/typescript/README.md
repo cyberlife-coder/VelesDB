@@ -805,9 +805,9 @@ await db.alterCollection('docs', { autoReindex: false });
 > `executeMatch`, `addEdge`, `getEdges`, `removeEdge`, `getEdgeCount` and `matchQuery` run in
 > the browser with REST's shapes. A collection's points are its nodes, labelled by their
 > `_labels` payload key, so an edge's `source` and `target` must be stored points, as on the
-> server. `matchQuery` names the collection for the MATCH and returns `{ bindings, depth,
-> projected }` rows without `score`: the browser computes no `similarity()`, so a query
-> `vector` is refused with `NOT_SUPPORTED`. Traversal (`traverseGraph`, `traverseParallel`)
+> server. `matchQuery` names the collection for the MATCH and returns REST's `{ bindings,
+> depth, projected, score? }` rows: the points' vectors score `similarity()` as on the server,
+> and `options.vector` / `threshold` behave as on REST `/match`. Traversal (`traverseGraph`, `traverseParallel`)
 > and `getNodeDegree` stay server-only, so `capabilities().graphTraversal` is `false`. An older
 > binding refuses every graph method with `NOT_SUPPORTED`.
 

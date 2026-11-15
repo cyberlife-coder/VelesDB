@@ -167,4 +167,24 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
       db.addEdge('docs', { id: 11, source: 1, target: 99, label: 'NEXT' })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
+
+  it('graph: matchQuery scores the points\' vectors with similarity(), as on REST', async () => {
+    await db.addEdge('docs', { id: 20, source: 1, target: 2, label: 'SEES' });
+    await db.addEdge('docs', { id: 21, source: 1, target: 3, label: 'SEES' });
+
+    // Cosine to [0, 1]: point 2 ([0, 1]) 1.0, point 3 ([0.6, 0.8]) 0.8.
+    const where = await db.matchQuery(
+      'docs',
+      'MATCH (a)-[:SEES]->(b) WHERE similarity(b.embedding, $v) > 0.5 RETURN b.id ORDER BY similarity() DESC',
+      { v: [0, 1] }
+    );
+    expect(where.results.map(r => r.bindings.b)).toEqual([2, 3]);
+    expect(where.results[0]!.score).toBeCloseTo(1, 4);
+
+    const scored = await db.matchQuery('docs', 'MATCH (a)-[:SEES]->(b) RETURN b.id', undefined, {
+      vector: [0, 1],
+      threshold: 0.9,
+    });
+    expect(scored.results.map(r => r.bindings.b)).toEqual([2]);
+  });
 });

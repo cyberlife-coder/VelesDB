@@ -9,9 +9,9 @@
  * {@link WasmGraph.create} returns `null` on an older binding, whose graph
  * methods keep refusing with `NOT_SUPPORTED`.
  *
- * Divergences from REST, both refused rather than approximated: the browser
- * MATCH path computes no `similarity()`, so a `matchQuery` with a query
- * `vector` is `NOT_SUPPORTED`, and its rows carry no `score`.
+ * A collection's points are the MATCH's nodes, so `similarity()` scores their
+ * vectors in the binding as core does, and `matchQuery`'s `vector` and
+ * `threshold` reach it as they reach REST `/match`.
  * @packageDocumentation
  */
 
@@ -112,16 +112,16 @@ export class WasmGraph {
     params?: Record<string, unknown>,
     options?: MatchQueryOptions
   ): MatchQueryResponse {
-    if (options?.vector !== undefined || options?.threshold !== undefined) {
-      throw new VelesDBError(
-        'matchQuery with a query vector is not supported in WASM: the browser MATCH path computes no similarity(). Use the REST backend.',
-        'NOT_SUPPORTED'
-      );
-    }
     this.requireCollection(collection);
+    const vector = options?.vector === undefined ? undefined : Float32Array.from(options.vector);
     const started = performance.now();
     const json = call(() =>
-      this.db.executeMatch(queryString, paramsJson({ ...params, _collection: collection }) ?? null)
+      this.db.executeMatch(
+        queryString,
+        paramsJson({ ...params, _collection: collection }) ?? null,
+        vector,
+        options?.threshold
+      )
     );
     const results = JSON.parse(json) as MatchQueryResultItem[];
     return {

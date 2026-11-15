@@ -5,7 +5,8 @@
  * Before: `addEdge`, `getEdges`, `removeEdge`, `getEdgeCount` and
  * `matchQuery` threw `NOT_SUPPORTED`. A binding that exposes the
  * `WasmDatabase` edge API and `executeMatch` now answers them with REST's
- * shapes; an older binding keeps the old refusal.
+ * shapes, `similarity()` scores included; an older binding keeps the old
+ * refusal.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -51,7 +52,7 @@ class MockWasmDatabase {
     return before !== this.edges.length;
   });
   edgeCount = vi.fn(() => this.edges.length);
-  executeMatch = vi.fn((_sql: string, _params: string | null) => {
+  executeMatch = vi.fn((_sql: string, _params: string | null, _vector?: Float32Array, _threshold?: number) => {
     if (this.matchError) { throw this.matchError; }
     return JSON.stringify(this.matchRows);
   });
@@ -176,13 +177,20 @@ describe('WASM backend matchQuery through executeMatch', () => {
     await expectCode(backend.matchQuery('docs', 'SELECT * FROM docs'), 'BAD_REQUEST');
   });
 
-  it('when a query vector is passed, then matchQuery is NOT_SUPPORTED: the browser computes no similarity()', async () => {
+  it('when a query vector and threshold are passed, then they reach executeMatch and rows keep their score', async () => {
     const backend = await backendWithDocs();
+    const db = MockWasmDatabase.last!;
+    db.matchRows = [{ bindings: { d: 3 }, depth: 1, projected: {}, score: 0.97 }];
 
-    await expectCode(
-      backend.matchQuery('docs', 'MATCH (a) RETURN a', undefined, { vector: [1, 0] }),
-      'NOT_SUPPORTED'
-    );
+    const response = await backend.matchQuery('docs', 'MATCH (a)-[:R]->(d) RETURN d', undefined, {
+      vector: new Float32Array([1, 0]),
+      threshold: 0.7,
+    });
+
+    const [, , vector, threshold] = db.executeMatch.mock.calls[0]! as unknown[];
+    expect(Array.from(vector as Float32Array)).toEqual([1, 0]);
+    expect(threshold).toBe(0.7);
+    expect(response.results[0]!.score).toBe(0.97);
   });
 });
 

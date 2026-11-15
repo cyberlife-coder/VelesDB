@@ -221,10 +221,11 @@ export interface WasmVelesQLDatabase {
   executeQuery(sql: string, params_json: string | null): WasmQueryResult;
   /**
    * Run a `MATCH`; returns a JSON array of core-shaped rows
-   * (`{ bindings, depth, projected }`). Declared by hand and optional, like
+   * (`{ bindings, depth, projected, score? }`). `vector` and `threshold` are
+   * REST `/match`'s. Declared by hand and optional, like
    * the edge methods below: bindings before it do not have it.
    */
-  executeMatch?(sql: string, params_json: string | null): string;
+  executeMatch?(sql: string, params_json: string | null, vector?: Float32Array, threshold?: number): string;
   /** Add an edge given as JSON `{ id?, source, target, label, properties? }`; returns its id. */
   addEdge?(name: string, edge_json: string): bigint;
   /** The edges of a collection, as a JSON array, optionally only one label. */
