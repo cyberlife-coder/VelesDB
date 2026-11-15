@@ -245,8 +245,9 @@ impl Collection {
     ///
     /// Resolving once at pipeline entry guarantees every downstream
     /// conversion to a payload [`Filter`](crate::filter::Filter) sees bound
-    /// values: without this, `Value::Parameter` silently degrades to JSON
-    /// `null` in `filter::Condition::from`, returning 0 rows without error.
+    /// values: without this, `filter::Condition::from` would compare against
+    /// the placeholder text `$name` ([`Value::to_json`](crate::velesql::Value::to_json))
+    /// instead of the caller's value, returning wrong rows without error.
     ///
     /// # Errors
     ///

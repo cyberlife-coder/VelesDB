@@ -137,7 +137,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `date BETWEEN '2024-01-01' AND '2024-12-31'`, the example in
   `docs/VELESQL_SPEC.md`, matched nothing. The bounds now convert like a
   comparison's value, so `x BETWEEN a AND b` returns what
-  `x >= a AND x <= b` returns. The WASM executor already did.
+  `x >= a AND x <= b` returns. The WASM executor already did. Root cause:
+  core carried three VelesQL-value-to-JSON converters; the payload filter,
+  the MATCH index prefilter and DML writes now all use `Value::to_json`.
 
 - **`POST /collections/{name}/relations` no longer fails permanently after an
   edge with ID `u64::MAX` exists** (server, 2026-11-15). The handler picks the
