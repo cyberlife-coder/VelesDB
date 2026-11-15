@@ -89,7 +89,7 @@ fn save_last(config: &ReplConfig, path: &Path) -> CommandResult {
 }
 
 fn ask(db: &Database, config: &mut ReplConfig, question: &str) -> CommandResult {
-    let report = agent::run(db, question, config.agent.max_iterations);
+    let report = agent::run(db, question, config.agent.max_iterations, &config.agent.llm);
     if matches!(config.format, OutputFormat::Json) {
         println!("{}", agent::report_json(&report));
     } else {

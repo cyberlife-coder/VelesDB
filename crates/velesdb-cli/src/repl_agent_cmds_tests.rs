@@ -1,15 +1,20 @@
-//! `.agent` REPL controls — offline only (dead `VELESDB_AGENT_URL`).
+//! `.agent` REPL controls — offline only: the session's LLM endpoint is a
+//! dead port, set on the session rather than through `VELESDB_AGENT_URL`.
 
 use super::*;
 use tempfile::TempDir;
 
 fn setup() -> (TempDir, Database, ReplConfig) {
-    std::env::set_var("VELESDB_AGENT_URL", "http://127.0.0.1:1");
     let dir = TempDir::new().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");
     db.create_collection("docs", 4, velesdb_core::DistanceMetric::Cosine)
         .expect("create docs");
-    (dir, db, ReplConfig::default())
+    let mut config = ReplConfig::default();
+    config.agent.llm = crate::agent::LlmEndpoint {
+        url: "http://127.0.0.1:1".to_string(),
+        model: crate::agent::LlmEndpoint::DEFAULT_MODEL.to_string(),
+    };
+    (dir, db, config)
 }
 
 fn run(db: &Database, config: &mut ReplConfig, line: &str) -> CommandResult {
