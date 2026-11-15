@@ -7,12 +7,12 @@
 //! that a caller can neither set nor filter on, which was believed to make
 //! them invisible to every caller-facing recall path.
 //!
-//! It did not, for a `!=` predicate, while VelesQL's `!=` matched a fact that
+//! It did not, for a `!=` predicate, while `VelesQL`'s `!=` matched a fact that
 //! has no such field at all: scaffolding carries only reserved keys, so it has
 //! none of the caller's columns, so `status != "archived"` swept in every
 //! artefact the service ever wrote.
 //!
-//! VelesQL's WHERE is now three-valued: `!=` on an absent field is UNKNOWN,
+//! `VelesQL`'s WHERE is now three-valued: `!=` on an absent field is UNKNOWN,
 //! never true, so a caller's `ne` cannot select scaffolding at all. The marker
 //! exclusion is kept regardless — it is what protects the paths where the
 //! caller passes no `ne` predicate — and is written `marker IS NULL OR
