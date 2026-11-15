@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **TypeScript SDK: VelesQL `SELECT … WHERE` on the WASM backend** (#2784).
+  With a velesdb-wasm binding that has `WasmDatabase.attachStore` (#2783),
+  each collection's store is shared with the binding's VelesQL executor, so
+  `query()` runs a read-only `SELECT` with `WHERE`, `ORDER BY` and the other
+  clauses velesdb-wasm evaluates over the points the SDK wrote, returning
+  REST's `/query` shape. The pure `NEAR` shape keeps its fast path;
+  aggregations, `MATCH` and DDL/mutations are still `NOT_SUPPORTED` on WASM,
+  and velesdb-wasm 8.0.0 keeps the previous behaviour.
+
 - **`install-memory-daemon.sh` runs the shared daemon on Linux** as a
   systemd user unit (`~/.config/systemd/user/velesdb-memory.service`, logs in
   `journalctl --user -u velesdb-memory`), with the same environment and
