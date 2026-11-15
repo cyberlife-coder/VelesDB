@@ -17,7 +17,7 @@
 //! (the address of its `payload_storage`), then lock rank — `vector_storage`
 //! (2) before `payload_storage` (3) within a collection. A thread therefore
 //! never waits for a lower-ordered lock while holding a higher one, which is
-//! what rules out the cycle two cross-annotating MATCHes with queued writers
+//! what rules out the cycle two cross-annotating MATCH queries with queued writers
 //! would otherwise form. The handles are resolved by the caller *before*
 //! [`MatchReads::acquire`] — never under a held guard — because resolving a
 //! name can take the database's collection-registry lock, which is ordered

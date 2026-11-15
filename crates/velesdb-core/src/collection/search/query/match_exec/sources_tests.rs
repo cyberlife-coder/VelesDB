@@ -157,7 +157,7 @@ fn a_collection_named_by_several_annotations_is_locked_once() {
     assert!(std::ptr::eq(annotations.storage(a), annotations.storage(b)));
 }
 
-/// Two MATCHes annotating each other's collection, with writers queued on
+/// Two MATCH queries annotating each other's collection, with writers queued on
 /// both payload locks: in any order but the total one, parking_lot's fair
 /// `RwLock` parks each reader behind the other's queued writer.
 #[test]

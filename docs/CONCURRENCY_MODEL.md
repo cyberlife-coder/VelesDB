@@ -524,7 +524,7 @@ two collections' locks at once.
 `match_exec::sources::MatchReads::acquire`, in a total order over
 (collection instance, rank): instances by the address of their
 `payload_storage`, and within the target `vector_storage` (2) before
-`payload_storage` (3). Two MATCHes annotating each other's collections
+`payload_storage` (3). Two MATCH queries annotating each other's collections
 therefore take the shared locks in the same order, and with a writer queued
 on each the fair `RwLock` cannot park either behind the other. Ordering by
 *name* would not do: two racing opens of one name can briefly yield two
