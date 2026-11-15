@@ -77,16 +77,31 @@ fn parse_integer_literal(s: &str) -> Result<Value, ParseError> {
     if let Some(int_val) = try_parse_integer(s) {
         return Ok(int_val);
     }
-    s.parse::<f64>()
-        .map(Value::Float)
-        .map_err(|_| ParseError::syntax(0, s, "Invalid integer"))
+    finite_float(s, "Invalid integer")
 }
 
 /// Parses a float literal string into a [`Value::Float`].
 fn parse_float_literal(s: &str) -> Result<Value, ParseError> {
-    s.parse::<f64>()
-        .map(Value::Float)
-        .map_err(|_| ParseError::syntax(0, s, "Invalid float"))
+    finite_float(s, "Invalid float")
+}
+
+/// Parses `s` as an `f64`, refusing a value too large to be finite.
+///
+/// Past ~309 digits `f64` parsing yields infinity, which JSON cannot hold:
+/// it became `null` downstream, so `WHERE x = 1000…0` matched `{"x": null}`.
+fn finite_float(s: &str, invalid: &str) -> Result<Value, ParseError> {
+    let value = s
+        .parse::<f64>()
+        .map_err(|_| ParseError::syntax(0, s, invalid))?;
+    if value.is_finite() {
+        Ok(Value::Float(value))
+    } else {
+        Err(ParseError::syntax(
+            0,
+            s,
+            "Numeric literal out of range: too large for a 64-bit float",
+        ))
+    }
 }
 
 /// Extracts and parses a `u64` integer from a clause pair (e.g., LIMIT, OFFSET).

@@ -176,6 +176,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over the now-public `Filter::evaluate_point`, so a `NOT` above an UNKNOWN
   leaf no longer admits the row.
 
+- **A numeric literal too large for an `f64` is refused at parse time**
+  (core, 2026-11-15). Past ~309 digits, `WHERE x = 1000…0` parsed to an
+  infinite float, which JSON cannot hold: the filter compared `x` against
+  `null`, so the query matched rows whose `x` is `null` instead of none. Such
+  a literal now fails with "Numeric literal out of range". As no literal
+  yields an infinity any more, `WithValue`'s display of `±∞` (`1.0/0.0`,
+  `-1.0/0.0`), like that of `NaN`, no longer parses.
+
 - **`velesdb agent` takes its LLM endpoint as an argument** (cli,
   2026-11-15). The Ollama URL and model were read from `VELESDB_AGENT_URL` /
   `VELESDB_AGENT_MODEL` inside the backend probe, so two runs in one process
