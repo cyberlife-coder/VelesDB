@@ -34,7 +34,7 @@ mod aggregation;
 mod bounded_top_k;
 #[cfg(test)]
 mod component_scores_tests;
-pub(crate) mod condition_tree;
+pub(crate) use crate::velesql::condition_tree;
 mod early_return;
 mod execution_paths;
 mod extraction;

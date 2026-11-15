@@ -175,7 +175,8 @@ impl Collection {
         results
             .iter()
             .map(|r| {
-                let vec: std::borrow::Cow<[f32]> = if field == "vector" {
+                let vec: std::borrow::Cow<[f32]> = if field == crate::velesql::PRIMARY_VECTOR_FIELD
+                {
                     std::borrow::Cow::Borrowed(&r.point.vector)
                 } else {
                     match self.get_vector_for_field(r.point.id, field)? {

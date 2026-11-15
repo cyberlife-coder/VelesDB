@@ -61,12 +61,17 @@ pub(crate) fn execute(
     finalize(&query.select, rows, params, higher_is_better)
 }
 
-/// The rows a SELECT keeps, by a fused, a vector or a plain scan.
+/// The rows a SELECT keeps, by a fused, a vector or a plain scan, once its
+/// vector predicates pass the validation core applies
+/// ([`velesdb_core::velesql::validate_vector_predicates`]).
 fn scan(
     db: &mut DatabaseInner,
     stmt: &SelectStatement,
     params: &Params,
 ) -> Result<Vec<OwnedScanRow>, String> {
+    if let Some(cond) = stmt.where_clause.as_ref() {
+        velesdb_core::velesql::validate_vector_predicates(cond).map_err(|e| e.to_string())?;
+    }
     if let Some(vfs) = crate::velesql_fused::find_fused_search(stmt.where_clause.as_ref()) {
         crate::velesql_fused::execute_fused_search(db, stmt, vfs, params)
     } else if let Some(vs) = find_vector_search(stmt.where_clause.as_ref()) {
@@ -92,9 +97,13 @@ fn check_select_access(db: &DatabaseInner, select: &SelectStatement) -> Result<(
 /// Runs a non-vector SELECT (optionally with a similarity() threshold in
 /// the WHERE clause).
 ///
-/// With a threshold, each row carries its similarity as its score and the
-/// rows come back best first, as core's `dispatch_similarity_query` returns
-/// them; otherwise rows keep insertion order with score 0.0.
+/// With a threshold, each row carries its similarity to the first
+/// `similarity()` leaf as its score and the rows come back best first, as
+/// core's `dispatch_similarity_query` returns them; a row that leaf cannot
+/// score comes last. Otherwise rows keep insertion order.
+///
+/// A row no vector predicate scored carries
+/// [`velesdb_core::velesql::METADATA_MATCH_SCORE`], as in core.
 fn execute_plain(
     db: &DatabaseInner,
     stmt: &SelectStatement,
@@ -117,25 +126,41 @@ fn execute_plain(
         if !filters.passes(id, payload, idx, &borrowed, params)? {
             continue;
         }
-        let score = filters.eval.as_ref().map_or(0.0, |e| e.score_at(idx));
+        let score = filters.eval.as_ref().and_then(|e| e.score_at(idx));
         out.push((id, score, payload.cloned()));
         crate::guardrails::check_cardinality(out.len())?;
     }
     if filters.eval.is_some() {
         rank_by_score(&mut out, borrowed.metric.higher_is_better());
     }
-    Ok(out)
+    Ok(out
+        .into_iter()
+        .map(|(id, score, payload)| {
+            let score = score.unwrap_or(velesdb_core::velesql::METADATA_MATCH_SCORE);
+            (id, score, payload)
+        })
+        .collect())
 }
 
-/// Stable sort of scored rows in the metric's direction (best first).
-fn rank_by_score(rows: &mut [OwnedScanRow], higher_is_better: bool) {
-    rows.sort_by(|a, b| {
-        let ascending = a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal);
-        if higher_is_better {
-            ascending.reverse()
-        } else {
-            ascending
+/// Stable sort of rows in the metric's direction (best first), the rows
+/// without a score last.
+fn rank_by_score(
+    rows: &mut [(u64, Option<f32>, Option<serde_json::Value>)],
+    higher_is_better: bool,
+) {
+    use std::cmp::Ordering;
+    rows.sort_by(|a, b| match (a.1, b.1) {
+        (Some(x), Some(y)) => {
+            let ascending = x.partial_cmp(&y).unwrap_or(Ordering::Equal);
+            if higher_is_better {
+                ascending.reverse()
+            } else {
+                ascending
+            }
         }
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
     });
 }
 
@@ -177,21 +202,8 @@ impl WhereFilters {
             None => stmt.where_clause.clone(),
         };
         let normalized = base.map(crate::velesql_logic::push_not_inward);
-        // Finding H: reject WHERE clauses that mix similarity() predicates
-        // against distinct query vectors — SimilarityEvaluator pre-computes
-        // scores for a single vector and would otherwise silently return
-        // wrong rows for the second threshold.
-        velesql_similarity::assert_single_similarity_vector(normalized.as_ref())?;
-        // Finding P: `normalized` is already push_not_inward-ed above;
-        // use the pre-normalized variants to skip redundant clones + tree
-        // walks inside `find_similarity` / `strip_similarity`.
-        let similarity_cond =
-            velesql_similarity::find_similarity_pre_normalized(normalized.as_ref());
-        let residual = velesql_similarity::strip_similarity_pre_normalized(normalized.as_ref());
-        let eval = similarity_cond
-            .as_ref()
-            .map(|c| SimilarityEvaluator::new(db, &stmt.from, c, params))
-            .transpose()?;
+        let residual = velesql_similarity::strip_similarity(normalized.as_ref());
+        let eval = SimilarityEvaluator::for_condition(db, &stmt.from, normalized.as_ref(), params)?;
         Ok(Self {
             normalized,
             residual,

@@ -20,26 +20,26 @@ fn config(strategy: &str, k: Option<f64>) -> FusionConfig {
 
 #[test]
 fn maps_average_strategy() {
-    let strat = Collection::fused_config_to_strategy(&config("average", None));
+    let strat = config("average", None).near_fused_strategy();
     assert_eq!(strat, FusionStrategy::Average);
 }
 
 #[test]
 fn maps_maximum_strategy() {
-    let strat = Collection::fused_config_to_strategy(&config("maximum", None));
+    let strat = config("maximum", None).near_fused_strategy();
     assert_eq!(strat, FusionStrategy::Maximum);
 }
 
 #[test]
 fn maps_rrf_strategy_with_default_k() {
     // No `k` param => the documented default k=60.
-    let strat = Collection::fused_config_to_strategy(&config("rrf", None));
+    let strat = config("rrf", None).near_fused_strategy();
     assert_eq!(strat, FusionStrategy::RRF { k: 60 });
 }
 
 #[test]
 fn rrf_honors_explicit_k() {
-    let strat = Collection::fused_config_to_strategy(&config("rrf", Some(42.0)));
+    let strat = config("rrf", Some(42.0)).near_fused_strategy();
     assert_eq!(strat, FusionStrategy::RRF { k: 42 });
 }
 
@@ -48,7 +48,7 @@ fn unknown_strategy_falls_back_to_rrf() {
     // weighted/rsf/garbage are ill-defined for N homogeneous query vectors
     // and must fall back to RRF (parser default), not error or silently drop.
     for name in ["weighted", "rsf", "nonsense"] {
-        let strat = Collection::fused_config_to_strategy(&config(name, Some(7.0)));
+        let strat = config(name, Some(7.0)).near_fused_strategy();
         assert_eq!(
             strat,
             FusionStrategy::RRF { k: 7 },
@@ -60,11 +60,11 @@ fn unknown_strategy_falls_back_to_rrf() {
 #[test]
 fn strategy_name_is_case_insensitive() {
     assert_eq!(
-        Collection::fused_config_to_strategy(&config("AVERAGE", None)),
+        config("AVERAGE", None).near_fused_strategy(),
         FusionStrategy::Average
     );
     assert_eq!(
-        Collection::fused_config_to_strategy(&config("Maximum", None)),
+        config("Maximum", None).near_fused_strategy(),
         FusionStrategy::Maximum
     );
 }

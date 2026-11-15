@@ -160,9 +160,10 @@ refuses), a `similarity()` threshold without `NEAR` came back unranked with
 score 0.0, and `SELECT DISTINCT` ignored `ORDER BY` and the default `LIMIT`.
 The accepted gaps that remain are the fixture's `documented_divergences`:
 D003 (set-operation row order), D004 (MATCH data model), D005 (multi-query
-rsf), D007 (WASM DELETE accepts any WHERE, core only id predicates), D008
-(core UPDATE may set `vector`) and D009 (an unranked row scores 1.0 on core,
-0.0 on WASM). D001 (unaliased aggregate key) was closed in 8.0.0: both name it
+rsf), D007 (WASM DELETE accepts any WHERE, core only id predicates) and D008
+(core UPDATE may set `vector`). D009 (an unranked row scored 1.0 on core,
+0.0 on WASM) was closed on 2026-11-15: both report
+`velesql::METADATA_MATCH_SCORE`. D001 (unaliased aggregate key) was closed in 8.0.0: both name it
 through `AggregateFunction::result_key`.
 
 ## Enum Propagation Matrix

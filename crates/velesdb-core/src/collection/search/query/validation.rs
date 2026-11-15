@@ -14,100 +14,17 @@
 //! This applies filters sequentially (cascade).
 
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::velesql::Condition;
 
 use super::condition_tree::{any_subtree, count_matching_leaves, is_vector_leaf};
 
 impl Collection {
-    /// Validate that similarity() queries don't use unsupported patterns.
-    ///
-    /// # Supported Patterns (EPIC-044 US-001)
-    ///
-    /// - **Multiple similarity() with AND**: Filters applied sequentially
-    ///   `WHERE similarity(v, $v1) > 0.8 AND similarity(v, $v2) > 0.7`
-    ///
-    /// # Unsupported Patterns
-    ///
-    /// 1. **similarity() in OR with non-similarity conditions** (EPIC-044 US-002):
-    ///    `WHERE similarity(v, $v) > 0.8 OR category = 'tech'`
-    ///    ✅ NOW SUPPORTED - Executes vector search + metadata scan, then unions results.
-    ///
-    /// 2. **Multiple similarity() in OR**:
-    ///    `WHERE similarity(v, $v1) > 0.8 OR similarity(v, $v2) > 0.7`
-    ///    This would require union of two vector searches - not currently supported.
-    ///
-    /// 3. **NOT similarity()**:
-    ///    Cannot be efficiently executed with ANN indexes.
-    ///
-    /// Returns Ok(()) if the query structure is valid, or an error describing the issue.
+    /// Refuses the vector-predicate shapes no executor can run as written
+    /// ([`crate::velesql::validate_vector_predicates`], shared with the WASM
+    /// executor).
     pub(crate) fn validate_similarity_query_structure(condition: &Condition) -> Result<()> {
-        let similarity_count = Self::count_similarity_conditions(condition);
-
-        // Multiple similarity() in OR is not supported (would require union of vector searches)
-        if similarity_count > 1 && Self::has_multiple_similarity_in_or(condition) {
-            return Err(Error::Query(
-                "Multiple similarity() conditions in OR are not supported. \
-                Use AND to apply filters sequentially, or split into separate queries."
-                    .to_string(),
-            ));
-        }
-
-        Self::reject_more_than_one_sparse_search(condition)?;
-
-        Self::reject_unexecutable_fused_search(condition)?;
-
-        // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
-        // Only block when multiple similarity() are in OR (handled above)
-
-        // EPIC-044 US-003: NOT similarity() IS now supported via full scan
-        // Warning: This requires scanning all documents - use with LIMIT for performance
-
-        Ok(())
-    }
-
-    /// Rejects a `NEAR_FUSED` the fusion executor cannot run as written.
-    fn reject_unexecutable_fused_search(condition: &Condition) -> Result<()> {
-        // NEAR_FUSED routes to the multi-vector fusion executor, which can only
-        // honor a single fused predicate optionally AND-ed with a metadata
-        // filter. Reject shapes it cannot execute — more than one fused, a fused
-        // mixed with NEAR / similarity() / SPARSE_NEAR, or a fused under OR/NOT —
-        // so the fused vectors are never silently dropped to a non-fused scan.
-        // `vector_or_sparse_count` includes SPARSE_NEAR leaves (which
-        // `is_vector_leaf` omits) so "NEAR_FUSED AND SPARSE_NEAR" is rejected
-        // just like "NEAR_FUSED AND NEAR / similarity()".
-        let fused_count =
-            count_matching_leaves(condition, |c| matches!(c, Condition::VectorFusedSearch(_)));
-        let vector_or_sparse_count = count_matching_leaves(condition, |c| {
-            is_vector_leaf(c) || matches!(c, Condition::SparseVectorSearch(_))
-        });
-        if fused_count > 0
-            && (fused_count > 1
-                || vector_or_sparse_count > fused_count
-                || fused_under_or_or_not(condition))
-        {
-            return Err(Error::Query(
-                "NEAR_FUSED must be the only vector predicate and cannot appear under OR/NOT; \
-                 combine it only with AND <metadata filter>."
-                    .to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Rejects a condition with more than one `SPARSE_NEAR`: a query runs a
-    /// single sparse branch (`extract_sparse_vector_search` takes the first),
-    /// so a second one would be dropped without a word.
-    fn reject_more_than_one_sparse_search(condition: &Condition) -> Result<()> {
-        let sparse_count =
-            count_matching_leaves(condition, |c| matches!(c, Condition::SparseVectorSearch(_)));
-        if sparse_count > 1 {
-            return Err(Error::Query(format!(
-                "the query has {sparse_count} SPARSE_NEAR clauses, and a query runs one \
-                 sparse search; run one query per sparse vector and fuse the results"
-            )));
-        }
-        Ok(())
+        crate::velesql::validate_vector_predicates(condition)
     }
 
     /// Check if similarity() appears under a NOT condition.
@@ -123,22 +40,6 @@ impl Collection {
             condition,
             &|c| matches!(c, Condition::Not(inner) if Self::count_similarity_conditions(inner) > 0),
         )
-    }
-
-    /// Check if multiple similarity() conditions appear under the same OR.
-    /// This pattern requires unioning two vector search results which is not supported.
-    ///
-    /// # Example (Unsupported)
-    /// ```sql
-    /// WHERE similarity(v, $v1) > 0.8 OR similarity(v, $v2) > 0.7
-    /// ```
-    pub(crate) fn has_multiple_similarity_in_or(condition: &Condition) -> bool {
-        any_subtree(condition, &|c| {
-            matches!(c, Condition::Or(left, right)
-                if Self::count_similarity_conditions(left) > 0
-                    && Self::count_similarity_conditions(right) > 0
-            )
-        })
     }
 
     /// Count the number of vector search conditions in a condition tree.
@@ -197,19 +98,6 @@ impl Collection {
 /// True if the tree holds a `similarity()` threshold leaf.
 fn has_similarity_threshold(condition: &Condition) -> bool {
     count_matching_leaves(condition, |c| matches!(c, Condition::Similarity(_))) > 0
-}
-
-/// True if any `NEAR_FUSED` leaf sits under an `OR` or `NOT`, where the fusion
-/// executor (which only walks AND/Group) would not reach it.
-fn fused_under_or_or_not(condition: &Condition) -> bool {
-    fn has_fused(c: &Condition) -> bool {
-        count_matching_leaves(c, |x| matches!(x, Condition::VectorFusedSearch(_))) > 0
-    }
-    any_subtree(condition, &|c| match c {
-        Condition::Or(l, r) => has_fused(l) || has_fused(r),
-        Condition::Not(inner) => has_fused(inner),
-        _ => false,
-    })
 }
 
 #[cfg(test)]
