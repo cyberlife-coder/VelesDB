@@ -64,7 +64,8 @@ pub(crate) fn insert_node(
 
 /// Splits a user-supplied node payload into `(value_payload, labels)`.
 ///
-/// When the payload is a JSON object with a `labels` array, those strings
+/// When the payload is a JSON object with a `_labels` array (core's key) or
+/// a `labels` array (accepted for payloads written before), those strings
 /// are extracted and the remaining fields form the value payload. Any
 /// other shape is stored verbatim with no labels.
 fn split_node_payload_and_labels(
@@ -76,7 +77,7 @@ fn split_node_payload_and_labels(
     let mut labels = Vec::new();
     let mut remainder = serde_json::Map::new();
     for (k, v) in obj {
-        if k == "labels" {
+        if k == "labels" || k == crate::velesql_match_nodes::LABELS_KEY {
             extend_labels_from_value(v, &mut labels);
             continue;
         }

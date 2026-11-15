@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`MATCH` binds the target collection's points as nodes**, as core does: a
+  point's payload is the node's properties and its `_labels` array the node's
+  labels. Nodes lived only in the graph store, so points inserted through the
+  collection, or a `VectorStore` attached to it, were invisible to `MATCH`
+  even with edges between them, and a collection with points but no edge
+  answered "Graph is empty". A node written with `INSERT NODE` still wins over
+  the point with its id.
+- **`INSERT NODE` reads core's `_labels` key.** It read only `labels`, so the
+  same statement labelled a node in core and left it unlabelled in the
+  browser. `labels` is still accepted.
 - **`MATCH` reads the graph named by the `_collection` param**, the way core
   and the server name a MATCH target (MATCH has no `FROM`). The executor only
   knew the first node's `@collection` annotation and otherwise read the

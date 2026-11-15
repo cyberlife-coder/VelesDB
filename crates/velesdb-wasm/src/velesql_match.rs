@@ -13,6 +13,7 @@ use velesdb_core::velesql::{
 
 use crate::database::{DatabaseInner, SharedStore};
 use crate::graph_store::{WasmEdge, WasmGraphNode, WasmGraphStore};
+use crate::velesql_match_nodes::MatchNodes;
 use crate::velesql_match_orderby::{order_and_limit, MatchCandidate};
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
@@ -109,8 +110,11 @@ pub(crate) fn execute_match(
     let pattern = &clause.patterns[0];
     validate_pattern(pattern)?;
     let cross = resolve_cross_refs(db, clause);
-    let store = inferred_graph_store(db, pattern, params)?;
-    let borrowed = store.borrow();
+    let (name, store) = inferred_graph_store(db, pattern, params)?;
+    let collection = db.get_shared_store(&name).ok();
+    let graph = store.borrow();
+    let points = collection.as_ref().map(|c| c.borrow());
+    let nodes = MatchNodes::new(&graph, points.as_deref());
     let walk = PathWalk {
         pattern,
         labels: pattern.nodes.iter().map(first_label).collect(),
@@ -120,8 +124,8 @@ pub(crate) fn execute_match(
     };
     let mut out = Vec::new();
     let mut path = PathState::default();
-    for start in borrowed.candidate_nodes(walk.labels[0].as_deref()) {
-        walk.start_from(&borrowed, start, &mut path, &mut out)?;
+    for start in nodes.candidates(walk.labels[0].as_deref()) {
+        walk.start_from(&nodes, start, &mut path, &mut out)?;
     }
     finalize_candidates(out, clause)
 }
@@ -169,18 +173,18 @@ struct PathState {
 impl PathWalk<'_> {
     fn start_from(
         &self,
-        store: &WasmGraphStore,
+        nodes: &MatchNodes<'_>,
         start: u64,
         path: &mut PathState,
         out: &mut Vec<MatchCandidate>,
     ) -> Result<(), String> {
         // A lone node must exist to be returned; as a path anchor an id known
         // only through its edges still starts a walk, as it always has.
-        if self.pattern.nodes.len() == 1 && store.get_node(start).is_none() {
+        if self.pattern.nodes.len() == 1 && nodes.get(start).is_none() {
             return Ok(());
         }
         path.nodes.push(start);
-        let result = self.extend(store, path, out);
+        let result = self.extend(nodes, path, out);
         path.nodes.pop();
         result
     }
@@ -189,23 +193,23 @@ impl PathWalk<'_> {
     /// edge of the current one, or emits the row once all nodes are bound.
     fn extend(
         &self,
-        store: &WasmGraphStore,
+        nodes: &MatchNodes<'_>,
         path: &mut PathState,
         out: &mut Vec<MatchCandidate>,
     ) -> Result<(), String> {
         let depth = path.nodes.len();
         if depth == self.pattern.nodes.len() {
-            return self.emit(store, path, out);
+            return self.emit(nodes, path, out);
         }
         let anchor = path.nodes[depth - 1];
         let rel = &self.pattern.relationships[depth - 1];
-        for edge in directed_filter_edges(store, anchor, rel) {
+        for edge in directed_filter_edges(nodes.graph(), anchor, rel) {
             // Relationship isomorphism (Cypher, and core's `follow_edge`).
             if path.edges.contains(&edge.id) {
                 continue;
             }
             let next = other_endpoint(&edge, anchor);
-            let Some(next_node) = store.get_node(next) else {
+            let Some(next_node) = nodes.get(next) else {
                 continue;
             };
             if !matches_label(next_node, self.labels[depth].as_deref()) {
@@ -213,7 +217,7 @@ impl PathWalk<'_> {
             }
             path.nodes.push(next);
             path.edges.push(edge.id);
-            let result = self.extend(store, path, out);
+            let result = self.extend(nodes, path, out);
             path.edges.pop();
             path.nodes.pop();
             result?;
@@ -224,7 +228,7 @@ impl PathWalk<'_> {
     /// Evaluates WHERE with every alias bound, then builds the row.
     fn emit(
         &self,
-        store: &WasmGraphStore,
+        nodes: &MatchNodes<'_>,
         path: &PathState,
         out: &mut Vec<MatchCandidate>,
     ) -> Result<(), String> {
@@ -234,7 +238,7 @@ impl PathWalk<'_> {
             .nodes
             .iter()
             .zip(&path.nodes)
-            .map(|(pattern, &id)| (pattern, id, store.get_node(id).unwrap_or(&default_node)))
+            .map(|(pattern, &id)| (pattern, id, nodes.get(id).unwrap_or(&default_node)))
             .collect();
         let bindings: Vec<AliasBinding> = bound
             .iter()
@@ -340,12 +344,13 @@ fn matches_label(node: &WasmGraphNode, label: Option<&str>) -> bool {
 /// In order: the first node's `@collection` annotation (it names the node's
 /// collection explicitly), then the `_collection` param — how core and the
 /// server name a MATCH target, since MATCH has no `FROM` — then the default
-/// `graph` store.
+/// `graph` store. The name is returned with the store: the collection of
+/// that name supplies the points MATCH binds as nodes ([`MatchNodes`]).
 fn inferred_graph_store(
     db: &mut DatabaseInner,
     pattern: &GraphPattern,
     params: &Params,
-) -> Result<std::rc::Rc<std::cell::RefCell<WasmGraphStore>>, String> {
+) -> Result<(String, std::rc::Rc<std::cell::RefCell<WasmGraphStore>>), String> {
     let annotated = pattern.nodes.first().and_then(|n| n.collection.clone());
     let name = match annotated {
         Some(name) => name,
@@ -359,8 +364,16 @@ fn inferred_graph_store(
             }
         },
     };
-    db.get_graph_store(&name)
-        .ok_or_else(|| format!("Graph '{name}' is empty; no data to match"))
+    // A collection with points and no edge yet still has nodes to bind; it
+    // gets an empty, unregistered graph store for this MATCH.
+    let store = match db.get_graph_store(&name) {
+        Some(store) => store,
+        None if db.contains(&name) => {
+            std::rc::Rc::new(std::cell::RefCell::new(WasmGraphStore::new()))
+        }
+        None => return Err(format!("Graph '{name}' is empty; no data to match")),
+    };
+    Ok((name, store))
 }
 
 /// Param naming the collection a MATCH targets (core's `_collection`).
@@ -555,3 +568,7 @@ fn node_json(id: u64, data: &WasmGraphNode) -> serde_json::Value {
 #[cfg(test)]
 #[path = "velesql_match_path_tests.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "velesql_match_points_tests.rs"]
+mod points_tests;

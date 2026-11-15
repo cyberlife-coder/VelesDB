@@ -100,6 +100,7 @@ mod velesql_introspection;
 mod velesql_join;
 mod velesql_logic;
 mod velesql_match;
+mod velesql_match_nodes;
 mod velesql_match_orderby;
 mod velesql_orderby;
 mod velesql_project;
