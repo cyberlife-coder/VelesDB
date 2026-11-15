@@ -6616,3 +6616,68 @@ async fn test_relate_points_between_existing_points_succeeds() {
 
     assert_eq!(response.status(), StatusCode::CREATED);
 }
+
+/// Regression: `POST /relations` seeds its edge ID at `max_edge_id + 1`. A
+/// client may store an edge with ID `u64::MAX` through `POST /graph/edges`,
+/// and the seed used to saturate there — every later `/relations` call probed
+/// that one taken ID until the retry budget ran out and answered 500.
+#[tokio::test]
+async fn test_relate_points_allocates_after_u64_max_edge_id() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+
+    create_graph_collection(&app, "rel_max").await;
+    create_graph_node(&app, "rel_max", 1).await;
+    create_graph_node(&app, "rel_max", 2).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rel_max/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"id": u64::MAX.to_string(), "source": 1, "target": 2, "label": "KNOWS"})
+                        .to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let mut allocated = Vec::new();
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/collections/rel_max/relations")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({"source": 1, "target": 2, "rel_type": "KNOWS"}).to_string(),
+                    ))
+                    .expect("Failed to build request"),
+            )
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let json: Value = serde_json::from_slice(&body).expect("Invalid JSON");
+        allocated.push(json["edge_id"].clone());
+    }
+    assert_ne!(
+        allocated[0], allocated[1],
+        "each relation gets its own edge id"
+    );
+    assert!(
+        allocated
+            .iter()
+            .all(|id| *id != json!(u64::MAX.to_string()) && *id != json!(u64::MAX)),
+        "allocation must not reuse the client-chosen u64::MAX id: {allocated:?}"
+    );
+}
