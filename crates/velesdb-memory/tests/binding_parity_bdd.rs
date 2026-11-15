@@ -680,6 +680,23 @@ const RELAYED_WHOLE: &[RelayedWhole] = &[
                  server's own serialized `insights` into it untouched",
     },
     RelayedWhole {
+        binding: "velesdb-node",
+        tool: "compile_transcript",
+        parent: "context",
+        by: "to_compiled_js(&compiled)",
+        reason: "the server's own `CompiledContext`, lifted whole into the shared \
+                 `CompiledContextJs` envelope by `to_compiled_js` — the same typed shape \
+                 `compile_context` returns, so one payload has one casing",
+    },
+    RelayedWhole {
+        binding: "velesdb-node",
+        tool: "compile_transcript",
+        parent: "segmentation",
+        by: "segmentation",
+        reason: "the shared `SegmentationReport`, serialized whole into \
+                 `CompileTranscriptJs.segmentation` (wire shape, id fields as decimal strings)",
+    },
+    RelayedWhole {
         binding: "velesdb-python",
         tool: "compile_transcript",
         parent: "context",
