@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior): WHERE follows SQL's three-valued logic for every
+  predicate** (core, 2026-11-15). The spec promised it, yet only
+  `similarity()` had an UNKNOWN: a comparison on a field that is `null` or
+  absent was false, so its negation was true. `x != 'a'`, `NOT (x = 'a')`,
+  `x NOT IN ('a')` and `NOT (x LIKE 'a%')` returned every row without `x`
+  (and MATCH even forced `!=` true on a missing property, reversing the
+  8.0.0 note in `MIGRATION_v8.0.0.md`). A comparison whose operand or literal
+  is `NULL` is now UNKNOWN (`x = NULL` matches nothing; use `IS [NOT] NULL`),
+  `x IN ('a', NULL)` is UNKNOWN for any other `x`, a `similarity()` MATCH
+  cannot score is UNKNOWN as on SELECT, a LIKE the guardrails refuse is
+  UNKNOWN rather than false, and `AND` / `OR` / `NOT` follow Kleene's
+  tables. WHERE admits only rows known TRUE, on the payload scan, the index
+  and columnar paths, filtered vector search, graph-predicate WHERE and
+  MATCH alike; a cross-type comparison stays known (`x != 'a'` holds for
+  `x = 5`). *Migration*: a query that relied on `!=` / `NOT IN` keeping rows
+  without the field adds `OR x IS NULL`.
+
 - **The `PostToolUse` hook compresses tool output line by line when the
   binary supports it** (`integrations/agent-hooks`). It probes
   `velesdb-memory compile-stdin --tool-output` once per session and binary,

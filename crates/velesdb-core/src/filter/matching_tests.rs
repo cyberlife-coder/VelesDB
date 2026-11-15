@@ -291,7 +291,8 @@ fn like_precompiled_matches_reference_over_batch() {
             let via_cache = like_match(text, pattern, ci);
             let expected = ref_like(text, pattern, ci);
             assert_eq!(
-                via_cache, expected,
+                via_cache,
+                Some(expected),
                 "cache path diverged from reference: pattern={pattern:?} ci={ci} text={text:?}"
             );
 
@@ -310,10 +311,10 @@ fn like_cache_switches_case_flag_for_same_pattern() {
     // Same pattern bytes, different case-sensitivity, alternated: the cache
     // key includes the case flag, so results must never bleed across.
     for _ in 0..8 {
-        assert!(!like_match("PARIS", "paris", false)); // LIKE: case matters
-        assert!(like_match("PARIS", "paris", true)); // ILIKE: case ignored
-        assert!(like_match("paris", "paris", false));
-        assert!(like_match("PaRiS", "paris", true));
+        assert_eq!(like_match("PARIS", "paris", false), Some(false)); // LIKE: case matters
+        assert_eq!(like_match("PARIS", "paris", true), Some(true)); // ILIKE: case ignored
+        assert_eq!(like_match("paris", "paris", false), Some(true));
+        assert_eq!(like_match("PaRiS", "paris", true), Some(true));
     }
 }
 
@@ -449,5 +450,26 @@ fn test_point_ids_accepts_an_integer_valued_float() {
             value,
         };
         assert_eq!(cond.point_ids(), None);
+    }
+}
+
+/// An empty `IN` / `CONTAINS ANY` list is an empty disjunction: false for
+/// every row, a `null` or absent field included, so its negation admits
+/// that row — it is not UNKNOWN, no comparison with the field being made.
+#[test]
+fn an_empty_disjunction_is_false_even_on_a_null_field() {
+    let empty_in = Condition::is_in("x", vec![]);
+    let empty_any = Condition::ArrayContainsAny {
+        field: "x".to_string(),
+        values: vec![],
+    };
+    for leaf in [empty_in, empty_any] {
+        let negated = Condition::Not {
+            condition: Box::new(leaf.clone()),
+        };
+        for row in [json!({"x": null}), json!({}), json!({"x": ["a"]})] {
+            assert!(!leaf.matches(&row), "{leaf:?} on {row}");
+            assert!(negated.matches(&row), "NOT {leaf:?} on {row}");
+        }
     }
 }

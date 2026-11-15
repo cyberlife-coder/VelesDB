@@ -329,3 +329,53 @@ fn test_metadata_only_collection_uses_mirror() {
     let after = query_ids(&col, query);
     assert!(after.contains(&9999));
 }
+
+/// GIVEN rows whose `category` is a value, `null`, or absent
+/// WHEN negated predicates run before and after the mirror is built
+/// THEN both paths return only the rows known TRUE in three-valued logic:
+///      the mirror's complements admit the `null` / absent rows, and the
+///      post-filter must drop them.
+#[test]
+fn test_mirror_keeps_three_valued_negations_exact() {
+    let dir = TempDir::new().expect("tempdir");
+    let col = Collection::create(dir.path().join("tvl"), 4, DistanceMetric::Cosine)
+        .expect("create collection");
+    let category = |i: usize| match i % 5 {
+        3 => Some(serde_json::Value::Null),
+        4 => None,
+        k => Some(serde_json::json!(format!("cat{k}"))),
+    };
+    col.upsert((0..ROWS).map(|i| {
+        let mut payload = serde_json::json!({ "price": i });
+        if let Some(value) = category(i) {
+            payload["category"] = value;
+        }
+        Point {
+            id: i as u64,
+            vector: vec![1.0, 0.5, 0.25, 1.0],
+            payload: Some(payload),
+            sparse_vectors: None,
+        }
+    }))
+    .expect("upsert");
+    let known_other_than = |cat: &str| -> Vec<u64> {
+        (0..ROWS)
+            .filter(|&i| category(i).is_some_and(|v| v.as_str().is_some_and(|s| s != cat)))
+            .map(|i| i as u64)
+            .collect()
+    };
+    let queries = [
+        "SELECT * FROM c WHERE category != 'cat0' LIMIT 500",
+        "SELECT * FROM c WHERE NOT (category = 'cat0') LIMIT 500",
+        "SELECT * FROM c WHERE category NOT IN ('cat0') LIMIT 500",
+    ];
+    let expected = known_other_than("cat0");
+    for query in queries {
+        assert_eq!(query_ids(&col, query), expected, "scan: {query}");
+    }
+    col.build_payload_mirror();
+    assert!(mirror_built(&col));
+    for query in queries {
+        assert_eq!(query_ids(&col, query), expected, "mirror: {query}");
+    }
+}

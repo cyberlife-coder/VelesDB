@@ -79,21 +79,22 @@ pub(in crate::collection::search::query) struct WhereFilterMemo {
 }
 
 impl WhereFilterMemo {
-    /// Evaluates the (possibly cached) compiled filter for `key` against
-    /// `payload`, building it with `build` exactly once per key.
-    pub(in crate::collection::search::query) fn matches_with(
+    /// Evaluates, three-valued, the (possibly cached) compiled filter for
+    /// `key` against `payload`, building it with `build` exactly once per
+    /// key. `None` is UNKNOWN, left for the enclosing WHERE to negate or fold.
+    pub(in crate::collection::search::query) fn evaluate_with(
         &self,
         key: (usize, u8),
         id: u64,
         payload: Option<&serde_json::Value>,
         build: impl FnOnce() -> crate::error::Result<crate::filter::Condition>,
-    ) -> crate::error::Result<bool> {
+    ) -> crate::error::Result<Option<bool>> {
         let mut cache = self.cache.borrow_mut();
         if let Some((_, cond)) = cache.iter().find(|(k, _)| *k == key) {
-            return Ok(cond.matches_point(id, payload));
+            return Ok(cond.evaluate_point(id, payload));
         }
         let cond = build()?;
-        let result = cond.matches_point(id, payload);
+        let result = cond.evaluate_point(id, payload);
         cache.push((key, cond));
         Ok(result)
     }

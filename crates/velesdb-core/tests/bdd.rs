@@ -133,5 +133,7 @@ mod velesql_reject_conformance;
 mod where_filters;
 #[path = "bdd/where_params.rs"]
 mod where_params;
+#[path = "bdd/where_three_valued_logic.rs"]
+mod where_three_valued_logic;
 #[path = "bdd/window_functions.rs"]
 mod window_functions;
