@@ -5,6 +5,7 @@ fn cand(node_id: u64, value: serde_json::Value) -> MatchCandidate {
         baseline: vec![node_id],
         row: QueryResultRow::synthetic(value.clone()).expect("test: row"),
         value,
+        binding: MatchBinding::default(),
     }
 }
 
@@ -100,6 +101,7 @@ fn test_multi_node_baseline_is_total_order() {
         row: QueryResultRow::synthetic(serde_json::json!({"a": {"k": 1}, "b": {}}))
             .expect("test: row"),
         value: serde_json::json!({"a": {"k": 1}, "b": {}}),
+        binding: MatchBinding::default(),
     };
     let mut c = vec![row(1, 9), row(1, 4)];
     let ob = vec![OrderByItem {

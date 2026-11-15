@@ -14,7 +14,7 @@ use velesdb_core::velesql::{
 use crate::database::{DatabaseInner, SharedStore};
 use crate::graph_store::{WasmEdge, WasmGraphNode, WasmGraphStore};
 use crate::velesql_match_nodes::MatchNodes;
-use crate::velesql_match_orderby::{order_and_limit, MatchCandidate};
+use crate::velesql_match_orderby::{order_and_limit, BoundElement, MatchBinding, MatchCandidate};
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
 
@@ -82,18 +82,21 @@ fn enrich_row(map: &mut serde_json::Map<String, serde_json::Value>, cross: &[Cro
     }
 }
 
-/// Executes a MATCH query.
+/// Runs a MATCH and returns its rows as ordered, limited candidates — the
+/// alias-keyed row together with what it binds ([`MatchBinding`]). Callers
+/// go through [`crate::velesql_graph::match_candidates_gated`], which puts
+/// the read gate in front.
 ///
 /// Only single-pattern MATCH is supported in the WASM executor. A query
 /// with multiple comma-separated patterns (e.g.
 /// `MATCH (a:X), (b:Y) RETURN a, b`) surfaces a clear error so callers
 /// know to use the persistent core backend (Devin Review Finding K) —
 /// rather than silently dropping all patterns after the first.
-pub(crate) fn execute_match(
+pub(crate) fn match_candidates(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<MatchCandidate>, String> {
     let Some(clause) = query.match_clause.as_ref() else {
         return Err("MATCH clause missing".to_string());
     };
@@ -250,7 +253,22 @@ impl PathWalk<'_> {
         if !matches_where_in_match_scope(self.where_clause, &bindings, self.params)? {
             return Ok(());
         }
-        out.push(build_match_row(&bound, &self.cross)?);
+        let edges = path
+            .edges
+            .iter()
+            .zip(&self.pattern.relationships)
+            .map(|(&id, rel)| BoundElement {
+                alias: rel.alias.clone(),
+                id,
+                payload: nodes
+                    .graph()
+                    .edges()
+                    .iter()
+                    .find(|e| e.id == id)
+                    .and_then(|e| e.payload.clone()),
+            })
+            .collect();
+        out.push(build_match_row(&bound, edges, &self.cross)?);
         Ok(())
     }
 }
@@ -265,17 +283,17 @@ fn positional_alias(position: usize) -> String {
 }
 
 /// Sorts the collected candidates per the RETURN `ORDER BY` (Finding 8: sort
-/// BEFORE LIMIT), truncates to LIMIT, then projects to result rows.
+/// BEFORE LIMIT), then truncates to LIMIT.
 fn finalize_candidates(
     mut candidates: Vec<MatchCandidate>,
     clause: &MatchClause,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<MatchCandidate>, String> {
     order_and_limit(
         &mut candidates,
         clause.return_clause.order_by.as_deref(),
         clause.return_clause.limit,
     )?;
-    Ok(candidates.into_iter().map(|c| c.row).collect())
+    Ok(candidates)
 }
 
 /// Returns edges incident to `anchor` that are compatible with the
@@ -517,6 +535,7 @@ fn make_binding(node: &NodePattern, id: u64, data: &WasmGraphNode, fallback: &st
 fn candidate_from_map(
     baseline: Vec<u64>,
     map: serde_json::Map<String, serde_json::Value>,
+    binding: MatchBinding,
 ) -> Result<MatchCandidate, String> {
     let value = serde_json::Value::Object(map);
     let row = QueryResultRow::synthetic(value.clone())?;
@@ -524,11 +543,13 @@ fn candidate_from_map(
         baseline,
         value,
         row,
+        binding,
     })
 }
 
 fn build_match_row(
     bound: &[(&NodePattern, u64, &WasmGraphNode)],
+    edges: Vec<BoundElement>,
     cross: &[CrossRef],
 ) -> Result<MatchCandidate, String> {
     let mut map = serde_json::Map::new();
@@ -540,7 +561,18 @@ fn build_match_row(
         map.insert(alias, node_json(*id, data));
     }
     enrich_row(&mut map, cross);
-    candidate_from_map(bound.iter().map(|(_, id, _)| *id).collect(), map)
+    let binding = MatchBinding {
+        nodes: bound
+            .iter()
+            .map(|(pattern, id, data)| BoundElement {
+                alias: pattern.alias.clone(),
+                id: *id,
+                payload: data.payload.clone(),
+            })
+            .collect(),
+        edges,
+    };
+    candidate_from_map(bound.iter().map(|(_, id, _)| *id).collect(), map, binding)
 }
 
 /// Builds the JSON shape returned for a single MATCH-bound node.

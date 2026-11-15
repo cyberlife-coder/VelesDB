@@ -72,6 +72,33 @@ console.log(plan.rowsJson);
 `createMetadataCollection` exists precisely so payload-only workloads can run
 VelesQL without declaring a `vector` column.
 
+### Graph patterns: `executeMatch`
+
+A `MATCH` reads one graph: the first node's `@collection` annotation, else the
+`_collection` param, else the default `graph` (MATCH has no `FROM`). As in core,
+the points of the collection with that name are its nodes (payload as
+properties, `_labels` as labels), and its edges come from `INSERT EDGE`.
+
+`executeQuery` returns one alias-keyed object per MATCH row. `executeMatch`
+runs the same MATCH and returns a JSON string of rows in core's
+`MatchResult` shape, the rows of REST `POST /collections/{name}/match`:
+
+```javascript
+db.executeQuery("INSERT EDGE INTO docs (source = 1, target = 2, label = 'CITES')", null);
+
+const rows = JSON.parse(db.executeMatch(
+  "MATCH (a)-[:CITES]->(b) RETURN b.title AS cited, b.id",
+  JSON.stringify({ _collection: 'docs' })
+));
+// [{ "bindings": { "a": 1, "b": 2 }, "depth": 1,
+//    "projected": { "cited": "world", "b.id": 2 } }]
+```
+
+`projected` follows core's RETURN rules: `alias.property` under its `AS` alias or
+its text, `alias.id` for the element id, a bare alias as every `alias.key` plus
+`alias.id`, and `*` for every bound node. Rows carry no `score`, because the
+browser MATCH path computes no `similarity()`.
+
 ## What runs in WASM
 
 | Feature | WASM | REST server |

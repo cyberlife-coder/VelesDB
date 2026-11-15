@@ -33,6 +33,26 @@ pub(crate) struct MatchCandidate {
     pub value: serde_json::Value,
     /// The serialized row returned to the caller after sorting.
     pub row: QueryResultRow,
+    /// What the row binds, for core-shaped results
+    /// ([`crate::velesql_match_core`]).
+    pub binding: MatchBinding,
+}
+
+/// The elements one MATCH row binds, in pattern order.
+#[derive(Debug, Default)]
+pub(crate) struct MatchBinding {
+    /// Bound nodes: explicit alias (`None` for an unnamed node), id, payload.
+    pub nodes: Vec<BoundElement>,
+    /// Traversed relationships: explicit alias, edge id, edge properties.
+    pub edges: Vec<BoundElement>,
+}
+
+/// One bound node or relationship.
+#[derive(Debug)]
+pub(crate) struct BoundElement {
+    pub alias: Option<String>,
+    pub id: u64,
+    pub payload: Option<serde_json::Value>,
 }
 
 /// Sorts MATCH candidates in place per the RETURN `ORDER BY`, then truncates to

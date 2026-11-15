@@ -9,7 +9,7 @@
 use velesdb_core::velesql::{InsertEdgeStatement, InsertNodeStatement, Parser};
 
 use crate::database::DatabaseInner;
-use crate::velesql_match::execute_match;
+use crate::velesql_graph::execute_match;
 use crate::velesql_value::Params;
 
 fn node(db: &mut DatabaseInner, id: u64, name: &str, label: &str) {

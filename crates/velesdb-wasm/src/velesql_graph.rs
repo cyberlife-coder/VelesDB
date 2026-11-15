@@ -26,12 +26,26 @@ pub(crate) fn execute_match(
     query: &Query,
     params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
+    Ok(match_candidates_gated(db, query, params)?
+        .into_iter()
+        .map(|c| c.row)
+        .collect())
+}
+
+/// Runs a MATCH behind its read gate and returns the ordered, limited
+/// candidates. Both `executeQuery` and `executeMatch` read through here, so
+/// one gate covers every MATCH surface.
+pub(crate) fn match_candidates_gated(
+    db: &mut DatabaseInner,
+    query: &Query,
+    params: &Params,
+) -> Result<Vec<crate::velesql_match_orderby::MatchCandidate>, String> {
     // Read-path gate (audit F-5.4, #1392), asked about every collection the
     // MATCH reads. Zero-overhead without an observer.
     for collection in match_gate_collections(query, params)? {
         db.check_query_access(&collection, WasmQueryOperationKind::GraphTraversal)?;
     }
-    crate::velesql_match::execute_match(db, query, params)
+    crate::velesql_match::match_candidates(db, query, params)
 }
 
 /// Every collection a MATCH reads, for its read gate, in first-read order:

@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`WasmDatabase.executeMatch(sql, paramsJson)`** returns `MATCH` rows in
+  core's `MatchResult` shape, `[{ bindings, depth, projected }]`, which is what
+  REST `POST /collections/{name}/match` returns. It projects RETURN with
+  core's rules through core's own RETURN item parser. `executeQuery` returns
+  alias-keyed objects and left the projection to the caller. Both run behind
+  the same read gate, walk, `ORDER BY` and `LIMIT`.
 - **`MATCH` binds the target collection's points as nodes**, as core does: a
   point's payload is the node's properties and its `_labels` array the node's
   labels. Nodes lived only in the graph store, so points inserted through the

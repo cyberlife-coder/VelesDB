@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`velesql::{parse_projection_item, ProjectionItem, parse_property_path}`**:
+  the MATCH RETURN item parser is also exported from `velesdb_core::velesql`,
+  and builds without `persistence`, so the WASM executor projects RETURN
+  through it. The `collection::search::query::match_exec` path still exports
+  the same items.
+
 - **`install-memory-daemon.sh` runs the shared daemon on Linux** as a
   systemd user unit (`~/.config/systemd/user/velesdb-memory.service`, logs in
   `journalctl --user -u velesdb-memory`), with the same environment and

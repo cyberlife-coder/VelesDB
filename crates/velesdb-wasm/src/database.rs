@@ -475,6 +475,44 @@ impl WasmDatabase {
         crate::velesql_exec::execute(&mut self.inner, sql, params_json.as_deref())
             .map_err(|e| JsValue::from_str(&e))
     }
+
+    /// Runs a VelesQL `MATCH` and returns its rows in core's `MatchResult`
+    /// shape, as a JSON array string: `[{ bindings, depth, projected }]` —
+    /// the rows of REST `POST /collections/{name}/match`.
+    ///
+    /// `executeQuery` runs the same MATCH (same read gate, walk, ORDER BY and
+    /// LIMIT) but returns alias-keyed objects and leaves RETURN to the
+    /// caller. Name the collection with `_collection` in `params_json` (MATCH
+    /// has no `FROM`). No row carries a `score`: the browser MATCH path
+    /// computes no `similarity()`.
+    ///
+    /// # Example (JavaScript)
+    /// ```javascript
+    /// const rows = JSON.parse(db.executeMatch(
+    ///     "MATCH (a:Doc)-[:CITES]->(b:Doc) RETURN b.title",
+    ///     JSON.stringify({ _collection: "docs" })
+    /// ));
+    /// // [{ bindings: { a: 1, b: 2 }, depth: 1, projected: { "b.title": "…" } }]
+    /// ```
+    ///
+    /// # Errors
+    /// Returns a `JsValue` error string when parsing or validation fails, the
+    /// statement is not a MATCH, parameters are invalid, the read gate denies
+    /// a collection, or the MATCH fails.
+    #[wasm_bindgen(js_name = executeMatch)]
+    pub fn execute_match(
+        &mut self,
+        sql: &str,
+        params_json: Option<String>,
+    ) -> Result<String, JsValue> {
+        let rows = crate::velesql_match_core::execute_match_rows(
+            &mut self.inner,
+            sql,
+            params_json.as_deref(),
+        )
+        .map_err(|e| JsValue::from_str(&e))?;
+        serde_json::to_string(&rows).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
 }
 
 // ---------------------------------------------------------------------------
