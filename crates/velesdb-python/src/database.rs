@@ -531,6 +531,8 @@ impl Database {
     /// Example:
     ///     >>> db.train_pq("documents", m=8, k=256)
     ///     >>> db.train_pq("documents", m=16, k=128, opq=True)
+    #[allow(clippy::too_many_arguments)] // py token + training knobs
+    #[allow(clippy::too_many_arguments)] // py token + training knobs
     #[pyo3(signature = (collection_name, m=8, k=256, opq=false))]
     fn train_pq(
         &self,
@@ -540,57 +542,17 @@ impl Database {
         k: usize,
         opq: bool,
     ) -> PyResult<String> {
-        // Build the statement, rather than printing VelesQL and parsing it
-        // back. The round-trip was what forced this method to invent an
-        // identifier sanitizer ("prevent VelesQL injection via string
-        // interpolation"), and that sanitizer drifted from
-        // `velesdb_core::validation`: it rejected the interior hyphen core
-        // accepts and pins as a doc example (`docs-v2`), while passing a
-        // leading digit the grammar's `regular_identifier` then refused, and
-        // passing the empty string, which produced `TRAIN QUANTIZER ON  WITH
-        // (...)`. Constructing the AST emits no identifier text at all, so
-        // there is no charset rule to keep in step and all three dissolve
-        // together. `velesdb-mobile` and `tauri-plugin-velesdb` already build
-        // this statement the same way.
-        let mut params = std::collections::HashMap::new();
-        params.insert(
-            "m".to_string(),
-            WithValue::Integer(i64::try_from(m).map_err(|_| {
-                PyValueError::new_err(format!(
-                    "m={m} exceeds the maximum supported subspace count"
-                ))
-            })?),
-        );
-        params.insert(
-            "k".to_string(),
-            WithValue::Integer(i64::try_from(k).map_err(|_| {
-                PyValueError::new_err(format!(
-                    "k={k} exceeds the maximum supported centroid count"
-                ))
-            })?),
-        );
-        if opq {
-            params.insert("type".to_string(), WithValue::Identifier("opq".to_string()));
-        }
-
-        let parsed = Query::new_train(TrainStatement {
-            collection: collection_name.to_string(),
-            params,
-        });
-
-        // Drop the GIL for the training run: k-means codebook fitting is
-        // CPU-bound Rust work that scales with the collection size and easily
-        // reaches multi-second latency — holding the GIL for that long would
-        // freeze every other Python thread.
-        let inner = Arc::clone(&self.inner);
-        let results = py
-            .detach(move || {
-                let empty_params = std::collections::HashMap::new();
-                inner.execute_query(&parsed, &empty_params)
-            })
-            .map_err(core_err)?;
-
-        Ok(format!("PQ training complete: {} results", results.len()))
+        // Back-compat shim: pq/opq only, no force/sample. The general path is
+        // `train_quantizer` (pq/opq/rabitq/sq8 + force + sample_limit).
+        //
+        // The statement is built as an AST, not printed and re-parsed: the
+        // round-trip was what forced an identifier sanitizer that drifted from
+        // `velesdb_core::validation`. Constructing the AST emits no identifier
+        // text at all, so there is no charset rule to keep in step.
+        // `velesdb-mobile` and `tauri-plugin-velesdb` build it the same way.
+        let quantizer = if opq { "opq" } else { "pq" };
+        let results = self.run_train(py, collection_name, quantizer, m, k, false, None)?;
+        Ok(format!("PQ training complete: {results} results"))
     }
 
     /// Create a new persistent graph collection.
@@ -942,6 +904,138 @@ impl Database {
         .map_err(core_err)?;
         Ok(())
     }
+
+    /// The database directory path on disk.
+    #[getter]
+    fn data_dir(&self) -> String {
+        self.path.display().to_string()
+    }
+
+    /// Schema version of the on-disk database format.
+    fn schema_version(&self) -> u64 {
+        self.inner.schema_version()
+    }
+
+    /// The live query guardrail limits of the whole database (the last value
+    /// ``update_guardrails`` applied, or the defaults).
+    ///
+    /// Returns:
+    ///     dict with keys ``max_depth``, ``max_cardinality``,
+    ///     ``memory_limit_bytes``, ``timeout_ms``, ``rate_limit_qps``,
+    ///     ``circuit_failure_threshold``, ``circuit_recovery_seconds``.
+    fn guardrail_limits(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let limits = self.inner.guardrail_limits();
+        let value = serde_json::to_value(&limits)
+            .map_err(|e| PyRuntimeError::new_err(format!("guardrail serialization failed: {e}")))?;
+        Ok(crate::utils::json_to_python(py, &value))
+    }
+
+    /// Flush every collection (vector, graph, metadata) to disk.
+    ///
+    /// Returns:
+    ///     int: Number of collections whose flush failed (0 = all durable).
+    fn flush_all(&self, py: Python<'_>) -> usize {
+        py.detach(|| self.inner.flush_all())
+    }
+
+    /// Explain a VelesQL statement at database scope (plan only, no execution),
+    /// through the same gate and compiled-plan cache as ``execute_query``.
+    ///
+    /// Unlike the collection-scoped ``Collection.explain``, this resolves JOIN
+    /// targets and cross-collection MATCH from the database registry, and the
+    /// returned plan carries the cache fields ``cache_hit`` /
+    /// ``plan_reuse_count``.
+    ///
+    /// Args:
+    ///     sql: VelesQL statement string.
+    ///     params: Optional parameter bindings (bare names, e.g. ``{"q": [...]}``).
+    ///
+    /// Returns:
+    ///     dict with keys ``tree``, ``estimated_cost_ms``, ``filter_strategy``,
+    ///     ``index_used``, ``cache_hit``, ``plan_reuse_count``.
+    #[pyo3(signature = (sql, params = None))]
+    fn explain(
+        &self,
+        py: Python<'_>,
+        sql: &str,
+        params: Option<std::collections::HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Py<PyAny>> {
+        use crate::collection::query::{convert_params, parse_velesql, plan_to_dict};
+
+        let parsed = parse_velesql(sql)?;
+        let rust_params = convert_params(py, params)?;
+        let inner = Arc::clone(&self.inner);
+        let plan = py
+            .detach(move || inner.explain_query_with_params(&parsed, &rust_params))
+            .map_err(core_err)?;
+        Ok(plan_to_dict(py, &plan))
+    }
+
+    /// Explain a VelesQL statement at database scope WITH execution, returning
+    /// measured statistics (EXPLAIN ANALYZE). Database-level counterpart of
+    /// ``Collection.explain_analyze``; runs the statement, so it is a read
+    /// through the gate, not a free diagnostic.
+    ///
+    /// Args:
+    ///     sql: VelesQL statement string.
+    ///     params: Optional parameter bindings (bare names, e.g. ``{"q": [...]}``).
+    ///
+    /// Returns:
+    ///     dict with keys ``plan``, ``actual_stats``, ``node_stats``,
+    ///     ``cost_factors``, ``calibration_source``.
+    #[pyo3(signature = (sql, params = None))]
+    fn explain_analyze(
+        &self,
+        py: Python<'_>,
+        sql: &str,
+        params: Option<std::collections::HashMap<String, Py<PyAny>>>,
+    ) -> PyResult<Py<PyAny>> {
+        use crate::collection::query::{build_explain_analyze_dict, convert_params, parse_velesql};
+
+        let parsed = parse_velesql(sql)?;
+        let rust_params = convert_params(py, params)?;
+        let inner = Arc::clone(&self.inner);
+        let output = py
+            .detach(move || inner.explain_analyze_query(&parsed, &rust_params))
+            .map_err(core_err)?;
+        Ok(build_explain_analyze_dict(py, &output))
+    }
+
+    /// Train a quantizer on a collection (typed counterpart of
+    /// ``TRAIN QUANTIZER ON <c> WITH (...)``).
+    ///
+    /// Args:
+    ///     collection_name: Name of the collection to train on.
+    ///     quantizer: ``"pq"`` (default), ``"opq"``, ``"rabitq"`` or ``"sq8"``.
+    ///     m: Number of subspaces for pq/opq (dimension must be divisible by m).
+    ///     k: Number of centroids per subspace for pq/opq.
+    ///     force: Retrain even if a quantizer is already installed.
+    ///     sample_limit: Cap on the number of vectors used for training.
+    ///
+    /// Returns:
+    ///     Status message from the training operation.
+    #[allow(clippy::too_many_arguments)] // py token + training knobs
+    #[allow(clippy::too_many_arguments)] // py token + training knobs
+    #[pyo3(signature = (collection_name, quantizer="pq", m=8, k=256, force=false, sample_limit=None))]
+    fn train_quantizer(
+        &self,
+        py: Python<'_>,
+        collection_name: &str,
+        quantizer: &str,
+        m: usize,
+        k: usize,
+        force: bool,
+        sample_limit: Option<usize>,
+    ) -> PyResult<String> {
+        let quantizer = quantizer.to_ascii_lowercase();
+        if !matches!(quantizer.as_str(), "pq" | "opq" | "rabitq" | "sq8") {
+            return Err(PyValueError::new_err(format!(
+                "unknown quantizer '{quantizer}'. Supported: pq, opq, rabitq, sq8"
+            )));
+        }
+        let results = self.run_train(py, collection_name, &quantizer, m, k, force, sample_limit)?;
+        Ok(format!("{quantizer} training complete: {results} results"))
+    }
 }
 
 impl Database {
@@ -962,5 +1056,75 @@ impl Database {
     /// parent `Database`, avoiding VELES-031 re-entrant lock errors.
     pub fn open_shared(&self) -> std::result::Result<Arc<CoreDatabase>, String> {
         Ok(Arc::clone(&self.inner))
+    }
+
+    /// Shared TRAIN QUANTIZER implementation: validates the quantizer name,
+    /// builds the statement as an AST (never via string interpolation, so no
+    /// identifier sanitizer can drift from `velesdb_core::validation`), runs
+    /// it off the GIL, and returns the result count.
+    #[allow(clippy::too_many_arguments)] // py token + training knobs
+    fn run_train(
+        &self,
+        py: Python<'_>,
+        collection_name: &str,
+        quantizer: &str,
+        m: usize,
+        k: usize,
+        force: bool,
+        sample_limit: Option<usize>,
+    ) -> PyResult<usize> {
+        let quantizer = quantizer.to_ascii_lowercase();
+        if !matches!(quantizer.as_str(), "pq" | "opq" | "rabitq" | "sq8") {
+            return Err(PyValueError::new_err(format!(
+                "unknown quantizer '{quantizer}'. Supported: pq, opq, rabitq, sq8"
+            )));
+        }
+        let mut params = std::collections::HashMap::new();
+        params.insert(
+            "m".to_string(),
+            WithValue::Integer(i64::try_from(m).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "m={m} exceeds the maximum supported subspace count"
+                ))
+            })?),
+        );
+        params.insert(
+            "k".to_string(),
+            WithValue::Integer(i64::try_from(k).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "k={k} exceeds the maximum supported centroid count"
+                ))
+            })?),
+        );
+        params.insert("type".to_string(), WithValue::Identifier(quantizer.clone()));
+        params.insert("force".to_string(), WithValue::Boolean(force));
+        if let Some(limit) = sample_limit {
+            params.insert(
+                "sample".to_string(),
+                WithValue::Integer(i64::try_from(limit).map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "sample_limit={limit} exceeds the maximum supported sample count"
+                    ))
+                })?),
+            );
+        }
+
+        let parsed = Query::new_train(TrainStatement {
+            collection: collection_name.to_string(),
+            params,
+        });
+
+        // Drop the GIL for the training run: k-means codebook fitting is
+        // CPU-bound Rust work that scales with the collection size and easily
+        // reaches multi-second latency — holding the GIL for that long would
+        // freeze every other Python thread.
+        let inner = Arc::clone(&self.inner);
+        let results = py
+            .detach(move || {
+                let empty_params = std::collections::HashMap::new();
+                inner.execute_query(&parsed, &empty_params)
+            })
+            .map_err(core_err)?;
+        Ok(results.len())
     }
 }

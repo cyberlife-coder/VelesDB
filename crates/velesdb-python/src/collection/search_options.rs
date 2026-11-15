@@ -86,6 +86,17 @@ pub struct SearchOptions {
     /// ``principal`` for multi-tenant scoping. ``None`` by default.
     #[pyo3(get, set)]
     pub tenant: Option<String>,
+    /// Optional HNSW ``ef_search`` override for dense search, in
+    /// ``[16, 4096]`` (core's `MIN_EF_SEARCH`/`MAX_EF_SEARCH`). Wins over
+    /// ``quality`` when both are set, exactly like core's gate.
+    #[pyo3(get, set)]
+    pub ef_search: Option<usize>,
+    /// Optional named search-quality profile for dense search
+    /// (``"fast"``, ``"balanced"``, ``"accurate"``, ``"perfect"``,
+    /// ``"adaptive"``, ``"autotune"``, ``"custom"``). Parsed through core's
+    /// own mode parser, so the accepted set can never drift from the engine.
+    #[pyo3(get, set)]
+    pub quality: Option<String>,
 }
 
 #[pymethods]
@@ -107,6 +118,8 @@ impl SearchOptions {
     ///         fusion (default: RRF k=60).
     ///     principal: Optional caller identity forwarded to the read gate.
     ///     tenant: Optional tenant hint forwarded to the read gate.
+    ///     ef_search: Optional HNSW ef override in [16, 4096] for dense search.
+    ///     quality: Optional search-quality profile name for dense search.
     #[new]
     #[allow(clippy::too_many_arguments)] // additive governance kwargs on an existing builder
     #[pyo3(signature = (
@@ -120,7 +133,10 @@ impl SearchOptions {
         fusion = None,
         principal = None,
         tenant = None,
+        ef_search = None,
+        quality = None,
     ))]
+    #[allow(clippy::too_many_arguments)] // additive tuning kwargs on the builder
     pub fn new(
         vector: Option<Py<PyAny>>,
         sparse_vector: Option<Py<PyAny>>,
@@ -131,6 +147,8 @@ impl SearchOptions {
         fusion: Option<FusionStrategy>,
         principal: Option<String>,
         tenant: Option<String>,
+        ef_search: Option<usize>,
+        quality: Option<String>,
     ) -> Self {
         Self {
             vector,
@@ -142,6 +160,8 @@ impl SearchOptions {
             fusion,
             principal,
             tenant,
+            ef_search,
+            quality,
         }
     }
 
@@ -222,6 +242,18 @@ impl SearchOptions {
     /// Sets the read-gate tenant hint and returns `self`.
     pub fn with_tenant(slf: Py<Self>, py: Python<'_>, tenant: Option<String>) -> Py<Self> {
         slf.bind(py).borrow_mut().tenant = tenant;
+        slf
+    }
+
+    /// Sets the HNSW ``ef_search`` override (dense search) and returns `self`.
+    pub fn with_ef_search(slf: Py<Self>, py: Python<'_>, ef_search: Option<usize>) -> Py<Self> {
+        slf.bind(py).borrow_mut().ef_search = ef_search;
+        slf
+    }
+
+    /// Sets the search-quality profile (dense search) and returns `self`.
+    pub fn with_quality(slf: Py<Self>, py: Python<'_>, quality: Option<String>) -> Py<Self> {
+        slf.bind(py).borrow_mut().quality = quality;
         slf
     }
 }

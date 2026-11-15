@@ -282,3 +282,121 @@ def test_graph_store_direction_and_reads():
 
     assert store.remove_node_edges(20) == 2
     assert store.edge_count() == 0
+
+
+# ---------------------------------------------------------------------------
+# 4. Search / Database parity: tuning knobs, rrf_k, component_scores, explain
+# ---------------------------------------------------------------------------
+
+
+def _seed_docs(col):
+    col.upsert(
+        [
+            {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"text": "machine learning"}},
+            {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"text": "deep learning"}},
+            {"id": 3, "vector": [0.9, 0.1, 0.0, 0.0], "payload": {"text": "supervised learning"}},
+        ]
+    )
+
+
+def test_search_options_ef_and_quality(temp_db):
+    col = temp_db.create_collection("tune", dimension=4, metric="cosine")
+    _seed_docs(col)
+    r = col.search_request(velesdb.SearchOptions(vector=[1.0, 0, 0, 0], k=2, ef_search=64))
+    assert len(r) == 2
+    r = col.search_request(
+        velesdb.SearchOptions(vector=[1.0, 0, 0, 0], k=2, quality="accurate")
+    )
+    assert len(r) == 2
+    r = col.search_request(
+        velesdb.SearchOptions().with_vector([1.0, 0, 0, 0]).with_k(2).with_quality("fast")
+    )
+    assert len(r) == 2
+    # out-of-range ef is rejected client-side, same bounds as core
+    with pytest.raises(ValueError, match="ef_search"):
+        col.search_request(velesdb.SearchOptions(vector=[1.0, 0, 0, 0], k=2, ef_search=8))
+    with pytest.raises(ValueError):
+        col.search_request(
+            velesdb.SearchOptions(vector=[1.0, 0, 0, 0], k=2, quality="bogus-mode")
+        )
+
+
+def test_hybrid_search_rrf_k_and_component_scores(temp_db):
+    col = temp_db.create_collection("hyb", dimension=4, metric="cosine")
+    _seed_docs(col)
+    r = col.hybrid_search([1.0, 0, 0, 0], "learning", top_k=3, rrf_k=10)
+    assert len(r) == 3
+    assert r[0]["id"] == 1
+    # the per-component breakdown core tags on hybrid paths is now visible
+    assert "component_scores" in r[0]
+    assert "vector_score" in r[0]["component_scores"]
+    r2 = col.hybrid_search([1.0, 0, 0, 0], "learning", top_k=3, rrf_k=1)
+    assert len(r2) == 3
+
+
+def test_database_getters_guardrails_flush_all(tmp_path):
+    db = velesdb.Database(str(tmp_path))
+    assert db.data_dir == str(tmp_path)
+    assert isinstance(db.schema_version(), int)
+    limits = db.guardrail_limits()
+    for key in (
+        "max_depth",
+        "max_cardinality",
+        "memory_limit_bytes",
+        "timeout_ms",
+        "rate_limit_qps",
+        "circuit_failure_threshold",
+        "circuit_recovery_seconds",
+    ):
+        assert key in limits, f"guardrail_limits missing {key}"
+    col = db.create_collection("c", dimension=4, metric="cosine")
+    col.upsert([{"id": 1, "vector": [1.0, 0, 0, 0]}])
+    assert db.flush_all() == 0
+
+
+def test_database_explain_and_explain_analyze(tmp_path):
+    db = velesdb.Database(str(tmp_path))
+    col = db.create_collection("c", dimension=4, metric="cosine")
+    _seed_docs(col)
+    sql = "SELECT * FROM c WHERE vector NEAR $q LIMIT 3"
+    # execute once so the compiled plan enters the cache
+    db.execute_query(sql, params={"q": [1.0, 0, 0, 0]})
+    plan = db.explain(sql, params={"q": [1.0, 0, 0, 0]})
+    for key in ("tree", "estimated_cost_ms", "filter_strategy", "index_used", "cache_hit", "plan_reuse_count"):
+        assert key in plan, f"explain plan missing {key}"
+    assert plan["cache_hit"] is True  # the execute_query above cached it
+    ea = db.explain_analyze("SELECT * FROM c LIMIT 3")
+    assert ea["actual_stats"]["actual_rows"] == 3
+    assert "plan" in ea and "node_stats" in ea
+
+
+def test_train_quantizer_all_types_and_train_pq_compat(temp_db):
+    col = temp_db.create_collection("q", dimension=8, metric="cosine")
+    col.upsert(
+        [
+            {"id": i, "vector": [float((i >> j) & 1) for j in range(8)]}
+            for i in range(1, 33)
+        ]
+    )
+    assert "sq8" in temp_db.train_quantizer("q", quantizer="sq8")
+    assert "rabitq" in temp_db.train_quantizer("q", quantizer="rabitq", force=True)
+    with pytest.raises(ValueError, match="unknown quantizer"):
+        temp_db.train_quantizer("q", quantizer="bogus")
+    # train_pq keeps its historical message for pq/opq
+    col2 = temp_db.create_collection("q2", dimension=8, metric="cosine")
+    col2.upsert(
+        [
+            {"id": i, "vector": [float((i >> j) & 1) for j in range(8)]}
+            for i in range(1, 33)
+        ]
+    )
+    assert "PQ training complete" in temp_db.train_pq("q2", m=4, k=16)
+
+
+def test_rebuild_index_and_all_point_ids(temp_db):
+    col = temp_db.create_collection("ri", dimension=4, metric="cosine")
+    col.upsert([{"id": i, "vector": [1.0, 0, 0, 0]} for i in range(1, 6)])
+    col.delete([4, 5])
+    reclaimed = col.rebuild_index()
+    assert isinstance(reclaimed, int)
+    assert sorted(col.all_point_ids()) == [1, 2, 3]

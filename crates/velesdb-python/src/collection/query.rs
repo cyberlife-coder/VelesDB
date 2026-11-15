@@ -138,6 +138,36 @@ pub(crate) fn build_explain_dict(
     dict.into_any().unbind()
 }
 
+/// Convert a core `QueryPlan` (as returned by the database-level
+/// `explain_query_with_params`) to a Python dict, including the compiled-plan
+/// cache fields `cache_hit` / `plan_reuse_count` that the collection-level
+/// leaf path cannot see.
+pub(crate) fn plan_to_dict(py: Python<'_>, plan: &velesdb_core::velesql::QueryPlan) -> Py<PyAny> {
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(
+        PyString::intern(py, "tree"),
+        to_pyobject(py, plan.to_tree()),
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "estimated_cost_ms"),
+        plan.estimated_cost_ms,
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "filter_strategy"),
+        plan.filter_strategy.as_str(),
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "index_used"),
+        plan.index_used.map(|i| i.as_str().to_string()),
+    );
+    let _ = dict.set_item(PyString::intern(py, "cache_hit"), plan.cache_hit);
+    let _ = dict.set_item(
+        PyString::intern(py, "plan_reuse_count"),
+        plan.plan_reuse_count,
+    );
+    dict.into_any().unbind()
+}
+
 /// Builds an EXPLAIN ANALYZE dict from an `ExplainOutput`.
 ///
 /// Returns a Python dict with keys: `plan`, `actual_stats`, `node_stats`.
