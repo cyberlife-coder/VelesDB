@@ -3355,6 +3355,11 @@ SELECT * FROM places WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4);
 | Parameter | `$name` | `$query_vector` |
 | Temporal | `NOW()`, `INTERVAL` | `NOW() - INTERVAL '7 days'` |
 
+An integer literal is an `i64`, or a `u64` above `i64::MAX`; past `u64::MAX`
+it reads as a float. A numeric literal too large for an `f64` (past about
+309 digits) is refused at parse time with "Numeric literal out of range":
+an infinity has no JSON form, so no literal stands for one.
+
 ### Score Variables (for ORDER BY and LET)
 
 | Variable | Source | When Populated |
