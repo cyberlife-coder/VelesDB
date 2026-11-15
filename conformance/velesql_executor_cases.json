@@ -1,6 +1,6 @@
 {
   "version": "2.6.0",
-  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with. v2.6.0 adds the `nums` extra collection and `number_cases` (plain SELECT, core+WASM, ids in order): numbers compare by exact value, `-0.0` equal to `0`, `0.3` not `0.30000000000000004`, an integer past 2^53 not the float it rounds to, an IN list the same at any length; core also runs them through a secondary index and the payload mirror. It adds G022-G025 (GROUP BY, MIN/MAX and HAVING over those numbers) and P006-P007 (DISTINCT `id`, PARTITION BY a number), and runs `projection_cases` over the extra collections too. v2.5.0 adds the `tickets` extra collection, whose payloads carry an `id` of their own, with O003 and G021 (`id` is the point id in WHERE, ORDER BY and aggregates). v2.4.0 adds G016-G020 (FIRST and tie order independent of scan order, `score` as a SQL GROUP BY alias, HAVING precedence) and R014-R015 (V018). v2.3.0 adds `null_order_cases` (plain SELECT over the extra collections, ids in order) and runs `aggregate_cases` over the extra collections too, pinning where a NULL sort key lands. v2.2.0 adds the Euclidean `docs_l2` extra collection and the `e` query vector for vector GROUP BY cases, which may also pin each group's row (`expect_rows`), id (`expect_ids`) and score (`expect_scores`, within 1e-5).",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, ids in order since D003 was resolved), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with. v2.6.0 adds the `nums` extra collection and `number_cases` (plain SELECT, core+WASM, ids in order): numbers compare by exact value, `-0.0` equal to `0`, `0.3` not `0.30000000000000004`, an integer past 2^53 not the float it rounds to, an IN list the same at any length; core also runs them through a secondary index and the payload mirror. It adds G022-G025 (GROUP BY, MIN/MAX and HAVING over those numbers) and P006-P007 (DISTINCT `id`, PARTITION BY a number), and runs `projection_cases` over the extra collections too. v2.5.0 adds the `tickets` extra collection, whose payloads carry an `id` of their own, with O003 and G021 (`id` is the point id in WHERE, ORDER BY and aggregates). v2.4.0 adds G016-G020 (FIRST and tie order independent of scan order, `score` as a SQL GROUP BY alias, HAVING precedence) and R014-R015 (V018). v2.3.0 adds `null_order_cases` (plain SELECT over the extra collections, ids in order) and runs `aggregate_cases` over the extra collections too, pinning where a NULL sort key lands. v2.2.0 adds the Euclidean `docs_l2` extra collection and the `e` query vector for vector GROUP BY cases, which may also pin each group's row (`expect_rows`), id (`expect_ids`) and score (`expect_scores`, within 1e-5).",
   "dataset": {
     "collection": "docs",
     "dimension": 4,
@@ -506,26 +506,51 @@
     {
       "id": "S001",
       "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC UNION SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
-      "expect_ids": [1, 2, 3, 4, 5],
-      "note": "issue #1544: UNION of two disjoint partitions returns every id exactly once. Compared as a SET, not an ordered list — see documented_divergences D003"
+      "expect_ids": [5, 1, 3, 2, 4],
+      "note": "UNION of two disjoint partitions returns every id once; the last operand's ORDER BY windows the compound, so the rows come back by year (velesql::execute_compound)"
     },
     {
       "id": "S002",
       "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC UNION SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC",
       "expect_ids": [1, 2, 4],
-      "note": "issue #1544: UNION of a branch with itself proves de-duplication (3 ids, not 6). Compared as a SET — see documented_divergences D003"
+      "note": "UNION of a branch with itself proves de-duplication (3 rows, not 6)"
     },
     {
       "id": "S003",
       "query": "SELECT * FROM docs WHERE year >= 2020 ORDER BY year ASC INTERSECT SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC",
       "expect_ids": [1, 2, 4],
-      "note": "issue #1544: INTERSECT keeps only ids present in both branches. Compared as a SET — see documented_divergences D003"
+      "note": "INTERSECT keeps the rows present in both branches, ordered by the window"
     },
     {
       "id": "S004",
       "query": "SELECT * FROM docs ORDER BY year ASC EXCEPT SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
       "expect_ids": [1, 2, 4],
-      "note": "issue #1544: EXCEPT removes the right-hand branch's ids from the left-hand branch. Compared as a SET — see documented_divergences D003"
+      "note": "EXCEPT removes the right-hand branch's rows from the left-hand branch"
+    },
+    {
+      "id": "S005",
+      "query": "SELECT * FROM docs WHERE category = 'tech' UNION SELECT * FROM docs WHERE category = 'other' LIMIT 2",
+      "expect_ids": [1, 2],
+      "note": "a LIMIT after the last operand windows the compound (core ignored it: the trailing LIMIT was the last operand's, overridden). Without ORDER BY the metadata rows tie at 1.0 and keep the order met"
+    },
+    {
+      "id": "S006",
+      "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year DESC LIMIT 1 UNION SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
+      "expect_ids": [5, 3, 4],
+      "note": "a first operand keeps its own ORDER BY / LIMIT (tech's latest year, 4); the last operand's ORDER BY windows the compound"
+    },
+    {
+      "id": "S007",
+      "query": "SELECT category FROM docs WHERE year >= 2021 INTERSECT SELECT category FROM docs WHERE year <= 2020",
+      "expect_ids": [2, 3],
+      "note": "rows are compared by their projected values: both year ranges hold a tech and an other category, so both survive the INTERSECT (as the first rows met with them, 2 and 3)"
+    },
+    {
+      "id": "S008",
+      "query": "SELECT * FROM docs_l2 WHERE vector NEAR $e LIMIT 2 UNION SELECT * FROM docs_l2 WHERE grp = 'y'",
+      "expect_ids": [24, 21, 22],
+      "expect_scores": [0.5, 1.0, 1.0],
+      "note": "without ORDER BY the rows rank by score in the metric's direction — closest first under euclidean (24 at 0.5, then the ties at 1.0 in the order met)"
     }
   ],
   "match_cases": [
@@ -1283,10 +1308,10 @@
     {
       "id": "D003",
       "area": "UNION/INTERSECT/EXCEPT row ordering for non-ranked branches",
-      "core_behavior": "apply_set_operation (set_operations.rs) always re-sorts the merged result by score descending, regardless of any per-branch ORDER BY; when every row has score 0.0 (no vector NEAR in either branch) the comparator sees only ties and Vec::sort_unstable_by's tie-break is not stable — order was observed to differ between two consecutive runs of the SAME core binary for the identical query",
-      "wasm_behavior": "velesql_setops.rs concatenates branches left-to-right and de-duplicates first-seen, so each branch's own ORDER BY is preserved in the final row sequence — deterministic, but not the same sequence as core's",
-      "status": "accepted — neither behaviour is wrong (SQL does not guarantee an order for UNION/INTERSECT/EXCEPT without an explicit outer ORDER BY, which this query engine does not yet apply to compound results). fixture setops_cases S001-S004 assert result MEMBERSHIP and COUNT only (ids compared as a sorted set), never exact order",
-      "evidence": "crates/velesdb-core/src/collection/search/query/set_operations.rs (score-sort); crates/velesdb-wasm/src/velesql_setops.rs (concat+dedup)"
+      "core_behavior": "RESOLVED: velesql::execute_compound — the window after the last operand (ORDER BY / LIMIT / OFFSET) orders and caps the combined rows; without ORDER BY they rank by score in the metric's direction, ties in the order met",
+      "wasm_behavior": "RESOLVED: the WASM executor runs the same velesql::execute_compound; it used to concatenate and de-duplicate, while core re-sorted by score with an unstable tie-break",
+      "status": "resolved — setops_cases S001-S008 assert ids in order",
+      "evidence": "crates/velesdb-core/src/velesql/set_operation.rs; crates/velesdb-wasm/src/velesql_setops.rs"
     },
     {
       "id": "D004",

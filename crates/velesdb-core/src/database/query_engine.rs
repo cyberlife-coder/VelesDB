@@ -721,50 +721,23 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
-        // EPIC-040 US-006: For compound queries, strip LIMIT from each operand so
-        // the set operation sees the full result sets.  The final LIMIT is applied
-        // once on the merged output (SQL-standard behaviour).
-        // Use MAX_LIMIT (not None) to avoid the default-10 cap downstream.
-        const COMPOUND_LIMIT: usize = 100_000;
-        let compound_limit = Some(COMPOUND_LIMIT as u64); // 100_000 fits u64 exactly.
-        let left_results = if query.compound.is_some() {
-            // Compound queries execute several selects; a single reported
-            // strategy would be ambiguous, so the probe stays untouched.
-            let mut left_query = query.clone();
-            left_query.select.limit = compound_limit;
-            left_query.select.offset = None; // OFFSET applies to the combined result.
-            self.execute_single_select(&left_query, params, None)?
-        } else {
+        if query.compound.is_none() {
             return self.execute_single_select(query, params, probe);
-        };
-
-        // compound is guaranteed Some here (non-compound returns above).
-        if let Some(ref compound) = query.compound {
-            let mut accumulated = left_results;
-            for (operator, right_select) in &compound.operations {
-                let mut right_query = crate::velesql::Query::new_select(right_select.clone());
-                right_query.select.limit = compound_limit;
-                let right_results = self.execute_single_select(&right_query, params, None)?;
-                accumulated = crate::collection::search::query::set_operations::apply_set_operation(
-                    accumulated,
-                    right_results,
-                    *operator,
-                    // Intermediate ops keep the server-side ceiling: truncating to the
-                    // user LIMIT here would drop rows a later chained set op still needs.
-                    COMPOUND_LIMIT,
-                );
-            }
-            // SQL-standard: the outer SELECT's OFFSET then LIMIT window the final result.
-            return Ok(
-                crate::collection::search::query::set_operations::apply_offset_limit(
-                    accumulated,
-                    query.select.offset,
-                    query.select.limit,
-                ),
-            );
         }
-
-        Ok(left_results)
+        // Compound semantics are velesql's (`velesql::execute_compound`),
+        // shared with `Collection::execute_query` and WASM. A compound runs
+        // several selects, so no single strategy is reported: the probe stays
+        // untouched. The first operand's collection gives the metric direction
+        // and orders the combined rows.
+        let first = self.resolve_collection(&query.select.from)?;
+        let higher_is_better = first.config().metric.higher_is_better();
+        crate::velesql::execute_compound(
+            query,
+            higher_is_better,
+            u64::try_from(crate::collection::search::query::MAX_LIMIT).unwrap_or(u64::MAX),
+            |operand| self.execute_single_select(operand, params, None),
+            |rows, order_by| first.apply_order_by(rows, order_by, params),
+        )
     }
 
     /// Collects sorted, deduplicated collection names referenced by a query,

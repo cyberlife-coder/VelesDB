@@ -43,7 +43,22 @@ use rustc_hash::FxHashSet;
 /// - `Aggregations(_)` → no dedup (aggregations collapse rows themselves).
 #[must_use]
 pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Vec<SearchResult> {
-    let (column_names, include_score) = match columns {
+    let (column_names, include_score) = key_columns(columns);
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    results
+        .into_iter()
+        .filter(|r| {
+            let key = compute_distinct_key(r, &column_names, include_score);
+            seen.insert(key)
+        })
+        .collect()
+}
+
+/// The fields a projected row is keyed by under `columns` (see the
+/// [`apply_distinct`] contract): the listed columns, or none for "the full
+/// payload", and whether the similarity score is part of the key.
+pub(crate) fn key_columns(columns: &SelectColumns) -> (Vec<String>, bool) {
+    match columns {
         SelectColumns::Columns(cols) => (cols.iter().map(|c| c.name.clone()).collect(), false),
         SelectColumns::Mixed {
             columns: cols,
@@ -63,22 +78,12 @@ pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Ve
         }
         SelectColumns::SimilarityScore(_) => (Vec::new(), true),
         // All / QualifiedWildcard → full payload; Aggregations → no dedup
-        // (the empty-column path below gives the same "full payload" key,
-        // which is harmless for Aggregations since that path never reaches
-        // this function in practice).
+        // (the empty-column path gives the same "full payload" key, which is
+        // harmless for Aggregations since that path never reaches DISTINCT).
         SelectColumns::All
         | SelectColumns::Aggregations(_)
         | SelectColumns::QualifiedWildcard(_) => (Vec::new(), false),
-    };
-
-    let mut seen: FxHashSet<String> = FxHashSet::default();
-    results
-        .into_iter()
-        .filter(|r| {
-            let key = compute_distinct_key(r, &column_names, include_score);
-            seen.insert(key)
-        })
-        .collect()
+    }
 }
 
 /// Compute a unique key for DISTINCT deduplication.
