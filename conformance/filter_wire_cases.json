@@ -1,5 +1,5 @@
 {
-  "description": "Metadata filter wire shapes shared by velesdb-core (tests/filter_wire_conformance.rs) and the TypeScript SDK (sdks/typescript/tests/filter-wire-contract.test.ts). Every `valid` case must deserialize as velesdb_core::Filter and match exactly the `matches` payloads; every `invalid` case must be refused by core and by the SDK's normalizeFilter. The `agent_memory_*` cases are the exact filters the SDK's agent-memory REST calls send; with the `condition_*` cases every core condition kind appears, and velesdb-wasm (src/filter_tests.rs) evaluates every valid case with the same expectations.",
+  "description": "Metadata filter wire shapes shared by velesdb-core (tests/filter_wire_conformance.rs) and the TypeScript SDK (sdks/typescript/tests/filter-wire-contract.test.ts). Every `valid` case must deserialize as velesdb_core::Filter and match exactly the `matches` payloads; every `invalid` case must be refused by core and by the SDK's normalizeFilter. The `agent_memory_*` cases are the exact filters the SDK's agent-memory REST calls send; with the `condition_*` cases every core condition kind appears, and velesdb-wasm (src/filter_tests.rs) evaluates every valid case with the same expectations. Matching is three-valued, as WHERE is: a comparison on a `null` or absent field is UNKNOWN, so neither it nor its negation (`neq`, `not`) selects that payload; a value of another type is known different.",
   "valid": [
     {
       "id": "agent_memory_semantic",
@@ -162,12 +162,18 @@
         {
           "status": "active"
         },
-        {}
+        {
+          "status": 5
+        }
       ],
       "rejects": [
         {
           "status": "archived"
-        }
+        },
+        {
+          "status": null
+        },
+        {}
       ]
     },
     {
@@ -361,13 +367,16 @@
       "matches": [
         {
           "a": 2
-        },
-        {}
+        }
       ],
       "rejects": [
         {
           "a": 1
-        }
+        },
+        {
+          "a": null
+        },
+        {}
       ]
     },
     {

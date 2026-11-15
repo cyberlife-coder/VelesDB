@@ -79,21 +79,22 @@ pub(in crate::collection::search::query) struct WhereFilterMemo {
 }
 
 impl WhereFilterMemo {
-    /// Evaluates the (possibly cached) compiled filter for `key` against
-    /// `payload`, building it with `build` exactly once per key.
-    pub(in crate::collection::search::query) fn matches_with(
+    /// Evaluates, three-valued, the (possibly cached) compiled filter for
+    /// `key` against `payload`, building it with `build` exactly once per
+    /// key. `None` is UNKNOWN, left for the enclosing WHERE to negate or fold.
+    pub(in crate::collection::search::query) fn evaluate_with(
         &self,
         key: (usize, u8),
         id: u64,
         payload: Option<&serde_json::Value>,
         build: impl FnOnce() -> crate::error::Result<crate::filter::Condition>,
-    ) -> crate::error::Result<bool> {
+    ) -> crate::error::Result<Option<bool>> {
         let mut cache = self.cache.borrow_mut();
         if let Some((_, cond)) = cache.iter().find(|(k, _)| *k == key) {
-            return Ok(cond.matches_point(id, payload));
+            return Ok(cond.evaluate_point(id, payload));
         }
         let cond = build()?;
-        let result = cond.matches_point(id, payload);
+        let result = cond.evaluate_point(id, payload);
         cache.push((key, cond));
         Ok(result)
     }
@@ -218,76 +219,10 @@ enum AliasBinding {
     Conflict,
 }
 
-/// A parsed RETURN clause projection item (Fix #489).
-///
-/// Replaces the former `parse_property_path()` that silently returned `None`
-/// for wildcards, function calls, and bare aliases — leaving `projected` empty.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ProjectionItem<'a> {
-    /// `RETURN *` — project all properties from all bound aliases.
-    Wildcard,
-    /// `RETURN similarity()` — a function call expression.
-    /// The inner `&str` is the function name (e.g., `"similarity"`).
-    FunctionCall(&'a str),
-    /// `RETURN n.name` — a dotted property path.
-    PropertyPath {
-        /// The alias portion (e.g., `"n"`).
-        alias: &'a str,
-        /// The property portion (e.g., `"name"` or `"metadata.category"`).
-        property: &'a str,
-    },
-    /// `RETURN n` — a bare alias referring to a bound node.
-    BareAlias(&'a str),
-}
-
-/// Parses a RETURN clause expression into a [`ProjectionItem`] (Fix #489).
-///
-/// Handles four patterns:
-/// - `"*"` → [`ProjectionItem::Wildcard`]
-/// - `"similarity()"` → `ProjectionItem::FunctionCall("similarity")`
-/// - `"n.name"` → `ProjectionItem::PropertyPath { alias: "n", property: "name" }`
-/// - `"n"` → `ProjectionItem::BareAlias("n")`
-#[must_use]
-pub fn parse_projection_item(expression: &str) -> ProjectionItem<'_> {
-    if expression == "*" {
-        return ProjectionItem::Wildcard;
-    }
-
-    // Function calls contain '(' — extract the name before the parenthesis.
-    if let Some(paren_pos) = expression.find('(') {
-        let name = &expression[..paren_pos];
-        return ProjectionItem::FunctionCall(name);
-    }
-
-    // Dotted property path: split on first dot (both halves must be non-empty).
-    if let Some(dot_pos) = expression.find('.') {
-        let alias = &expression[..dot_pos];
-        let property = &expression[dot_pos + 1..];
-        if !alias.is_empty() && !property.is_empty() {
-            return ProjectionItem::PropertyPath { alias, property };
-        }
-    }
-
-    // Everything else is a bare alias (including edge cases like ".x" or "x.").
-    ProjectionItem::BareAlias(expression)
-}
-
-/// Parses a property path expression like "alias.property" (EPIC-058 US-007).
-///
-/// Returns `Some((alias, property))` if valid, `None` otherwise.
-/// For nested paths like "doc.metadata.category", returns `("doc", "metadata.category")`.
-///
-/// **Prefer [`parse_projection_item`]** for RETURN clause projection — this function
-/// only handles `PropertyPath` cases and returns `None` for wildcards, function calls,
-/// and bare aliases.
-#[must_use]
-pub fn parse_property_path(expression: &str) -> Option<(&str, &str)> {
-    match parse_projection_item(expression) {
-        ProjectionItem::PropertyPath { alias, property } => Some((alias, property)),
-        _ => None,
-    }
-}
+// The RETURN item parser is VelesQL language, not storage: it lives in
+// `velesql` (available without `persistence`, so the WASM executor shares
+// it) and is re-exported here under its historical path.
+pub use crate::velesql::{parse_projection_item, parse_property_path, ProjectionItem};
 
 /// Context for collecting single-node pattern results (no relationships).
 struct SingleNodeCtx<'a> {

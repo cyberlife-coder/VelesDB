@@ -1131,9 +1131,9 @@
       "id": "D004",
       "area": "MATCH data model (core unified vs WASM separate graph store)",
       "core_behavior": "graph nodes ARE vector-collection points (payload `_labels` field); edges live on the same Collection via add_edge; MATCH is expressed as `SELECT ... FROM <collection> WHERE MATCH (...)`",
-      "wasm_behavior": "graph nodes/edges live in a separate in-memory graph store per name, populated via `INSERT NODE`/`INSERT EDGE`, addressed from pattern nodes via `@collection` annotations, and queried with the standalone `MATCH ... RETURN` form — there is no requirement for a same-named vector collection to exist",
-      "status": "accepted architectural difference (WASM has no persistence layer to unify with); fixture match_cases M001/M002 carry a `core_query`/`wasm_query` pair instead of one shared query string, both encoding the same graph topology, asserted against the same golden ids",
-      "evidence": "crates/velesdb-wasm/src/velesql_match.rs: inferred_graph_store(); crates/velesdb-core/src/database/query_engine.rs: execute_match_routed()"
+      "wasm_behavior": "edges live in a separate in-memory graph store per name (`INSERT EDGE`, `WasmDatabase.addEdge`); the nodes a MATCH binds are, as in core, the points of the collection with that name (payload as properties, `_labels` as labels, vectors scoring `similarity()`), plus nodes written with `INSERT NODE`, which win on a shared id; the target is the first node's `@collection`, else the `_collection` param, else `graph`; queried with the standalone `MATCH ... RETURN` form",
+      "status": "accepted architectural difference, narrowed: only the edge store stays separate (WASM has no persistence layer to unify it with); fixture match_cases M001/M002 carry a `core_query`/`wasm_query` pair instead of one shared query string, both encoding the same graph topology, asserted against the same golden ids",
+      "evidence": "crates/velesdb-wasm/src/velesql_match.rs: match_target(), inferred_graph_store(); crates/velesdb-wasm/src/velesql_match_nodes.rs: MatchNodes; crates/velesdb-core/src/database/query_engine.rs: execute_match_routed()"
     },
     {
       "id": "D005",

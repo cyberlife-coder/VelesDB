@@ -7,12 +7,11 @@
 //! resolve to a total, deterministic order. Sorting happens BEFORE the LIMIT
 //! truncation (the caller collects the full candidate set first).
 //!
-//! Supported keys (the forms the WASM in-memory graph path can evaluate
-//! exactly): `depth` (constant within a single pattern, so a defined no-op) and
-//! an `alias.property` path. `similarity()` / `similarity(field, $v)`,
-//! arithmetic, and aggregate expressions need vector / score-context evaluation
-//! the WASM MATCH path does not materialize (it performs no vector scoring), so
-//! they are rejected with a clear error rather than silently mis-ordered.
+//! Supported keys: `depth` (constant within a single pattern, so a defined
+//! no-op), an `alias.property` path, and bare `similarity()` (the row's score,
+//! [`crate::velesql_match_score`]), most-similar-first under every metric as
+//! in core. `similarity(field, $v)`, arithmetic and aggregate expressions are
+//! rejected with a clear error rather than silently mis-ordered.
 
 use std::cmp::Ordering;
 
@@ -33,6 +32,29 @@ pub(crate) struct MatchCandidate {
     pub value: serde_json::Value,
     /// The serialized row returned to the caller after sorting.
     pub row: QueryResultRow,
+    /// What the row binds, for core-shaped results
+    /// ([`crate::velesql_match_core`]).
+    pub binding: MatchBinding,
+    /// The row's `similarity()` score, when the MATCH computes one
+    /// ([`crate::velesql_match_score`]): the metric's raw value.
+    pub score: Option<f32>,
+}
+
+/// The elements one MATCH row binds, in pattern order.
+#[derive(Debug, Default)]
+pub(crate) struct MatchBinding {
+    /// Bound nodes: explicit alias (`None` for an unnamed node), id, payload.
+    pub nodes: Vec<BoundElement>,
+    /// Traversed relationships: explicit alias, edge id, edge properties.
+    pub edges: Vec<BoundElement>,
+}
+
+/// One bound node or relationship.
+#[derive(Debug)]
+pub(crate) struct BoundElement {
+    pub alias: Option<String>,
+    pub id: u64,
+    pub payload: Option<serde_json::Value>,
 }
 
 /// Sorts MATCH candidates in place per the RETURN `ORDER BY`, then truncates to
@@ -47,6 +69,7 @@ pub(crate) fn order_and_limit(
     candidates: &mut Vec<MatchCandidate>,
     order_by: Option<&[OrderByItem]>,
     limit: Option<u64>,
+    higher_is_better: bool,
 ) -> Result<(), String> {
     if let Some(items) = order_by {
         // Deterministic baseline: the bound-node-id tuple is unique per row, so
@@ -54,7 +77,7 @@ pub(crate) fn order_and_limit(
         candidates.sort_by(|a, b| a.baseline.cmp(&b.baseline));
         // Apply least-significant key first so the most-significant wins.
         for item in items.iter().rev() {
-            sort_by_key(candidates, &item.expr, item.descending)?;
+            sort_by_key(candidates, &item.expr, item.descending, higher_is_better)?;
         }
     }
     if let Some(limit) = limit {
@@ -69,6 +92,7 @@ fn sort_by_key(
     candidates: &mut [MatchCandidate],
     expr: &OrderByExpr,
     descending: bool,
+    higher_is_better: bool,
 ) -> Result<(), String> {
     match expr {
         OrderByExpr::Field(f) if f == "depth" => {
@@ -79,7 +103,18 @@ fn sort_by_key(
         }
         OrderByExpr::Field(f) => sort_by_property(candidates, f, descending),
         OrderByExpr::SimilarityBare => {
-            reject_unsupported("similarity() (the browser MATCH path performs no vector scoring)")
+            // Core's `sort_match_by_score`: a distance is negated so `DESC`
+            // is most-similar-first under every metric; unscored rows sort as
+            // least similar.
+            sort_stable(candidates, descending, |a, b| {
+                let key = |c: &MatchCandidate| match c.score {
+                    Some(score) if higher_is_better => score,
+                    Some(distance) => -distance,
+                    None => f32::NEG_INFINITY,
+                };
+                key(a).total_cmp(&key(b))
+            });
+            Ok(())
         }
         OrderByExpr::Similarity(_) => reject_unsupported("similarity(field, $v)"),
         OrderByExpr::Arithmetic(_) => reject_unsupported("arithmetic expressions"),
@@ -87,11 +122,12 @@ fn sort_by_key(
     }
 }
 
-/// Uniform rejection for ORDER BY forms the WASM MATCH path cannot evaluate
-/// (it materializes no vector scores; only `depth` and `alias.property` work).
+/// Uniform rejection for ORDER BY forms the WASM MATCH path does not evaluate
+/// (`similarity(field, $v)`, arithmetic and aggregates; `depth`,
+/// `alias.property` and bare `similarity()` work).
 fn reject_unsupported(form: &str) -> Result<(), String> {
     Err(format!(
-        "MATCH ORDER BY {form} is not supported in WASM (use depth or alias.property)"
+        "MATCH ORDER BY {form} is not supported in WASM (use depth, alias.property or similarity())"
     ))
 }
 
