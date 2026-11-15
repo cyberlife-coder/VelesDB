@@ -1925,6 +1925,36 @@ Combine results from multiple SELECT queries. N-ary chaining is supported.
 > unlike standard SQL where `INTERSECT` binds tighter than `UNION`. Use
 > parenthesized subqueries if different evaluation order is needed.
 
+#### Semantics
+
+One definition serves every engine (`velesql::execute_compound`, core and
+WASM):
+
+- **Window.** As in SQL, the `ORDER BY`, `LIMIT` and `OFFSET` written after the
+  last operand apply to the combined rows. A compound has no implicit
+  `LIMIT 10` (see the defaults table): without a `LIMIT`, every combined row
+  up to the 100 000-row ceiling. An operand other than the last keeps its own
+  clauses, and without a `LIMIT` it is not capped.
+- **Rows.** Two rows are the same row when their projected values are: the
+  listed columns, compared by position, or the id and payload for `*`. So
+  `SELECT id FROM a INTERSECT SELECT id FROM b` intersects ids, while
+  `SELECT * FROM a INTERSECT SELECT * FROM b` keeps only points whose id and
+  payload both agree. `UNION`, `INTERSECT` and `EXCEPT` return distinct rows;
+  `UNION ALL` keeps every row. A row met twice keeps its first position and
+  its better score.
+- **Order.** The window's `ORDER BY` when there is one; otherwise the rows rank
+  by score in the first operand's metric direction (most similar first,
+  closest first under a distance), ties in the order they were met.
+- The combined rows are projected by the first operand's column list.
+
+```sql
+-- The 3 latest documents of either category, by year:
+SELECT id, year FROM docs WHERE category = 'tech'
+UNION
+SELECT id, year FROM docs WHERE category = 'science'
+ORDER BY year DESC LIMIT 3
+```
+
 ### UNION
 
 Combine results, removing duplicates:

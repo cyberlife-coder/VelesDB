@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use velesdb_core::point::SearchResult;
 use velesdb_core::velesql::distinct_evaluator::apply_distinct;
 use velesdb_core::velesql::{Condition, DistinctMode, Query, SelectStatement, VectorSearch};
 
@@ -53,12 +54,48 @@ pub(crate) fn execute(
     }
 
     let rows = scan(db, &query.select, params)?;
-    let higher_is_better = db
-        .get_shared_store(&query.select.from)?
+    let higher_is_better = metric_direction(db, &query.select)?;
+    finalize(&query.select, rows, params, higher_is_better)
+}
+
+/// Runs a compound operand: the rows its SELECT keeps, windowed by its own
+/// DISTINCT / ORDER BY / OFFSET / LIMIT but not projected, so the compound
+/// keys and combines them (`velesdb_core::velesql::execute_compound`).
+///
+/// # Errors
+///
+/// What [`execute`] refuses, and an operand that joins or aggregates: its
+/// rows are not points a set operation can combine here.
+pub(crate) fn execute_operand(
+    db: &mut DatabaseInner,
+    query: &Query,
+    params: &Params,
+) -> Result<Vec<SearchResult>, String> {
+    check_select_access(db, &query.select)?;
+    if !query.let_bindings.is_empty() {
+        return Err("LET bindings are not supported in WASM".to_string());
+    }
+    if !query.select.joins.is_empty()
+        || velesql_aggregate::needs_aggregation_pipeline(&query.select)
+    {
+        return Err(
+            "a JOIN or an aggregation in a UNION / INTERSECT / EXCEPT operand is not \
+             supported in WASM"
+                .to_string(),
+        );
+    }
+    let rows = scan(db, &query.select, params)?;
+    let higher_is_better = metric_direction(db, &query.select)?;
+    window_plain(&query.select, rows, higher_is_better)
+}
+
+/// Whether the metric of `stmt`'s collection ranks higher scores first.
+pub(crate) fn metric_direction(db: &DatabaseInner, stmt: &SelectStatement) -> Result<bool, String> {
+    Ok(db
+        .get_shared_store(&stmt.from)?
         .borrow()
         .metric
-        .higher_is_better();
-    finalize(&query.select, rows, params, higher_is_better)
+        .higher_is_better())
 }
 
 /// The rows a SELECT keeps, by a fused, a vector or a plain scan, once its
@@ -503,16 +540,26 @@ fn finalize_plain(
     rows: Vec<OwnedScanRow>,
     higher_is_better: bool,
 ) -> Result<Vec<QueryResultRow>, String> {
+    let results = window_plain(stmt, rows, higher_is_better)?;
+    velesql_project::project(stmt, &results)
+}
+
+/// The non-aggregated rows of a SELECT in their final order and window,
+/// before projection: DISTINCT, window functions, ORDER BY, OFFSET / LIMIT.
+fn window_plain(
+    stmt: &SelectStatement,
+    rows: Vec<OwnedScanRow>,
+    higher_is_better: bool,
+) -> Result<Vec<SearchResult>, String> {
     let mut results = velesql_project::to_search_results(rows);
     if stmt.distinct == DistinctMode::All {
         results = apply_distinct(results, &stmt.columns);
     }
     velesql_project::inject_window_functions(stmt, &mut results)?;
     velesql_orderby::sort_rows(stmt, &mut results, higher_is_better)?;
-    let projected = velesql_project::project(stmt, &results)?;
     Ok(apply_limit_offset(
         stmt,
-        projected,
+        results,
         velesdb_core::velesql::DEFAULT_SELECT_LIMIT,
     ))
 }
@@ -523,11 +570,7 @@ fn finalize_plain(
 /// `DEFAULT_SELECT_LIMIT` (10), not "every row" — previously WASM used
 /// `u64::MAX`, diverging from every other surface (#8b). Aggregation passes
 /// `u64::MAX` so a LIMIT-less GROUP BY still returns every group.
-fn apply_limit_offset(
-    stmt: &SelectStatement,
-    rows: Vec<QueryResultRow>,
-    default_limit: u64,
-) -> Vec<QueryResultRow> {
+fn apply_limit_offset<T>(stmt: &SelectStatement, rows: Vec<T>, default_limit: u64) -> Vec<T> {
     let offset = usize::try_from(stmt.offset.unwrap_or(0)).unwrap_or(usize::MAX);
     let limit = usize::try_from(stmt.limit.unwrap_or(default_limit)).unwrap_or(usize::MAX);
     rows.into_iter().skip(offset).take(limit).collect()

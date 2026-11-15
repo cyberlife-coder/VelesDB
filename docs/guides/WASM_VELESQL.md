@@ -157,7 +157,8 @@ projection / aliases / window functions
 (`ROW_NUMBER`, `RANK`, `DENSE_RANK`), `GROUP BY` / `HAVING`, aggregates,
 `ORDER BY` (payload columns, `similarity()`, arithmetic expressions, and
 aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
-`UNION` / `INTERSECT` / `EXCEPT`, `INNER` / `LEFT JOIN`,
+`UNION` / `INTERSECT` / `EXCEPT` (core's semantics, `velesql::execute_compound`;
+an operand cannot join or aggregate), `INNER` / `LEFT JOIN`,
 `INSERT` / `UPSERT` / `UPDATE` / `DELETE`, DDL
 (`CREATE` / `DROP` / `TRUNCATE COLLECTION`), introspection
 (`SHOW COLLECTIONS`, `DESCRIBE COLLECTION`), admin (`FLUSH`, a no-op), and

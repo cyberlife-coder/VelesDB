@@ -1,109 +1,98 @@
-use super::*;
+//! Compound queries through the whole WASM executor. The combinators
+//! themselves are core's (`velesdb_core::velesql::set_operation`, unit-tested
+//! there); these pin the wiring: operands, projection, window and refusals.
 
-fn row(id: u64) -> QueryResultRow {
-    QueryResultRow::build(id, 0.0, None).expect("test: row")
+use crate::database::DatabaseInner;
+use crate::velesql_exec::execute;
+
+/// `alpha`: ids 1, 2, 3 (`cat = 'tech'`); `beta`: ids 3, 4, 5
+/// (`cat = 'science'`) — point 3 is in both, with different payloads.
+fn db() -> DatabaseInner {
+    let mut db = DatabaseInner::new();
+    for (name, ids, cat) in [("alpha", [1, 2, 3], "tech"), ("beta", [3, 4, 5], "science")] {
+        db.create_collection(name, 2, "cosine")
+            .expect("test: create");
+        for id in ids {
+            execute(
+                &mut db,
+                &format!("INSERT INTO {name} (id, vector, cat) VALUES ({id}, $v, '{cat}')"),
+                Some(r#"{"v": [1.0, 0.0]}"#),
+            )
+            .expect("test: seed");
+        }
+    }
+    db
+}
+
+fn ids(db: &mut DatabaseInner, sql: &str) -> Vec<u64> {
+    let result = execute(db, sql, None).unwrap_or_else(|e| panic!("test: {sql}: {e}"));
+    (0..result.row_count() as usize)
+        .map(|i| result.row(i).expect("test: row").id())
+        .collect()
 }
 
 #[test]
-fn test_union_dedups() {
-    let left = vec![row(1), row(2)];
-    let right = vec![row(2), row(3)];
-    let out = combine(SetOperator::Union, left, right).expect("test: union");
-    assert_eq!(out.len(), 3);
+fn a_star_row_is_its_id_and_payload() {
+    let mut db = db();
+    let union = ids(&mut db, "SELECT * FROM alpha UNION SELECT * FROM beta");
+    assert_eq!(union.len(), 6, "the two points 3 differ: {union:?}");
+    let by_id = ids(
+        &mut db,
+        "SELECT id FROM alpha UNION SELECT id FROM beta ORDER BY id ASC",
+    );
+    assert_eq!(by_id, vec![1, 2, 3, 4, 5]);
 }
 
 #[test]
-fn test_union_all_keeps_duplicates() {
-    let left = vec![row(1), row(2)];
-    let right = vec![row(2), row(3)];
-    let out = combine(SetOperator::UnionAll, left, right).expect("test: union all");
-    assert_eq!(out.len(), 4);
+fn intersect_and_except_compare_projected_values() {
+    let mut db = db();
+    assert_eq!(
+        ids(
+            &mut db,
+            "SELECT id FROM alpha INTERSECT SELECT id FROM beta"
+        ),
+        vec![3]
+    );
+    assert!(ids(&mut db, "SELECT * FROM alpha INTERSECT SELECT * FROM beta").is_empty());
+    assert_eq!(
+        ids(
+            &mut db,
+            "SELECT id FROM alpha EXCEPT SELECT id FROM beta ORDER BY id ASC"
+        ),
+        vec![1, 2]
+    );
+}
+
+/// The clauses after the last operand window the compound; a first
+/// operand's clauses only its own rows.
+#[test]
+fn the_last_operands_clauses_window_the_compound() {
+    let mut db = db();
+    assert_eq!(
+        ids(
+            &mut db,
+            "SELECT id FROM alpha UNION SELECT id FROM beta ORDER BY id ASC LIMIT 2 OFFSET 2"
+        ),
+        vec![3, 4]
+    );
+    assert_eq!(
+        ids(
+            &mut db,
+            "SELECT id FROM alpha ORDER BY id ASC OFFSET 2 UNION SELECT id FROM beta ORDER BY id ASC"
+        ),
+        vec![3, 4, 5]
+    );
 }
 
 #[test]
-fn test_intersect_returns_common() {
-    let left = vec![row(1), row(2), row(3)];
-    let right = vec![row(2), row(3), row(4)];
-    let out = combine(SetOperator::Intersect, left, right).expect("test: intersect");
-    let ids: Vec<u64> = out.iter().map(QueryResultRow::id).collect();
-    assert!(ids.contains(&2));
-    assert!(ids.contains(&3));
-    assert!(!ids.contains(&1));
-}
-
-#[test]
-fn test_except_subtracts_right() {
-    let left = vec![row(1), row(2), row(3)];
-    let right = vec![row(2)];
-    let out = combine(SetOperator::Except, left, right).expect("test: except");
-    let ids: Vec<u64> = out.iter().map(QueryResultRow::id).collect();
-    assert!(ids.contains(&1));
-    assert!(ids.contains(&3));
-    assert!(!ids.contains(&2));
-}
-
-#[test]
-fn test_intersect_empty_when_disjoint() {
-    let left = vec![row(1)];
-    let right = vec![row(2)];
-    let out = combine(SetOperator::Intersect, left, right).expect("test: empty intersect");
-    assert!(out.is_empty());
-}
-
-// --- Finding F11: O(n) dedup preserves first-seen order ---------------
-
-#[test]
-fn test_union_preserves_first_seen_order() {
-    // First-seen order matters: UNION of [1,2,3] with [2,4] must
-    // yield [1,2,3,4] — not [1,4,2,3] (HashMap iteration order).
-    let left = vec![row(1), row(2), row(3)];
-    let right = vec![row(2), row(4)];
-    let out = combine(SetOperator::Union, left, right).expect("test: union order");
-    let ids: Vec<u64> = out.iter().map(QueryResultRow::id).collect();
-    assert_eq!(ids, vec![1, 2, 3, 4]);
-}
-
-#[test]
-fn test_intersect_preserves_left_order() {
-    let left = vec![row(3), row(1), row(2)];
-    let right = vec![row(1), row(2), row(3)];
-    let out = combine(SetOperator::Intersect, left, right).expect("test: intersect order");
-    let ids: Vec<u64> = out.iter().map(QueryResultRow::id).collect();
-    // Order must match the left-hand walk.
-    assert_eq!(ids, vec![3, 1, 2]);
-}
-
-#[test]
-fn test_except_preserves_left_order() {
-    let left = vec![row(4), row(2), row(3), row(1)];
-    let right = vec![row(2)];
-    let out = combine(SetOperator::Except, left, right).expect("test: except order");
-    let ids: Vec<u64> = out.iter().map(QueryResultRow::id).collect();
-    assert_eq!(ids, vec![4, 3, 1]);
-}
-
-#[test]
-fn test_dedup_dedups_repeated_rows() {
-    let rows = vec![row(1), row(2), row(1), row(3), row(2)];
-    let out = combine(
-        SetOperator::Union,
-        rows,
-        // UNION with empty to trigger dedup branch.
-        Vec::new(),
+fn an_operand_that_joins_is_refused() {
+    let mut db = db();
+    let err = execute(
+        &mut db,
+        "SELECT * FROM alpha JOIN beta ON alpha.id = beta.id UNION SELECT * FROM beta",
+        None,
     )
-    .expect("test: dedup");
-    let ids: Vec<u64> = out.iter().map(QueryResultRow::id).collect();
-    assert_eq!(ids, vec![1, 2, 3]);
-}
-
-#[test]
-fn test_setops_handle_large_inputs() {
-    // Regression: the previous O(n^2) implementation required ~2s for
-    // 2000 rows. The hash-set path handles this in milliseconds. The
-    // test here asserts correctness at N=1000; a regression would not
-    // fail the assertion but would slow `cargo test` noticeably.
-    let left: Vec<QueryResultRow> = (0..1000u64).map(row).collect();
-    let right: Vec<QueryResultRow> = (500..1500u64).map(row).collect();
-    let out = combine(SetOperator::Union, left, right).expect("test: large-union");
-    assert_eq!(out.len(), 1500);
+    .map(|_| ())
+    .expect_err("test: refused");
+    assert!(err.contains("UNION / INTERSECT / EXCEPT operand"), "{err}");
 }

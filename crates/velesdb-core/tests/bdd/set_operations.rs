@@ -180,46 +180,59 @@ fn setup_let_collection(db: &Database) {
 // UNION: combines results from two queries
 // =========================================================================
 
-/// GIVEN two collections `alpha` (ids 1,2,3) and `beta` (ids 3,4,5)
-/// WHEN `SELECT * FROM alpha LIMIT 10 UNION SELECT * FROM beta LIMIT 10`
-/// THEN returns deduplicated combined results (id 3 appears once).
+/// GIVEN two collections `alpha` (ids 1,2,3) and `beta` (ids 3,4,5), whose
+///       point 3 differs (`tech` in alpha, `science` in beta)
+/// WHEN `SELECT * … UNION SELECT * …`
+/// THEN six rows come back: a `*` row is its id AND its payload, so the two
+///      points 3 are two rows; `SELECT id … UNION SELECT id …` merges them.
 #[test]
 fn test_union_combines_results_from_two_queries() {
     let (_dir, db) = create_test_db();
     setup_two_collections(&db);
 
-    let results = execute_sql(
-        &db,
-        "SELECT * FROM alpha LIMIT 10 UNION SELECT * FROM beta LIMIT 10",
-    )
-    .expect("UNION should succeed");
+    let rows = execute_sql(&db, "SELECT * FROM alpha UNION SELECT * FROM beta")
+        .expect("UNION should succeed");
+    assert_eq!(
+        rows.len(),
+        6,
+        "two different points 3 are two rows: {rows:?}"
+    );
 
-    let ids = result_ids(&results);
-    assert_eq!(ids.len(), 5, "UNION should deduplicate: got {ids:?}");
-    assert!(ids.contains(&1), "should contain id 1 from alpha");
-    assert!(ids.contains(&3), "overlapping id 3 should appear once");
-    assert!(ids.contains(&5), "should contain id 5 from beta");
+    let ids = execute_sql(&db, "SELECT id FROM alpha UNION SELECT id FROM beta")
+        .expect("UNION of ids should succeed");
+    let mut got: Vec<u64> = ids.iter().map(|r| r.point.id).collect();
+    got.sort_unstable();
+    assert_eq!(got, vec![1, 2, 3, 4, 5], "id 3 appears once");
 }
 
 /// GIVEN two collections `alpha` (ids 1,2,3) and `beta` (ids 3,4,5)
-/// WHEN `SELECT * FROM alpha LIMIT 10 OFFSET 3 UNION SELECT * FROM beta LIMIT 10`
-/// THEN OFFSET skips 3 rows of the 5-row combined result, leaving 2. Applied
-/// to `alpha` alone it would empty that operand and leave beta's 3 rows.
-/// Count only — all scores tie at 0.0, so which rows are skipped is
-/// unspecified (fixture divergence D003).
+/// WHEN the clauses after the last operand window the compound
+/// THEN `ORDER BY id LIMIT 2 OFFSET 2` returns the third and fourth ids of
+///      the five, while an OFFSET on the first operand only skips its rows.
 #[test]
 fn test_union_offset_applies_to_combined_result() {
     let (_dir, db) = create_test_db();
     setup_two_collections(&db);
 
-    let results = execute_sql(
+    let windowed = execute_sql(
         &db,
-        "SELECT * FROM alpha LIMIT 10 OFFSET 3 UNION SELECT * FROM beta LIMIT 10",
+        "SELECT id FROM alpha UNION SELECT id FROM beta ORDER BY id ASC LIMIT 2 OFFSET 2",
     )
-    .expect("UNION with OFFSET should succeed");
+    .expect("UNION with a window should succeed");
+    let got: Vec<u64> = windowed.iter().map(|r| r.point.id).collect();
+    assert_eq!(got, vec![3, 4], "the window skips and caps the merged rows");
 
-    let ids = result_ids(&results);
-    assert_eq!(ids.len(), 2, "OFFSET must skip merged rows: got {ids:?}");
+    let first_operand = execute_sql(
+        &db,
+        "SELECT id FROM alpha ORDER BY id ASC OFFSET 2 UNION SELECT id FROM beta ORDER BY id ASC",
+    )
+    .expect("UNION with an operand OFFSET should succeed");
+    let got: Vec<u64> = first_operand.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        got,
+        vec![3, 4, 5],
+        "alpha keeps only its id 3, beta adds 4 and 5"
+    );
 }
 
 // =========================================================================
@@ -255,22 +268,22 @@ fn test_union_all_keeps_duplicates() {
 // =========================================================================
 
 /// GIVEN two collections `alpha` (ids 1,2,3) and `beta` (ids 3,4,5)
-/// WHEN `INTERSECT`
-/// THEN returns only the overlapping id 3.
+/// WHEN they are intersected by id
+/// THEN id 3 is the common row; intersected as `*` rows, nothing is, since
+///      the two points 3 carry different payloads.
 #[test]
 fn test_intersect_returns_common_rows() {
     let (_dir, db) = create_test_db();
     setup_two_collections(&db);
 
-    let results = execute_sql(
-        &db,
-        "SELECT * FROM alpha LIMIT 10 INTERSECT SELECT * FROM beta LIMIT 10",
-    )
-    .expect("INTERSECT should succeed");
+    let by_id = execute_sql(&db, "SELECT id FROM alpha INTERSECT SELECT id FROM beta")
+        .expect("INTERSECT should succeed");
+    let got: Vec<u64> = by_id.iter().map(|r| r.point.id).collect();
+    assert_eq!(got, vec![3], "id 3 is the only shared id");
 
-    let ids = result_ids(&results);
-    assert_eq!(ids.len(), 1, "INTERSECT should return only shared ids");
-    assert!(ids.contains(&3), "id 3 is the only overlapping point");
+    let by_row = execute_sql(&db, "SELECT * FROM alpha INTERSECT SELECT * FROM beta")
+        .expect("INTERSECT should succeed");
+    assert!(by_row.is_empty(), "no row is in both: {by_row:?}");
 }
 
 // =========================================================================
@@ -278,8 +291,8 @@ fn test_intersect_returns_common_rows() {
 // =========================================================================
 
 /// GIVEN two collections `alpha` (ids 1,2,3) and `beta` (ids 3,4,5)
-/// WHEN `EXCEPT`
-/// THEN returns ids from alpha that are NOT in beta (ids 1, 2).
+/// WHEN `SELECT id FROM alpha EXCEPT SELECT id FROM beta`
+/// THEN ids 1 and 2 remain.
 #[test]
 fn test_except_removes_second_set() {
     let (_dir, db) = create_test_db();
@@ -287,15 +300,11 @@ fn test_except_removes_second_set() {
 
     let results = execute_sql(
         &db,
-        "SELECT * FROM alpha LIMIT 10 EXCEPT SELECT * FROM beta LIMIT 10",
+        "SELECT id FROM alpha EXCEPT SELECT id FROM beta ORDER BY id ASC",
     )
     .expect("EXCEPT should succeed");
-
-    let ids = result_ids(&results);
-    assert_eq!(ids.len(), 2, "EXCEPT should return alpha - beta");
-    assert!(ids.contains(&1), "id 1 only in alpha");
-    assert!(ids.contains(&2), "id 2 only in alpha");
-    assert!(!ids.contains(&3), "id 3 should be excluded (in beta)");
+    let got: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(got, vec![1, 2], "alpha's ids beta lacks");
 }
 
 // =========================================================================

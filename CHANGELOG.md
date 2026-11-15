@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior): `UNION` / `INTERSECT` / `EXCEPT` follow SQL**
+  (core, WASM, 2026-11-15). The three executors disagreed: core windowed the
+  compound by the *first* operand's `LIMIT` and ignored the one written last,
+  keyed rows by point id (two collections' point 3 were one row, and
+  `SELECT item_id … INTERSECT SELECT item_id …` compared ids, not item ids),
+  kept the higher score even under a distance, and re-sorted by score with an
+  unstable tie-break (D003); WASM capped each operand at 10 and windowed
+  nothing. One definition (`velesql::execute_compound`) now serves core's
+  `Collection` and `Database` paths and WASM:
+  - the `ORDER BY` / `LIMIT` / `OFFSET` after the last operand window the
+    combined rows (no implicit `LIMIT`, as documented); an earlier operand
+    keeps its own;
+  - rows are compared by projected values (`*` is the id and the payload);
+  - a duplicate keeps its first position and its better score;
+  - without `ORDER BY`, rows rank by score in the metric's direction, ties in
+    the order met.
+  A query that relied on a first operand's `LIMIT` capping the union now caps
+  that operand only: move the `LIMIT` after the last operand. WASM refuses a
+  JOIN or an aggregation inside an operand rather than combining their rows.
+
 - **BREAKING (behavior): inline pattern properties filter as WHERE `=` does**
   (core, WASM, 2026-11-15). `(n {k: v})` and `-[r {k: v}]->` had their own
   equality: a `$name` was compared as the text `$name` and never matched,

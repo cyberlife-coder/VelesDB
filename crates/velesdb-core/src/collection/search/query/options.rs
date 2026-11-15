@@ -3,7 +3,7 @@
 //! Extracted from `query/mod.rs` to keep file NLOC under 500.
 
 /// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
-pub(in crate::collection::search::query) const MAX_LIMIT: usize = 100_000;
+pub(crate) const MAX_LIMIT: usize = 100_000;
 
 /// Query-time search options extracted from the WITH clause.
 ///
