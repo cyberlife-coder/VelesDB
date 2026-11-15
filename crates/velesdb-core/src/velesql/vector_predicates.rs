@@ -132,3 +132,7 @@ fn fused_under_or_or_not(condition: &Condition) -> bool {
         _ => false,
     })
 }
+
+#[cfg(test)]
+#[path = "vector_predicates_tests.rs"]
+mod tests;
