@@ -123,6 +123,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`INSERT EDGE`, `SELECT EDGES` and `DELETE EDGE` work on vector and
+  metadata collections.** The three collection types share one edge store,
+  and the Rust API, REST `/relations` and the agent-memory wedge already add
+  edges to all of them, but the VelesQL executor resolved only graph
+  collections: `INSERT EDGE INTO docs …` on a vector collection failed with
+  "Collection 'docs' not found". `INSERT NODE` stays graph-only, and now says
+  so (`VELES-018`, naming the collection's type) instead of claiming the
+  collection does not exist.
+
 - **REPL `.graph store-payload` takes `--vector`** like the one-shot
   `velesdb graph store-payload`. The REPL command stored the payload only, so a
   graph created with a dimension could not get node embeddings from the REPL,

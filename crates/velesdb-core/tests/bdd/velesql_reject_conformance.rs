@@ -11,7 +11,9 @@
 //!   - `Graph expansion exceeded: max=32`: `velesql/validation.rs:289`
 //!     enforced inside `Parser::parse` (`parser/mod.rs:128`), cap 32 from
 //!     `validation_types.rs:DEFAULT_MAX_GRAPH_EXPANSION`.
-//!   - DELETE / SELECT EDGES markers: `database/dml_executor.rs:199,208,274,291,364`.
+//!   - DELETE / SELECT EDGES markers: `database/dml_executor.rs`
+//!     (`extract_delete_ids`, `extract_single_id`, `dispatch_edge_comparison`,
+//!     `extract_and_filter`).
 //!
 //! Scenarios skipped (no reliably-constructible SQL trigger) are documented in
 //! the module-level review notes, not coded as flaky tests.
