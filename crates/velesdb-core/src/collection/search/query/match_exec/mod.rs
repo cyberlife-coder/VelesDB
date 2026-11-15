@@ -18,6 +18,7 @@ mod similarity;
 mod start_nodes;
 mod vector_first;
 pub(in crate::collection::search::query) mod where_eval;
+mod where_similarity_score;
 
 use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
@@ -391,6 +392,9 @@ impl Collection {
             qc.add_traversal(edges, edges);
         }
 
+        // The WHERE similarity leaf filtered the rows; carry its score on them
+        // so ORDER BY similarity() and RETURN similarity() see it.
+        self.score_rows_by_where_similarity(&mut all_results, match_clause, params, guards)?;
         Ok(all_results)
     }
 
