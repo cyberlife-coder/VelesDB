@@ -298,3 +298,44 @@ fn an_annotation_in_a_graph_predicate_is_refused_not_ignored() {
     let msg = err.to_string();
     assert!(msg.contains("V011") && msg.contains("@pricing"), "{msg}");
 }
+
+/// GIVEN a `pricing` point that has expired but is not swept yet
+/// WHEN a MATCH reads it through the annotation
+/// THEN it is absent, as reading `pricing` directly answers: the graph node
+///      keeps its own properties, the expired ones are not added.
+#[test]
+fn an_expired_annotated_point_adds_nothing() {
+    let (_dir, db) = create_test_db();
+    setup(&db);
+    let pricing = db
+        .get_metadata_collection("pricing")
+        .expect("test: pricing");
+    pricing
+        .upsert(vec![Point::metadata_only(
+            2,
+            json!({"price": 99.99, velesdb_core::collection::EXPIRES_AT_KEY: 1}),
+        )])
+        .expect("test: expire point 2");
+    assert!(
+        pricing.get(&[2]).into_iter().flatten().next().is_none(),
+        "test: pricing reads point 2 as absent"
+    );
+    let filtered = run(
+        &db,
+        "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@pricing) WHERE w.price < 100 RETURN w.name",
+    );
+    assert!(
+        warehouses(&filtered).is_empty(),
+        "{:?}",
+        warehouses(&filtered)
+    );
+    let all = run(
+        &db,
+        "MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@pricing) RETURN w.name, w.price",
+    );
+    let paris = all
+        .iter()
+        .find(|r| field(r, "w.name") == Some(&json!("Paris")))
+        .expect("test: the graph node stays");
+    assert_eq!(field(paris, "w.price"), None);
+}

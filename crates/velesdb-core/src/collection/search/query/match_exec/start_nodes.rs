@@ -31,7 +31,31 @@ impl Collection {
     /// the already-held guard deadlocks against any concurrent writer (the
     /// same rule `graph_api.rs::validate_edge_endpoints_exist` documents for
     /// the edge-write path).
-    pub(super) fn find_start_nodes(
+    /// The start nodes of `pattern` per `starts`: every node its first node
+    /// matches ([`Self::find_start_nodes`]), or the given seeds, in order,
+    /// each kept when it matches that first node exactly as a scanned node
+    /// would (labels, inline properties, annotation).
+    pub(super) fn resolve_start_nodes(
+        &self,
+        pattern: &GraphPattern,
+        guards: &MatchStorageGuards<'_>,
+        starts: super::StartNodes<'_>,
+    ) -> Result<Vec<(u64, HashMap<String, u64>)>> {
+        let super::StartNodes::Seeded(seeds) = starts else {
+            return self.find_start_nodes(pattern, guards);
+        };
+        let first_node = pattern
+            .nodes
+            .first()
+            .ok_or_else(|| Error::Query("Pattern must have at least one node".to_string()))?;
+        Ok(seeds
+            .iter()
+            .filter(|&&id| Self::node_matches_bound_pattern(id, first_node, &guards.payload_memo))
+            .map(|&id| Self::build_start_binding(id, first_node))
+            .collect())
+    }
+
+    fn find_start_nodes(
         &self,
         pattern: &GraphPattern,
         guards: &MatchStorageGuards<'_>,
@@ -223,34 +247,6 @@ impl Collection {
                 .get(key)
                 .is_some_and(|actual| Self::values_match(expected, actual))
         })
-    }
-
-    /// Computes maximum traversal depth from pattern.
-    pub(super) fn compute_max_depth(pattern: &GraphPattern) -> u32 {
-        let mut max_depth = 0u32;
-
-        for rel in &pattern.relationships {
-            if let Some((_, end)) = rel.range {
-                max_depth = max_depth.saturating_add(end.min(10));
-            } else {
-                max_depth = max_depth.saturating_add(1);
-            }
-        }
-
-        if max_depth == 0 && !pattern.relationships.is_empty() {
-            max_depth = u32::try_from(pattern.relationships.len()).unwrap_or(10);
-        }
-
-        max_depth.min(10)
-    }
-
-    /// Extracts relationship type filters from pattern.
-    pub(super) fn extract_rel_types(pattern: &GraphPattern) -> Vec<String> {
-        let mut types = Vec::new();
-        for rel in &pattern.relationships {
-            types.extend(rel.types.clone());
-        }
-        types
     }
 
     /// Compares a VelesQL Value with a JSON value.

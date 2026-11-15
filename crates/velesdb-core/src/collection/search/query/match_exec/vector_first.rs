@@ -1,40 +1,36 @@
-//! VectorFirst MATCH execution strategy (Wave 6 Phase B).
+//! `VectorFirst` MATCH execution: the MATCH walk, seeded by a vector search.
 //!
-//! When the MATCH planner selects `VectorFirst`, the query is executed by:
-//! 1. Running a vector similarity search to find top-k candidates
-//! 2. Filtering candidates below the similarity threshold
-//! 3. Validating each candidate against the graph pattern (BFS)
-//! 4. Projecting RETURN properties with similarity scores
+//! When the planner picks `VectorFirst` (see
+//! [`MatchQueryPlanner::seeding_similarity`] for exactly when), the walk's
+//! start nodes are not every node the first pattern node matches but the
+//! nodes nearest the query vector of the seeding `similarity()` leaf, nearest
+//! first. Everything else is the walk every MATCH runs: the whole pattern,
+//! the whole WHERE (the seeding leaf included), each path its own row. So a
+//! seeded MATCH returns what an unseeded one returns.
 //!
-//! This strategy is optimal when the start node has a similarity predicate
-//! and the graph is dense (many edges per node), because the vector index
-//! quickly narrows the candidate set before the more expensive graph check.
+//! The seeds grow until the walk has its `LIMIT` of rows, the collection is
+//! exhausted, or the farthest seed already fails the seeding leaf — every
+//! node beyond it is farther still, so none of them can start a row.
 
-// Reason: f32->f64 for score injection into projected map; threshold comparisons
-// use bounded similarity scores (0.0-1.0). No user-data truncation risk.
-#![allow(clippy::cast_precision_loss)]
-
-use super::where_eval::resolve_query_vector;
-use super::where_similarity_score::first_similarity_condition;
-use super::{MatchResult, MatchStorageGuards};
-use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig};
+use super::where_eval::{compare_score, resolve_query_vector};
+use super::{MatchResult, MatchSources, StartNodes};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::guardrails::QueryContext;
-use crate::velesql::{Condition, MatchClause, SimilarityCondition};
+use crate::velesql::match_planner::MatchQueryPlanner;
+use crate::velesql::MatchClause;
 use std::collections::HashMap;
 
 impl Collection {
-    /// Executes a MATCH query using the VectorFirst strategy.
-    ///
-    /// Finds top-k vector candidates, filters by similarity threshold,
-    /// validates graph pattern existence for each candidate, then projects
-    /// RETURN properties with similarity scores.
+    /// Executes a MATCH the planner chose `VectorFirst` for, starting with
+    /// `top_k` seeds; `threshold` is the seeding leaf's, as the planner
+    /// read it.
     ///
     /// # Errors
     ///
-    /// Returns an error if the query vector cannot be resolved, the vector
-    /// search fails, or graph validation encounters a storage error.
+    /// Returns an error if the clause has no seeding `similarity()` leaf, its
+    /// query vector cannot be resolved, the vector search fails, or the walk
+    /// fails (guard rails included).
     pub(crate) fn execute_match_vector_first(
         &self,
         match_clause: &MatchClause,
@@ -42,311 +38,40 @@ impl Collection {
         ctx: &QueryContext,
         top_k: usize,
         threshold: f32,
-        sources: &super::MatchSources,
+        sources: &MatchSources,
     ) -> Result<Vec<MatchResult>> {
-        let sim_cond = extract_similarity_condition(match_clause.where_clause.as_ref())?;
-        let query_vector = resolve_query_vector(&sim_cond.vector, params)?;
+        let (seed, limit) = MatchQueryPlanner::seeding_similarity(match_clause)
+            .zip(match_clause.return_clause.limit)
+            .ok_or_else(|| {
+                Error::Query(
+                    "VectorFirst requires a seeding similarity() condition and a LIMIT".to_string(),
+                )
+            })?;
+        let query_vector = resolve_query_vector(&seed.vector, params)?;
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        // Metric snapshot (config, rank 1) before the walk takes any guard.
+        let higher_is_better = self.storage.config.read().metric.higher_is_better();
+        let total = self.len();
 
-        if query_vector.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let candidates = self.search(&query_vector, top_k)?;
-
-        // Metric snapshot (config, rank 1) — also reused by
-        // `filter_candidates_by_graph` for its guard bundle, so the rank-1
-        // lock is never taken under the storage guards.
-        let metric = self.storage.config.read().metric;
-        let higher_is_better = metric.higher_is_better();
-
-        let above_threshold: Vec<_> = candidates
-            .into_iter()
-            .filter(|r| passes_threshold(r.score, threshold, higher_is_better))
-            .collect();
-
-        let limit = match_clause
-            .return_clause
-            .limit
-            .and_then(|l| usize::try_from(l).ok())
-            .unwrap_or(100);
-
-        self.filter_candidates_by_graph(
-            &above_threshold,
-            match_clause,
-            params,
-            ctx,
-            limit,
-            metric,
-            sources,
-        )
-    }
-
-    /// Validates each vector candidate against the graph pattern and builds
-    /// `MatchResult` entries for those that pass.
-    ///
-    /// Hoists both storage guards once, in decree order — `vector_storage`
-    /// (2) before `payload_storage` (3) — and passes them down so WHERE
-    /// evaluation (including similarity re-checks) never re-acquires a
-    /// storage lock under them.
-    // Every guard is lent into MatchStorageGuards for the whole candidate
-    // walk, in the cross-collection order MatchReads sets.
-    #[allow(clippy::too_many_arguments)]
-    #[expect(clippy::significant_drop_tightening)]
-    fn filter_candidates_by_graph(
-        &self,
-        candidates: &[crate::point::SearchResult],
-        match_clause: &MatchClause,
-        params: &HashMap<String, serde_json::Value>,
-        ctx: &QueryContext,
-        limit: usize,
-        metric: crate::distance::DistanceMetric,
-        sources: &super::MatchSources,
-    ) -> Result<Vec<MatchResult>> {
-        let reads = super::MatchReads::acquire(self, sources);
-        let guards = MatchStorageGuards::over(metric, &reads);
-        let mut results = Vec::new();
-        let mut examined = 0u64;
-
-        for candidate in candidates {
-            if results.len() >= limit {
-                break;
-            }
-            ctx.check_timeout().map_err(Error::from)?;
-            examined += 1;
-
-            if let Some(mr) =
-                self.try_match_candidate(candidate, match_clause, params, ctx, &guards)?
-            {
-                results.push(mr);
-            }
-        }
-
-        // VectorFirst counts the candidate nodes it evaluated toward
-        // nodes_visited (the per-candidate BFS adds the nodes/edges it reaches),
-        // so EXPLAIN ANALYZE reports real traversal counts for this strategy too.
-        ctx.add_traversal(examined, 0);
-        Self::sort_by_score(&mut results, metric.higher_is_better());
-        Ok(results)
-    }
-
-    /// Builds a [`MatchResult`] for a single vector candidate when it satisfies
-    /// the start pattern, WHERE filters, and any graph relationships.
-    /// Returns `Ok(None)` when the candidate is rejected.
-    fn try_match_candidate(
-        &self,
-        candidate: &crate::point::SearchResult,
-        match_clause: &MatchClause,
-        params: &HashMap<String, serde_json::Value>,
-        ctx: &QueryContext,
-        guards: &MatchStorageGuards<'_>,
-    ) -> Result<Option<MatchResult>> {
-        let node_id = candidate.point.id;
-        let Some(pattern) = match_clause.patterns.first() else {
-            return Ok(None);
-        };
-
-        let starts = pattern.nodes.first().is_none_or(|first| {
-            Self::node_matches_bound_pattern(node_id, first, &guards.payload_memo)
-        });
-        if !starts {
-            return Ok(None);
-        }
-
-        let graph_ok = if pattern.relationships.is_empty() {
-            self.candidate_passes_where(node_id, match_clause, params, guards, pattern)?
-        } else {
-            self.candidate_has_graph_path(node_id, match_clause, params, ctx, guards, pattern)?
-        };
-
-        if !graph_ok {
-            return Ok(None);
-        }
-
-        let mut mr = MatchResult::new(node_id, 0, Vec::new());
-        mr.score = Some(candidate.score);
-        if let Some(alias) = pattern.nodes.first().and_then(|n| n.alias.as_ref()) {
-            mr.bindings.insert(alias.clone(), node_id);
-        }
-        mr.projected = self.project_properties_with_score(
-            &mr.bindings,
-            &mr.edge_bindings,
-            &mr.edge_paths,
-            &match_clause.return_clause,
-            Some(candidate.score),
-            &guards.payload_memo,
-        );
-        Ok(Some(mr))
-    }
-
-    /// Validates that a candidate node passes the non-similarity WHERE conditions.
-    ///
-    /// Used when the MATCH pattern has no relationships (single-node pattern).
-    fn candidate_passes_where(
-        &self,
-        node_id: u64,
-        match_clause: &MatchClause,
-        params: &HashMap<String, serde_json::Value>,
-        guards: &MatchStorageGuards<'_>,
-        pattern: &crate::velesql::GraphPattern,
-    ) -> Result<bool> {
-        let non_sim = strip_similarity_from_where(match_clause.where_clause.as_ref());
-
-        if let Some(ref cond) = non_sim {
-            let mut bindings = HashMap::new();
-            if let Some(alias) = pattern.nodes.first().and_then(|n| n.alias.as_ref()) {
-                bindings.insert(alias.clone(), node_id);
-            }
-            self.evaluate_where_condition(
-                node_id,
-                Some(&bindings),
-                super::where_eval::EdgeAliasBindings::NONE,
-                cond,
+        let mut wanted = top_k.max(limit).max(1);
+        loop {
+            let seeds = self.search(&query_vector, wanted)?;
+            let ids: Vec<u64> = seeds.iter().map(|seed| seed.point.id).collect();
+            let rows = self.execute_match_from(
+                match_clause,
                 params,
-                guards,
-            )
-        } else {
-            Ok(true)
-        }
-    }
-
-    /// Validates that a candidate node can reach at least one target through
-    /// the graph relationships defined in the MATCH pattern.
-    ///
-    /// Runs a bounded BFS from `node_id` and checks the first hit against the
-    /// non-similarity portion of the WHERE clause. Returns `true` if at least
-    /// one valid path exists.
-    fn candidate_has_graph_path(
-        &self,
-        node_id: u64,
-        match_clause: &MatchClause,
-        params: &HashMap<String, serde_json::Value>,
-        ctx: &QueryContext,
-        guards: &MatchStorageGuards<'_>,
-        pattern: &crate::velesql::GraphPattern,
-    ) -> Result<bool> {
-        let max_depth = Self::compute_max_depth(pattern);
-        let rel_types = Self::extract_rel_types(pattern);
-        let non_sim = strip_similarity_from_where(match_clause.where_clause.as_ref());
-
-        let config = StreamingConfig::default()
-            .with_limit(1)
-            .with_max_depth(max_depth)
-            .with_rel_types(rel_types);
-
-        let mut bindings = HashMap::new();
-        if let Some(alias) = pattern.nodes.first().and_then(|n| n.alias.as_ref()) {
-            bindings.insert(alias.clone(), node_id);
-        }
-
-        for hit in concurrent_bfs_stream(&self.graph.edge_store, node_id, config) {
-            // Each BFS hit is a node reached by following edges (EXPLAIN ANALYZE).
-            ctx.add_traversal(1, 1);
-            if let Some(target_pattern) = pattern.nodes.get(hit.depth as usize) {
-                if let Some(ref alias) = target_pattern.alias {
-                    bindings.insert(alias.clone(), hit.target_id);
-                }
+                Some(ctx),
+                sources,
+                StartNodes::Seeded(&ids),
+            )?;
+            let exhausted = seeds.len() < wanted || wanted >= total;
+            let past_threshold = seeds.last().is_some_and(|farthest| {
+                !compare_score(seed.operator, farthest.score, threshold, higher_is_better)
+            });
+            if rows.len() >= limit || exhausted || past_threshold {
+                return Ok(rows);
             }
-
-            if let Some(ref cond) = non_sim {
-                if self.evaluate_where_condition(
-                    hit.target_id,
-                    Some(&bindings),
-                    super::where_eval::EdgeAliasBindings::NONE,
-                    cond,
-                    params,
-                    guards,
-                )? {
-                    return Ok(true);
-                }
-            } else {
-                return Ok(true);
-            }
+            wanted = wanted.saturating_mul(2).min(total);
         }
-
-        Ok(false)
     }
 }
-
-/// Extracts the first `SimilarityCondition` from a WHERE clause tree.
-///
-/// Walks the condition recursively through AND/OR/NOT/Group wrappers.
-///
-/// # Errors
-///
-/// Returns `Error::Query` when no similarity condition is found.
-fn extract_similarity_condition(where_clause: Option<&Condition>) -> Result<&SimilarityCondition> {
-    where_clause
-        .and_then(first_similarity_condition)
-        .ok_or_else(|| {
-            Error::Query(
-                "VectorFirst strategy requires a similarity condition in WHERE clause".to_string(),
-            )
-        })
-}
-
-/// Returns the WHERE clause with the first `Similarity` leaf replaced by nothing.
-///
-/// When the entire WHERE is just a `Similarity`, returns `None`.
-/// When `Similarity` is inside AND or OR, removes it and simplifies:
-/// - `AND(sim, X)` or `AND(X, sim)` → `Some(X)` (both must hold; sim is
-///   already satisfied by the vector search, so only X remains)
-/// - `OR(sim, X)` or `OR(X, sim)` → `None` (either branch suffices; the
-///   sim branch is already satisfied by the vector search, so the entire
-///   OR is satisfied — no residual filter needed)
-///
-/// This allows the graph validation step to skip re-evaluating the similarity
-/// condition (already handled by the vector search threshold filter).
-fn strip_similarity_from_where(where_clause: Option<&Condition>) -> Option<Condition> {
-    where_clause.and_then(strip_sim)
-}
-
-/// Recursively removes `Similarity` leaves from a condition tree.
-///
-/// Returns `None` when the condition itself is a `Similarity` leaf.
-///
-/// # Limitations
-///
-/// - Strips ALL `Similarity` leaves, not just the one handled by
-///   vector search. Multiple similarity predicates in a single MATCH
-///   WHERE clause are not supported by VectorFirst strategy.
-/// - Does NOT recurse into `Not` nodes: `NOT(similarity(...) > 0.8)`
-///   is a meaningful residual filter (reject high-similarity matches)
-///   and must be preserved.
-fn strip_sim(cond: &Condition) -> Option<Condition> {
-    match cond {
-        Condition::Similarity(_) => None,
-        Condition::And(left, right) => match (strip_sim(left), strip_sim(right)) {
-            (None, None) => None,
-            (None, Some(r)) | (Some(r), None) => Some(r),
-            (Some(l), Some(r)) => Some(Condition::And(Box::new(l), Box::new(r))),
-        },
-        Condition::Or(left, right) => match (strip_sim(left), strip_sim(right)) {
-            // If either branch was the similarity condition, the entire OR
-            // is satisfied by the vector search — no residual filter needed.
-            (None | Some(_), None) | (None, Some(_)) => None,
-            (Some(l), Some(r)) => Some(Condition::Or(Box::new(l), Box::new(r))),
-        },
-        // NOT(Similarity) is a meaningful residual: "reject matches above
-        // threshold". Do not strip — preserve the entire NOT subtree.
-        Condition::Not(_) => Some(cond.clone()),
-        Condition::Group(inner) => strip_sim(inner).map(|c| Condition::Group(Box::new(c))),
-        other => Some(other.clone()),
-    }
-}
-
-/// Checks whether a score passes the similarity threshold.
-///
-/// For `higher_is_better` metrics (cosine, dot-product), the score must be
-/// greater than or equal to the threshold. For distance metrics (Euclidean),
-/// the score must be less than or equal.
-fn passes_threshold(score: f32, threshold: f32, higher_is_better: bool) -> bool {
-    if higher_is_better {
-        score >= threshold
-    } else {
-        score <= threshold
-    }
-}
-
-#[cfg(test)]
-#[path = "vector_first_tests.rs"]
-mod tests;

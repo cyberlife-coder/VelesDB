@@ -2143,11 +2143,18 @@ The query planner automatically chooses the optimal strategy:
 
 | Strategy | When Used | Description |
 |----------|-----------|-------------|
-| **GraphFirst** | No similarity condition | Traverse graph, then filter |
-| **VectorFirst** | Similarity on start node | Vector search, then validate graph |
+| **GraphFirst** | Every other MATCH | Walk the pattern from every node its first node matches |
+| **VectorFirst** | `LIMIT`, and a `similarity(start.field, $v) >`/`>=` threshold joined to WHERE by `AND` | Walk the pattern from the nodes nearest `$v`, nearest first |
 
-No strategy runs both: GraphFirst enumerates every row a VectorFirst search
-could return, so a union would add nothing and cost both.
+Both strategies run the same walk: the whole pattern (labels, inline
+properties, every hop), the whole WHERE (the `similarity()` leaf included),
+each path its own row. VectorFirst only chooses where the walk starts, so it
+returns the rows GraphFirst returns: it applies only when the nearest start
+nodes are the ones the rows come from — one pattern, an explicit `LIMIT`, the
+first `similarity()` leaf scoring the start node towards "closer", and any
+`ORDER BY` being `similarity() DESC`. Its seeds grow until the walk has its
+`LIMIT` of rows, the collection is exhausted, or the farthest seed fails the
+threshold. No strategy runs both.
 
 ### REST API
 
@@ -2334,10 +2341,8 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 > **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
 > lower bound** on the graph traversal across all MATCH strategies — not exact
 > figures. For **GraphFirst** they are the start nodes examined plus the
-> edges/nodes reached; for the similarity-anchored **VectorFirst** strategy (a
-> `similarity()` predicate on the start node) they are the candidate nodes
-> evaluated plus the per-candidate existence-BFS edges/nodes — each BFS uses
-> `limit(1)` and so undercounts the true frontier.
+> edges/nodes reached; for the similarity-anchored **VectorFirst** strategy
+> they are the same counts over the seeded walk (its seeds as start nodes).
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 

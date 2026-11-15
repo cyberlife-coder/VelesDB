@@ -148,9 +148,10 @@ impl<'s> MatchReads<'s> {
 
     /// What [`super::PayloadMemo::with_annotations`] reads: each annotation
     /// name with its payload storage, and each annotated alias with its
-    /// annotation name.
+    /// annotation name, read as of now.
     pub(in crate::collection::search::query) fn annotations(&self) -> Annotations<'_> {
         Annotations {
+            now_secs: crate::collection::expiry::now_unix_secs(),
             storages: self
                 .names
                 .iter()
@@ -172,13 +173,16 @@ impl<'s> MatchReads<'s> {
 /// The annotation lookups a [`super::PayloadMemo`] answers from.
 #[derive(Default)]
 pub(in crate::collection::search::query) struct Annotations<'a> {
+    /// The query's clock: an annotated point expired by then is absent, as
+    /// `Collection::get` answers it.
+    now_secs: u64,
     /// `(annotation name, payload storage it reads)`.
     storages: Vec<(&'a str, &'a LogPayloadStorage)>,
     /// `(node alias, annotation name)`.
     aliases: Vec<(&'a str, &'a str)>,
 }
 
-impl<'a> Annotations<'a> {
+impl Annotations<'_> {
     /// Index of the annotation `name`.
     pub(super) fn by_name(&self, name: &str) -> Option<usize> {
         self.storages.iter().position(|(n, _)| *n == name)
@@ -190,7 +194,25 @@ impl<'a> Annotations<'a> {
         self.by_name(name)
     }
 
-    /// The payload storage of annotation `index`.
+    /// The live payload of point `id` in annotation `index`: `None` when it
+    /// has none, or when it has expired (not yet swept).
+    pub(super) fn point(&self, index: usize, id: u64) -> Option<serde_json::Value> {
+        use crate::storage::PayloadStorage;
+        self.storages[index]
+            .1
+            .retrieve(id)
+            .ok()
+            .flatten()
+            .filter(|payload| {
+                !crate::collection::expiry::is_payload_expired(Some(payload), self.now_secs)
+            })
+    }
+}
+
+#[cfg(test)]
+impl<'a> Annotations<'a> {
+    /// The payload storage of annotation `index` (tests compare which
+    /// storage an alias reads).
     pub(super) fn storage(&self, index: usize) -> &'a LogPayloadStorage {
         self.storages[index].1
     }

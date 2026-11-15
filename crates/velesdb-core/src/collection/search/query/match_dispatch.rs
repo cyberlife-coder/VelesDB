@@ -162,9 +162,12 @@ impl Collection {
         sources: &super::match_exec::MatchSources,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         let start = std::time::Instant::now();
-        if crate::velesql::match_planner::MatchQueryPlanner::has_similarity_condition(
-            match_clause.where_clause.as_ref(),
-        ) {
+        if match_clause
+            .where_clause
+            .as_ref()
+            .and_then(crate::velesql::match_planner::first_similarity)
+            .is_some()
+        {
             global_match_metrics().record_similarity_query();
         }
 

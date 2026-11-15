@@ -39,7 +39,7 @@ fn ordering_holds(op: crate::velesql::CompareOp, ordering: std::cmp::Ordering) -
 }
 
 /// Compares a similarity score against a threshold, inverting for distance metrics.
-fn compare_score(
+pub(super) fn compare_score(
     op: crate::velesql::CompareOp,
     score: f32,
     threshold: f32,
@@ -365,7 +365,7 @@ impl Collection {
         // alias, mirroring what evaluate_comparison_condition does. Without
         // this, `WHERE a.category IN (...)` would evaluate against node_id
         // (the traversal target) instead of the node bound to alias `a`.
-        let column = crate::velesql::match_planner::column_of_metadata_condition(condition);
+        let column = column_of_metadata_condition(condition);
 
         // Audit 2026-06 F: a relationship alias resolves against the EDGE's
         // properties (ANY-element semantics; fixed-length = one element).
@@ -446,7 +446,7 @@ impl Collection {
         // Compile-once per (leaf, strip-decision) — tag bit 1 separates the
         // edge-namespace rewrite from the node one. This also amortizes the
         // build across the ANY-element fold, which recompiled per edge id.
-        let column = crate::velesql::match_planner::column_of_metadata_condition(condition);
+        let column = column_of_metadata_condition(condition);
         let stripped = column
             .and_then(column_alias)
             .is_some_and(|a| ctx.is_edge_alias(a));
@@ -631,6 +631,25 @@ pub(super) fn resolve_target_id(
         .split_once('.')
         .and_then(|(alias, _)| bindings?.get(alias).copied())
         .unwrap_or(default_id)
+}
+
+/// Extracts the column name from a metadata condition variant.
+///
+/// Returns `Some(&str)` for condition types that carry a `column` field.
+/// Non-metadata variants return `None`.
+fn column_of_metadata_condition(condition: &crate::velesql::Condition) -> Option<&str> {
+    match condition {
+        crate::velesql::Condition::In(ic) => Some(&ic.column),
+        crate::velesql::Condition::Between(btw) => Some(&btw.column),
+        crate::velesql::Condition::Like(lk) => Some(&lk.column),
+        crate::velesql::Condition::IsNull(isn) => Some(&isn.column),
+        crate::velesql::Condition::Match(m) => Some(&m.column),
+        crate::velesql::Condition::ContainsText(ct) => Some(&ct.column),
+        crate::velesql::Condition::Contains(c) => Some(&c.column),
+        crate::velesql::Condition::GeoDistance(gd) => Some(&gd.column),
+        crate::velesql::Condition::GeoBbox(gb) => Some(&gb.column),
+        _ => None,
+    }
 }
 
 /// The alias prefix of a dotted column (`a.name` -> `a`), if any.

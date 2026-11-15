@@ -34,7 +34,7 @@ impl Database {
     /// with that target would run: the read gate admits the target and every
     /// `@collection` the clause names (each unscoped), the annotated nodes
     /// read their collection's properties during the walk, and the rows are
-    /// ordered and limited as on `/query`.
+    /// ordered and limited as on `/query`, `search.max_results` included.
     ///
     /// # Errors
     ///
@@ -51,7 +51,7 @@ impl Database {
         self.authorize_match_clause(Some(collection), Some(clause), &GateDecisions::default())?;
         let target = self.resolve_collection(collection)?;
         let sources = self.match_sources(Some(clause))?;
-        match scoring {
+        let mut rows = match scoring {
             Some(scoring) => target.execute_match_with_similarity_reading(
                 clause,
                 scoring.vector,
@@ -60,6 +60,9 @@ impl Database {
                 &sources,
             ),
             None => target.match_query_ordered_reading(clause, params, &sources),
-        }
+        }?;
+        // `search.max_results` bounds what a caller receives (#2591).
+        rows.truncate(self.config.search.max_results);
+        Ok(rows)
     }
 }

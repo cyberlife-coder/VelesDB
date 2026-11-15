@@ -232,10 +232,7 @@ impl<'a> PayloadMemo<'a> {
             .map(std::sync::Arc::new);
         let properties = match collection.and_then(|c| self.annotations.by_name(c)) {
             None => own.clone(),
-            Some(index) => sources::union_payload(
-                own.clone(),
-                self.annotations.storage(index).retrieve(id).ok().flatten(),
-            ),
+            Some(index) => sources::union_payload(own.clone(), self.annotations.point(index, id)),
         };
         (own, properties)
     }
@@ -251,11 +248,20 @@ impl<'a> PayloadMemo<'a> {
         if let Some(hit) = self.united.borrow().get(&(index, id)) {
             return hit.clone();
         }
-        let extra = self.annotations.storage(index).retrieve(id).ok().flatten();
-        let united = sources::union_payload(self.get(id), extra);
+        let united = sources::union_payload(self.get(id), self.annotations.point(index, id));
         self.united.borrow_mut().insert((index, id), united.clone());
         united
     }
+}
+
+/// Where a MATCH walk takes its start nodes from.
+#[derive(Clone, Copy)]
+pub(in crate::collection::search::query) enum StartNodes<'s> {
+    /// Every node the first pattern node matches (label index or scan).
+    Scan,
+    /// These ids, in this order, each kept when it matches the first pattern
+    /// node: `VectorFirst`'s nearest-first seeds.
+    Seeded(&'s [u64]),
 }
 
 /// Result of a MATCH query traversal.
@@ -437,9 +443,6 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the query cannot be executed or a guard-rail is violated.
-    // Every guard is lent into MatchStorageGuards for the whole match
-    // execution, in the cross-collection order MatchReads sets.
-    #[expect(clippy::significant_drop_tightening)]
     pub(in crate::collection::search::query) fn execute_match_reading(
         &self,
         match_clause: &MatchClause,
@@ -447,12 +450,31 @@ impl Collection {
         ctx: Option<&QueryContext>,
         sources: &MatchSources,
     ) -> Result<Vec<MatchResult>> {
+        self.execute_match_from(match_clause, params, ctx, sources, StartNodes::Scan)
+    }
+
+    /// [`Self::execute_match_reading`] whose walk starts from `starts`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be executed or a guard-rail is violated.
+    // Every guard is lent into MatchStorageGuards for the whole match
+    // execution, in the cross-collection order MatchReads sets.
+    #[expect(clippy::significant_drop_tightening)]
+    pub(in crate::collection::search::query) fn execute_match_from(
+        &self,
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        ctx: Option<&QueryContext>,
+        sources: &MatchSources,
+        starts: StartNodes<'_>,
+    ) -> Result<Vec<MatchResult>> {
         // Metric snapshot (config, rank 1) BEFORE the guards. See
         // `MatchStorageGuards`.
         let metric = self.storage.config.read().metric;
         let reads = MatchReads::acquire(self, sources);
         let guards = MatchStorageGuards::over(metric, &reads);
-        self.execute_match_with_guards(match_clause, params, ctx, &guards)
+        self.walk_match(match_clause, params, ctx, &guards, starts)
     }
 
     /// Guard-accepting MATCH execution: the body of
@@ -468,6 +490,20 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
         guards: &MatchStorageGuards<'_>,
+    ) -> Result<Vec<MatchResult>> {
+        self.walk_match(match_clause, params, ctx, guards, StartNodes::Scan)
+    }
+
+    /// The MATCH walk every strategy runs: each pattern from its start nodes,
+    /// WHERE evaluated on every row, rows scored by WHERE's first
+    /// `similarity()` leaf.
+    fn walk_match(
+        &self,
+        match_clause: &MatchClause,
+        params: &HashMap<String, serde_json::Value>,
+        ctx: Option<&QueryContext>,
+        guards: &MatchStorageGuards<'_>,
+        starts: StartNodes<'_>,
     ) -> Result<Vec<MatchResult>> {
         if match_clause.patterns.is_empty() {
             return Err(Error::Query(
@@ -487,13 +523,14 @@ impl Collection {
             if all_results.len() >= limit {
                 break;
             }
+            let start_nodes = self.resolve_start_nodes(pattern, guards, starts)?;
             self.execute_single_pattern(
                 pattern,
+                &start_nodes,
                 match_clause,
                 params,
                 ctx,
                 guards,
-                &self.graph.edge_store,
                 limit,
                 &mut all_results,
                 &mut iteration_count,
@@ -519,23 +556,22 @@ impl Collection {
         Ok(all_results)
     }
 
-    /// Executes a single graph pattern: finds start nodes, then dispatches to
-    /// single-node collection or BFS traversal.
+    /// Executes a single graph pattern from its resolved start nodes:
+    /// dispatches to single-node collection or BFS traversal.
     #[allow(clippy::too_many_arguments)]
     fn execute_single_pattern(
         &self,
         pattern: &GraphPattern,
+        start_nodes: &[(u64, HashMap<String, u64>)],
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
         guards: &MatchStorageGuards<'_>,
-        edge_store: &crate::collection::graph::ConcurrentEdgeStore,
         limit: usize,
         all_results: &mut Vec<MatchResult>,
         iteration_count: &mut u32,
         reported_cardinality: &mut usize,
     ) -> Result<()> {
-        let start_nodes = self.find_start_nodes(pattern, guards)?;
         if start_nodes.is_empty() {
             return Ok(());
         }
@@ -561,7 +597,7 @@ impl Collection {
                 limit,
                 prefilter,
             };
-            return self.collect_single_node_results(&start_nodes, &mut sn_ctx);
+            return self.collect_single_node_results(start_nodes, &mut sn_ctx);
         }
 
         let mut trav_ctx = TraversalCtx {
@@ -575,7 +611,7 @@ impl Collection {
             reported_cardinality,
             seen_bindings: &mut HashSet::new(),
         };
-        self.traverse_pattern(pattern, &start_nodes, edge_store, &mut trav_ctx)
+        self.traverse_pattern(pattern, start_nodes, &self.graph.edge_store, &mut trav_ctx)
     }
 
     /// Collects results for single-node patterns (no relationships).
