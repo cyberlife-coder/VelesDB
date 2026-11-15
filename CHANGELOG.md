@@ -132,6 +132,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`BETWEEN` with string or date bounds matches the range.** It converted
+  its bounds with a numbers-only converter, so a string bound became `null`:
+  `date BETWEEN '2024-01-01' AND '2024-12-31'`, the example in
+  `docs/VELESQL_SPEC.md`, matched nothing. The bounds now convert like a
+  comparison's value, so `x BETWEEN a AND b` returns what
+  `x >= a AND x <= b` returns. The WASM executor already did.
+
 - **`POST /collections/{name}/relations` no longer fails permanently after an
   edge with ID `u64::MAX` exists** (server, 2026-11-15). The handler picks the
   next edge ID as `max_edge_id + 1`, and that sum saturated at `u64::MAX`, an

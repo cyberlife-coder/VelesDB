@@ -21,18 +21,6 @@ fn velesql_value_to_json(v: crate::velesql::Value) -> Value {
     }
 }
 
-/// Converts a `VelesQL` value to JSON, accepting only numeric types.
-///
-/// Non-numeric variants (String, Boolean, Null, etc.) produce `Value::Null`.
-fn velesql_numeric_to_json(v: &crate::velesql::Value) -> Value {
-    match *v {
-        crate::velesql::Value::Integer(i) => Value::Number(i.into()),
-        crate::velesql::Value::UnsignedInteger(u) => Value::Number(u.into()),
-        crate::velesql::Value::Float(f) => Value::from(f),
-        _ => Value::Null,
-    }
-}
-
 /// The filter field a `VelesQL` column reads:
 /// [`POINT_ID_FIELD`](super::POINT_ID_FIELD) for `id`, the point id in every
 /// clause of a query, else the payload path.
@@ -176,15 +164,18 @@ fn convert_in(inc: crate::velesql::InCondition) -> Condition {
 
 /// Converts a BETWEEN condition into `Gte AND Lte`.
 fn convert_between(btw: crate::velesql::BetweenCondition) -> Condition {
+    // `x BETWEEN a AND b` is `x >= a AND x <= b`: the bounds convert like a
+    // comparison's value, so string and date bounds compare as they do there
+    // (they used to become `null` and match nothing).
     Condition::And {
         conditions: vec![
             Condition::Gte {
                 field: field(btw.column.clone()),
-                value: velesql_numeric_to_json(&btw.low),
+                value: velesql_value_to_json(btw.low),
             },
             Condition::Lte {
                 field: field(btw.column),
-                value: velesql_numeric_to_json(&btw.high),
+                value: velesql_value_to_json(btw.high),
             },
         ],
     }
