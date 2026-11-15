@@ -35,27 +35,29 @@ pub fn bind_value<S: BuildHasher>(
     let bound = params
         .get(name)
         .ok_or_else(|| Error::Query(format!("Missing parameter: ${name}")))?;
-    Ok(match bound {
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Integer(i)
-            } else if let Some(u) = n.as_u64() {
-                Value::UnsignedInteger(u)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
-            } else {
-                Value::Null
-            }
-        }
-        serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Bool(b) => Value::Boolean(*b),
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-            return Err(Error::Query(format!(
-                "Unsupported parameter type for ${name}: {bound:?}",
-            )));
-        }
-    })
+    scalar_of(name, bound)
+}
+
+/// The scalar a JSON parameter value binds as (see [`bind_value`]).
+fn scalar_of(name: &str, bound: &serde_json::Value) -> Result<Value> {
+    match bound {
+        serde_json::Value::Number(n) => Ok(number_of(n)),
+        serde_json::Value::String(s) => Ok(Value::String(s.clone())),
+        serde_json::Value::Bool(b) => Ok(Value::Boolean(*b)),
+        serde_json::Value::Null => Ok(Value::Null),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Err(Error::Query(format!(
+            "Unsupported parameter type for ${name}: {bound:?}",
+        ))),
+    }
+}
+
+/// The narrowest of `i64`, `u64` and `f64` that holds `n`.
+fn number_of(n: &serde_json::Number) -> Value {
+    n.as_i64()
+        .map(Value::Integer)
+        .or_else(|| n.as_u64().map(Value::UnsignedInteger))
+        .or_else(|| n.as_f64().map(Value::Float))
+        .unwrap_or(Value::Null)
 }
 
 /// Binds every scalar `$name` operand in `cond`: comparison, `IN`,
@@ -79,6 +81,16 @@ pub fn bind_condition<S: BuildHasher>(
         Condition::Or(left, right) => Condition::Or(boxed(left)?, boxed(right)?),
         Condition::Not(inner) => Condition::Not(boxed(inner)?),
         Condition::Group(inner) => Condition::Group(boxed(inner)?),
+        leaf => bind_leaf(leaf, params)?,
+    })
+}
+
+/// [`bind_condition`] on a leaf: binds its scalar operands, if it has any.
+fn bind_leaf<S: BuildHasher>(
+    leaf: &Condition,
+    params: &HashMap<String, serde_json::Value, S>,
+) -> Result<Condition> {
+    Ok(match leaf {
         Condition::Comparison(cmp) => Condition::Comparison(Comparison {
             column: cmp.column.clone(),
             operator: cmp.operator,
@@ -110,3 +122,7 @@ fn bind_values<S: BuildHasher>(
 ) -> Result<Vec<Value>> {
     values.iter().map(|v| bind_value(v, params)).collect()
 }
+
+#[cfg(test)]
+#[path = "param_binding_tests.rs"]
+mod tests;
