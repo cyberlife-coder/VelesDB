@@ -319,6 +319,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM: deleting a row drops its sparse postings, and `CREATE COLLECTION
+  … WITH (storage = …)` is honoured** (WASM, 2026-11-16).
+  `VectorStore.remove` and VelesQL `DELETE` left the row's postings in the
+  store's sparse index, so `search_sparse` kept returning a deleted
+  document. The storage mode of a VelesQL `CREATE COLLECTION` was ignored
+  (every collection Full) and an unknown mode accepted; it is now read by
+  core's parser, which refuses unknown names.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
