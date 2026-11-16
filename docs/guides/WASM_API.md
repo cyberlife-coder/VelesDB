@@ -76,6 +76,7 @@ map were ES2015 `Map`s, on which `record.id` is `undefined` (#2332).
 | `VectorStore.new_with_mode(dimension, metric, mode)` | Store with a declared storage mode — `'full'`, `'sq8'`, `'binary'`, `'pq'` or `'rabitq'` (see [storage modes](#storage-modes-and-memory)). |
 | `VectorStore.with_capacity(dimension, metric, capacity)` | Pre-allocates, avoids repeated reallocation during bulk load. |
 | `VectorStore.new_metadata_only()` | Payload-only store, no vectors. |
+| `VectorStore.validate_search_quality(quality)` | Checks a `quality` preset with the parser `search_with_quality` runs, without a store: throws its refusal, returns nothing otherwise. A metadata-only store refuses every vector search, so it cannot serve as a probe. |
 
 `metric` is one of `cosine`, `euclidean` (alias `l2`), `dot`, `hamming`,
 `jaccard`. An unknown metric throws immediately.
