@@ -117,3 +117,22 @@ fn test_insert_rejects_row_arity_mismatch_at_parse_time() {
     let err = execute(&db, &stmt, &empty_params());
     assert!(err.is_err());
 }
+
+/// A vector on a metadata-only collection is refused, as core refuses it,
+/// rather than dropped.
+#[test]
+fn a_vector_on_a_metadata_only_collection_is_refused() {
+    let mut db = crate::database::DatabaseInner::new();
+    db.create_metadata_collection("m").expect("test: create");
+    let err = crate::velesql_exec::execute(
+        &mut db,
+        "INSERT INTO m (id, vector, k) VALUES (1, $v, 'x')",
+        Some(r#"{"v": [1.0, 0.0]}"#),
+    )
+    .map(|_| ())
+    .expect_err("test: refused");
+    assert!(
+        err.contains("metadata-only collection cannot set 'vector'"),
+        "{err}"
+    );
+}

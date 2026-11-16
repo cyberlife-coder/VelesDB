@@ -59,7 +59,7 @@ fn test_update_on_id_column_is_rejected() {
 }
 
 #[test]
-fn test_update_on_vector_column_is_rejected() {
+fn a_vector_that_is_not_an_array_is_refused() {
     let mut db = DatabaseInner::new();
     db.create_collection("vecs", 4, "cosine")
         .expect("test: create");
@@ -99,4 +99,64 @@ fn test_update_with_param() {
     let borrowed = store.borrow();
     let p = borrowed.payloads[0].as_ref().expect("test: payload");
     assert_eq!(p["cat"], "gaming");
+}
+
+/// `SET vector = $v` replaces the embedding, as core's UPDATE does: the
+/// row's NEAR rank follows its new vector.
+#[test]
+fn set_vector_replaces_the_embedding() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 2, "cosine")
+        .expect("test: create");
+    for (id, v) in [(1, "[1.0, 0.0]"), (2, "[0.0, 1.0]")] {
+        crate::velesql_exec::execute(
+            &mut db,
+            &format!("INSERT INTO vecs (id, vector) VALUES ({id}, $v)"),
+            Some(&format!("{{\"v\": {v}}}")),
+        )
+        .expect("test: seed");
+    }
+    crate::velesql_exec::execute(
+        &mut db,
+        "UPDATE vecs SET vector = $v WHERE id = 2",
+        Some(r#"{"v": [1.0, 0.1]}"#),
+    )
+    .expect("test: update the vector");
+    let r = crate::velesql_exec::execute(
+        &mut db,
+        "SELECT * FROM vecs WHERE vector NEAR $q LIMIT 2",
+        Some(r#"{"q": [0.0, 1.0]}"#),
+    )
+    .expect("test: NEAR");
+    assert_eq!(
+        r.row(0).expect("test: row").id(),
+        2,
+        "[1, 0.1] is nearer [0, 1] than [1, 0]"
+    );
+}
+
+#[test]
+fn set_vector_is_refused_on_a_metadata_collection_and_at_another_dimension() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("m").expect("test: create m");
+    let err = execute(
+        &db,
+        &parse_update("UPDATE m SET vector = $v WHERE id = 1"),
+        &parse_params(Some(r#"{"v": [1.0]}"#)).expect("test: p"),
+    )
+    .expect_err("test: metadata-only");
+    assert!(
+        err.contains("metadata-only collection cannot set 'vector'"),
+        "{err}"
+    );
+
+    db.create_collection("vecs", 2, "cosine")
+        .expect("test: create vecs");
+    let err = execute(
+        &db,
+        &parse_update("UPDATE vecs SET vector = $v WHERE id = 1"),
+        &parse_params(Some(r#"{"v": [1.0, 0.0, 0.0]}"#)).expect("test: p"),
+    )
+    .expect_err("test: dimension");
+    assert!(err.contains("dimension mismatch"), "{err}");
 }

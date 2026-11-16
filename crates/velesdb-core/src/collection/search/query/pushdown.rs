@@ -32,6 +32,21 @@ impl PushdownAnalysis {
         !self.column_store_filters.is_empty()
     }
 
+    /// The predicates a JOIN's joined rows must pass: every one that reads a
+    /// join side — pushed below an INNER join too, as an optimization, but
+    /// only a predicate on that one side can be, so each is still evaluated
+    /// on the joined row — and every cross-source one. The base query keeps
+    /// only the predicates on the base collection: run on a base row before
+    /// the join, a joined-side column reads nothing.
+    #[must_use]
+    pub fn joined_row_filters(&self) -> Vec<Condition> {
+        self.column_store_filters
+            .iter()
+            .chain(&self.post_join_filters)
+            .cloned()
+            .collect()
+    }
+
     /// Returns the total number of conditions analyzed.
     #[must_use]
     pub fn total_conditions(&self) -> usize {
@@ -77,6 +92,28 @@ pub fn extract_join_tables(joins: &[JoinClause]) -> HashSet<String> {
         }
     }
     tables
+}
+
+/// The tables (and aliases) of the INNER joins: the only join sides a WHERE
+/// predicate may be pushed below. Under a LEFT, RIGHT or FULL join a
+/// predicate on the outer side must see the null-filled row — pushed below,
+/// `WHERE c.id IS NULL` would filter the join side before the join and the
+/// unmatched rows it means to find would all pass.
+#[must_use]
+pub fn pushable_join_tables(joins: &[JoinClause]) -> HashSet<String> {
+    let inner: Vec<JoinClause> = joins
+        .iter()
+        .filter(|join| matches!(join.join_type, crate::velesql::JoinType::Inner))
+        .cloned()
+        .collect();
+    extract_join_tables(&inner)
+}
+
+/// Whether `condition` reads only the columns of `tables` — the pushed
+/// predicates one join side's store is filtered by.
+#[must_use]
+pub fn reads_only(condition: &Condition, tables: &HashSet<String>) -> bool {
+    get_condition_source(condition, &HashSet::new(), tables) == Source::ColumnStore
 }
 
 /// Routes a condition clone into the appropriate analysis bucket by source.

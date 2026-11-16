@@ -17,7 +17,7 @@ impl Database {
         stmt: &crate::velesql::SelectStatement,
     ) -> crate::collection::search::query::pushdown::PushdownAnalysis {
         let join_tables =
-            crate::collection::search::query::pushdown::extract_join_tables(&stmt.joins);
+            crate::collection::search::query::pushdown::pushable_join_tables(&stmt.joins);
         let graph_vars: std::collections::HashSet<String> =
             stmt.from_alias.iter().cloned().collect();
         let analysis = stmt.where_clause.as_ref().map_or_else(

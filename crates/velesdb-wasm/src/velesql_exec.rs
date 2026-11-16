@@ -117,8 +117,8 @@ fn dispatch(
         velesql_admin::execute(db, admin)?;
         return Ok(DispatchOutcome::Rows(Vec::new()));
     }
-    if let Some(compound) = &query.compound {
-        return velesql_setops::execute(db, query, compound, params).map(DispatchOutcome::Rows);
+    if query.compound.is_some() {
+        return velesql_setops::execute(db, query, params).map(DispatchOutcome::Rows);
     }
     // Default path: a SELECT (no explicit DML/DDL/introspection/admin).
     velesql_select::execute(db, query, params).map(DispatchOutcome::Rows)

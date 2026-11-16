@@ -329,3 +329,129 @@ fn test_self_join_exact_rows() {
     assert_eq!(payload_str(row(&results, 1), "emp_name"), Some("Carol"));
     assert_eq!(payload_str(row(&results, 2), "emp_name"), Some("Carol"));
 }
+
+// =========================================================================
+// The joined row as SQL reads it: each side under its alias, the window
+// after the join, aggregates over the joined rows
+// =========================================================================
+
+/// GIVEN orders joined to customers
+/// WHEN the SELECT projects and orders by qualified columns
+/// THEN each side reads under its alias, sorted after the join.
+#[test]
+fn qualified_columns_read_each_side_after_the_join() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    let rows = execute_sql(
+        &db,
+        "SELECT * FROM orders AS o JOIN customers AS c ON o.customer_id = c.id \
+         ORDER BY c.name DESC",
+    )
+    .expect("JOIN ORDER BY a joined column");
+    let names: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r.point.payload.as_ref()?.get("c")?.get("name")?.as_str())
+        .collect();
+    assert_eq!(names, vec!["Cust-Y", "Cust-X"], "{rows:?}");
+}
+
+/// GIVEN three orders, one whose customer does not exist
+/// WHEN `LIMIT 2` asks for two INNER-joined rows
+/// THEN two come back: the LIMIT windows the joined rows, not the base rows
+///      the join then drops.
+#[test]
+fn the_limit_windows_the_joined_rows() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    let rows = execute_sql(
+        &db,
+        "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id \
+         ORDER BY orders.id DESC LIMIT 2",
+    )
+    .expect("JOIN LIMIT");
+    let ids: Vec<u64> = rows.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, vec![2, 1], "order 3 has no customer");
+}
+
+/// GIVEN orders joined to customers
+/// WHEN an aggregate without GROUP BY counts the joined rows
+/// THEN it counts them, not the base collection's points.
+#[test]
+fn an_aggregate_counts_the_joined_rows() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    let query = velesdb_core::velesql::Parser::parse(
+        "SELECT COUNT(*) AS n FROM orders JOIN customers ON orders.customer_id = customers.id",
+    )
+    .expect("parse");
+    let result = db
+        .execute_aggregate(&query, &std::collections::HashMap::new())
+        .expect("aggregate over a JOIN");
+    assert_eq!(result, json!({"n": 2}), "orders 1 and 2 have a customer");
+}
+
+/// GIVEN orders LEFT-joined to customers
+/// WHEN the WHERE compares a joined-side column a matched row satisfies
+/// THEN that row comes back: the predicate reads the joined row, not the
+///      base row before the join.
+#[test]
+fn a_left_join_where_on_the_joined_side_keeps_the_matching_rows() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    let rows = execute_sql(
+        &db,
+        "SELECT * FROM orders LEFT JOIN customers ON orders.customer_id = customers.id \
+         WHERE customers.name = 'Cust-X'",
+    )
+    .expect("LEFT JOIN WHERE on the joined side");
+    assert_eq!(result_ids(&rows), HashSet::from([1]), "{rows:?}");
+}
+
+/// GIVEN a category joined to its group and that group's dept (two INNER
+///       joins)
+/// WHEN the WHERE ORs a predicate on each join side, or negates that OR
+/// THEN the row comes back exactly when the condition holds on the joined
+///      row: a predicate spanning two sides is evaluated after the joins.
+#[test]
+fn a_where_spanning_two_join_sides_is_evaluated_on_the_joined_row() {
+    let (_dir, db) = create_test_db();
+    setup_three_way_chain(&db);
+    let ids = |predicate: &str| {
+        let sql = format!(
+            "SELECT * FROM categories \
+             JOIN groups ON categories.parent_fk = groups.id \
+             JOIN depts ON groups.dept_fk = depts.id WHERE {predicate}"
+        );
+        result_ids(&execute_sql(&db, &sql).unwrap_or_else(|e| panic!("{sql}: {e}")))
+    };
+    let neither = "groups.group_name = 'none' OR depts.dept_name = 'none'";
+    let one = "groups.group_name = 'none' OR depts.dept_name = 'Dept-500'";
+    assert_eq!(ids(neither), HashSet::new(), "{neither}");
+    assert_eq!(ids(one), HashSet::from([1]), "{one}");
+    assert_eq!(
+        ids(&format!("NOT ({neither})")),
+        HashSet::from([1]),
+        "NOT ({neither})"
+    );
+}
+
+/// GIVEN orders joined to customers
+/// WHEN the WHERE keeps no joined row
+/// THEN an aggregate without GROUP BY still reports each column over no row
+///      (`COUNT(*)` 0), as an aggregate over a scan does.
+#[test]
+fn an_aggregate_over_no_joined_row_reports_its_empty_values() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    for predicate in ["customers.name = 'none'", "orders.title = 'ord-c'"] {
+        let query = velesdb_core::velesql::Parser::parse(&format!(
+            "SELECT COUNT(*) AS n FROM orders JOIN customers ON orders.customer_id = customers.id \
+             WHERE {predicate}"
+        ))
+        .expect("parse");
+        let result = db
+            .execute_aggregate(&query, &std::collections::HashMap::new())
+            .expect("aggregate over an empty JOIN");
+        assert_eq!(result, json!({"n": 0}), "{predicate}");
+    }
+}

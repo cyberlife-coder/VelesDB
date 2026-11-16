@@ -155,9 +155,13 @@ payload vector, several under `AND` — read and ranked as in core),
 `SELECT DISTINCT` (core's dedup key, applied before `ORDER BY` and `LIMIT`),
 projection / aliases / window functions
 (`ROW_NUMBER`, `RANK`, `DENSE_RANK`), `GROUP BY` / `HAVING`, aggregates,
-`ORDER BY` (payload columns, `similarity()`, arithmetic expressions, and
+`ORDER BY` (payload columns, `similarity()`, `score` and the component scores
+resolved by core's `velesql::ScoreContext`, arithmetic expressions, and
 aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
-`UNION` / `INTERSECT` / `EXCEPT`, `INNER` / `LEFT JOIN`,
+`UNION` / `INTERSECT` / `EXCEPT` (core's semantics, `velesql::execute_compound`;
+an operand cannot join or aggregate), `INNER` / `LEFT JOIN` (core's joined row,
+each side under its alias; WHERE, DISTINCT, ORDER BY, GROUP BY and LIMIT over
+the joined rows),
 `INSERT` / `UPSERT` / `UPDATE` / `DELETE`, DDL
 (`CREATE` / `DROP` / `TRUNCATE COLLECTION`), introspection
 (`SHOW COLLECTIONS`, `DESCRIBE COLLECTION`), admin (`FLUSH`, a no-op), and
@@ -196,8 +200,7 @@ reference from `@wiscale/velesdb-wasm@4.0.0`.
 | `CONTAINS` / `CONTAINS_TEXT` | `CONTAINS / CONTAINS_TEXT conditions are not supported in WASM` |
 | Geospatial conditions | `Geospatial conditions are not supported in WASM` |
 | Inline vectors in `INSERT` | `… inline vectors are not supported in WASM INSERT` |
-| `ORDER BY similarity(field, $v)` | `ORDER BY similarity(field, $vec) is not supported in WASM: named/secondary …` |
-| `ORDER BY similarity(field, $v)`, arithmetic or an aggregate in a `MATCH` | `MATCH ORDER BY <form> is not supported in WASM (use depth, alias.property or similarity())` |
+| An aggregate `ORDER BY` in a `MATCH` | `MATCH ORDER BY aggregate expression is not supported …` (as in core) |
 
 One case deserves more than a one-liner:
 
@@ -229,11 +232,13 @@ Both rules, and the ranking of every accepted shape, are pinned against core by
 
 ### `ORDER BY similarity()`
 
-WASM stores only the **primary** vector, so the named/secondary form
-`ORDER BY similarity(field, $v)` is rejected on both the `SELECT` and `MATCH`
-paths. Use `ORDER BY similarity()` (the search score itself, or a `MATCH` row's
-score) or a payload column. The `MATCH` path also rejects arithmetic `ORDER BY`;
-order by `depth`, `alias.property` or `similarity()` there.
+`ORDER BY similarity()` is the search score. `ORDER BY similarity(field, $v)`
+scores each row as core does: `vector` against the row's own vector, any other
+field against the payload's named vector, a row without one of the query's
+dimension taking the worst key (last under `DESC`). It is refused only over
+grouped rows. A `MATCH` orders as core's does: `depth`, `alias.property`,
+`similarity()`, `similarity(alias.vector, $v)` (the node `alias` binds, the
+target for a bare field) and arithmetic over the target.
 
 ## Error surface: mixed, coerce before reading
 

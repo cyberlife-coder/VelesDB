@@ -167,38 +167,60 @@ fn scenario_over_cap_graph_hop_rejected() {
 }
 
 // =========================================================================
-// 5. DELETE rejects
+// 5. DELETE: any metadata WHERE, no vector predicate
 // =========================================================================
 
-#[test]
-fn scenario_delete_non_id_where_column_rejected() {
-    let (_dir, db) = create_test_db();
-    setup_products(&db);
-
-    // DELETE only supports `id = N` or `id IN (...)`; a payload column WHERE
-    // must be rejected rather than silently matching nothing.
-    let err = execute_sql(&db, "DELETE FROM products WHERE price = 10")
-        .expect_err("test: DELETE on non-id column must be rejected");
-    assert!(
-        err.to_string().contains("DELETE WHERE must use 'id = N'"),
-        "expected DELETE id-pattern marker, got: {err}"
-    );
+fn product_ids(db: &Database) -> Vec<u64> {
+    let mut ids: Vec<u64> = execute_sql(db, "SELECT * FROM products LIMIT 10")
+        .expect("test: SELECT")
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+    ids.sort_unstable();
+    ids
 }
 
+/// GIVEN two products priced 10 and 20
+/// WHEN DELETE filters on a payload column, then on `id > 1`
+/// THEN each removes exactly the rows its WHERE selects, as UPDATE selects
+///      them (the WASM executor already did; core refused every non-id WHERE).
 #[test]
-fn scenario_delete_non_eq_operator_on_id_rejected() {
+fn scenario_delete_removes_the_rows_its_where_selects() {
     let (_dir, db) = create_test_db();
     setup_products(&db);
+    execute_sql(&db, "DELETE FROM products WHERE price = 10").expect("test: DELETE by price");
+    assert_eq!(product_ids(&db), vec![2]);
 
-    // `id` is the supported column, but only the `=` operator is allowed.
-    let err = execute_sql(&db, "DELETE FROM products WHERE id > 0")
-        .expect_err("test: DELETE id with non-= operator must be rejected");
+    let (_dir, db) = create_test_db();
+    setup_products(&db);
+    execute_sql(&db, "DELETE FROM products WHERE id > 1").expect("test: DELETE by id range");
+    assert_eq!(product_ids(&db), vec![1]);
+}
+
+/// GIVEN products
+/// WHEN DELETE's WHERE holds a vector predicate
+/// THEN it is refused: a DML WHERE filters on metadata, as UPDATE's does.
+#[test]
+fn scenario_delete_with_a_vector_predicate_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_products(&db);
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), json!([1.0, 0.0, 0.0, 0.0]));
+    let err = execute_sql_with_params(
+        &db,
+        "DELETE FROM products WHERE similarity(vector, $v) > 0.5",
+        &params,
+    )
+    .expect_err("test: vector DELETE must be rejected");
     assert!(
         err.to_string()
-            .contains("DELETE WHERE id must use '=' operator"),
-        "expected DELETE '=' operator marker, got: {err}"
+            .contains("DELETE WHERE supports metadata predicates only"),
+        "{err}"
     );
+    assert_eq!(product_ids(&db), vec![1, 2], "nothing deleted");
 }
+
+// =========================================================================
 
 // =========================================================================
 // 7. SELECT EDGES rejects

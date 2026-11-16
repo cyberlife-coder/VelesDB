@@ -327,34 +327,18 @@ fn test_wasm_velesql_executor_known_bugs_are_correct() {
     assert_cases(&mut db, &fixture.known_bugs);
 }
 
-/// UNION / INTERSECT / EXCEPT conformance against the WASM executor (issue #1544).
-///
-/// Compared as a **sorted set of ids**, not an ordered list: `velesql_setops`
-/// concatenates branches left-to-right (preserving each branch's own ORDER BY)
-/// and de-duplicates first-seen, which is a *different* — but equally valid —
-/// sequence than core's score-sort. Only membership and count are part of the
-/// golden contract (`documented_divergences` D003 in the fixture).
+/// UNION / INTERSECT / EXCEPT conformance against core: ids in order (and
+/// scores where pinned), the order being `velesql::execute_compound`'s (D003,
+/// resolved).
 #[test]
 fn test_wasm_velesql_executor_setops_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
-    for case in &fixture.setops_cases {
-        let result = execute(&mut db, &case.query, None)
-            .unwrap_or_else(|e| panic!("setops case {} failed to execute: {e}", case.id));
-        let mut ids: Vec<u64> = result
-            .rows_ref()
-            .iter()
-            .map(crate::velesql_result::QueryResultRow::id)
-            .collect();
-        ids.sort_unstable();
-        let mut expected = case.expect_ids.clone();
-        expected.sort_unstable();
-        assert_eq!(
-            ids, expected,
-            "WASM setops conformance mismatch (compared as a set) for case {}: query={:?}",
-            case.id, case.query
-        );
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
     }
+    let params = params_json(&fixture);
+    assert_cases_with(&mut db, &fixture.setops_cases, Some(&params));
 }
 
 /// JOIN (ON and USING) conformance against the WASM executor (issue #1544).

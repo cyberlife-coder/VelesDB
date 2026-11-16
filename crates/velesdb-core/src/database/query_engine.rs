@@ -721,50 +721,23 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
-        // EPIC-040 US-006: For compound queries, strip LIMIT from each operand so
-        // the set operation sees the full result sets.  The final LIMIT is applied
-        // once on the merged output (SQL-standard behaviour).
-        // Use MAX_LIMIT (not None) to avoid the default-10 cap downstream.
-        const COMPOUND_LIMIT: usize = 100_000;
-        let compound_limit = Some(COMPOUND_LIMIT as u64); // 100_000 fits u64 exactly.
-        let left_results = if query.compound.is_some() {
-            // Compound queries execute several selects; a single reported
-            // strategy would be ambiguous, so the probe stays untouched.
-            let mut left_query = query.clone();
-            left_query.select.limit = compound_limit;
-            left_query.select.offset = None; // OFFSET applies to the combined result.
-            self.execute_single_select(&left_query, params, None)?
-        } else {
+        if query.compound.is_none() {
             return self.execute_single_select(query, params, probe);
-        };
-
-        // compound is guaranteed Some here (non-compound returns above).
-        if let Some(ref compound) = query.compound {
-            let mut accumulated = left_results;
-            for (operator, right_select) in &compound.operations {
-                let mut right_query = crate::velesql::Query::new_select(right_select.clone());
-                right_query.select.limit = compound_limit;
-                let right_results = self.execute_single_select(&right_query, params, None)?;
-                accumulated = crate::collection::search::query::set_operations::apply_set_operation(
-                    accumulated,
-                    right_results,
-                    *operator,
-                    // Intermediate ops keep the server-side ceiling: truncating to the
-                    // user LIMIT here would drop rows a later chained set op still needs.
-                    COMPOUND_LIMIT,
-                );
-            }
-            // SQL-standard: the outer SELECT's OFFSET then LIMIT window the final result.
-            return Ok(
-                crate::collection::search::query::set_operations::apply_offset_limit(
-                    accumulated,
-                    query.select.offset,
-                    query.select.limit,
-                ),
-            );
         }
-
-        Ok(left_results)
+        // Compound semantics are velesql's (`velesql::execute_compound`),
+        // shared with `Collection::execute_query` and WASM. A compound runs
+        // several selects, so no single strategy is reported: the probe stays
+        // untouched. The first operand's collection gives the metric direction
+        // and orders the combined rows.
+        let first = self.resolve_collection(&query.select.from)?;
+        let higher_is_better = first.config().metric.higher_is_better();
+        crate::velesql::execute_compound(
+            query,
+            higher_is_better,
+            u64::try_from(crate::collection::search::query::MAX_LIMIT).unwrap_or(u64::MAX),
+            |operand| self.execute_single_select(operand, params, None),
+            |rows, order_by| first.apply_order_by(rows, order_by, params),
+        )
     }
 
     /// Collects sorted, deduplicated collection names referenced by a query,
@@ -843,13 +816,8 @@ impl Database {
         self.resolve_collection(name)
     }
 
-    /// Executes a single SELECT (no compound), resolving JOINs if present.
-    ///
-    /// Orchestrates filter pushdown and join strategy selection:
-    /// 1. Analyze WHERE for pushdown-eligible conditions
-    /// 2. Strip pushed conditions from base query
-    /// 3. For each JOIN: lookup, filtered, or full `ColumnStore` path
-    /// 4. Apply post-join filters (cross-source predicates)
+    /// Executes a single SELECT (no compound): the base collection's query,
+    /// or the JOIN path ([`Self::execute_joined_select`]).
     fn execute_single_select(
         &self,
         query: &crate::velesql::Query,
@@ -868,94 +836,7 @@ impl Database {
             };
         }
 
-        let analysis = Self::prepare_join_pushdown(&mut single_query, params)?;
-        let pushed = analysis.column_store_filters.clone();
-
-        let row_budget = Self::join_row_budget(&query.select, &analysis);
-
-        let mut results = match probe {
-            Some(slot) => base_collection.execute_query_probed(&single_query, params, slot)?,
-            None => base_collection.execute_query(&single_query, params)?,
-        };
-        for join in &query.select.joins {
-            results = self.execute_single_join(results, join, &pushed, row_budget)?;
-        }
-
-        // Apply post-join filters: cross-source predicates that reference
-        // columns from both the base collection and joined ColumnStore tables.
-        if !analysis.post_join_filters.is_empty() {
-            results = Self::apply_post_join_filters(
-                &base_collection,
-                results,
-                &analysis.post_join_filters,
-                params,
-                &query.select.from_alias,
-            )?;
-        }
-
-        Ok(results)
-    }
-
-    /// Resolves WHERE parameters, runs pushdown analysis, and strips pushed
-    /// conditions from the base query (JOIN path of `execute_single_select`).
-    ///
-    /// Parameter placeholders are resolved before the analysis so pushed-down
-    /// filters never silently convert them to NULL at the `ColumnStore` layer
-    /// (the collection pipeline resolves its own copy independently).
-    fn prepare_join_pushdown(
-        single_query: &mut crate::velesql::Query,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<crate::collection::search::query::pushdown::PushdownAnalysis> {
-        if let Some(cond) = single_query.select.where_clause.take() {
-            single_query.select.where_clause = Some(crate::velesql::bind_condition(&cond, params)?);
-        }
-
-        let analysis = Self::analyze_join_pushdown_for_select(&single_query.select);
-
-        let resolved_where = single_query.select.where_clause.clone();
-        single_query.select.joins.clear();
-        if !analysis.column_store_filters.is_empty() {
-            single_query.select.where_clause = Self::strip_pushed_conditions(
-                resolved_where.as_ref(),
-                &analysis.column_store_filters,
-            );
-        }
-        Ok(analysis)
-    }
-
-    /// Computes the bound on joined rows to materialize.
-    ///
-    /// When the query has an explicit LIMIT, no post-join filters, and no
-    /// ORDER BY (which could reorder past the window), the bound is the
-    /// effective `LIMIT + OFFSET`. GROUP BY / HAVING / DISTINCT also disqualify
-    /// the bounded shape: SQL LIMIT bounds output *groups/rows*, not input rows,
-    /// so truncating joined input to `LIMIT` would drop rows that belong to
-    /// groups still inside the window. Otherwise downstream stages may reorder or
-    /// drop rows, so we fall back to the conservative server-side ceiling
-    /// [`JOIN_ROW_CEILING`] — still bounding OOM without affecting correctness.
-    ///
-    /// [`JOIN_ROW_CEILING`]: crate::collection::search::query::JOIN_ROW_CEILING
-    pub(super) fn join_row_budget(
-        select: &crate::velesql::SelectStatement,
-        analysis: &crate::collection::search::query::pushdown::PushdownAnalysis,
-    ) -> usize {
-        use crate::collection::search::query::JOIN_ROW_CEILING;
-        use crate::velesql::DistinctMode;
-        let bounded_shape = analysis.post_join_filters.is_empty()
-            && select.order_by.is_none()
-            && select.group_by.is_none()
-            && select.having.is_none()
-            && select.distinct == DistinctMode::None;
-        match select.limit {
-            Some(limit) if bounded_shape => {
-                let limit = usize::try_from(limit).unwrap_or(JOIN_ROW_CEILING);
-                let offset = select
-                    .offset
-                    .map_or(0, |o| usize::try_from(o).unwrap_or(JOIN_ROW_CEILING));
-                limit.saturating_add(offset).min(JOIN_ROW_CEILING)
-            }
-            _ => JOIN_ROW_CEILING,
-        }
+        self.execute_joined_select(single_query, &query.select, &base_collection, params, probe)
     }
 
     // NOTE: analyze_join_pushdown_for_select, apply_post_join_filters
@@ -985,7 +866,7 @@ impl Database {
             | crate::velesql::DmlStatement::Upsert(stmt) => self.execute_insert(stmt, params),
             crate::velesql::DmlStatement::Update(stmt) => self.execute_update(stmt, params),
             crate::velesql::DmlStatement::InsertEdge(stmt) => self.execute_insert_edge(stmt),
-            crate::velesql::DmlStatement::Delete(stmt) => self.execute_delete(stmt),
+            crate::velesql::DmlStatement::Delete(stmt) => self.execute_delete(stmt, params),
             crate::velesql::DmlStatement::DeleteEdge(stmt) => self.execute_delete_edge(stmt),
             crate::velesql::DmlStatement::SelectEdges(stmt) => self.execute_select_edges(stmt),
             crate::velesql::DmlStatement::InsertNode(stmt) => self.execute_insert_node(stmt),

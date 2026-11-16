@@ -39,7 +39,11 @@ pub(crate) fn order_groups(
             )
         })
         .collect();
-    crate::velesql_orderby::sort_rows(&stmt, &mut results, higher_is_better)?;
+    crate::velesql_orderby::sort_rows(
+        &stmt,
+        &mut results,
+        &crate::velesql_orderby::OrderContext::without_vectors(higher_is_better),
+    )?;
     results
         .iter()
         .map(|result| {

@@ -429,8 +429,9 @@ scalar-expression ones below, which use the same single-collection dataset):
   `GROUP BY` key, G019 the default order (`GROUP BY` key ascending), G020
   HAVING's `AND` binding tighter than `OR` and G021 an aggregate whose WHERE
   reads `id` as the point id.
-- `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
-  **sorted set of ids**, not an ordered list (see D003 below).
+- `setops_cases` S001–S008: `UNION` / `INTERSECT` / `EXCEPT`, ids in order:
+  the compound's window, the last operand's own clauses, value identity and
+  score ranking in the metric's direction (D003, resolved).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
   (see D004 below).
 
@@ -493,12 +494,10 @@ silently relied upon:
   above and the parity test
   (`test_wasm_join_condition_side_order_parity_1555` in
   `crates/velesdb-wasm/src/velesql_executor_conformance_tests.rs`).
-- **D003** — `UNION`/`INTERSECT`/`EXCEPT` row order for non-ranked (score 0.0)
-  branches is implementation-defined on both sides (core re-sorts by score
-  with an unstable tie-break that was observed to differ between two runs of
-  the *same* binary; WASM preserves branch/`ORDER BY` order via
-  concatenate-then-dedup). Only membership and count are part of the golden
-  contract.
+- ~~D003~~ — **fixed 2026-11-15**: both engines run
+  `velesql::execute_compound`, which defines the row order (the window's
+  `ORDER BY`, else score in the metric's direction, ties in the order met).
+  `setops_cases` assert ids in order.
 - **D004** — core treats vector-collection points as graph nodes (MATCH is
   `SELECT ... FROM <coll> WHERE MATCH (...)`); WASM keeps a separate
   in-memory graph store addressed via `@collection` annotations and the
@@ -513,11 +512,11 @@ silently relied upon:
   cap — a LIMIT-less `GROUP BY` still returns every group). Locked by
   `aggregate_cases` G005 above and
   `crates/velesdb-core/tests/velesql_group_by_limit.rs`.
-- **D007** — `DELETE` on core accepts only `id = N` / `id IN (...)`; WASM
-  evaluates any `WHERE`. WASM is a superset, so the fixture's `dml_cases`
-  delete by id.
-- **D008** — `UPDATE ... SET vector = ...` works on core; WASM refuses it and
-  points to `UPSERT`. The fixture's `dml_cases` assign payload fields only.
+- ~~D007~~ — **fixed 2026-11-16**: `DELETE` removes the rows any metadata
+  `WHERE` selects on both engines (core accepted only `id` predicates).
+  Locked by `dml_cases` W010.
+- ~~D008~~ — **fixed 2026-11-16**: `UPDATE ... SET vector = ...` replaces the
+  embedding on both engines. Locked by `dml_cases` W009.
 - ~~D009~~ — **fixed 2026-11-15**: a row no vector ranked scores
   `velesql::METADATA_MATCH_SCORE` (1.0) on both engines. Locked by
   `near_cases` N023.
