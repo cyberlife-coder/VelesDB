@@ -337,6 +337,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `crates/velesdb-wasm/tests/semantic_memory_web.rs`, run under Node by the
   wasm-bindgen CI step.
 
+- **WASM `VectorStore`: a metadata-only store refuses a vector search, a
+  non-finite vector is refused, and a hybrid search ranks a distance metric
+  nearest-first** (WASM, 2026-11-16). `batch_search` / `multi_query_search`
+  on a dimension-0 store reached `chunks_exact(0)` and trapped the module
+  (`RuntimeError: unreachable`); every vector search now refuses a
+  metadata-only store with `SearchNotSupported` (VELES-015), as core does.
+  Inserts and searches accepted `NaN` / infinite components, which core
+  refuses (`InvalidVector`, VELES-005); they now refuse them too, through
+  core's `validate_vector_is_finite`. And `hybrid_search` blended a raw
+  distance as if it were a similarity, dropped rows at or below 0 and sorted
+  descending, so on a `euclidean` or `hamming` store the exact match was
+  dropped and the farthest vector ranked first; the distance is now negated
+  before the blend, as core's fusion orients a lower-is-better branch.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with

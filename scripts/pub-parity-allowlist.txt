@@ -23,3 +23,7 @@ crates/velesdb-wasm/src/filter.rs fn get_nested_field
 # is a private module of the cdylib, so it was unreachable from the published
 # package; StoreState::search renders its typed top_k for JavaScript instead.
 crates/velesdb-wasm/src/store_search.rs fn search
+# Superseded by validate_query_vector / validate_ingest_vector, which add the
+# metadata-only and finite-component checks core runs: `store_search` is a
+# private module of the cdylib, so it was unreachable from the published package.
+crates/velesdb-wasm/src/store_search.rs fn validate_dimension

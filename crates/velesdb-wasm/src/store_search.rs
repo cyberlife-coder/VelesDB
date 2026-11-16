@@ -48,18 +48,50 @@ pub(crate) fn sort_scored_triples<T>(results: &mut [(u64, f32, T)], higher_is_be
 /// Single source of truth for the dimension check: delegates to core's
 /// [`velesdb_core::validate_dimension_match`] and preserves the core error's
 /// machine-readable `code` instead of pre-flattening it to a bare string
-/// (backlog #22). The `wasm32` FFI wrapper [`validate_dimension`] renders this
-/// as a structured JS `Error`.
+/// (backlog #22). [`validate_query_vector`] and [`validate_ingest_vector`]
+/// build on it; their callers render the error as a structured JS `Error`.
 #[inline]
 pub fn validate_dimension_structured(query_len: usize, store_dim: usize) -> Result<(), WasmError> {
     velesdb_core::validate_dimension_match(store_dim, query_len).map_err(WasmError::from)
 }
 
-/// FFI wrapper over [`validate_dimension_structured`] that renders the
-/// structured error as a JS `Error` with a non-enumerable `code` property.
-#[inline]
-pub fn validate_dimension(query_len: usize, store_dim: usize) -> Result<(), JsValue> {
-    validate_dimension_structured(query_len, store_dim).map_err(WasmError::into_js_value)
+/// The checks core runs on a query vector before it searches a collection:
+/// the store holds vectors (a metadata-only store refuses with
+/// `SearchNotSupported`, VELES-015), the query has the store's dimension
+/// (VELES-004) and only finite components (`InvalidVector`, VELES-005).
+pub fn validate_query_vector(query: &[f32], store_dim: usize) -> Result<(), WasmError> {
+    refuse_metadata_only(store_dim)?;
+    validate_ingest_vector(query, store_dim)
+}
+
+/// [`validate_query_vector`] for `num_vectors` queries laid out row-major in
+/// one flat buffer.
+pub fn validate_query_vectors(
+    vectors: &[f32],
+    num_vectors: usize,
+    store_dim: usize,
+) -> Result<(), WasmError> {
+    refuse_metadata_only(store_dim)?;
+    validate_multi_vector_len(vectors.len(), num_vectors, store_dim)
+        .map_err(|e| WasmError::from(velesdb_core::Error::InvalidVector(e)))?;
+    velesdb_core::validation::validate_vector_is_finite(vectors).map_err(WasmError::from)
+}
+
+/// The checks core runs on a vector it stores: the store's dimension and
+/// only finite components.
+pub fn validate_ingest_vector(vector: &[f32], store_dim: usize) -> Result<(), WasmError> {
+    validate_dimension_structured(vector.len(), store_dim)?;
+    velesdb_core::validation::validate_vector_is_finite(vector).map_err(WasmError::from)
+}
+
+/// A store of dimension 0 is metadata-only: it holds no vector to search.
+fn refuse_metadata_only(store_dim: usize) -> Result<(), WasmError> {
+    if store_dim == 0 {
+        return Err(WasmError::from(velesdb_core::Error::SearchNotSupported(
+            "vector search needs a vector store; this one is metadata-only".to_string(),
+        )));
+    }
+    Ok(())
 }
 
 /// Validates that a flat multi-vector buffer holds exactly
@@ -161,6 +193,7 @@ pub fn hybrid_search_scored<'a>(
     let v_weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
     let t_weight = 1.0 - v_weight;
     let text_query_lower = text_query.to_lowercase();
+    let higher_is_better = metric.higher_is_better();
 
     let mut results: Vec<(u64, f32, Option<&serde_json::Value>)> = ids
         .iter()
@@ -168,7 +201,10 @@ pub fn hybrid_search_scored<'a>(
         .filter_map(|(idx, &id)| {
             let start = idx * dimension;
             let v_data = &data[start..start + dimension];
-            let vector_score = metric.calculate(query_vector, v_data);
+            // A distance is negated so the blend is higher-is-better under
+            // every metric, as core's fusion orients a lower-is-better branch.
+            let raw = metric.calculate(query_vector, v_data);
+            let vector_score = if higher_is_better { raw } else { -raw };
 
             let payload = payloads[idx].as_ref();
             let text_score = payload.map_or(0.0, |p| {
@@ -180,7 +216,9 @@ pub fn hybrid_search_scored<'a>(
             });
 
             let combined_score = v_weight * vector_score + t_weight * text_score;
-            if combined_score > 0.0 {
+            // The relevance floor is a similarity's: a negated distance is
+            // never above it, so a distance metric keeps every row.
+            if !higher_is_better || combined_score > 0.0 {
                 Some((id, combined_score, payload))
             } else {
                 None
@@ -397,3 +435,7 @@ pub fn batch_search_impl(
         .collect();
     to_js(&all_results)
 }
+
+#[cfg(test)]
+#[path = "store_guards_tests.rs"]
+mod guards_tests;

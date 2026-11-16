@@ -86,7 +86,8 @@ impl SemanticMemory {
     /// * `embedding` - Vector representation (`Float32Array`)
     #[wasm_bindgen]
     pub fn store(&mut self, id: u64, content: &str, embedding: &[f32]) -> Result<(), JsValue> {
-        crate::store_search::validate_dimension(embedding.len(), self.store.dimension)?;
+        crate::store_search::validate_ingest_vector(embedding, self.store.dimension)
+            .map_err(crate::wasm_error::WasmError::into_js_value)?;
         let payload = serde_json::json!({ "content": content });
         store_insert::insert_with_payload(&mut self.store, id, embedding, Some(payload));
         Ok(())

@@ -16,9 +16,10 @@ pub fn insert_vector(store: &mut StoreState, id: u64, vector: &[f32]) {
 
 /// Validates a flat raw batch against the store geometry.
 ///
-/// Checks that `dimension` matches the store, then delegates the
-/// `checked_mul` overflow guard and `ids.len() * dimension` length check to
-/// [`store_search::validate_multi_vector_len`].
+/// Checks that `dimension` matches the store, delegates the `checked_mul`
+/// overflow guard and `ids.len() * dimension` length check to
+/// [`store_search::validate_multi_vector_len`], and refuses a non-finite
+/// component as core's ingest does.
 fn validate_raw_batch(
     store: &StoreState,
     ids: &[u64],
@@ -32,7 +33,7 @@ fn validate_raw_batch(
         ));
     }
     store_search::validate_multi_vector_len(vectors.len(), ids.len(), dimension)?;
-    Ok(())
+    velesdb_core::validation::validate_vector_is_finite(vectors).map_err(|e| e.to_string())
 }
 
 /// Bulk insert from a flat row-major `vectors` buffer plus parallel `ids`.
