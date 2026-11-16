@@ -76,6 +76,10 @@ import {
   validateDocsBatch,
   validateDocument,
   validateRestPointId,
+  refuseRestOnlyOptions,
+  refuseUnsupportedBatchFields,
+  refuseNamedSparseOnDocs,
+  refuseSparseOnStreamInsert,
 } from './client/validation';
 import * as searchMethods from './client/search-methods';
 import * as graphMethods from './client/graph-methods';
@@ -193,14 +197,14 @@ export class VelesDB {
   async upsert(collection: string, doc: VectorDocument): Promise<void> {
     this.ensureInitialized();
     validateDocument(doc, this.config);
-    this.refuseNamedSparseOnDocs([doc]);
+    refuseNamedSparseOnDocs([doc], this.backend.capabilities().namedSparseIndexes, this.config.backend);
     await this.backend.upsert(collection, doc);
   }
 
   async upsertBatch(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
     validateDocsBatch(docs, doc => { validateDocument(doc, this.config); });
-    this.refuseNamedSparseOnDocs(docs);
+    refuseNamedSparseOnDocs(docs, this.backend.capabilities().namedSparseIndexes, this.config.backend);
     await this.backend.upsertBatch(collection, docs);
   }
 
@@ -218,7 +222,7 @@ export class VelesDB {
   async upsertBatchRaw(collection: string, docs: VectorDocument[]): Promise<number> {
     this.ensureInitialized();
     validateDocsBatch(docs, doc => { validateDocument(doc, this.config); });
-    this.refuseNamedSparseOnDocs(docs);
+    refuseNamedSparseOnDocs(docs, this.backend.capabilities().namedSparseIndexes, this.config.backend);
     return this.backend.upsertBatchRaw(collection, docs);
   }
 
@@ -259,99 +263,12 @@ export class VelesDB {
 
   // ========================================================================
   // Search & Query -- delegates to client/search-methods.ts
+  // (capability guards live in client/validation.ts to keep this file small)
   // ========================================================================
-
-  /**
-   * Refuse REST-only search options on a non-REST backend instead of letting
-   * the backend silently drop them (these fields have no WASM equivalent).
-   */
-  private refuseRestOnlyOptions(
-    options: object | undefined,
-    fields: readonly string[]
-  ): void {
-    if (this.config.backend === 'rest' || !options) {
-      return;
-    }
-    const bag = options as Record<string, unknown>;
-    for (const field of fields) {
-      if (bag[field] !== undefined) {
-        throw new VelesDBError(
-          `${field} is only supported by the REST backend (current backend: '${this.config.backend}')`,
-          'NOT_SUPPORTED'
-        );
-      }
-    }
-  }
-
-  /**
-   * Refuse per-entry batch fields the batch kernel never applies, on every
-   * backend: `run_batch_search` (server) uses only each entry's `vector`,
-   * `top_k` and `filter` — `mode`/`ef_search`/`timeout_ms`/sparse/`fusion`
-   * are validated but ignored, and the WASM dispatcher drops sparse too.
-   * Accepting them would return dense-only rankings while implying otherwise.
-   */
-  private refuseUnsupportedBatchFields(searches: BatchSearchItem[]): void {
-    const ignored = [
-      'quality',
-      'efSearch',
-      'timeoutMs',
-      'fusion',
-      'sparseVector',
-      'sparseVectors',
-      'sparseIndexName',
-    ] as const;
-    for (const s of searches) {
-      const bag = s as unknown as Record<string, unknown>;
-      for (const field of ignored) {
-        if (bag[field] !== undefined) {
-          throw new VelesDBError(
-            `${field} is not applied to batch entries (only vector, k and filter are); use search() for it`,
-            'NOT_SUPPORTED'
-          );
-        }
-      }
-    }
-  }
-
-  /**
-   * Refuse named sparse vectors (`sparseVectors`) on a backend without named
-   * sparse indexes — the WASM build has a single default sparse index, so a
-   * named map cannot be represented there and would be silently dropped.
-   */
-  private refuseNamedSparseOnDocs(docs: VectorDocument[]): void {
-    if (this.backend.capabilities().namedSparseIndexes) {
-      return;
-    }
-    for (const doc of docs) {
-      if (doc.sparseVectors !== undefined) {
-        throw new VelesDBError(
-          `sparseVectors requires named sparse indexes (current backend: '${this.config.backend}')`,
-          'NOT_SUPPORTED'
-        );
-      }
-    }
-  }
-
-  /**
-   * Refuse sparse vectors on the single-point streaming insert: the server's
-   * `StreamInsertRequest` is `{id, vector, payload}` only, so a sparse field
-   * would be silently dropped by serde. Use `upsert`/`upsertBatch` (or the
-   * NDJSON `streamUpsertPoints`, whose `Point` accepts sparse fields).
-   */
-  private refuseSparseOnStreamInsert(docs: VectorDocument[]): void {
-    for (const doc of docs) {
-      if (doc.sparseVector !== undefined || doc.sparseVectors !== undefined) {
-        throw new VelesDBError(
-          'sparse vectors are not accepted by the streaming insert endpoint; use upsert()/upsertBatch() or streamUpsertPoints()',
-          'NOT_SUPPORTED'
-        );
-      }
-    }
-  }
 
   async search(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
-    this.refuseRestOnlyOptions(options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
+    refuseRestOnlyOptions(this.config.backend, options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
     return searchMethods.search(this.backend, collection, query, options);
   }
 
@@ -360,7 +277,7 @@ export class VelesDB {
     // search-methods validates the array shape; guard the per-entry options
     // only once it is one.
     if (Array.isArray(searches)) {
-      this.refuseUnsupportedBatchFields(searches);
+      refuseUnsupportedBatchFields(searches);
     }
     return searchMethods.searchBatch(this.backend, collection, searches);
   }
@@ -372,7 +289,7 @@ export class VelesDB {
 
   async hybridSearch(collection: string, vector: number[] | Float32Array, textQuery: string, options?: HybridSearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
-    this.refuseRestOnlyOptions(options, ['rrfK']);
+    refuseRestOnlyOptions(this.config.backend, options, ['rrfK']);
     return searchMethods.hybridSearch(this.backend, collection, vector, textQuery, options);
   }
 
@@ -395,7 +312,7 @@ export class VelesDB {
    */
   async sparseSearchNamed(collection: string, query: SparseVector, indexName: string, options?: SparseSearchNamedOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
-    this.refuseRestOnlyOptions(options, ['efSearch', 'timeoutMs']);
+    refuseRestOnlyOptions(this.config.backend, options, ['efSearch', 'timeoutMs']);
     return searchMethods.sparseSearchNamed(this.backend, collection, query, indexName, options);
   }
 
@@ -431,19 +348,19 @@ export class VelesDB {
 
   async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
-    this.refuseSparseOnStreamInsert(docs);
+    refuseSparseOnStreamInsert(docs);
     return searchMethods.streamInsert(this.backend, this.config, collection, docs);
   }
 
   async streamUpsertPoints(collection: string, docs: VectorDocument[]): Promise<StreamUpsertResponse> {
     this.ensureInitialized();
-    this.refuseNamedSparseOnDocs(docs);
+    refuseNamedSparseOnDocs(docs, this.backend.capabilities().namedSparseIndexes, this.config.backend);
     return searchMethods.streamUpsertPoints(this.backend, this.config, collection, docs);
   }
 
   async searchIds(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<Array<{ id: number; score: number }>> {
     this.ensureInitialized();
-    this.refuseRestOnlyOptions(options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
+    refuseRestOnlyOptions(this.config.backend, options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
     return searchMethods.searchIds(this.backend, collection, query, options);
   }
 
