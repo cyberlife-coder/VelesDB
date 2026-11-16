@@ -131,3 +131,27 @@ fn an_unknown_strategy_keeps_its_original_casing_in_the_message() {
         "message should echo what the caller sent, got: {error}"
     );
 }
+
+/// `rsf` reads `branch_weights`, one per query vector, in place of its
+/// dense and sparse weights; another count is refused before any search.
+#[test]
+fn rsf_reads_one_branch_weight_per_query_vector() {
+    let body = |weights: serde_json::Value| -> MultiQuerySearchRequestWithWeights {
+        serde_json::from_value(serde_json::json!({
+            "vectors": [[0.1f32, 0.2f32], [0.3f32, 0.4f32], [0.5f32, 0.6f32]],
+            "strategy": "rsf",
+            "branch_weights": weights,
+        }))
+        .expect("test: body")
+    };
+    assert_eq!(
+        build_fusion_strategy(&body(serde_json::json!([0.5, 0.3, 0.2]))),
+        Ok(
+            velesdb_core::FusionStrategy::weighted_relative_score(vec![0.5, 0.3, 0.2])
+                .expect("test: weights")
+        )
+    );
+    let error = build_fusion_strategy(&body(serde_json::json!([0.5, 0.5])))
+        .expect_err("test: two weights for three vectors");
+    assert!(error.contains("3 vectors"), "{error}");
+}

@@ -192,8 +192,9 @@ impl FusionStrategy {
     ///         (default: 0.6 / 0.3 / 0.1)
     ///     dense_weight, sparse_weight: ``relative_score`` weights
     ///         (default: 0.5 / 0.5)
-    ///     weights: ``weighted_rrf`` per-branch weights — required for that
-    ///         strategy, one weight per query vector in vector order
+    ///     weights: per-branch weights, one per query vector in vector
+    ///         order — required by ``weighted_rrf``; ``relative_score``
+    ///         reads them in place of its dense and sparse weights
     ///
     /// Returns:
     ///     FusionStrategy: The named strategy
@@ -204,6 +205,7 @@ impl FusionStrategy {
     /// Example:
     ///     >>> strategy = FusionStrategy.from_name("avg")
     ///     >>> strategy = FusionStrategy.from_name("rsf", dense_weight=0.7)
+    ///     >>> strategy = FusionStrategy.from_name("rsf", weights=[0.5, 0.3, 0.2])
     #[staticmethod]
     #[pyo3(signature = (
         name,
@@ -289,6 +291,9 @@ impl FusionStrategy {
             } => format!(
                 "FusionStrategy.relative_score(dense_weight={dense_weight}, sparse_weight={sparse_weight})"
             ),
+            CoreFusionStrategy::WeightedRelativeScore { weights } => {
+                format!("FusionStrategy.from_name(\"rsf\", weights={weights:?})")
+            }
             // Forward-compat: future variants added behind #[non_exhaustive].
             _ => format!("FusionStrategy(<unknown variant: {:?}>)", self.inner),
         }

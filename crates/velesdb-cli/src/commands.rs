@@ -512,8 +512,8 @@ pub enum QueryCommands {
         #[arg(long, default_value = "60")]
         rrf_k: u32,
 
-        /// Per-branch weights for weighted_rrf, comma-separated, one per
-        /// query vector (e.g. '0.7,0.3')
+        /// Per-branch weights for weighted_rrf or relative_score,
+        /// comma-separated, one per query vector (e.g. '0.7,0.3')
         #[arg(long, value_delimiter = ',')]
         branch_weights: Option<Vec<f32>>,
 

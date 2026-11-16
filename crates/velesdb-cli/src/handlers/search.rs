@@ -61,9 +61,11 @@ fn execute_multi_search(
 /// Parses a fusion strategy name into the core enum, through core's name
 /// grammar ([`FusionStrategy::from_name_with_weights`]): its aliases, its
 /// case rule and its defaults, so `weighted` here ranks as it does on every
-/// other surface. `branch_weights` carries `weighted_rrf`'s one weight per
-/// query vector (`--branch-weights`); strategies that do not read it ignore
-/// it. Shared by `multi-search` and the REPL's `.hybrid-sparse`.
+/// other surface. `branch_weights` carries one weight per query vector
+/// (`--branch-weights`), which `weighted_rrf` requires and `relative_score`
+/// reads in place of its dense and sparse weights; strategies that do not
+/// read it ignore it. Shared by `multi-search` and the REPL's
+/// `.hybrid-sparse`.
 pub(crate) fn parse_fusion_strategy(
     strategy: &str,
     rrf_k: u32,

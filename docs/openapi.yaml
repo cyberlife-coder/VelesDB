@@ -3751,8 +3751,8 @@ components:
             items:
               type: number
               format: float
-            description: "`weighted_rrf` only: one weight per query vector, in vector order —\nthe parameter the strategy cannot default. Ignored by every other\nstrategy, like the scalar weight fields."
-      description: "`/search/multi`'s request: core's `MultiQuerySearchRequest`\nplus the `branch_weights` `weighted_rrf` reads.\n\nKept server-side on purpose: the core DTO is a published,\nexternally-constructible struct, so a new pub field would break\ndownstream struct literals — the semver gate refuses it\n(`constructible_struct_adds_field`). `#[serde(flatten)]` keeps the wire\nbody byte-identical."
+            description: "One weight per query vector, in vector order: `weighted_rrf`'s, the\nparameter it cannot default, and `relative_score` / `rsf`'s, which\nthen replace its `dense_weight` / `sparse_weight`. Ignored by every\nother strategy, like the scalar weight fields."
+      description: "`/search/multi`'s request: core's `MultiQuerySearchRequest`\nplus the `branch_weights` `weighted_rrf` and `relative_score` read.\n\nKept server-side on purpose: the core DTO is a published,\nexternally-constructible struct, so a new pub field would break\ndownstream struct literals — the semver gate refuses it\n(`constructible_struct_adds_field`). `#[serde(flatten)]` keeps the wire\nbody byte-identical."
     NodeListResponse:
       type: object
       description: Response containing all node IDs in the graph.

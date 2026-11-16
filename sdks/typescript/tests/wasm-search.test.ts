@@ -919,7 +919,7 @@ describe('wasmMultiQuerySearch — fusionParams reach the binding or are refused
   });
 
   it.each(['denseWeight', 'sparseWeight'] as const)(
-    'refuses fusionParams.%s: WASM relative_score weighs its branches equally',
+    'refuses fusionParams.%s: WASM relative_score takes per-branch weights, not dense/sparse',
     async (name) => {
       const multi = vi.fn(() => []);
       const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
@@ -935,6 +935,34 @@ describe('wasmMultiQuerySearch — fusionParams reach the binding or are refused
       expect(multi).not.toHaveBeenCalled();
     }
   );
+
+  it('passes relative_score its branchWeights, one per query vector', async () => {
+    const multi = multiQuerySearchStub([]);
+    const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
+
+    await wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2], [0.3, 0.4]], {
+      fusion: 'relative_score',
+      fusionParams: { branchWeights: [0.75, 0.25] },
+    });
+
+    expect(multi).toHaveBeenCalledTimes(1);
+    expect(Array.from(multi.mock.calls[0]![5] as Float32Array)).toEqual([0.75, 0.25]);
+  });
+
+  it('refuses relative_score branchWeights whose count is not the vector count', async () => {
+    const multi = multiQuerySearchStub([]);
+    const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
+
+    const outcome = await settle(
+      wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2], [0.3, 0.4]], {
+        fusion: 'relative_score',
+        fusionParams: { branchWeights: [1.0] },
+      })
+    );
+
+    expectBadRequest(outcome, /relative_score requires one weight per query vector: 1 weights for 2 vectors/);
+    expect(multi).not.toHaveBeenCalled();
+  });
 
   it('refuses a partial weighted triple rather than inventing the missing weights', async () => {
     const multi = vi.fn(() => []);

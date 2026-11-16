@@ -196,10 +196,10 @@ for name, strategy in multi_query_strategies.items():
     for t in titles:
         print(f"    - {t}")
 
-# RelativeScore is designed for exactly 2 branches (dense + sparse).
-# With 3+ vectors, branches beyond index 1 are silently discarded.
-# Demo it separately with 2 vectors to show correct usage.
-print("\n  relative_score (2 vectors — dense+sparse design):")
+# RelativeScore weighs two branches by its dense and sparse weights; with 3+
+# vectors every branch weighs equally, and unequal weights are refused.
+# Demo the weighted two-vector form.
+print("\n  relative_score (2 vectors, weights 0.7 / 0.3):")
 results = collection.multi_query_search(
     vectors=[q1, q2],
     top_k=3,

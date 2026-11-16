@@ -282,6 +282,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Relative-score fusion fuses every branch, in every engine** (core,
+  WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
+  branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
+  three query vectors or more silently dropped every one past the second,
+  logging a warning nobody read. The browser fused them all, but by its own
+  rule — each document's scores averaged over the branches it appeared in —
+  so it ranked differently from core at every branch count. Both engines now
+  run core's: each branch min-max normalized, a document absent from a
+  branch getting 0 from it, weighted by the dense and sparse weights for two
+  branches and `1/N` each beyond. Unequal weights over three branches or
+  more are refused (`WeightCountMismatch`), since they name a dense and a
+  sparse branch. Two-branch dense + sparse fusion is unchanged (D005).
+  `relative_score` also reads per-branch weights now — the
+  `branch_weights` of `/search/multi`, the CLI's `--branch-weights`, WASM's
+  and the TS SDK's `branchWeights`, Python's `from_name(..., weights=...)` —
+  which it used to ignore without a word: one weight per branch, summing to
+  1.0, in place of the dense and sparse weights
+  (`FusionStrategy::WeightedRelativeScore`). The browser's
+  `multi_query_search` also fused raw distances as similarities: under
+  Euclidean or Hamming, `average`, `maximum`, `weighted` and `rsf` ranked the
+  farthest point first. It now fuses them as core does, lower-is-better
+  (`fuse_with_directions`). A strategy's weights are checked against the
+  branch count even when every branch comes back empty.
 - **A JOIN matches on any column, for every join type, in every engine**
   (core, WASM, 2026-11-16). Core joined only on the joined collection's
   primary key, or on a column a secondary index covers for INNER and LEFT

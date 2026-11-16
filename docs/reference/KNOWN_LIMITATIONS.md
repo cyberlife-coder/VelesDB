@@ -505,9 +505,12 @@ silently relied upon:
   in-memory graph store addressed via `@collection` annotations and the
   standalone `MATCH ... RETURN` form. An accepted architectural difference,
   not a bug.
-- **D005** — cross-reference to the pre-existing `relative_score`/`rsf`
-  multi-query fusion ranking divergence, already tracked in
-  `docs/reference/ECOSYSTEM_PARITY.md`.
+- ~~D005~~ — **fixed 2026-11-16**: multi-query `relative_score` / `rsf`
+  fusion ranks the same in every engine. Core's `RelativeScore` dropped every
+  branch past the second (one per query vector of `multi_query_search`), and
+  WASM averaged each document over the branches it appeared in. Core now
+  fuses every branch — its dense and sparse weights for two, `1/N` each
+  beyond, unequal weights over 3+ branches refused — and WASM runs it.
 - ~~D006~~ — **fixed 2026-07-24** (issue #1556):
   `Collection::build_grouped_results` now applies `OFFSET`/`LIMIT` to grouped
   results after `ORDER BY`, matching the WASM aggregate pipeline (no default

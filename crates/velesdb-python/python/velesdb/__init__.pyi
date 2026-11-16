@@ -233,7 +233,8 @@ class FusionStrategy:
         case-insensitive. A parameter left out takes core's default
         (k=60; 0.6/0.3/0.1; 0.5/0.5); a single ``relative_score`` weight
         implies the other. ``weighted_rrf`` requires ``weights`` — one per
-        query vector.
+        query vector; ``relative_score`` reads them too, in place of its
+        dense and sparse weights (summing to 1.0).
 
         Raises:
             ValueError: If the name is unknown, weights are invalid, or a

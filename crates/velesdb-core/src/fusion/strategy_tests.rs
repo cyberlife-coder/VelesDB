@@ -859,44 +859,46 @@ fn test_rsf_fuse_rejects_negative_weight_from_literal() {
     );
 }
 
+/// Beyond two branches RSF weighs every branch equally (`1/N`): each is
+/// min-max normalized, a document absent from a branch gets `0` from it, and
+/// no branch is dropped (D005: branches beyond index 1 used to be ignored).
 #[test]
-fn test_rsf_ignores_extra_branches_beyond_two() {
-    // M-7: fuse_relative_score silently drops branches beyond index 1.
-    // The result must be identical to passing only the first two branches.
-    let strategy = FusionStrategy::relative_score(0.6, 0.4).unwrap();
-
-    let two_branches = vec![
-        vec![(1_u64, 10.0_f32), (2, 8.0)], // dense
-        vec![(2_u64, 5.0_f32), (3, 3.0)],  // sparse
-    ];
+fn test_rsf_fuses_every_branch_with_equal_weights_beyond_two() {
+    let strategy = FusionStrategy::relative_score(0.5, 0.5).unwrap();
     let three_branches = vec![
-        vec![(1_u64, 10.0_f32), (2, 8.0)], // dense
-        vec![(2_u64, 5.0_f32), (3, 3.0)],  // sparse
-        vec![(4_u64, 99.0_f32)],           // extra (must be ignored)
+        vec![(1_u64, 10.0_f32), (2, 8.0)],
+        vec![(2_u64, 5.0_f32), (3, 3.0)],
+        vec![(4_u64, 99.0_f32), (1, 0.0)],
     ];
 
-    let fused_two = strategy.fuse(two_branches).unwrap();
-    let fused_three = strategy.fuse(three_branches).unwrap();
+    let fused = strategy.fuse(three_branches).unwrap();
+    let score = |id: u64| {
+        fused
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map_or_else(|| panic!("doc {id} must be fused"), |(_, s)| *s)
+    };
+    // Normalized: b0 {1: 1, 2: 0}, b1 {2: 1, 3: 0}, b2 {4: 1, 1: 0}.
+    let third = 1.0 / 3.0;
+    assert!((score(1) - third).abs() < 1e-5, "doc 1: {}", score(1));
+    assert!((score(2) - third).abs() < 1e-5, "doc 2: {}", score(2));
+    assert!(score(3).abs() < 1e-5, "doc 3: {}", score(3));
+    assert!((score(4) - third).abs() < 1e-5, "doc 4: {}", score(4));
+}
 
-    // Extra branch doc 4 must NOT appear in the results.
-    assert!(
-        !fused_three.iter().any(|(id, _)| *id == 4),
-        "doc 4 from the extra branch must be absent from RSF output"
+/// Unequal RSF weights name a dense and a sparse branch: more branches are
+/// refused rather than silently weighed some other way.
+#[test]
+fn test_rsf_refuses_unequal_weights_beyond_two_branches() {
+    let strategy = FusionStrategy::relative_score(0.8, 0.2).unwrap();
+    let three = vec![vec![(1_u64, 1.0_f32)], vec![(2, 1.0)], vec![(3, 1.0)]];
+    assert_eq!(
+        strategy.fuse(three),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
     );
-
-    // Scores for the shared documents must be identical.
-    for (id, score) in &fused_two {
-        let matching = fused_three.iter().find(|(i, _)| i == id);
-        assert!(
-            matching.is_some(),
-            "doc {id} must appear in three-branch result"
-        );
-        let (_, score_three) = matching.unwrap();
-        assert!(
-            (score - score_three).abs() < 1e-5,
-            "score for doc {id} must not change when an extra branch is present"
-        );
-    }
 }
 
 // =============================================================================
@@ -1141,5 +1143,88 @@ fn test_fused_score_cmp_keeps_nan_order() {
     assert_eq!(
         super::strategy::fused_score_cmp(-quiet, 1.0),
         std::cmp::Ordering::Less
+    );
+}
+
+// =============================================================================
+// WeightedRelativeScore (per-branch RSF weights, D005)
+// =============================================================================
+
+/// Each branch is min-max normalized, then weighed by its own weight; a
+/// document absent from a branch gets `0` from it.
+#[test]
+fn test_weighted_rsf_weighs_each_branch_by_its_weight() {
+    let strategy = FusionStrategy::weighted_relative_score(vec![0.5, 0.3, 0.2]).unwrap();
+    let fused = strategy
+        .fuse(vec![
+            vec![(1_u64, 10.0_f32), (2, 0.0)],
+            vec![(2_u64, 4.0_f32), (3, 2.0)],
+            vec![(3_u64, 7.0_f32), (1, 1.0)],
+        ])
+        .unwrap();
+    // Normalized: b0 {1: 1, 2: 0}, b1 {2: 1, 3: 0}, b2 {3: 1, 1: 0}.
+    let expected = [(1_u64, 0.5_f32), (2, 0.3), (3, 0.2)];
+    assert_eq!(fused.len(), expected.len());
+    for ((id, score), (want_id, want)) in fused.iter().zip(expected) {
+        assert_eq!(*id, want_id);
+        assert!((score - want).abs() < 1e-6, "doc {id}: {score}");
+    }
+}
+
+#[test]
+fn test_weighted_rsf_needs_one_weight_per_branch() {
+    let strategy = FusionStrategy::weighted_relative_score(vec![0.5, 0.5]).unwrap();
+    assert_eq!(
+        strategy.fuse(vec![vec![(1, 1.0)], vec![(2, 1.0)], vec![(3, 1.0)]]),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
+    );
+}
+
+#[test]
+fn test_weighted_rsf_validates_its_weights() {
+    assert!(FusionStrategy::weighted_relative_score(vec![]).is_err());
+    assert!(FusionStrategy::weighted_relative_score(vec![0.7, 0.7]).is_err());
+    assert!(FusionStrategy::weighted_relative_score(vec![1.5, -0.5]).is_err());
+    assert!(FusionStrategy::weighted_relative_score(vec![f32::NAN, 1.0]).is_err());
+}
+
+/// A strategy's weights are checked against the branch count even when
+/// every branch came back empty: an invalid request fails on an empty
+/// collection as it does on a full one.
+#[test]
+fn test_weight_checks_run_when_every_branch_is_empty() {
+    let empty = || vec![Vec::new(), Vec::new(), Vec::new()];
+    let unequal = FusionStrategy::relative_score(0.8, 0.2).unwrap();
+    assert!(matches!(
+        unequal.fuse(empty()),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
+    ));
+    let per_branch = FusionStrategy::weighted_relative_score(vec![0.5, 0.5]).unwrap();
+    assert!(matches!(
+        per_branch.fuse(empty()),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
+    ));
+    let rrf = FusionStrategy::weighted_rrf(vec![1.0, 1.0], 60.0).unwrap();
+    assert!(matches!(
+        rrf.fuse(empty()),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
+    ));
+    assert_eq!(
+        FusionStrategy::relative_score(0.5, 0.5)
+            .unwrap()
+            .fuse(empty()),
+        Ok(Vec::new())
     );
 }
