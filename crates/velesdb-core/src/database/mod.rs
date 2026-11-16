@@ -357,31 +357,16 @@ impl Database {
     }
 
     // =========================================================================
-    // Observer notification helpers (called by server handlers after operations)
+    // Deprecated observer notification shims
     // =========================================================================
 
-    /// Fires the `on_upsert` telemetry hook once for a completed upsert write.
+    /// Invokes the observer's `on_upsert` directly.
     ///
-    /// Called by the core use-case DML entry points (INSERT/UPSERT and UPDATE
-    /// in [`query_engine_dml`]) after the data-plane write completes, so a
-    /// single completed operation results in exactly one `on_upsert`
-    /// invocation (Requirement 2.1, 2.3, 2.5). This is the internal replacement
-    /// for the deprecated [`Database::notify_upsert`] shim — it is invoked by
-    /// core itself rather than by callers, and is a single pointer check when
-    /// no observer is present (Requirement 2.4).
-    pub(super) fn fire_on_upsert(&self, collection: &str, point_count: usize) {
-        if let Some(ref obs) = self.observer {
-            obs.on_upsert(collection, point_count);
-        }
-    }
-
-    /// Notifies the observer that points were upserted into a collection.
-    ///
-    /// **Caller contract**: this method is NOT called automatically by
-    /// [`Database`] internals. HTTP handlers and SDK bindings are responsible
-    /// for calling it after a successful upsert, passing the number of points
-    /// written. Forgetting to call it means the observer receives no upsert
-    /// events for that operation.
+    /// Core already reports every write to a collection this database
+    /// registered — `VelesQL` DML and the programmatic collection API alike —
+    /// from the collection's storage entry points (see
+    /// `Database::admit_collection`). Calling this after such a write reports
+    /// it a second time.
     ///
     /// No-op when no observer is registered.
     #[deprecated(

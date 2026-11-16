@@ -33,6 +33,41 @@ use velesdb_core::{
 /// Default fusion strategy when none is specified by the caller.
 const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
 
+/// A `search_request` parsed off the Python objects, ready to route once the
+/// GIL is released: which query vectors it carries and how to run them.
+pub(crate) struct SearchPlan<'a> {
+    pub(crate) dense: Option<Vec<f32>>,
+    pub(crate) sparse: Option<velesdb_core::sparse_index::SparseVector>,
+    pub(crate) top_k: usize,
+    pub(crate) filter: Option<&'a Filter>,
+    pub(crate) sparse_index_name: Option<&'a str>,
+    /// Hybrid dense+sparse only; the other paths ignore it.
+    pub(crate) fusion: Option<&'a CoreFusionStrategy>,
+    /// Dense-only tuning knobs.
+    pub(crate) ef_search: Option<usize>,
+    pub(crate) quality: Option<&'a velesdb_core::SearchQuality>,
+}
+
+/// The caller identity a read forwards to the database's read gate.
+///
+/// Caller-supplied, so only meaningful when a trusted embedder forwards a
+/// verified identity (local-SDK trust boundary): the gate authorizes against
+/// it but cannot itself authenticate the caller.
+#[derive(Clone, Copy)]
+pub(crate) struct ReadIdentity<'a> {
+    pub(crate) principal: Option<&'a str>,
+    pub(crate) tenant: Option<&'a str>,
+}
+
+/// A sparse-only or hybrid dense+sparse search the read gate has authorized.
+struct SparseQuery<'a> {
+    dense: Option<&'a [f32]>,
+    sparse: &'a velesdb_core::sparse_index::SparseVector,
+    top_k: usize,
+    index_name: &'a str,
+    fusion: &'a CoreFusionStrategy,
+}
+
 use velesdb_core::collection::streaming::{AsyncIndexBuilderConfig, DeferredIndexerConfig};
 
 use crate::utils::opt_field;
@@ -174,19 +209,10 @@ impl Collection {
     /// sparse and hybrid-sparse reads have no `GatedRead` leaf, so they consult
     /// [`authorize_read`](CoreDatabase::authorize_read) and AND any observer
     /// scope filter into a post-filter (fail closed on deny, narrow on scope).
-    #[allow(clippy::too_many_arguments)] // gate identity (principal/tenant) threads through
     fn dispatch_search(
         &self,
-        dense: Option<Vec<f32>>,
-        sparse: Option<velesdb_core::sparse_index::SparseVector>,
-        top_k: usize,
-        filter: Option<&Filter>,
-        sparse_index_name: Option<&str>,
-        fusion: Option<&CoreFusionStrategy>,
-        principal: Option<&str>,
-        tenant: Option<&str>,
-        ef_search: Option<usize>,
-        quality: Option<&velesdb_core::SearchQuality>,
+        plan: SearchPlan<'_>,
+        identity: ReadIdentity<'_>,
     ) -> PyResult<Vec<SearchResult>> {
         use crate::collection_helpers::core_err;
         use pyo3::exceptions::PyValueError;
@@ -195,26 +221,27 @@ impl Collection {
         // not return an empty list.
         self.ensure_vector()?;
 
-        let index_name =
-            sparse_index_name.unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
+        let index_name = plan
+            .sparse_index_name
+            .unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
         // Hybrid dense+sparse honors a caller-supplied fusion strategy
         // (backlog #24); other paths ignore it. Default preserves RRF k=60.
-        let fusion = fusion.unwrap_or(&DEFAULT_FUSION);
+        let fusion = plan.fusion.unwrap_or(&DEFAULT_FUSION);
 
-        match (dense, sparse) {
+        match (plan.dense, plan.sparse) {
             // Dense-only / dense+filter: expressible as a governed `GatedRead`.
             (Some(d), None) => self
                 .db
                 .gated_search(
                     &self.name,
-                    principal,
-                    tenant,
+                    identity.principal,
+                    identity.tenant,
                     GatedRead::Dense {
                         query: &d,
-                        k: top_k,
-                        ef: ef_search,
-                        quality: quality.cloned(),
-                        filter,
+                        k: plan.top_k,
+                        ef: plan.ef_search,
+                        quality: plan.quality.cloned(),
+                        filter: plan.filter,
                     },
                 )
                 .map_err(core_err),
@@ -227,19 +254,18 @@ impl Collection {
                     .authorize_read(
                         &self.name,
                         QueryOperationKind::VectorSearch,
-                        principal,
-                        tenant,
+                        identity.principal,
+                        identity.tenant,
                     )
                     .map_err(core_err)?;
-                self.run_sparse_gated(
-                    dense_opt.as_deref(),
-                    &s,
-                    top_k,
-                    filter,
-                    scope.as_ref(),
+                let query = SparseQuery {
+                    dense: dense_opt.as_deref(),
+                    sparse: &s,
+                    top_k: plan.top_k,
                     index_name,
                     fusion,
-                )
+                };
+                self.run_sparse_gated(&query, plan.filter, scope.as_ref())
             }
             (None, None) => Err(PyValueError::new_err(
                 "At least one of 'vector' or 'sparse_vector' must be provided",
@@ -251,20 +277,22 @@ impl Collection {
     /// authorized it. Hybrid dense+sparse pre-filters both fusion branches via
     /// core's `_filtered` leaf (caller filter ANDed with any observer scope);
     /// sparse-only has no filtered leaf, so a scope filter still post-filters.
-    #[allow(clippy::too_many_arguments)] // scope threading is intrinsic to the gate
     fn run_sparse_gated(
         &self,
-        dense: Option<&[f32]>,
-        sparse: &velesdb_core::sparse_index::SparseVector,
-        top_k: usize,
+        query: &SparseQuery<'_>,
         caller_filter: Option<&Filter>,
         scope_filter: Option<&Filter>,
-        index_name: &str,
-        fusion: &CoreFusionStrategy,
     ) -> PyResult<Vec<SearchResult>> {
         use crate::collection_helpers::core_err;
         use pyo3::exceptions::PyValueError;
 
+        let SparseQuery {
+            dense,
+            sparse,
+            top_k,
+            index_name,
+            fusion,
+        } = *query;
         match dense {
             // Hybrid dense+sparse: filter BOTH branches before RRF fusion, like
             // core's `hybrid_sparse_search_filtered`. Post-filtering after fusion
@@ -320,20 +348,6 @@ impl Collection {
             .authorize_read(&self.name, operation, principal, tenant)
             .map_err(crate::collection_helpers::core_err)
     }
-}
-
-/// Fire the observer's `upsert` event for a direct (non-VelesQL) write.
-///
-/// Core fires `on_upsert` internally on the VelesQL DML path
-/// (`Database::fire_on_upsert`); the deprecated `notify_upsert` shim is the
-/// documented caller contract for direct data-plane writes (the REST handlers
-/// call it the same way), so the binding calls it here — without it,
-/// `Collection.upsert` never reached Python observers. Never called on
-/// `execute_query` paths: those fire internally, and calling it too would
-/// double-count.
-#[allow(deprecated)]
-pub(crate) fn notify_upsert_event(db: &CoreDatabase, collection: &str, point_count: usize) {
-    db.notify_upsert(collection, point_count);
 }
 
 /// AND-composes a caller filter with an observer scope filter. The result

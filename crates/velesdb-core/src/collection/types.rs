@@ -579,6 +579,12 @@ pub(crate) struct RuntimeGuards {
     /// the registry has cloned the collection. **Not persisted** — re-pushed
     /// on every open.
     pub(crate) runtime_max_results: Arc<RwLock<Option<usize>>>,
+
+    /// Where completed writes are reported (`DatabaseObserver::on_upsert`),
+    /// set once at `Database` registration when the database has an
+    /// observer. Empty for a direct `Collection::create`/`open` caller, which
+    /// then reports nothing. See [`super::write_telemetry`].
+    pub(crate) upsert_reporter: super::write_telemetry::UpsertReporterSlot,
 }
 
 /// A collection of vectors with associated metadata.

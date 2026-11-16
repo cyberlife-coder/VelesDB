@@ -80,6 +80,7 @@ impl Collection {
 
         self.invalidate_caches_and_bump_generation();
 
+        self.report_upsert(inserted);
         Ok(inserted)
     }
 

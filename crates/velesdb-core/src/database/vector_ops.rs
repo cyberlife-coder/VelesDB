@@ -242,7 +242,7 @@ impl Database {
         // Parity item E: thread the live LimitsConfig caps and guard-rails
         // into the collection as it is shared, so direct Collection::upsert /
         // search paths (used by every SDK/REST handler) enforce them.
-        self.admit_collection(&coll.inner, || {
+        self.admit_collection(name, &coll.inner, || {
             self.vector_colls
                 .write()
                 .insert(name.to_string(), coll.clone());
@@ -291,7 +291,7 @@ impl Database {
         }
         let coll = VectorCollection::open(self.collection_dir(name).ok()?).ok()?;
         // Parity item E: re-push runtime limits on disk-open (not persisted).
-        self.admit_collection(&coll.inner, || {
+        self.admit_collection(name, &coll.inner, || {
             self.vector_colls
                 .write()
                 .insert(name.to_string(), coll.clone());

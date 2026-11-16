@@ -47,7 +47,6 @@ impl Collection {
                 .upsert(core_points)
                 .map_err(|e| core_err_with_collection(e, &name))
         })?;
-        super::notify_upsert_event(&self.db, &self.name, count);
 
         Ok(count)
     }
@@ -73,7 +72,6 @@ impl Collection {
 
         let count = core_points.len();
         py.detach(|| self.inner.upsert_metadata(core_points).map_err(core_err))?;
-        super::notify_upsert_event(&self.db, &self.name, count);
 
         Ok(count)
     }
@@ -100,7 +98,6 @@ impl Collection {
                 .upsert_bulk(&core_points)
                 .map_err(|e| core_err_with_collection(e, &name))
         })?;
-        super::notify_upsert_event(&self.db, &self.name, inserted);
         Ok(inserted)
     }
 
@@ -173,7 +170,6 @@ impl Collection {
                 .upsert_bulk_from_raw(&flat_owned, &ids, dimension, payloads_ref)
                 .map_err(core_err)
         })?;
-        super::notify_upsert_event(&self.db, &self.name, inserted);
         Ok(inserted)
     }
 
@@ -250,7 +246,6 @@ impl Collection {
                 .upsert_bulk_from_raw(&flat_owned, &ids, dimension, Some(&payload_vec))
                 .map_err(core_err)
         })?;
-        super::notify_upsert_event(&self.db, &self.name, inserted);
         Ok(inserted)
     }
 
@@ -360,7 +355,6 @@ impl Collection {
                 ))
             })
         })?;
-        super::notify_upsert_event(&self.db, &self.name, queued);
         Ok(queued)
     }
 }

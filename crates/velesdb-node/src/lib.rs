@@ -879,7 +879,7 @@ impl NodeMemoryService {
     ///   structure out of prose. `model`/`url` arguments win over
     ///   `VELESDB_MEMORY_EXTRACTOR_MODEL`/`_URL`, then the canonical local
     ///   default; the model itself is required for this backend.
-    /// - `"openai"` speaks the OpenAI chat-completions protocol: `url`/`model`
+    /// - `"openai"` speaks the `OpenAI` chat-completions protocol: `url`/`model`
     ///   come from the arguments or `VELESDB_MEMORY_EXTRACTOR_URL`/`_MODEL`
     ///   (both required — there is no default for a protocol), and the
     ///   credential from `VELESDB_MEMORY_EXTRACTOR_API_TOKEN` only, never

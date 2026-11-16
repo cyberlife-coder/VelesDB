@@ -106,7 +106,9 @@ impl Collection {
         self.generations
             .write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        stored.map_err(Into::into)
+        stored?;
+        self.report_upsert(entries.len());
+        Ok(())
     }
 
     /// Rejects the batch before any mutation, so a bad entry commits nothing.

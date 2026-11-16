@@ -58,6 +58,8 @@ pub(crate) mod text_utils;
 mod types;
 #[cfg(feature = "persistence")]
 mod vector_collection;
+#[cfg(feature = "persistence")]
+mod write_telemetry;
 
 #[cfg(feature = "persistence")]
 mod any_collection;

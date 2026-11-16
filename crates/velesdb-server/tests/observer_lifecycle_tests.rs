@@ -4,7 +4,7 @@
 //!
 //! Each assertion proves a distinct piece of wiring is live:
 //! - `POST /collections`              → `on_collection_created`
-//! - `POST /collections/{name}/points` → `on_upsert` (`points/mod.rs`)
+//! - `POST /collections/{name}/points` → `on_upsert` (core, exactly once)
 //! - `POST /collections/{name}/search` → `on_query`  (`search/pipeline.rs`)
 //! - `DELETE /collections/{name}`     → `on_collection_deleted`
 
@@ -116,7 +116,8 @@ async fn observer_receives_full_lifecycle() {
         "on_collection_created"
     );
 
-    // upsert → on_upsert (points/mod.rs notify_upsert)
+    // upsert → on_upsert, reported by core itself: exactly once, so a handler
+    // that also notified would show up as a double count.
     let status = post(
         &app,
         &format!("/collections/{COLLECTION}/points"),
@@ -124,7 +125,7 @@ async fn observer_receives_full_lifecycle() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "upsert");
-    assert!(observer.upsert.load(Ordering::SeqCst) >= 1, "on_upsert");
+    assert_eq!(observer.upsert.load(Ordering::SeqCst), 1, "on_upsert");
 
     // search → on_query (search/pipeline.rs notify_query)
     let status = post(

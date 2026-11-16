@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Core reports every write to the observer, whatever surface makes it**
+  (core, server, Python, 2026-11-16). `DatabaseObserver::on_upsert` fired
+  inside core only for VelesQL `INSERT`/`UPDATE`; a write through the
+  collection API reached the observer only if the caller invoked the
+  deprecated `Database::notify_upsert` shim afterwards, which the REST
+  handlers and the Python binding each did with their own count — and which
+  a Rust embedder, the Node, Tauri and mobile bindings did not. Now a
+  collection registered by a database with an observer reports each completed
+  write once, from its storage entry points (`upsert`, `upsert_metadata`,
+  `upsert_bulk`, `upsert_bulk_from_raw`, graph node payload writes; the
+  streaming drain writes through `upsert`), with the number of points written.
+  A failed or empty write reports nothing, and a streamed point is reported
+  when it is written rather than when it is queued. The server and the Python
+  binding no longer call the shim. **Embedder action:** a Rust caller that
+  still invokes `notify_upsert` after a collection write now reports it twice;
+  drop the call.
+
 - **Dependencies** (2026-11-16): non-major updates. In `Cargo.lock`:
   arc-swap 1.9.5, flate2 1.1.11, napi 3.16.2, pest 2.9.6, rmcp 3.10.0,
   serde-saphyr 2.1.1, smallvec 1.16.5, toml 1.2.0, uuid 1.29.2 and

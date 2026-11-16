@@ -6,10 +6,11 @@ fixture opens without an observer, so these tests build their own ``Database``
 with one attached.
 
 Scope note: ``collection_created`` / ``collection_deleted`` fire directly from
-the core engine, and the Python binding calls ``notify_upsert`` after direct
-data-plane upserts, so ``upsert`` reaches the embedded SDK too. The ``query``
-event fires on the VelesQL path (core-internal); the REST server's end-to-end
-wiring is covered by ``crates/velesdb-server/tests/observer_lifecycle_tests.rs``.
+the core engine, and so does ``upsert``: core reports every write to a
+collection the database registered, whether it comes through VelesQL or the
+collection API, so the binding adds nothing of its own. The ``query`` event
+fires on the VelesQL path (core-internal); the REST server's end-to-end wiring
+is covered by ``crates/velesdb-server/tests/observer_lifecycle_tests.rs``.
 """
 
 import shutil
@@ -203,9 +204,8 @@ def test_query_request_fields_carry_collection_and_operation():
 def test_upsert_event_fires_on_direct_upsert():
     """`Collection.upsert` (data-plane, not VelesQL) must reach the observer.
 
-    Core fires `on_upsert` internally only on the VelesQL DML path; the binding
-    calls the `notify_upsert` shim after a direct write, per the trait's
-    documented caller contract.
+    Core reports the write from the collection's storage entry point, the same
+    one the VelesQL DML path writes through, so each reaches the observer once.
     """
     temp_dir = tempfile.mkdtemp()
     try:
@@ -221,6 +221,31 @@ def test_upsert_event_fires_on_direct_upsert():
         recorder.events.clear()
         db.execute_query("INSERT INTO docs (id, vector) VALUES (2, $v)", params={"v": [0.0, 1.0, 0.0, 0.0]})
         assert len(recorder.events_of("upsert")) == 1
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_upsert_event_fires_once_on_bulk_and_graph_writes():
+    """Bulk and graph-node writes report once each, with the exact count."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+        recorder = Recorder()
+        db = Database(temp_dir, observer=recorder)
+        col = db.create_collection("docs", dimension=DIM)
+        col.upsert_bulk(
+            [
+                {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+            ]
+        )
+        assert [(e["collection"], e["point_count"]) for e in recorder.events_of("upsert")] == [("docs", 2)]
+
+        recorder.events.clear()
+        graph = db.create_graph_collection("kg")
+        graph.upsert_node_payloads([{"id": 1, "payload": {"name": "a"}}, {"id": 2, "payload": {"name": "b"}}])
+        graph.upsert_node(3, {"name": "c"})
+        upserts = [(e["collection"], e["point_count"]) for e in recorder.events_of("upsert")]
+        assert upserts == [("kg", 2), ("kg", 1)]
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

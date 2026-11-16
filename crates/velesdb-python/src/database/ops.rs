@@ -201,8 +201,8 @@ impl Database {
     ///
     /// Returns:
     ///     Status message from the training operation.
-    #[allow(clippy::too_many_arguments)] // py token + training knobs
-    #[allow(clippy::too_many_arguments)] // py token + training knobs
+    #[allow(clippy::too_many_arguments)]
+    // Reason: PyO3 maps each keyword argument of this Python method to one Rust parameter; grouping them would change the Python signature.
     #[pyo3(signature = (collection_name, quantizer="pq", m=8, k=256, force=false, sample_limit=None))]
     fn train_quantizer(
         &self,
@@ -214,15 +214,31 @@ impl Database {
         force: bool,
         sample_limit: Option<usize>,
     ) -> PyResult<String> {
-        let quantizer = quantizer.to_ascii_lowercase();
-        if !matches!(quantizer.as_str(), "pq" | "opq" | "rabitq" | "sq8") {
-            return Err(PyValueError::new_err(format!(
-                "unknown quantizer '{quantizer}'. Supported: pq, opq, rabitq, sq8"
-            )));
-        }
-        let results = self.run_train(py, collection_name, &quantizer, m, k, force, sample_limit)?;
-        Ok(format!("{quantizer} training complete: {results} results"))
+        let request = TrainRequest {
+            collection: collection_name,
+            quantizer,
+            m,
+            k,
+            force,
+            sample_limit,
+        };
+        let results = self.run_train(py, &request)?;
+        Ok(format!(
+            "{} training complete: {results} results",
+            quantizer.to_ascii_lowercase()
+        ))
     }
+}
+
+/// One `TRAIN QUANTIZER` run, as the Python training methods describe it.
+pub(super) struct TrainRequest<'a> {
+    pub(super) collection: &'a str,
+    /// `pq`, `opq`, `rabitq` or `sq8`, in any letter case.
+    pub(super) quantizer: &'a str,
+    pub(super) m: usize,
+    pub(super) k: usize,
+    pub(super) force: bool,
+    pub(super) sample_limit: Option<usize>,
 }
 
 impl Database {
@@ -230,17 +246,15 @@ impl Database {
     /// builds the statement as an AST (never via string interpolation, so no
     /// identifier sanitizer can drift from `velesdb_core::validation`), runs
     /// it off the GIL, and returns the result count.
-    #[allow(clippy::too_many_arguments)] // py token + training knobs
-    pub(super) fn run_train(
-        &self,
-        py: Python<'_>,
-        collection_name: &str,
-        quantizer: &str,
-        m: usize,
-        k: usize,
-        force: bool,
-        sample_limit: Option<usize>,
-    ) -> PyResult<usize> {
+    pub(super) fn run_train(&self, py: Python<'_>, request: &TrainRequest<'_>) -> PyResult<usize> {
+        let TrainRequest {
+            collection: collection_name,
+            quantizer,
+            m,
+            k,
+            force,
+            sample_limit,
+        } = *request;
         let quantizer = quantizer.to_ascii_lowercase();
         if !matches!(quantizer.as_str(), "pq" | "opq" | "rabitq" | "sq8") {
             return Err(PyValueError::new_err(format!(

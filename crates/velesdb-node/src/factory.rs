@@ -171,7 +171,7 @@ pub struct NodeMemoryService {
 
 /// Build the extraction backend named `backend` for one `rememberExtracted`
 /// call. Explicit `model`/`url` arguments win over the extraction role's
-/// environment (`VELESDB_MEMORY_EXTRACTOR_*`); the OpenAI credential comes
+/// environment (`VELESDB_MEMORY_EXTRACTOR_*`); the `OpenAI` credential comes
 /// from `VELESDB_MEMORY_EXTRACTOR_API_TOKEN` only — never from an argument,
 /// so no token lands in a source file.
 pub(crate) fn build_extractor(

@@ -70,7 +70,7 @@ pub fn to_filters(filters: Vec<ColumnFilterJs>) -> napi::Result<Vec<ColumnFilter
 
 /// JS `{hops?, graphBoost?, pool?}` → engine [`FusionOptions`]. Routed
 /// through [`FusionOptions::from_knobs`] — the same constructor the MCP tool
-/// and the PyO3 binding use — so the defaults and the `DoS` clamps
+/// and the `PyO3` binding use — so the defaults and the `DoS` clamps
 /// (`MAX_WHY_HOPS`, `MAX_RECALL_LIMIT`) live in exactly one place and a knob
 /// added upstream reaches this binding the day it exists. A hand-written
 /// mirror here is how the two would drift.

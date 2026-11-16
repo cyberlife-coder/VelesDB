@@ -55,11 +55,10 @@ try {
 # ============================================================================
 Write-Step "Check 2: Linting (clippy)"
 try {
-    # Mot pour mot ci.yml:217-219. La forme --all-features sans exclusion
-    # divergeait : elle rend rc=101 sur velesdb-node, que la CI lint
-    # separement (ci.yml:226) avec ses propres regles.
+    # Mot pour mot le clippy strict de ci.yml (velesdb-python exclu : son
+    # harnais de test se lie a libpython).
     cargo clippy --workspace --all-targets --features persistence,gpu,update-check `
-        --exclude velesdb-python --exclude velesdb-node `
+        --exclude velesdb-python `
         -- -D warnings -D clippy::pedantic `
            -A clippy::missing_errors_doc -A clippy::missing_panics_doc 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Clippy failed" }

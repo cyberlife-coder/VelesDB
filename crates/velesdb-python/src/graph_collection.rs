@@ -362,7 +362,6 @@ impl PyGraphCollection {
                 .upsert_node_payload(node_id, &value)
                 .map_err(core_err)
         })?;
-        crate::collection::notify_upsert_event(&self.db, &self.name, 1);
         Ok(())
     }
 
@@ -395,13 +394,11 @@ impl PyGraphCollection {
                 })?;
             parsed.push((id, payload));
         }
-        let count = parsed.len();
         py.detach(|| {
             let refs: Vec<(u64, &serde_json::Value)> =
                 parsed.iter().map(|(id, value)| (*id, value)).collect();
             self.inner.upsert_node_payloads(&refs).map_err(core_err)
         })?;
-        crate::collection::notify_upsert_event(&self.db, &self.name, count);
         Ok(())
     }
 
@@ -486,7 +483,6 @@ impl PyGraphCollection {
                 .upsert_node(node_id, &value, vector)
                 .map_err(core_err)
         })?;
-        crate::collection::notify_upsert_event(&self.db, &self.name, 1);
         Ok(())
     }
 
