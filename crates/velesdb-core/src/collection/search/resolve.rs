@@ -117,36 +117,15 @@ pub(crate) fn resolve_scored_results(
 /// path ranks candidates before any vector is read, so it sorts triples, not
 /// results.
 pub(crate) fn sort_scored_ids_by_metric<P>(entries: &mut [(u64, f32, P)], higher_is_better: bool) {
-    entries.sort_unstable_by(|a, b| metric_score_order(a.1, b.1, higher_is_better));
-}
-
-/// Shared score ordering for the metric direction.
-///
-/// - `higher_is_better = true`: descending; NaN treated as worst (placed at
-///   the end). `partial_cmp` returns `None` for NaN; the fallback arms put
-///   any NaN result after all finite scores, preserving result quality when
-///   a score is accidentally NaN (e.g. zero-norm vector in SIMD path).
-/// - `higher_is_better = false`: ascending (lower distance = better);
-///   `total_cmp` gives a true total order and NaN sorts after +inf, so NaN
-///   distances end up last (worst).
-fn metric_score_order(a: f32, b: f32, higher_is_better: bool) -> std::cmp::Ordering {
-    if higher_is_better {
-        b.partial_cmp(&a)
-            .unwrap_or_else(|| match (a.is_nan(), b.is_nan()) {
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                _ => std::cmp::Ordering::Equal,
-            })
-    } else {
-        a.total_cmp(&b)
-    }
+    entries.sort_unstable_by(|a, b| crate::distance::rank_scores(a.1, b.1, higher_is_better));
 }
 
 /// Sorts `ScoredResult` values by score according to metric direction.
 ///
 /// Uses unstable sort: equal-score tie-breaking order is irrelevant for ranking.
 pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_better: bool) {
-    results.sort_unstable_by(|a, b| metric_score_order(a.score, b.score, higher_is_better));
+    results
+        .sort_unstable_by(|a, b| crate::distance::rank_scores(a.score, b.score, higher_is_better));
 }
 
 /// Creates a "sparse index not found" error with consistent formatting.

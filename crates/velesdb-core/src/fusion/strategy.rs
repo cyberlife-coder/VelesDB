@@ -738,9 +738,9 @@ fn validate_weight_sum(sum: f32) -> Result<(), FusionError> {
 ///
 /// Scores compare with [`f32::total_cmp`], as core's strategies always did,
 /// except that `-0.0` and `0.0` tie, so the id decides. A positive NaN
-/// sorts first and a negative NaN last. That is the opposite of
-/// `metric_score_order`, which ranks a NaN worst; a fused NaN comes only from
-/// a NaN input score.
+/// sorts first and a negative NaN last. That differs from
+/// [`crate::distance::rank_scores`], which ranks a NaN worst; a fused NaN
+/// comes only from a NaN input score.
 pub fn sort_fused_results(fused: &mut [(u64, f32)]) {
     fused.sort_unstable_by(|a, b| fused_score_cmp(b.1, a.1).then(a.0.cmp(&b.0)));
 }

@@ -212,11 +212,9 @@ impl Collection {
                 scored.push(SearchResult::new(point, score));
             }
         }
-        if higher_is_better {
-            scored.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-        } else {
-            scored.sort_unstable_by(|a, b| a.score.total_cmp(&b.score));
-        }
+        scored.sort_unstable_by(|a, b| {
+            crate::distance::rank_scores(a.score, b.score, higher_is_better)
+        });
         scored.truncate(limit);
         scored
     }
