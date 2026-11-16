@@ -178,10 +178,19 @@ def _legacy_edge_to_dict(
     elif weight is not None:
         props.setdefault("weight", weight)
 
-    # Current explicit-id shape: add_edge(id, source=..., target=..., label=...)
-    if source is not None or edge_id is not None:
-        eid = int(edge_or_source if edge_id is None else edge_id)
-        edge_source = int(source if source is not None else 0)
+    if edge_id is not None:
+        # add_edge(source, target, label, id=n): the positional is the source.
+        if source is not None:
+            raise ValueError(
+                "add_edge() got both id= and source=: pass the edge id "
+                "positionally with source=, or the source positionally with id="
+            )
+        eid = int(edge_id)
+        edge_source = int(edge_or_source)
+    elif source is not None:
+        # Explicit-id shape: add_edge(id, source=..., target=..., label=...)
+        eid = int(edge_or_source)
+        edge_source = int(source)
     else:
         # Legacy no-id shape: add_edge(source, target, label, weight=None)
         eid = int(next_id())
