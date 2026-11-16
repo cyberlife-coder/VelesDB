@@ -4,6 +4,13 @@
 //! binding crossed the 1000-line file budget — the `#[napi] impl` surface
 //! block stays in `lib.rs` because `binding_parity_bdd` parses it there.
 
+// This file declares the `#[napi]` class struct, so it is excluded from
+// CodeQL whole-file (see .github/codeql/codeql-config.yml): the exclusion is
+// only justified while the file forbids `unsafe` outright — pinned by
+// scripts/tests/test_codeql_config.py. Redundant with the crate-level
+// attribute in lib.rs, kept literal here for that guard.
+#![deny(unsafe_code)]
+
 use std::sync::Arc;
 
 use napi_derive::napi;
