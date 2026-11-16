@@ -462,6 +462,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors as VELES-009 (a caller configuration error); they keep core's code
   (an invalid edge label is VELES-021).
 
+- **`stream_insert` refuses a bad point up front, with core's code** (core,
+  server, Python, mobile, Tauri, 2026-11-16). A streamed point with the wrong
+  dimension, a non-finite component, or a vector on a metadata-only
+  collection was queued, then the background drain rejected the whole
+  micro-batch and dropped it silently, so the good points streamed alongside
+  it were lost too. `stream_insert` and `stream_insert_batch` now run the
+  same validation as `upsert` before queueing anything
+  (`BackpressureError::InvalidPoint`), and every surface reports core's code
+  (`VELES-004`, `VELES-005`, `VELES-014`): REST answers 400 instead of
+  queueing, Tauri no longer reports `VELES-009`, Python raises the typed
+  core exception (`DimensionMismatchError`, ...) instead of `RuntimeError`.
+  The server's own dimension pre-check is gone.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with

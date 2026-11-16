@@ -120,6 +120,18 @@ impl From<serde_json::Error> for Error {
     }
 }
 
+/// A streamed point an upsert would refuse keeps core's code; a full
+/// buffer, an unconfigured or a dead pipeline stays a configuration error
+/// naming the condition, as before.
+impl From<velesdb_core::BackpressureError> for Error {
+    fn from(err: velesdb_core::BackpressureError) -> Self {
+        match err {
+            velesdb_core::BackpressureError::InvalidPoint(inner) => Self::Database(*inner),
+            other => Self::InvalidConfig(format!("Stream insert backpressure: {other}")),
+        }
+    }
+}
+
 impl From<velesdb_core::agent::AgentMemoryError> for Error {
     fn from(err: velesdb_core::agent::AgentMemoryError) -> Self {
         use velesdb_core::agent::AgentMemoryError as A;

@@ -63,6 +63,27 @@ def test_enable_streaming_then_stream_insert_lands_points(temp_db):
     assert results[0]["id"] == 1
 
 
+def test_stream_insert_refuses_a_wrong_dimension_and_queues_nothing(temp_db):
+    """A wrong-dimension point raises DimensionMismatchError up front; none of the batch is queued.
+
+    Before, the point was queued and the drain dropped the whole micro-batch
+    silently, so the good points streamed alongside it were lost too.
+    """
+    collection = temp_db.create_collection("stream_bad_dim", dimension=4)
+    collection.enable_streaming(StreamingIngestConfig(batch_size=1, flush_interval_ms=10))
+
+    with pytest.raises(velesdb.DimensionMismatchError):
+        collection.stream_insert(
+            [
+                {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": 2, "vector": [1.0, 0.0]},
+            ]
+        )
+
+    time.sleep(0.2)
+    assert collection.is_empty()
+
+
 @pytest.mark.parametrize(
     "config",
     [

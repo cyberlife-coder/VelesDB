@@ -820,16 +820,28 @@ impl Collection {
         crate::collection::text_utils::extract_text(payload)
     }
 
-    /// Sends a point into the streaming ingestion channel.
+    /// Refuses, before anything is queued, a point an upsert would refuse:
+    /// the drain writes it later, where a refusal reaches no caller.
+    #[cfg(feature = "persistence")]
+    fn validate_streamed(&self, points: &[Point]) -> Result<(), BackpressureError> {
+        self.validate_points_for_upsert(points)
+            .map_err(|err| BackpressureError::InvalidPoint(Box::new(err)))
+    }
+
+    /// Sends a point into the streaming ingestion channel, once it passes the
+    /// checks an upsert runs.
     ///
     /// Returns `BackpressureError::NotConfigured` if streaming is not active
     /// on this collection.
     ///
     /// # Errors
     ///
-    /// Returns [`BackpressureError`] on buffer-full or not-configured.
+    /// Returns [`BackpressureError::InvalidPoint`] for a point an upsert
+    /// would refuse, else [`BackpressureError`] on buffer-full or
+    /// not-configured.
     #[cfg(feature = "persistence")]
     pub fn stream_insert(&self, point: Point) -> Result<(), BackpressureError> {
+        self.validate_streamed(std::slice::from_ref(&point))?;
         let guard = self.streaming.stream_ingester.read();
         match guard.as_ref() {
             Some(ingester) => ingester.try_send(point),
@@ -846,9 +858,12 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns [`BackpressureError`] on buffer-full, drain-dead, or not-configured.
+    /// Returns [`BackpressureError::InvalidPoint`] — nothing queued — when a
+    /// point fails the checks an upsert runs, else [`BackpressureError`] on
+    /// buffer-full, drain-dead, or not-configured.
     #[cfg(feature = "persistence")]
     pub fn stream_insert_batch(&self, points: Vec<Point>) -> Result<usize, BackpressureError> {
+        self.validate_streamed(&points)?;
         let guard = self.streaming.stream_ingester.read();
         match guard.as_ref() {
             Some(ingester) => ingester.try_send_batch(points),

@@ -608,11 +608,14 @@ impl VelesCollection {
         let core_points: Result<Vec<velesdb_core::Point>, VelesError> =
             points.into_iter().map(parse_point).collect();
 
-        let queued = self.inner.stream_insert_batch(core_points?).map_err(|e| {
-            VelesError::database(format!(
-                "Stream insert failed (buffer full or not configured): {e}"
-            ))
-        })?;
+        let queued = self
+            .inner
+            .stream_insert_batch(core_points?)
+            .map_err(|e| match e {
+                // A point an upsert would refuse keeps core's code.
+                velesdb_core::BackpressureError::InvalidPoint(inner) => VelesError::from(*inner),
+                other => VelesError::database(format!("Stream insert failed: {other}")),
+            })?;
         Ok(u64::try_from(queued).unwrap_or(u64::MAX))
     }
 

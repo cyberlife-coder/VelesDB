@@ -26,26 +26,18 @@ impl Collection {
     /// attempting to insert vectors into a metadata-only collection.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
+        // Parity item E + dimension validation at the cold boundary, before any
+        // storage lock or WAL write — a violation rejects the whole batch.
+        self.validate_points_for_upsert(&points)?;
         let config = self.storage.config.read();
-        let dimension = config.dimension;
         let storage_mode = config.storage_mode;
-
         if config.metadata_only {
-            for point in &points {
-                if !point.vector.is_empty() {
-                    return Err(Error::VectorNotAllowed(config.name.clone()));
-                }
-            }
             drop(config);
             // `upsert_metadata` is the storage entry for this path and applies
-            // the runtime limits itself — checking here too would double-scan.
+            // the runtime limits itself.
             return self.upsert_metadata(points);
         }
         drop(config);
-
-        // Parity item E + dimension validation at the cold boundary, before any
-        // storage lock or WAL write — a violation rejects the whole batch.
-        self.validate_vector_upsert_batch(&points, dimension)?;
 
         let (sparse_batch, old_payloads) = self.upsert_storage_and_index(&points, storage_mode)?;
 
@@ -59,6 +51,29 @@ impl Collection {
         self.bump_generation_with_mirror_upserts(&points);
         self.report_upsert(points.len());
         Ok(())
+    }
+
+    /// The checks [`Self::upsert`] runs on its points before any write: a
+    /// metadata-only collection refuses a vector
+    /// ([`Error::VectorNotAllowed`]); a vector collection runs
+    /// [`Self::validate_vector_upsert_batch`]. Streaming runs them too, when a
+    /// point is queued — the only moment its caller can still hear of a
+    /// refusal, since the drain writes it later.
+    ///
+    /// # Errors
+    ///
+    /// The refusal of the first point that fails a check.
+    pub(crate) fn validate_points_for_upsert(&self, points: &[Point]) -> Result<()> {
+        let config = self.storage.config.read();
+        if config.metadata_only {
+            if points.iter().any(|point| !point.vector.is_empty()) {
+                return Err(Error::VectorNotAllowed(config.name.clone()));
+            }
+            return Ok(());
+        }
+        let dimension = config.dimension;
+        drop(config);
+        self.validate_vector_upsert_batch(points, dimension)
     }
 
     /// Validates a vector-collection upsert batch at the cold boundary:

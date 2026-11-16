@@ -349,11 +349,9 @@ impl Collection {
 
         // Phase 2: Send entire batch in one call (single lock acquisition), GIL released
         let queued = py.detach(|| {
-            self.inner.stream_insert_batch(parsed).map_err(|e| {
-                pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "Stream insert failed (buffer full or not configured): {e}"
-                ))
-            })
+            self.inner
+                .stream_insert_batch(parsed)
+                .map_err(stream_insert_err)
         })?;
         Ok(queued)
     }
@@ -397,4 +395,16 @@ fn convert_payloads(
         }
     }
     Ok(Some(result))
+}
+
+/// A streamed point an upsert would refuse raises what that upsert raises
+/// (`core_err`, e.g. `ValueError` for a dimension mismatch); a full buffer, an
+/// unconfigured or a dead pipeline stays a `RuntimeError`.
+fn stream_insert_err(err: velesdb_core::BackpressureError) -> PyErr {
+    match err {
+        velesdb_core::BackpressureError::InvalidPoint(inner) => core_err(*inner),
+        other => {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Stream insert failed: {other}"))
+        }
+    }
 }

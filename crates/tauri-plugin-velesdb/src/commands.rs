@@ -802,15 +802,16 @@ pub async fn stream_insert<R: Runtime>(
         .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
 
-            let mut inserted = 0;
-            for p in request.points {
-                let point = velesdb_core::Point::new(p.id, p.vector, p.payload);
-                coll.stream_insert(point).map_err(|e| {
-                    crate::error::Error::InvalidConfig(format!("Stream insert backpressure: {e}"))
-                })?;
-                inserted += 1;
-            }
-            Ok(inserted)
+            let points = request
+                .points
+                .into_iter()
+                .map(|p| velesdb_core::Point::new(p.id, p.vector, p.payload))
+                .collect();
+            // One batch, checked by core before anything is queued: a point
+            // an upsert would refuse fails the call with core's code instead
+            // of being dropped later by the drain.
+            coll.stream_insert_batch(points)
+                .map_err(crate::error::Error::from)
         })
         .await
         .map_err(CommandError::from)?;

@@ -126,6 +126,12 @@ pub enum BackpressureError {
     /// and the collection may need to be reconfigured.
     #[error("streaming drain task has exited; the ingestion pipeline is dead")]
     DrainTaskDead,
+
+    /// A point fails the checks an upsert runs (dimension, finite components,
+    /// ingest limits, sparse index names); nothing of the call was queued.
+    /// The inner error carries core's code.
+    #[error("invalid point: {0}")]
+    InvalidPoint(Box<crate::error::Error>),
 }
 
 /// Streaming ingestion handle for a single collection.

@@ -232,6 +232,7 @@ fn should_flush(batch: &[Point], last_flush: Instant) -> bool {
     request_body = StreamInsertRequest,
     responses(
         (status = 202, description = "Point accepted into streaming buffer"),
+        (status = 400, description = "A point the collection refuses: wrong dimension (VELES-004), a non-finite component (VELES-005) or a vector on a metadata-only collection (VELES-014); nothing is queued", body = ErrorResponse),
         (status = 429, description = "Streaming buffer full — retry after 1 second", body = ErrorResponse),
         (status = 503, description = "Streaming drain task has exited — collection must be reconfigured", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
@@ -249,31 +250,8 @@ pub async fn stream_insert(
         Err(resp) => return resp,
     };
 
-    if let Err(resp) = validate_stream_dimension(&collection, &req) {
-        return resp;
-    }
-
     let point = Point::new(req.id, req.vector, req.payload);
     stream_insert_result_to_response(collection.stream_insert(point))
-}
-
-/// Validate that the request vector dimension matches the collection.
-#[allow(clippy::result_large_err)]
-fn validate_stream_dimension(
-    collection: &VectorCollection,
-    req: &StreamInsertRequest,
-) -> Result<(), axum::response::Response> {
-    let expected_dim = collection.dimension();
-    if req.vector.len() != expected_dim {
-        return Err(error_response(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "Vector dimension mismatch: collection expects {expected_dim}, got {}",
-                req.vector.len()
-            ),
-        ));
-    }
-    Ok(())
 }
 
 /// Convert a `stream_insert` result into an HTTP response.
@@ -303,6 +281,8 @@ fn stream_insert_result_to_response(
             StatusCode::CONFLICT,
             "Streaming not configured for this collection".to_string(),
         ),
+        // Core checks a streamed point as an upsert: its own code and status.
+        Err(BackpressureError::InvalidPoint(err)) => auto_core_error_response(&err),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Unexpected streaming error: {e}"),
