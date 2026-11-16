@@ -408,9 +408,11 @@ scalar-expression ones below, which use the same single-collection dataset):
 - `cases` X011–X014: WHERE-expression evaluation (`BETWEEN`, parenthesized
   `AND`/`OR`, `NOT`, `IN`) — safe for CLI's strict-order comparison, so these
   run on all three executors.
-- `join_cases` J001–J005: `JOIN ... ON` (both condition-side orders on both
+- `join_cases` J001–J015: `JOIN ... ON` (both condition-side orders on both
   engines — J005 locks the joined-table-first order, issue #1555) and
-  `JOIN ... USING (col)`.
+  `JOIN ... USING (col)`; J006–J010 window, order and filter the joined rows;
+  J011–J015 join on a column no index covers and run RIGHT and FULL joins,
+  `id = id` included (D014).
 - `aggregate_cases` G001–G005: `GROUP BY` / `HAVING` / `COUNT` / `SUM` /
   `LIMIT`, checked via `Database::execute_aggregate` on core (not
   `execute_query`, which only groups when combined with vector `NEAR`
