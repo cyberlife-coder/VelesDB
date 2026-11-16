@@ -80,6 +80,19 @@ pub fn insert_with_payload(
 /// mixing `swap_remove` on one and `drain` on the other desynchronises ids
 /// from the vector at `idx`. Order is not preserved by removal anyway, so
 /// swap-remove is both cheaper and correct.
+/// Deletes the row at `idx` — its id, payload, vector and sparse postings —
+/// for an explicit removal (`VectorStore.remove`, VelesQL `DELETE`). The
+/// postings would otherwise keep answering sparse searches for a row that
+/// is gone, as `StoreState::clear` documents for the whole store.
+pub fn delete_at_index(store: &mut StoreState, idx: usize) {
+    if let Some(&id) = store.ids.get(idx) {
+        if let Some(sparse) = store.sparse_index.as_mut() {
+            sparse.remove(id);
+        }
+    }
+    remove_at_index(store, idx);
+}
+
 pub fn remove_at_index(store: &mut StoreState, idx: usize) {
     store.ids.swap_remove(idx);
     store.payloads.swap_remove(idx);

@@ -393,7 +393,7 @@ impl StoreState {
     /// Removes a vector by ID.
     pub fn remove(&mut self, id: u64) -> bool {
         if let Some(idx) = self.ids.iter().position(|&x| x == id) {
-            self.remove_at_index(idx);
+            store_insert::delete_at_index(self, idx);
             true
         } else {
             false
