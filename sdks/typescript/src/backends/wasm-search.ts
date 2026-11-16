@@ -464,7 +464,7 @@ const FUSION_PARAMS_READ: Readonly<Record<FusionStrategy, readonly FusionParamNa
   rrf: ['k'],
   weighted_rrf: ['k', 'branchWeights'],
   weighted: WEIGHTED_TRIPLE,
-  relative_score: ['denseWeight', 'sparseWeight'],
+  relative_score: ['denseWeight', 'sparseWeight', 'branchWeights'],
   average: [],
   maximum: [],
 };
@@ -596,7 +596,10 @@ function wasmFusionArgs(
   }
   requireWasmFieldsListed('multiQueryFusionParams', 'multiQuerySearch fusionParams', read);
   if (strategy === 'weighted_rrf') {
-    return { rrfK, weights: weightedRrfWeights(branchWeights, numVectors) };
+    return { rrfK, weights: perBranchWeights(strategy, branchWeights, numVectors) };
+  }
+  if (strategy === 'relative_score' && isSet(branchWeights)) {
+    return { rrfK, weights: perBranchWeights(strategy, branchWeights, numVectors) };
   }
   const weights =
     strategy === 'weighted'
@@ -617,26 +620,29 @@ function wasmFusionArgs(
 }
 
 /**
- * `weighted_rrf`'s per-branch weights as the binding's `weights` argument —
- * one per query vector, the arity velesdb-server's `build_fusion_strategy`
- * refuses a mismatch on and velesdb-wasm's `multi_query_search` re-checks.
- * The two refusals run here too, as the weighted triple's do, because the
- * binding reports its own as a bare string.
+ * Per-branch weights as the binding's `weights` argument — one per query
+ * vector, the arity velesdb-server's `build_fusion_strategy` refuses a
+ * mismatch on and velesdb-wasm's `multi_query_search` re-checks, for
+ * `weighted_rrf` (which requires them) and `relative_score` (which reads
+ * them in place of its dense and sparse weights). The refusals run here
+ * too, as the weighted triple's do, because the binding reports its own as
+ * a bare string.
  */
-function weightedRrfWeights(
+function perBranchWeights(
+  strategy: 'weighted_rrf' | 'relative_score',
   branchWeights: number[] | null | undefined,
   numVectors: number
 ): Float32Array {
   if (!isSet(branchWeights)) {
     throw new VelesDBError(
-      'multiQuerySearch weighted_rrf fusion: branchWeights requires one weight per ' +
+      `multiQuerySearch ${strategy} fusion: branchWeights requires one weight per ` +
         'query vector and none were provided',
       'BAD_REQUEST'
     );
   }
   if (branchWeights.length !== numVectors) {
     throw new VelesDBError(
-      `weighted_rrf requires one weight per query vector: ` +
+      `${strategy} requires one weight per query vector: ` +
         `${branchWeights.length} weights for ${numVectors} vectors`,
       'BAD_REQUEST'
     );

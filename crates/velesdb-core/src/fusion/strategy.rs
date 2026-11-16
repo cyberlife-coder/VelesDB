@@ -443,6 +443,9 @@ impl FusionStrategy {
         if results.is_empty() {
             return Ok(Vec::new());
         }
+        // Checked before the empty-result shortcut below, so a request this
+        // strategy refuses fails whether or not any branch found a point.
+        self.validate_branch_count(results.len())?;
 
         // Filter out empty query results for counting
         let non_empty_count = results.iter().filter(|r| !r.is_empty()).count();
@@ -472,16 +475,42 @@ impl FusionStrategy {
                 sparse_weight,
             } => Self::fuse_relative_score(&results, *dense_weight, *sparse_weight),
             Self::WeightedRRF { weights, k } => Self::fuse_weighted_rrf(results, weights, *k),
+            Self::WeightedRelativeScore { weights } => Ok(fuse_normalized(&results, weights)),
+        }
+    }
+
+    /// Whether this strategy's weights fit `branches` branches: one per
+    /// branch for the per-branch strategies, equal dense and sparse weights
+    /// beyond two for `RelativeScore`.
+    ///
+    /// # Errors
+    ///
+    /// The validation error of the strategy's weights, or
+    /// [`FusionError::WeightCountMismatch`].
+    fn validate_branch_count(&self, branches: usize) -> Result<(), FusionError> {
+        let per_branch = match self {
+            Self::RelativeScore {
+                dense_weight,
+                sparse_weight,
+            } => {
+                validate_non_negative(&[*dense_weight, *sparse_weight])?;
+                validate_weight_sum(dense_weight + sparse_weight)?;
+                return rsf_branch_weights(branches, *dense_weight, *sparse_weight).map(drop);
+            }
             Self::WeightedRelativeScore { weights } => {
                 validate_relative_score_weights(weights)?;
-                if weights.len() != results.len() {
-                    return Err(FusionError::WeightCountMismatch {
-                        weights: weights.len(),
-                        branches: results.len(),
-                    });
-                }
-                Ok(fuse_normalized(&results, weights))
+                weights.len()
             }
+            Self::WeightedRRF { weights, .. } => weights.len(),
+            _ => return Ok(()),
+        };
+        if per_branch == branches {
+            Ok(())
+        } else {
+            Err(FusionError::WeightCountMismatch {
+                weights: per_branch,
+                branches,
+            })
         }
     }
 

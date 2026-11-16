@@ -1190,3 +1190,41 @@ fn test_weighted_rsf_validates_its_weights() {
     assert!(FusionStrategy::weighted_relative_score(vec![1.5, -0.5]).is_err());
     assert!(FusionStrategy::weighted_relative_score(vec![f32::NAN, 1.0]).is_err());
 }
+
+/// A strategy's weights are checked against the branch count even when
+/// every branch came back empty: an invalid request fails on an empty
+/// collection as it does on a full one.
+#[test]
+fn test_weight_checks_run_when_every_branch_is_empty() {
+    let empty = || vec![Vec::new(), Vec::new(), Vec::new()];
+    let unequal = FusionStrategy::relative_score(0.8, 0.2).unwrap();
+    assert!(matches!(
+        unequal.fuse(empty()),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
+    ));
+    let per_branch = FusionStrategy::weighted_relative_score(vec![0.5, 0.5]).unwrap();
+    assert!(matches!(
+        per_branch.fuse(empty()),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
+    ));
+    let rrf = FusionStrategy::weighted_rrf(vec![1.0, 1.0], 60.0).unwrap();
+    assert!(matches!(
+        rrf.fuse(empty()),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
+    ));
+    assert_eq!(
+        FusionStrategy::relative_score(0.5, 0.5)
+            .unwrap()
+            .fuse(empty()),
+        Ok(Vec::new())
+    );
+}

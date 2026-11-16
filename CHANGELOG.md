@@ -299,7 +299,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the TS SDK's `branchWeights`, Python's `from_name(..., weights=...)` —
   which it used to ignore without a word: one weight per branch, summing to
   1.0, in place of the dense and sparse weights
-  (`FusionStrategy::WeightedRelativeScore`).
+  (`FusionStrategy::WeightedRelativeScore`). The browser's
+  `multi_query_search` also fused raw distances as similarities: under
+  Euclidean or Hamming, `average`, `maximum`, `weighted` and `rsf` ranked the
+  farthest point first. It now fuses them as core does, lower-is-better
+  (`fuse_with_directions`). A strategy's weights are checked against the
+  branch count even when every branch comes back empty.
 - **One reading of a dotted field path** (core, WASM, 2026-11-16). Ten
   copies of the `meta.lang` walk (WHERE, MATCH WHERE and RETURN, GROUP BY
   and DISTINCT, projection, window functions, set operations, scalar

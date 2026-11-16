@@ -30,10 +30,15 @@ use velesdb_core::{FusionParams, FusionStrategy};
 ///   the `"weighted"` strategy. When `None`, the canonical core defaults
 ///   ([`velesdb_core::FusionStrategy::weighted_default`]) are used. Ignored
 ///   for every other strategy.
+/// * `branch_weights` - One weight per branch, read by `"weighted_rrf"` and
+///   `"relative_score"` / `"rsf"`.
+/// * `metric` - The metric every branch's scores are in: a distance is fused
+///   as lower-is-better, as core's `multi_query_search` fuses it
+///   ([`FusionStrategy::fuse_with_directions`]).
 ///
 /// # Returns
 ///
-/// Fused results sorted by combined score (descending).
+/// Fused results, best first.
 /// # Errors
 ///
 /// Returns core's error if `strategy` is not one of the names
@@ -47,6 +52,7 @@ pub fn fuse_results(
     rrf_k: u32,
     weights: Option<(f32, f32, f32)>,
     branch_weights: Option<&[f32]>,
+    metric: velesdb_core::DistanceMetric,
 ) -> Result<Vec<(u64, f32)>, String> {
     let (avg_weight, max_weight, hit_weight) = match weights {
         Some((avg, max, hit)) => (Some(avg), Some(max), Some(hit)),
@@ -59,16 +65,9 @@ pub fn fuse_results(
         .with_hit_weight(hit_weight);
     let core_strategy = FusionStrategy::from_name_with_weights(strategy, params, branch_weights)
         .map_err(|e| e.to_string())?;
-    fuse_with_core(all_results, &core_strategy)
-}
-
-/// Delegates to the canonical core fusion and adapts its error to a `String`.
-fn fuse_with_core(
-    all_results: &[Vec<(u64, f32)>],
-    strategy: &FusionStrategy,
-) -> Result<Vec<(u64, f32)>, String> {
-    strategy
-        .fuse(all_results.to_vec())
+    let directions = vec![metric.score_direction(); all_results.len()];
+    core_strategy
+        .fuse_with_directions(all_results.to_vec(), &directions)
         .map_err(|e| e.to_string())
 }
 
