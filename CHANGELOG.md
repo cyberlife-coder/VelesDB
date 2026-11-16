@@ -319,6 +319,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **VelesQL `NOW()` and `INTERVAL` run in the browser** (core, WASM,
+  2026-11-16). Every temporal expression read `std::time::SystemTime::now`,
+  which panics on `wasm32-unknown-unknown`: a WASM query naming `NOW()` — or
+  an `INTERVAL` alone, since the clock was read before the expression was
+  inspected — trapped the module (`RuntimeError: unreachable`). `NOW()` now
+  reads one clock, `velesql::clock`, which takes the page's time
+  (`Date.now()`, through `web-time`) on wasm32 and the system clock
+  elsewhere, and only `NOW()` reads it. Pinned by
+  `crates/velesdb-wasm/tests/velesql_temporal_web.rs`, run under Node by the
+  wasm-bindgen CI step.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
