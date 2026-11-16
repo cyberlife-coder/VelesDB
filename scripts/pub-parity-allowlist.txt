@@ -11,3 +11,7 @@ crates/velesdb-core/src/collection/search/query/match_exec/mod.rs fn parse_prope
 # published cdylib; nothing in the crate or tests called them.
 crates/velesdb-python/src/graph.rs fn dict_to_node
 crates/velesdb-python/src/graph.rs fn node_to_dict
+# Duplicate dotted-path reader removed: `filter` is a private module of the
+# cdylib, so it was unreachable from the published package. Every caller now
+# reads paths through velesdb-core's velesql::json_path::payload_path.
+crates/velesdb-wasm/src/filter.rs fn get_nested_field

@@ -287,9 +287,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and DISTINCT, projection, window functions, set operations, scalar
   subqueries, and two in the browser) are now one, `velesql::json_path::payload_path`,
   with `velesql::json_path::column_value` for a row's `id`-or-path value.
-  The MATCH copy refused a path deeper than 10 segments, so a `RETURN` or
-  `WHERE` on such a property read nothing where every other clause read
-  the value; it now reads it.
+  The MATCH RETURN copy refused a path deeper than 10 segments: a REST
+  `/match` clause whose RETURN named such a path (VelesQL's `RETURN` takes
+  one segment) came back without the value, while `WHERE` on the same path
+  matched the node. It now reads it.
 
 - **`DELETE` takes any metadata `WHERE`** (core, 2026-11-16). Core refused
   every `DELETE` whose `WHERE` was not `id = N` or `id IN (...)`, though the
