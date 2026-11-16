@@ -220,9 +220,62 @@ fn test_sort_results_handles_nan() {
     let mut results = vec![(1, f32::NAN), (2, 0.5), (3, 0.8)];
     // Should not panic with NaN values
     DistanceMetric::Cosine.sort_results(&mut results);
-    assert!(results[0].1.is_nan()); // positive NaN is the max under total_cmp (descending)
-    assert_eq!(results[1].0, 3); // 0.8
-    assert_eq!(results[2].0, 2); // 0.5
+    let order: Vec<u64> = results.iter().map(|r| r.0).collect();
+    assert_eq!(order, [3, 2, 1], "NaN ranks last, after 0.8 and 0.5");
+}
+
+/// A NaN score ranks last whatever its sign bit, in both metric directions.
+///
+/// Bare `total_cmp` put a positive NaN first in a descending sort and a
+/// negative NaN first in an ascending one, and the sign a runtime NaN gets is
+/// architecture-defined (negative on `x86_64`, positive on `aarch64`).
+#[test]
+fn test_sort_results_ranks_nan_last_whatever_its_sign() {
+    let negative_nan = -f32::NAN;
+    assert!(f32::NAN.is_sign_positive() && negative_nan.is_sign_negative());
+    for metric in [DistanceMetric::Cosine, DistanceMetric::Euclidean] {
+        for nan in [f32::NAN, negative_nan] {
+            let mut results = vec![
+                (1_u64, nan),
+                (2, 0.5),
+                (3, f32::INFINITY),
+                (4, f32::NEG_INFINITY),
+            ];
+            metric.sort_results(&mut results);
+            let order: Vec<u64> = results.iter().map(|r| r.0).collect();
+            let expected = if metric.higher_is_better() {
+                [3, 2, 4, 1]
+            } else {
+                [4, 2, 3, 1]
+            };
+            assert_eq!(
+                order,
+                expected,
+                "{metric:?}, NaN sign negative: {}",
+                nan.is_sign_negative()
+            );
+        }
+    }
+}
+
+#[test]
+fn test_rank_scores_is_total_on_nan_pairs() {
+    use crate::distance::rank_scores;
+    use std::cmp::Ordering;
+    for higher_is_better in [true, false] {
+        assert_eq!(
+            rank_scores(f32::NAN, -f32::NAN, higher_is_better),
+            Ordering::Equal
+        );
+        assert_eq!(
+            rank_scores(f32::NAN, 1.0, higher_is_better),
+            Ordering::Greater
+        );
+        assert_eq!(
+            rank_scores(1.0, -f32::NAN, higher_is_better),
+            Ordering::Less
+        );
+    }
 }
 
 #[test]

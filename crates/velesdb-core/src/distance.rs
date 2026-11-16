@@ -273,14 +273,11 @@ impl DistanceMetric {
     /// DistanceMetric::Cosine.sort_results(&mut results);
     /// assert_eq!(results[0].0, 1); // Highest similarity first
     /// ```
+    ///
+    /// A NaN score ranks last whatever its sign (see [`rank_scores`]).
     pub fn sort_results<Id>(&self, results: &mut [(Id, f32)]) {
-        if self.higher_is_better() {
-            // Similarity metrics: descending order (higher = better)
-            results.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
-        } else {
-            // Distance metrics: ascending order (lower = better)
-            results.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
-        }
+        let higher_is_better = self.higher_is_better();
+        results.sort_unstable_by(|a, b| rank_scores(a.1, b.1, higher_is_better));
     }
 
     /// Sorts scored results by the distance metric semantics.
@@ -288,11 +285,8 @@ impl DistanceMetric {
     /// Same as [`sort_results`](Self::sort_results) but operates on
     /// [`ScoredResult`](crate::scored_result::ScoredResult) slices.
     pub fn sort_scored_results(&self, results: &mut [crate::scored_result::ScoredResult]) {
-        if self.higher_is_better() {
-            results.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-        } else {
-            results.sort_unstable_by(|a, b| a.score.total_cmp(&b.score));
-        }
+        let higher_is_better = self.higher_is_better();
+        results.sort_unstable_by(|a, b| rank_scores(a.score, b.score, higher_is_better));
     }
 
     /// Top-k twin of [`Self::sort_scored_results`]: O(n + k log k) partial
@@ -308,11 +302,34 @@ impl DistanceMetric {
         results: &mut Vec<crate::scored_result::ScoredResult>,
         k: usize,
     ) {
-        if self.higher_is_better() {
-            crate::index::top_k_partial_sort(results, k, |a, b| b.score.total_cmp(&a.score));
-        } else {
-            crate::index::top_k_partial_sort(results, k, |a, b| a.score.total_cmp(&b.score));
-        }
+        let higher_is_better = self.higher_is_better();
+        crate::index::top_k_partial_sort(results, k, |a, b| {
+            rank_scores(a.score, b.score, higher_is_better)
+        });
+    }
+}
+
+/// Orders two metric scores best first, with NaN last.
+///
+/// `higher_is_better` is [`DistanceMetric::higher_is_better`]: descending for
+/// similarities, ascending for distances. A NaN (a degenerate vector, or an
+/// overflow such as `inf - inf` in a dot product) is never a match, so it
+/// ranks after every number in both directions. Bare [`f32::total_cmp`]
+/// would place it by its sign bit instead, and that sign is whatever the
+/// hardware produced: a runtime `0.0 / 0.0` is a negative NaN on `x86_64`, a
+/// positive one on `aarch64`, so the same query ranked a NaN first on one
+/// architecture and last on the other.
+///
+/// Public so `velesdb-wasm` ranks with the same comparator as core instead of
+/// a copy. Fusion orders NaN differently on purpose, see
+/// [`crate::fusion::sort_fused_results`].
+#[must_use]
+pub fn rank_scores(a: f32, b: f32, higher_is_better: bool) -> std::cmp::Ordering {
+    match (a.is_nan(), b.is_nan()) {
+        (false, false) if higher_is_better => b.total_cmp(&a),
+        (false, false) => a.total_cmp(&b),
+        // `false < true`: the NaN side compares greater, i.e. later.
+        (a_nan, b_nan) => a_nan.cmp(&b_nan),
     }
 }
 

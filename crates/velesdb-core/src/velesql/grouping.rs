@@ -10,6 +10,8 @@ use std::hash::Hasher;
 
 use rustc_hash::FxHasher;
 
+use crate::distance::rank_scores;
+
 use super::aggregator::{AggregateResult, Aggregator};
 use super::ast::{
     AggregateFunction, AggregateType, HavingClause, SelectColumns, SelectStatement, WithClause,
@@ -476,16 +478,5 @@ fn select_aggregations(columns: &SelectColumns) -> &[AggregateFunction] {
             aggregations
         }
         _ => &[],
-    }
-}
-
-/// Orders scores most similar first, NaN last.
-fn rank_scores(a: f32, b: f32, higher_is_better: bool) -> std::cmp::Ordering {
-    match (a.is_nan(), b.is_nan()) {
-        (true, true) => std::cmp::Ordering::Equal,
-        (true, false) => std::cmp::Ordering::Greater,
-        (false, true) => std::cmp::Ordering::Less,
-        (false, false) if higher_is_better => b.total_cmp(&a),
-        (false, false) => a.total_cmp(&b),
     }
 }
