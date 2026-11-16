@@ -297,8 +297,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its id-lookup and index shortcuts for INNER and LEFT joins, and reads the
   joined collection's points, cached while it is unchanged, for every other
   join; the column-store copy it built per joined collection, which also
-  dropped any field whose type varied across points, is gone. Locked by
-  `join_cases` J011–J015 (D014).
+  dropped any field whose type varied across points, is gone. A query with a
+  RIGHT or FULL join reads every base row and holds its whole WHERE on the
+  joined rows, so a joined point is unmatched only when no base row matches
+  it, whatever the LIMIT or the WHERE; a join after it never takes the id
+  lookup, whose rows for unmatched points carry the joined point's id. A
+  qualified join key reads its own side only, and nested keys match as
+  WHERE `=` compares JSON (`[-0.0]` is `[0.0]`). Locked by `join_cases`
+  J011–J018 (D014).
 
 - **One reading of a dotted field path** (core, WASM, 2026-11-16). Ten
   copies of the `meta.lang` walk (WHERE, MATCH WHERE and RETURN, GROUP BY

@@ -178,30 +178,33 @@ impl Database {
     /// every join type, through [`crate::velesql::hash_join`]. An INNER or
     /// LEFT join on `id` or on an indexed column, with nothing pushed to its
     /// side, takes the lookup or index shortcut instead, which answers it
-    /// without reading the whole side; RIGHT and FULL need every point of
-    /// the side, so they never do. `prior_aliases` names the sides `results`
-    /// already carry, the FROM side first.
+    /// without reading the whole side. RIGHT and FULL need every point of the
+    /// side, so they never do; nor does a join after one, whose rows for
+    /// unmatched points carry no base id, nor an index join whose base keys
+    /// include an array or object, which the index does not key.
     pub(super) fn execute_single_join(
         &self,
         results: Vec<SearchResult>,
         join: &crate::velesql::JoinClause,
-        pushed: &[crate::velesql::Condition],
-        row_budget: usize,
-        prior_aliases: &[&str],
+        step: &super::query_engine_join::JoinStep<'_>,
     ) -> Result<Vec<SearchResult>> {
         use crate::velesql::JoinType;
         let join_collection = self.resolve_collection(&join.table)?;
-        let shortcut =
-            pushed.is_empty() && matches!(join.join_type, JoinType::Inner | JoinType::Left);
-        if shortcut && Self::is_lookup_join_eligible(join, prior_aliases) {
+        let shortcut = step.pushed.is_empty()
+            && !step.after_outer_join
+            && matches!(join.join_type, JoinType::Inner | JoinType::Left);
+        if shortcut && Self::is_lookup_join_eligible(join, step.prior_aliases) {
             return Ok(Self::execute_lookup_join(results, join, &join_collection));
         }
-        if shortcut && Self::indexed_join_eligible(join, &join_collection) {
+        if shortcut
+            && Self::indexed_join_eligible(join, &join_collection)
+            && Self::base_keys_are_scalar(&results, join)
+        {
             return Ok(Self::execute_indexed_join(
                 results,
                 join,
                 &join_collection,
-                row_budget,
+                step.row_budget,
             ));
         }
         let keys = crate::velesql::JoinKeys::of(join).ok_or_else(|| {
@@ -210,15 +213,28 @@ impl Database {
                 join.table
             ))
         })?;
-        let side = self.join_side_points(&join.table, &join_collection, pushed);
+        let side = self.join_side_points(&join.table, &join_collection, step.pushed);
         Ok(crate::velesql::hash_join(
             results,
             &side,
             join,
             &keys,
-            prior_aliases,
-            row_budget,
+            step.prior_aliases,
+            step.row_budget,
         ))
+    }
+
+    /// Whether every row's base value for the indexed join is a scalar (or
+    /// absent): the secondary index keys strings, numbers and booleans only.
+    fn base_keys_are_scalar(results: &[SearchResult], join: &crate::velesql::JoinClause) -> bool {
+        let Some(condition) = crate::collection::search::query::join::resolve_join_condition(join)
+        else {
+            return false;
+        };
+        results.iter().all(|row| {
+            Self::left_join_value(row, &condition.right.column)
+                .is_none_or(|value| !value.is_array() && !value.is_object())
+        })
     }
 
     /// Answers an Inner/Left JOIN from a secondary index on the join-side

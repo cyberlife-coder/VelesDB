@@ -408,11 +408,11 @@ scalar-expression ones below, which use the same single-collection dataset):
 - `cases` X011–X014: WHERE-expression evaluation (`BETWEEN`, parenthesized
   `AND`/`OR`, `NOT`, `IN`) — safe for CLI's strict-order comparison, so these
   run on all three executors.
-- `join_cases` J001–J015: `JOIN ... ON` (both condition-side orders on both
+- `join_cases` J001–J018: `JOIN ... ON` (both condition-side orders on both
   engines — J005 locks the joined-table-first order, issue #1555) and
   `JOIN ... USING (col)`; J006–J010 window, order and filter the joined rows;
-  J011–J015 join on a column no index covers and run RIGHT and FULL joins,
-  `id = id` included (D014).
+  J011–J018 join on a column no index covers and run RIGHT and FULL joins,
+  `id = id`, a LIMIT, a base WHERE and a later join included (D014).
 - `aggregate_cases` G001–G005: `GROUP BY` / `HAVING` / `COUNT` / `SUM` /
   `LIMIT`, checked via `Database::execute_aggregate` on core (not
   `execute_query`, which only groups when combined with vector `NEAR`
@@ -537,7 +537,7 @@ silently relied upon:
   `velesql::hash_join`, on any column, indexed or not, for INNER, LEFT, RIGHT
   and FULL joins. Core refused a non-primary-key column no index covered,
   and RIGHT/FULL on anything but the primary key; WASM refused RIGHT and
-  FULL. Locked by `join_cases` J011–J015.
+  FULL. Locked by `join_cases` J011–J018.
 
 ### Large production files vs the NLOC/complexity gate (audit F-5.13)
 

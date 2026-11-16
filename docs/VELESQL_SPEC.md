@@ -357,7 +357,9 @@ earlier side's alias with a `null` id, so `WHERE o.id IS NULL` finds it.
 As in SQL, WHERE filters the joined rows, then DISTINCT, ORDER BY, OFFSET and
 LIMIT (10 by default) apply to them, and an aggregate groups them. Only a
 predicate on the base collection alone filters the base rows before the
-join; every predicate that reads a join side — an OR across two sides, a
+join, and only when no join of the query is RIGHT or FULL (there it would
+hide the base row a joined point matches, so the whole WHERE holds on the
+joined rows); every predicate that reads a join side — an OR across two sides, a
 `NOT`, a predicate on a LEFT join's outer side — holds or fails on the joined
 row. A predicate on one INNER join side is also pushed below the join, to
 that side only, as an optimization. So `LEFT JOIN c ... WHERE c.id IS NULL`

@@ -220,15 +220,18 @@ fn side_index(side: &[Point], column: &str) -> HashMap<String, Vec<usize>> {
     index
 }
 
-/// A row's base-side join key: `alias.column` under that side's alias when
-/// the row carries it, else the row's own column (`id` is its point id).
+/// A row's base-side join key: `alias.column` read under that side when the
+/// row carries the side (absent there, no key: another side's field of that
+/// name never stands in), else the row's own column (`id` is its point id).
 fn base_key(row: &SearchResult, column: &ColumnRef) -> Option<String> {
     let payload = row.point.payload.as_ref();
-    let scoped = column.table.as_deref().and_then(|table| {
-        payload.and_then(|p| payload_path(p, &format!("{table}.{}", column.column)))
-    });
-    if let Some(value) = scoped {
-        return join_key(value);
+    let side = column
+        .table
+        .as_deref()
+        .and_then(|table| payload.and_then(|p| p.get(table)))
+        .filter(|side| side.is_object());
+    if let Some(side) = side {
+        return payload_path(side, &column.column).and_then(join_key);
     }
     if column.column == "id" {
         return join_key(&Value::from(row.point.id));
@@ -241,7 +244,24 @@ fn base_key(row: &SearchResult, column: &ColumnRef) -> Option<String> {
 /// The hash key of a join value: one key for values a WHERE `=` finds
 /// equal; none for `NULL`, which matches nothing.
 fn join_key(value: &Value) -> Option<String> {
-    (!value.is_null()).then(|| normalise(Cow::Borrowed(value)).to_string())
+    (!value.is_null()).then(|| canonical(normalise(Cow::Borrowed(value))).to_string())
+}
+
+/// `value` spelled one way for every value WHERE `=` finds equal to it. The
+/// top level is already [`normalise`]d (one number for `1` and `1.0`);
+/// nested inside an array or object, as WHERE compares JSON there, `-0.0`
+/// is `0.0`, object keys are in name order, and `1` and `1.0` stay apart.
+fn canonical(value: Value) -> Value {
+    match value {
+        Value::Number(n) if n.as_f64() == Some(0.0) && n.is_f64() => Value::from(0.0),
+        Value::Array(items) => Value::Array(items.into_iter().map(canonical).collect()),
+        Value::Object(map) => {
+            let sorted: std::collections::BTreeMap<String, Value> =
+                map.into_iter().map(|(k, v)| (k, canonical(v))).collect();
+            Value::Object(sorted.into_iter().collect())
+        }
+        other => other,
+    }
 }
 
 /// Every column a joined point has, and `id`, each `null`, in name order.

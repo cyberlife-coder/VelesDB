@@ -168,3 +168,48 @@ fn a_multi_column_using_has_no_join_keys() {
     let join = join_of("SELECT * FROM o JOIN c USING (a, b)");
     assert_eq!(JoinKeys::of(&join), None);
 }
+
+/// A qualified key reads its own side only: absent there, it matches
+/// nothing, though another side's field of that name sits flat on the row.
+#[test]
+fn a_qualified_key_never_reads_another_sides_field() {
+    let mut row = order(1, json!({}));
+    // An earlier join put `x = 7` flat on the row, under `b`.
+    row.point.payload = Some(merge_side(
+        row.point.payload.take(),
+        "b",
+        json!({"x": 7}).as_object().expect("test: object"),
+        Some(5),
+    ));
+    let side = [customer(10, json!({"x": 7}))];
+    assert_eq!(
+        pairs(&run(
+            "SELECT * FROM o JOIN c ON o.x = c.x",
+            vec![row],
+            &side
+        )),
+        []
+    );
+}
+
+/// Arrays and objects match as a WHERE `=` compares them: `-0.0` and `0.0`
+/// nested inside are equal, key order does not matter, `1` and `1.0`
+/// nested inside stay apart.
+#[test]
+fn nested_keys_match_as_where_equality_does() {
+    let rows = vec![
+        order(1, json!({"v": [-0.0]})),
+        order(2, json!({"v": {"a": 1, "b": 2}})),
+        order(3, json!({"v": [1]})),
+    ];
+    let side = [
+        customer(10, json!({"v": [0.0]})),
+        customer(11, json!({"v": {"b": 2, "a": 1}})),
+        customer(12, json!({"v": [1.0]})),
+    ];
+    let sql = "SELECT * FROM o JOIN c ON o.v = c.v";
+    assert_eq!(
+        pairs(&run(sql, rows, &side)),
+        [(1, Some(10)), (2, Some(11))]
+    );
+}

@@ -245,3 +245,44 @@ fn unindexed_non_pk_join_column_runs_the_hash_join() {
         .collect();
     assert_eq!(pairs, [(10, Some(1)), (11, Some(1))]);
 }
+
+/// An indexed join column whose base value is an array runs the hash join:
+/// the secondary index keys scalars only, so its shortcut found no match
+/// for an array that the joined point holds as is.
+#[test]
+fn an_array_join_key_matches_though_the_column_is_indexed() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_indexed_join_fixtures(&db);
+    db.resolve_collection("products")
+        .unwrap()
+        .upsert([Point::new(
+            3,
+            vec![0.0, 0.0, 1.0, 0.0],
+            Some(serde_json::json!({"sku": ["a", "b"]})),
+        )])
+        .unwrap();
+    db.resolve_collection("inventory")
+        .unwrap()
+        .upsert([Point::new(
+            13,
+            vec![0.0; 4],
+            Some(serde_json::json!({"sku": ["a", "b"], "wh": "metz"})),
+        )])
+        .unwrap();
+
+    let rows = run_sql(
+        &db,
+        "SELECT * FROM products JOIN inventory ON products.sku = inventory.sku LIMIT 10",
+    )
+    .unwrap();
+    let mut pairs: Vec<(u64, Option<u64>)> = rows
+        .iter()
+        .map(|r| {
+            let payload = r.point.payload.as_ref().unwrap();
+            (r.point.id, payload["inventory"]["id"].as_u64())
+        })
+        .collect();
+    pairs.sort_unstable();
+    assert_eq!(pairs, [(1, Some(10)), (1, Some(11)), (3, Some(13))]);
+}
