@@ -40,10 +40,25 @@ use velesdb_core::velesql::{
 /// sorts most similar first under `DESC` whatever the metric, as in core
 /// (`SelectOrderBy::directed`).
 /// What `ORDER BY similarity(field, $v)` scores rows against: the query's
-/// parameters and the collection the rows are points of.
+/// parameters, the metric, and where a row's own vector is read.
 pub(crate) struct OrderVectors<'a> {
     pub(crate) params: &'a Params,
-    pub(crate) store: &'a StoreState,
+    pub(crate) metric: DistanceMetric,
+    /// The collection the rows are points of, its vector read by row id; or
+    /// `None` when each row carries its own (`point.vector`), as a compound's
+    /// rows from several collections do (ids are collection-local).
+    pub(crate) store: Option<&'a StoreState>,
+}
+
+impl<'a> OrderVectors<'a> {
+    /// The rows of one collection, `store`.
+    pub(crate) fn of(params: &'a Params, store: &'a StoreState) -> Self {
+        Self {
+            params,
+            metric: store.metric,
+            store: Some(store),
+        }
+    }
 }
 
 /// What an ORDER BY reads besides the rows: the metric's direction, and the
@@ -111,7 +126,7 @@ fn similarity_keys(
                 Ok(Some(
                     rows.iter()
                         .map(|row| {
-                            field_similarity(row, &sim.field, &query, &own, vectors.store.metric)
+                            field_similarity(row, &sim.field, &query, &own, vectors.metric)
                                 .unwrap_or(worst)
                         })
                         .collect(),
@@ -122,27 +137,36 @@ fn similarity_keys(
         .collect()
 }
 
-/// Row ids to their row in a store, for reading a row's own vector.
+/// Where a row's own vector is read: its collection's store by id, or the
+/// row itself when the rows carry their vectors.
 struct OwnVectors<'a> {
-    store: &'a StoreState,
-    rows: std::collections::HashMap<u64, usize>,
+    store: Option<(&'a StoreState, std::collections::HashMap<u64, usize>)>,
 }
 
 impl<'a> OwnVectors<'a> {
-    fn new(store: &'a StoreState) -> Self {
-        let rows = store
-            .ids
-            .iter()
-            .enumerate()
-            .map(|(row, &id)| (id, row))
-            .collect();
-        Self { store, rows }
+    fn new(store: Option<&'a StoreState>) -> Self {
+        let store = store.map(|store| {
+            let rows = store
+                .ids
+                .iter()
+                .enumerate()
+                .map(|(row, &id)| (id, row))
+                .collect();
+            (store, rows)
+        });
+        Self { store }
     }
 
-    fn get(&self, id: u64) -> Option<&'a [f32]> {
-        let row = *self.rows.get(&id)?;
-        let dim = self.store.dimension;
-        (dim > 0).then(|| &self.store.data[row * dim..(row + 1) * dim])
+    fn get<'r>(&self, row: &'r SearchResult) -> Option<&'r [f32]>
+    where
+        'a: 'r,
+    {
+        let Some((store, rows)) = &self.store else {
+            return (!row.point.vector.is_empty()).then_some(row.point.vector.as_slice());
+        };
+        let at = *rows.get(&row.point.id)?;
+        let dim = store.dimension;
+        (dim > 0).then(|| &store.data[at * dim..(at + 1) * dim])
     }
 }
 
@@ -158,7 +182,7 @@ fn field_similarity(
 ) -> Option<f32> {
     let named;
     let vector: &[f32] = if field == velesdb_core::velesql::PRIMARY_VECTOR_FIELD {
-        own.get(row.point.id)?
+        own.get(row)?
     } else {
         named =
             velesdb_core::velesql::payload_vector(row.point.payload.as_ref()?, field).ok()??;

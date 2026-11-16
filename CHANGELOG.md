@@ -24,9 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in both engines (`velesql::scope_base` / `merge_side`):
   - each side reads flat and under its alias, with its `id`;
   - WHERE filters the joined rows, then DISTINCT, ORDER BY, OFFSET and LIMIT
-    (10 by default) apply to them, and GROUP BY / aggregates group them;
-  - only a predicate on an INNER join side is pushed below the join, and only
-    to that side.
+    (10 by default) apply to them, and GROUP BY / aggregates group them; the
+    base rows are filtered before the join only by the predicates on the base
+    collection, so `LEFT JOIN … WHERE c.name = 'x'` keeps the matching rows
+    and an OR across two join sides holds or fails on the joined row;
+  - a predicate on one INNER join side is also pushed below the join, to that
+    side only, as an optimization.
   A LEFT JOIN with a WHERE on its outer side now follows SQL: the unmatched
   rows fail the predicate. Put a filter meant for the join side alone on the
   base query's own columns, or test `IS NULL`.
@@ -43,13 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the `ORDER BY` / `LIMIT` / `OFFSET` after the last operand window the
     combined rows (no implicit `LIMIT`, as documented); an earlier operand
     keeps its own;
-  - rows are compared by projected values (`*` is the id and the payload);
-  - a duplicate keeps its first position and its better score;
+  - columns are positional, named by the first operand: `SELECT year FROM a
+    UNION ALL SELECT age FROM b` returns `b`'s ages under `year`;
+  - rows are compared by projected values (`*` is the id and the payload),
+    window outputs included;
+  - a duplicate keeps its first position and its better score, with that
+    score's breakdown (`vector_score`);
+  - a written `LIMIT` is held to the 100 000-row ceiling, as a SELECT's is;
   - without `ORDER BY`, rows rank by score in the metric's direction, ties in
     the order met.
   A query that relied on a first operand's `LIMIT` capping the union now caps
   that operand only: move the `LIMIT` after the last operand. WASM refuses a
-  JOIN or an aggregation inside an operand rather than combining their rows.
+  JOIN or an aggregation inside an operand rather than combining their rows;
+  its window `ORDER BY similarity(vector, $v)` reads each row's own vector,
+  from its own collection.
 
 - **BREAKING (behavior): inline pattern properties filter as WHERE `=` does**
   (core, WASM, 2026-11-15). `(n {k: v})` and `-[r {k: v}]->` had their own

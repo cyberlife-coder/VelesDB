@@ -220,7 +220,8 @@ const MAX_ARITHMETIC_DEPTH: u8 = 64;
 /// Evaluates an arithmetic expression against a score context (EPIC-042).
 ///
 /// Division by zero returns `0.0` (safe default for sorting).
-/// Recursion depth is capped at [`MAX_ARITHMETIC_DEPTH`] to prevent stack overflow.
+/// Recursion depth is capped (64 levels, the validator's AST depth) to prevent
+/// stack overflow.
 #[must_use]
 pub fn evaluate_arithmetic(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>) -> f32 {
     evaluate_arithmetic_inner(expr, ctx, 0)
@@ -246,18 +247,18 @@ fn evaluate_arithmetic_inner(expr: &ArithmeticExpr, ctx: &ScoreContext<'_>, dept
         ArithmeticExpr::BinaryOp { left, op, right } => {
             let l = evaluate_arithmetic_inner(left, ctx, depth + 1);
             let r = evaluate_arithmetic_inner(right, ctx, depth + 1);
-            match op {
-                ArithmeticOp::Add => l + r,
-                ArithmeticOp::Sub => l - r,
-                ArithmeticOp::Mul => l * r,
-                ArithmeticOp::Div => {
-                    if r.abs() > f32::EPSILON {
-                        l / r
-                    } else {
-                        0.0
-                    }
-                }
-            }
+            apply_op(*op, l, r)
         }
+    }
+}
+
+/// `l op r`; a division by zero is `0.0` (safe default for sorting).
+fn apply_op(op: ArithmeticOp, l: f32, r: f32) -> f32 {
+    match op {
+        ArithmeticOp::Add => l + r,
+        ArithmeticOp::Sub => l - r,
+        ArithmeticOp::Mul => l * r,
+        ArithmeticOp::Div if r.abs() > f32::EPSILON => l / r,
+        ArithmeticOp::Div => 0.0,
     }
 }

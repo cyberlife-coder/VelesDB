@@ -149,6 +149,12 @@ impl Database {
                     (None, None) => None,
                 }
             }
+            // Pushdown analysis classifies a group's inside, so a group is
+            // stripped through, not kept whole.
+            C::Group(inner) if !pushed.iter().any(|p| p == inner.as_ref()) => {
+                Self::strip_condition_recursive(inner, pushed).map(|kept| C::Group(Box::new(kept)))
+            }
+            C::Group(_) => None,
             _ => Some(condition.clone()),
         }
     }
@@ -195,7 +201,7 @@ impl Database {
             row_budget,
         )?;
         let alias = crate::velesql::side_alias(join.alias.as_deref(), &join.table);
-        Ok(crate::collection::search::query::join::joined_to_search_results(joined, alias))
+        Ok(crate::collection::search::query::join::joined_to_aliased_search_results(joined, alias))
     }
 
     /// Answers an Inner/Left JOIN from a secondary index on the join-side

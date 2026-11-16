@@ -81,6 +81,16 @@ impl Collection {
             .into_iter()
             .map(|group| group.row)
             .collect();
+        Self::shape_groups(stmt, groups)
+    }
+
+    /// The aggregate's result from its groups: without GROUP BY, the one
+    /// group's object (an empty object when no row came); with it, the groups
+    /// ordered and paged as [`Self::execute_grouped_aggregate`] pages them.
+    fn shape_groups(
+        stmt: &crate::velesql::SelectStatement,
+        groups: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
         if stmt.group_by.is_none() {
             return Ok(groups
                 .into_iter()

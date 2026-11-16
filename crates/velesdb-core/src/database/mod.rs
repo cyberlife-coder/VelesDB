@@ -37,6 +37,7 @@ mod persistence;
 mod query_engine;
 mod query_engine_agg;
 mod query_engine_dml;
+mod query_engine_join;
 mod query_join;
 mod read_authorization;
 mod stats;

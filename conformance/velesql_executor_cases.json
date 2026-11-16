@@ -288,6 +288,24 @@
       "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY orders.id ASC LIMIT 2 OFFSET 1",
       "expect_ids": [2, 3],
       "note": "OFFSET and LIMIT window the joined rows"
+    },
+    {
+      "id": "J008",
+      "query": "SELECT * FROM orders LEFT JOIN customers ON orders.customer_id = customers.id WHERE customers.name = 'Alice' ORDER BY orders.id ASC",
+      "expect_ids": [1, 3],
+      "note": "a LEFT JOIN WHERE on the joined side reads the joined row (core filtered the base rows by it before the join and returned nothing)"
+    },
+    {
+      "id": "J009",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id WHERE customers.name = 'Bob' OR orders.amount = 100 ORDER BY orders.id ASC",
+      "expect_ids": [1, 2],
+      "note": "an OR across the base and a join side is evaluated on the joined row"
+    },
+    {
+      "id": "J010",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id WHERE NOT (customers.name = 'Alice') ORDER BY orders.id ASC",
+      "expect_ids": [2],
+      "note": "a negated joined-side predicate is evaluated on the joined row"
     }
   ],
   "aggregate_cases": [

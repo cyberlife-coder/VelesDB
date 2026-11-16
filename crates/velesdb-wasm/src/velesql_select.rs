@@ -87,7 +87,25 @@ pub(crate) fn execute_operand(
     let rows = scan(db, &query.select, params)?;
     let store = db.get_shared_store(&query.select.from)?;
     let borrowed = store.borrow();
-    window_plain(&query.select, rows, &order_context(&borrowed, params))
+    let mut rows = window_plain(&query.select, rows, &order_context(&borrowed, params))?;
+    carry_own_vectors(&mut rows, &borrowed);
+    Ok(rows)
+}
+
+/// Gives each row its own vector, as core's search results carry theirs: a
+/// compound's rows come from several collections, whose ids are local, so the
+/// window's `similarity(vector, $v)` reads the vector on the row.
+fn carry_own_vectors(rows: &mut [SearchResult], store: &crate::store_state::StoreState) {
+    let dim = store.dimension;
+    if dim == 0 {
+        return;
+    }
+    let index = build_id_to_idx(store);
+    for row in rows {
+        if let Some(&at) = index.get(&row.point.id) {
+            row.point.vector = store.data[at * dim..(at + 1) * dim].to_vec();
+        }
+    }
 }
 
 /// What the ORDER BY of rows from `store` reads: its metric's direction, and
@@ -98,7 +116,7 @@ fn order_context<'a>(
 ) -> velesql_orderby::OrderContext<'a> {
     velesql_orderby::OrderContext {
         higher_is_better: store.metric.higher_is_better(),
-        vectors: Some(velesql_orderby::OrderVectors { params, store }),
+        vectors: Some(velesql_orderby::OrderVectors::of(params, store)),
     }
 }
 

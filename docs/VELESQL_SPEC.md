@@ -342,11 +342,14 @@ payload carries each side twice:
 A LEFT JOIN row without a match carries the alias with a `null` id.
 
 As in SQL, WHERE filters the joined rows, then DISTINCT, ORDER BY, OFFSET and
-LIMIT (10 by default) apply to them, and an aggregate groups them. A WHERE
-predicate on one INNER join side is pushed below the join as an
-optimization; one on the outer side of a LEFT join is not, since it must see
-the null-filled row: `LEFT JOIN c ... WHERE c.id IS NULL` finds the rows
-without a match, and `WHERE c.price > 10` drops them.
+LIMIT (10 by default) apply to them, and an aggregate groups them. Only a
+predicate on the base collection alone filters the base rows before the
+join; every predicate that reads a join side — an OR across two sides, a
+`NOT`, a predicate on a LEFT join's outer side — holds or fails on the joined
+row. A predicate on one INNER join side is also pushed below the join, to
+that side only, as an optimization. So `LEFT JOIN c ... WHERE c.id IS NULL`
+finds the rows without a match, `WHERE c.name = 'x'` keeps the rows whose
+match is named `x`, and `WHERE c.price > 10` drops the unmatched rows.
 
 ### ON Condition
 
@@ -409,7 +412,7 @@ LIMIT 20
 
 The query engine automatically applies two optimizations to cross-collection JOINs:
 
-**Filter Pushdown**: WHERE conditions that reference the joined table (using qualified column names like `inventory.price > 100`) are automatically pushed down and evaluated before loading points into the ColumnStore. This reduces memory usage and I/O for large joined collections.
+**Filter Pushdown**: WHERE conditions that reference only one INNER-joined table (using qualified column names like `inventory.price > 100`) are also pushed down and evaluated before loading points into the ColumnStore. This reduces memory usage and I/O for large joined collections; the condition is still evaluated on the joined row.
 
 ```sql
 -- inventory.stock > 0 is pushed down to filter inventory before JOIN
@@ -1957,14 +1960,20 @@ WASM):
   last operand apply to the combined rows. A compound has no implicit
   `LIMIT 10` (see the defaults table): without a `LIMIT`, every combined row
   up to the 100 000-row ceiling. An operand other than the last keeps its own
-  clauses, and without a `LIMIT` it is not capped.
+  clauses, and without a `LIMIT` it is not capped. A written `LIMIT` above the
+  ceiling is held to it.
+- **Columns.** Positional, named by the first operand: a later operand's
+  column `i` comes back under the first operand's column `i`, so
+  `SELECT year FROM a UNION ALL SELECT age FROM b` returns `b`'s ages under
+  `year`, and the window's `ORDER BY year` reads them.
 - **Rows.** Two rows are the same row when their projected values are: the
-  listed columns, compared by position, or the id and payload for `*`. So
+  listed columns (window outputs included), compared by position, or the id
+  and payload for `*`. So
   `SELECT id FROM a INTERSECT SELECT id FROM b` intersects ids, while
   `SELECT * FROM a INTERSECT SELECT * FROM b` keeps only points whose id and
   payload both agree. `UNION`, `INTERSECT` and `EXCEPT` return distinct rows;
   `UNION ALL` keeps every row. A row met twice keeps its first position and
-  its better score.
+  its better score, with that score's breakdown (`vector_score`, ...).
 - **Order.** The window's `ORDER BY` when there is one; otherwise the rows rank
   by score in the first operand's metric direction (most similar first,
   closest first under a distance), ties in the order they were met.

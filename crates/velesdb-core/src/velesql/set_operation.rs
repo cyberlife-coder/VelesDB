@@ -10,11 +10,17 @@
 //!   unwindowed. A compound has no implicit `LIMIT` (the exception
 //!   [`super::DEFAULT_SELECT_LIMIT`] documents): without one, every combined
 //!   row up to the engine's ceiling.
+//! - **Columns.** Positional, named by the first operand: a later operand's
+//!   listed column `i` lands under the first operand's column `i`, so the
+//!   first operand's projection and the window's `ORDER BY` read it.
 //! - **Identity.** Two rows are the same row when their projected values are:
 //!   the listed columns, compared by position, or the id and payload for `*`
-//!   ([`row_key`]). `UNION`, `INTERSECT` and `EXCEPT` return distinct rows;
-//!   `UNION ALL` keeps every row. A row met twice keeps its first position and
-//!   the better of its scores.
+//!   ([`row_key`]), window outputs included. `UNION`, `INTERSECT` and
+//!   `EXCEPT` return distinct rows; `UNION ALL` keeps every row. A row met
+//!   twice keeps its first position and the better of its scores, with that
+//!   score's breakdown (`vector_score`, ...).
+//! - **Ceiling.** Every operand and the window are held to the engine's
+//!   ceiling, a written `LIMIT` too.
 //! - **Order.** The window's `ORDER BY` when there is one; otherwise the rows
 //!   rank by score in the metric's direction (most similar first, closest
 //!   first under a distance), ties keeping the order they were met in.
@@ -76,10 +82,18 @@ pub fn operand_queries(query: &Query, ceiling: u64) -> Vec<Query> {
 }
 
 /// The identity of `result` as a row of a SELECT projecting `columns`: the
-/// projected values in order, or, for `*`, the id and the full payload.
+/// projected values in order, window outputs included, or, for `*`, the id
+/// and the full payload.
+///
+/// An operand's rows come out of the SELECT post-processing, so its window
+/// functions are already evaluated into the row — unlike a SELECT's own
+/// DISTINCT, which runs before them and so leaves them out of its key.
 #[must_use]
 pub fn row_key(result: &SearchResult, columns: &SelectColumns) -> String {
-    let (names, include_score) = key_columns(columns);
+    let (mut names, include_score) = key_columns(columns);
+    if !names.is_empty() {
+        names.extend(window_outputs(columns));
+    }
     let values = compute_distinct_key(result, &names, include_score);
     if names.is_empty() && !matches!(columns, SelectColumns::SimilarityScore(_)) {
         // `*` projects the id beside the payload: two points are one row
@@ -109,7 +123,12 @@ pub fn execute_compound<E>(
     let operators = query.compound.iter().flat_map(|c| c.operations.iter());
     let mut combined = keyed(run_operand(&operands[0])?, &operands[0].select);
     for ((operator, _), operand) in operators.zip(&operands[1..]) {
-        let right = keyed(run_operand(operand)?, &operand.select);
+        let mut right = keyed(run_operand(operand)?, &operand.select);
+        align_columns(
+            &mut right,
+            &operand.select.columns,
+            &operands[0].select.columns,
+        );
         combined = combine(combined, right, *operator, higher_is_better);
     }
     let mut rows: Vec<SearchResult> = combined.into_iter().map(|(_, row)| row).collect();
@@ -119,7 +138,7 @@ pub fn execute_compound<E>(
         None => rank_by_score(&mut rows, higher_is_better),
     }
     let offset = usize::try_from(window.offset).unwrap_or(usize::MAX);
-    let limit = usize::try_from(window.limit.unwrap_or(ceiling)).unwrap_or(usize::MAX);
+    let limit = usize::try_from(window.limit.unwrap_or(ceiling).min(ceiling)).unwrap_or(usize::MAX);
     Ok(rows.into_iter().skip(offset).take(limit).collect())
 }
 
@@ -133,19 +152,18 @@ fn combine(
     match operator {
         SetOperator::UnionAll => left.into_iter().chain(right).collect(),
         SetOperator::Intersect => {
-            let right = best_scores(&right, higher_is_better);
+            let right = best_rows(&right, higher_is_better);
             let kept = left
                 .into_iter()
                 .filter_map(|(key, mut row)| {
-                    let other = *right.get(key.as_str())?;
-                    row.score = better(row.score, other, higher_is_better);
+                    adopt_if_better(&mut row, right.get(key.as_str())?, higher_is_better);
                     Some((key, row))
                 })
                 .collect();
             distinct(kept, higher_is_better)
         }
         SetOperator::Except => {
-            let right = best_scores(&right, higher_is_better);
+            let right = best_rows(&right, higher_is_better);
             let kept = left
                 .into_iter()
                 .filter(|(key, _)| !right.contains_key(key.as_str()))
@@ -163,8 +181,7 @@ fn distinct(rows: Vec<KeyedRow>, higher_is_better: bool) -> Vec<KeyedRow> {
     let mut out: Vec<KeyedRow> = Vec::with_capacity(rows.len());
     for (key, row) in rows {
         if let Some(&at) = position.get(&key) {
-            let kept = &mut out[at].1;
-            kept.score = better(kept.score, row.score, higher_is_better);
+            adopt_if_better(&mut out[at].1, &row, higher_is_better);
         } else {
             position.insert(key.clone(), out.len());
             out.push((key, row));
@@ -173,25 +190,52 @@ fn distinct(rows: Vec<KeyedRow>, higher_is_better: bool) -> Vec<KeyedRow> {
     out
 }
 
-/// Each key's best score among `rows`.
-fn best_scores(rows: &[KeyedRow], higher_is_better: bool) -> HashMap<&str, f32> {
-    let mut best: HashMap<&str, f32> = HashMap::with_capacity(rows.len());
+/// Each key's best-scored row among `rows`.
+fn best_rows(rows: &[KeyedRow], higher_is_better: bool) -> HashMap<&str, &SearchResult> {
+    let mut best: HashMap<&str, &SearchResult> = HashMap::with_capacity(rows.len());
     for (key, row) in rows {
         best.entry(key.as_str())
-            .and_modify(|score| *score = better(*score, row.score, higher_is_better))
-            .or_insert(row.score);
+            .and_modify(|kept| {
+                if is_better(row.score, kept.score, higher_is_better) {
+                    *kept = row;
+                }
+            })
+            .or_insert(row);
     }
     best
 }
 
-/// The better of two scores in the metric's direction.
-fn better(a: f32, b: f32, higher_is_better: bool) -> f32 {
-    let b_is_better = if higher_is_better { b > a } else { b < a };
-    if b_is_better {
-        b
-    } else {
-        a
+/// `kept` takes `other`'s score, and its breakdown, when it is better: the
+/// row keeps its own position and projected values.
+fn adopt_if_better(kept: &mut SearchResult, other: &SearchResult, higher_is_better: bool) {
+    if is_better(other.score, kept.score, higher_is_better) {
+        kept.score = other.score;
+        kept.component_scores.clone_from(&other.component_scores);
     }
+}
+
+/// Whether score `a` beats `b` in the metric's direction.
+fn is_better(a: f32, b: f32, higher_is_better: bool) -> bool {
+    if higher_is_better {
+        a > b
+    } else {
+        a < b
+    }
+}
+
+/// The names a SELECT's window functions write their outputs under.
+fn window_outputs(columns: &SelectColumns) -> impl Iterator<Item = String> + '_ {
+    let functions = match columns {
+        SelectColumns::Mixed {
+            window_functions, ..
+        } => window_functions.as_slice(),
+        _ => &[],
+    };
+    functions.iter().map(|wf| {
+        wf.alias
+            .clone()
+            .unwrap_or_else(|| wf.function_type.default_alias().to_string())
+    })
 }
 
 /// Stable sort, best score first in the metric's direction.
@@ -204,6 +248,64 @@ fn rank_by_score(rows: &mut [SearchResult], higher_is_better: bool) {
             ascending
         }
     });
+}
+
+/// Writes each row's listed column `i` under the first operand's column `i`
+/// (a compound's columns are positional). Rows of a `*` operand, or under a
+/// first operand's `id`, which reads the point id, are left as they are.
+fn align_columns(rows: &mut [KeyedRow], columns: &SelectColumns, first: &SelectColumns) {
+    let (Some(own), Some(first)) = (listed_columns(columns), listed_columns(first)) else {
+        return;
+    };
+    let renames: Vec<(&str, &str)> = own
+        .iter()
+        .zip(first)
+        .map(|(own, first)| (own.name.as_str(), first.name.as_str()))
+        .filter(|(own, first)| own != first && *first != "id")
+        .collect();
+    if renames.is_empty() {
+        return;
+    }
+    for (_, row) in rows {
+        let values: Vec<(&str, serde_json::Value)> = renames
+            .iter()
+            .map(|(own, first)| (*first, column_value(row, own)))
+            .collect();
+        let mut payload = match row.point.payload.take() {
+            Some(serde_json::Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        for (first, value) in values {
+            payload.insert(first.to_string(), value);
+        }
+        row.point.payload = Some(serde_json::Value::Object(payload));
+    }
+}
+
+/// The value a projection reads for `column`: the point id for `id`, else the
+/// payload's field (by path), `null` when absent.
+fn column_value(row: &SearchResult, column: &str) -> serde_json::Value {
+    if column == "id" {
+        return serde_json::Value::from(row.point.id);
+    }
+    row.point
+        .payload
+        .as_ref()
+        .and_then(|p| super::grouping::payload_path(p, column))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// The columns a SELECT lists by name, if it lists any.
+fn listed_columns(columns: &SelectColumns) -> Option<&[super::Column]> {
+    match columns {
+        SelectColumns::Columns(cols) | SelectColumns::Mixed { columns: cols, .. }
+            if !cols.is_empty() =>
+        {
+            Some(cols)
+        }
+        _ => None,
+    }
 }
 
 /// Keys each row of an operand by its projection.

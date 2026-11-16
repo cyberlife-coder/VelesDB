@@ -96,3 +96,81 @@ fn an_operand_that_joins_is_refused() {
     .expect_err("test: refused");
     assert!(err.contains("UNION / INTERSECT / EXCEPT operand"), "{err}");
 }
+
+/// `ORDER BY similarity(vector, $q)` over a compound reads each row's own
+/// vector, from the collection it came from (ids are collection-local).
+#[test]
+fn the_windows_similarity_order_reads_each_rows_own_vector() {
+    let mut db = DatabaseInner::new();
+    for (name, id, v) in [
+        ("a", 1, "[0.0, 1.0]"),
+        ("b", 2, "[1.0, 0.0]"),
+        ("c", 1, "[1.0, 0.0]"),
+    ] {
+        db.create_collection(name, 2, "cosine")
+            .expect("test: create");
+        execute(
+            &mut db,
+            &format!("INSERT INTO {name} (id, vector, src) VALUES ({id}, $v, '{name}')"),
+            Some(&format!(r#"{{"v": {v}}}"#)),
+        )
+        .expect("test: seed");
+    }
+    let nearest = |db: &mut DatabaseInner, other: &str| {
+        let sql = format!(
+            "SELECT * FROM a UNION ALL SELECT * FROM {other} \
+             ORDER BY similarity(vector, $q) DESC LIMIT 1"
+        );
+        let result = execute(db, &sql, Some(r#"{"q": [1.0, 0.0]}"#))
+            .unwrap_or_else(|e| panic!("test: {sql}: {e}"));
+        let row = result.row(0).expect("test: row");
+        let data: serde_json::Value =
+            serde_json::from_str(&row.data_json()).expect("test: row json");
+        (
+            row.id(),
+            data["src"].as_str().expect("test: src").to_string(),
+        )
+    };
+    assert_eq!(
+        nearest(&mut db, "b"),
+        (2, "b".to_string()),
+        "b's id 2 is absent from a"
+    );
+    assert_eq!(
+        nearest(&mut db, "c"),
+        (1, "c".to_string()),
+        "c's point 1, not a's"
+    );
+}
+
+/// A compound's columns are positional and named by the first operand: the
+/// second operand's `age` comes back under `year`.
+#[test]
+fn a_later_operands_column_comes_back_under_the_first_operands_name() {
+    let mut db = DatabaseInner::new();
+    for (name, column, value) in [("a", "year", 2020), ("b", "age", 30)] {
+        db.create_collection(name, 2, "cosine")
+            .expect("test: create");
+        execute(
+            &mut db,
+            &format!("INSERT INTO {name} (id, vector, {column}) VALUES (1, $v, {value})"),
+            Some(r#"{"v": [1.0, 0.0]}"#),
+        )
+        .expect("test: seed");
+    }
+    let result = execute(
+        &mut db,
+        "SELECT year FROM a UNION ALL SELECT age FROM b ORDER BY year ASC",
+        None,
+    )
+    .expect("test: compound");
+    let years: Vec<serde_json::Value> = (0..result.row_count() as usize)
+        .map(|i| {
+            let data: serde_json::Value =
+                serde_json::from_str(&result.row(i).expect("test: row").data_json())
+                    .expect("test: json");
+            data["year"].clone()
+        })
+        .collect();
+    assert_eq!(years, [serde_json::json!(30), serde_json::json!(2020)]);
+}

@@ -32,6 +32,21 @@ impl PushdownAnalysis {
         !self.column_store_filters.is_empty()
     }
 
+    /// The predicates a JOIN's joined rows must pass: every one that reads a
+    /// join side — pushed below an INNER join too, as an optimization, but
+    /// only a predicate on that one side can be, so each is still evaluated
+    /// on the joined row — and every cross-source one. The base query keeps
+    /// only the predicates on the base collection: run on a base row before
+    /// the join, a joined-side column reads nothing.
+    #[must_use]
+    pub fn joined_row_filters(&self) -> Vec<Condition> {
+        self.column_store_filters
+            .iter()
+            .chain(&self.post_join_filters)
+            .cloned()
+            .collect()
+    }
+
     /// Returns the total number of conditions analyzed.
     #[must_use]
     pub fn total_conditions(&self) -> usize {

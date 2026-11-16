@@ -165,3 +165,89 @@ fn the_windows_order_by_sorts_the_combined_rows() {
     );
     assert_eq!(ids(&rows), vec![1, 2]);
 }
+
+/// An operand's rows come out of the SELECT post-processing, its window
+/// functions evaluated: their outputs are projected values, part of the
+/// row's identity.
+#[test]
+fn window_outputs_are_part_of_a_rows_identity() {
+    let sql = "SELECT category, ROW_NUMBER() OVER (ORDER BY id ASC) AS rn FROM a \
+               UNION SELECT category, ROW_NUMBER() OVER (ORDER BY id ASC) AS rn FROM a";
+    let numbered = || {
+        vec![
+            row(1, 1.0, json!({"category": "tech", "rn": 1})),
+            row(2, 1.0, json!({"category": "tech", "rn": 2})),
+        ]
+    };
+    let rows = run(sql, vec![numbered(), numbered()], true);
+    assert_eq!(ids(&rows), [1, 2], "(tech, 1) and (tech, 2) are two rows");
+}
+
+/// A duplicate whose score wins brings its score breakdown along, so
+/// `vector_score` reads the score the row now carries.
+#[test]
+fn the_better_duplicate_brings_its_component_scores() {
+    let scored = |id: u64, score: f32| {
+        SearchResult::with_component_scores(
+            Point::metadata_only(id, json!({})),
+            score,
+            smallvec::smallvec![("vector_score", score)],
+        )
+    };
+    for operator in ["UNION", "INTERSECT"] {
+        let rows = run(
+            &format!("SELECT * FROM a {operator} SELECT * FROM a"),
+            vec![vec![scored(1, 0.2)], vec![scored(1, 0.9)]],
+            true,
+        );
+        let kept = &rows[0];
+        assert!(
+            (kept.score - 0.9).abs() < f32::EPSILON,
+            "{operator}: {}",
+            kept.score
+        );
+        assert_eq!(
+            kept.component_scores.as_deref(),
+            Some(&[("vector_score", 0.9)][..]),
+            "{operator}"
+        );
+    }
+}
+
+/// An explicit LIMIT above the engine's ceiling is held to it, as a SELECT's
+/// is.
+#[test]
+fn an_explicit_limit_is_held_to_the_ceiling() {
+    let query = parse("SELECT * FROM a UNION ALL SELECT * FROM b LIMIT 200000");
+    let rows: Vec<SearchResult> = (1..=6).map(|id| row(id, 1.0, json!({}))).collect();
+    let mut operands = vec![rows.clone(), rows].into_iter();
+    let combined = execute_compound::<()>(
+        &query,
+        true,
+        4,
+        |_| Ok(operands.next().expect("test: operand")),
+        |_, _| Ok(()),
+    )
+    .expect("test: compound");
+    assert_eq!(combined.len(), 4);
+}
+
+/// A compound's columns are positional, named by the first operand: a later
+/// operand's value lands under the first operand's column, so the first
+/// operand's projection and ORDER BY read it.
+#[test]
+fn a_later_operands_values_take_the_first_operands_column_names() {
+    let rows = run(
+        "SELECT year FROM a UNION ALL SELECT age FROM b",
+        vec![
+            vec![row(1, 1.0, json!({"year": 2020}))],
+            vec![row(2, 1.0, json!({"age": 30, "year": 1999}))],
+        ],
+        true,
+    );
+    let years: Vec<&serde_json::Value> = rows
+        .iter()
+        .map(|r| &r.point.payload.as_ref().expect("test: payload")["year"])
+        .collect();
+    assert_eq!(years, [&json!(2020), &json!(30)]);
+}
