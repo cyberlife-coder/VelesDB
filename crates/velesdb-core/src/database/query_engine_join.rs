@@ -39,13 +39,20 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         let base_collection = self.resolve_collection(&query.select.from)?;
         let joins = query.select.joins.clone();
-        let analysis = Self::prepare_join_pushdown(&mut query, params)?;
-        let row_budget = Self::join_row_budget(budget_select, &analysis);
-        let mut fetch = BaseFetch::new(row_budget);
+        let (analysis, post_join_filters) = Self::prepare_join_pushdown(&mut query, params)?;
+        let row_budget = Self::join_row_budget(budget_select, &post_join_filters);
+        // A RIGHT or FULL join tells an unmatched joined point only against
+        // every base row, so it reads them all at once.
+        let mut fetch = BaseFetch::new(if keeps_unmatched_side_rows(&joins) {
+            BaseFetch::CEILING
+        } else {
+            row_budget
+        });
         let plan = JoinPlan {
             select: budget_select,
             joins: &joins,
             analysis: &analysis,
+            post_join_filters: &post_join_filters,
             row_budget,
             collection: &base_collection,
             params,
@@ -99,6 +106,8 @@ impl Database {
                 r
             })
             .collect();
+        let mut prior_aliases = vec![from_alias];
+        let mut after_outer_join = false;
         for join in plan.joins {
             // Each join side is filtered by the pushed predicates on ITS
             // columns only: another side's predicate would empty its store.
@@ -112,15 +121,24 @@ impl Database {
                 .filter(|c| crate::collection::search::query::pushdown::reads_only(c, &sides))
                 .cloned()
                 .collect();
-            results = self.execute_single_join(results, join, &pushed, plan.row_budget)?;
+            let step = JoinStep {
+                pushed: &pushed,
+                row_budget: plan.row_budget,
+                prior_aliases: &prior_aliases,
+                after_outer_join,
+            };
+            results = self.execute_single_join(results, join, &step)?;
+            prior_aliases.push(crate::velesql::side_alias(
+                join.alias.as_deref(),
+                &join.table,
+            ));
+            after_outer_join |= keeps_unmatched_side_rows(std::slice::from_ref(join));
         }
-        // Every predicate that reads a join side, on the joined rows.
-        let joined_row_filters = plan.analysis.joined_row_filters();
-        if !joined_row_filters.is_empty() {
+        if !plan.post_join_filters.is_empty() {
             results = Self::apply_post_join_filters(
                 plan.collection,
                 results,
-                &joined_row_filters,
+                plan.post_join_filters,
                 plan.params,
                 &select.from_alias,
             )?;
@@ -140,7 +158,10 @@ impl Database {
     fn prepare_join_pushdown(
         single_query: &mut crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<crate::collection::search::query::pushdown::PushdownAnalysis> {
+    ) -> Result<(
+        crate::collection::search::query::pushdown::PushdownAnalysis,
+        Vec<crate::velesql::Condition>,
+    )> {
         if let Some(cond) = single_query.select.where_clause.take() {
             single_query.select.where_clause = Some(crate::velesql::bind_condition(&cond, params)?);
         }
@@ -148,15 +169,22 @@ impl Database {
         let analysis = Self::analyze_join_pushdown_for_select(&single_query.select);
 
         // The base rows are filtered by the predicates on the base collection
-        // only; the rest run on the joined rows (`join_base_rows`).
+        // only; the rest run on the joined rows (`join_base_rows`). Below a
+        // RIGHT or FULL join a base predicate would hide the base row a joined
+        // point matches, so the whole WHERE holds on the joined rows there.
         let resolved_where = single_query.select.where_clause.clone();
+        let outer = keeps_unmatched_side_rows(&single_query.select.joins);
         single_query.select.joins.clear();
+        if outer {
+            single_query.select.where_clause = None;
+            return Ok((analysis, resolved_where.into_iter().collect()));
+        }
         let joined_row_filters = analysis.joined_row_filters();
         if !joined_row_filters.is_empty() {
             single_query.select.where_clause =
                 Self::strip_pushed_conditions(resolved_where.as_ref(), &joined_row_filters);
         }
-        Ok(analysis)
+        Ok((analysis, joined_row_filters))
     }
 
     /// Computes the bound on joined rows to materialize.
@@ -173,11 +201,11 @@ impl Database {
     /// [`JOIN_ROW_CEILING`]: crate::collection::search::query::JOIN_ROW_CEILING
     pub(super) fn join_row_budget(
         select: &crate::velesql::SelectStatement,
-        analysis: &crate::collection::search::query::pushdown::PushdownAnalysis,
+        post_join_filters: &[crate::velesql::Condition],
     ) -> usize {
         use crate::collection::search::query::JOIN_ROW_CEILING;
         use crate::velesql::DistinctMode;
-        let bounded_shape = analysis.post_join_filters.is_empty()
+        let bounded_shape = post_join_filters.is_empty()
             && select.order_by.is_none()
             && select.group_by.is_none()
             && select.having.is_none()
@@ -201,11 +229,36 @@ struct JoinPlan<'a> {
     select: &'a crate::velesql::SelectStatement,
     joins: &'a [crate::velesql::JoinClause],
     analysis: &'a crate::collection::search::query::pushdown::PushdownAnalysis,
+    /// The predicates that hold on the joined rows.
+    post_join_filters: &'a [crate::velesql::Condition],
     /// Joined rows needed at most.
     row_budget: usize,
     /// The base collection, which evaluates the cross-source filters.
     collection: &'a crate::collection::Collection,
     params: &'a std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// What one JOIN of a chain reads besides the rows and the clause
+/// ([`Database::execute_single_join`]).
+pub(super) struct JoinStep<'a> {
+    /// The pushed predicates on this join's side.
+    pub(super) pushed: &'a [crate::velesql::Condition],
+    /// Joined rows needed at most.
+    pub(super) row_budget: usize,
+    /// The sides the rows already carry, the FROM side first.
+    pub(super) prior_aliases: &'a [&'a str],
+    /// Whether an earlier join of the chain was RIGHT or FULL: its rows for
+    /// unmatched points carry the joined point's id, not a base id.
+    pub(super) after_outer_join: bool,
+}
+
+/// Whether any of `joins` is RIGHT or FULL: one that adds rows for the joined
+/// points no base row matched.
+fn keeps_unmatched_side_rows(joins: &[crate::velesql::JoinClause]) -> bool {
+    use crate::velesql::JoinType;
+    joins
+        .iter()
+        .any(|join| matches!(join.join_type, JoinType::Right | JoinType::Full))
 }
 
 /// The clauses a JOIN applies to its joined rows rather than to the base

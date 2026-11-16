@@ -142,7 +142,7 @@ node, drops rows past the threshold and orders by score.
 | `GROUP BY` / `HAVING` / aggregates | yes | yes |
 | Aggregate `ORDER BY` over a `GROUP BY` | yes | yes |
 | `UNION` / `INTERSECT` / `EXCEPT` | yes | yes |
-| `JOIN` | `INNER`, `LEFT` only | all |
+| `JOIN` | `INNER`, `LEFT`, `RIGHT`, `FULL`, on any column | all |
 | `MATCH` graph traversal | one fixed-length pattern, any number of hops | any depth, multi-pattern, variable-length |
 | Cross-collection `MATCH` (`@collection`) | yes | yes |
 | `EXPLAIN` (core plan vocabulary) | yes | yes |
@@ -159,7 +159,8 @@ projection / aliases / window functions
 resolved by core's `velesql::ScoreContext`, arithmetic expressions, and
 aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
 `UNION` / `INTERSECT` / `EXCEPT` (core's semantics, `velesql::execute_compound`;
-an operand cannot join or aggregate), `INNER` / `LEFT JOIN` (core's joined row,
+an operand cannot join or aggregate), `INNER` / `LEFT` / `RIGHT` / `FULL JOIN`
+on any column (core's algorithm, `velesql::hash_join`, and core's joined row,
 each side under its alias; WHERE, DISTINCT, ORDER BY, GROUP BY and LIMIT over
 the joined rows),
 `INSERT` / `UPSERT` / `UPDATE` / `DELETE`, DDL
@@ -189,8 +190,6 @@ reference from `@wiscale/velesdb-wasm@4.0.0`.
 |---|---|
 | `LET` score bindings | `LET bindings are not supported in WASM` |
 | Scalar subqueries | `Subqueries are not supported in WASM` |
-| `RIGHT JOIN` | `RIGHT JOIN is not supported in WASM (use LEFT JOIN)` |
-| `FULL JOIN` | `FULL JOIN is not supported in WASM` |
 | Multi-pattern `MATCH` | `Multi-pattern MATCH is not yet supported in WASM (N patterns in this query)` |
 | Variable-length relationship (`[*1..3]`) | `Variable-length relationships (e.g. [*1..3]) are not yet supported in WASM` |
 | `ALTER COLLECTION` | `ALTER COLLECTION is not supported in WASM yet` |
@@ -274,7 +273,7 @@ need:
 
 - **Multi-pattern or variable-length `MATCH`** — `(a), (b)` patterns and `[*1..3]` ranges.
 - **More than ~100 K vectors** — browser RAM is the ceiling.
-- **`RIGHT`/`FULL JOIN`, quantizer training, geospatial or BM25 predicates.**
+- **Quantizer training, geospatial or BM25 predicates.**
 - **Centralized, shared state** — WASM is per-tab and per-user by definition.
 
 ### Migrating a query to REST

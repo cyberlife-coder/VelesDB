@@ -7,19 +7,15 @@
 //! and a self-JOIN.
 //!
 //! Routing notes verified against the engine source:
-//! - `Database::execute_single_join` (database/query_join.rs) takes the lookup
-//!   path only when both join sides reference `id` AND no filter is pushed; that
-//!   path (`execute_lookup_join`) appends unmatched rows for LEFT only. RIGHT and
-//!   FULL therefore exercise the ColumnStore path in `execute_join`
-//!   (collection/search/query/join.rs:134), which performs the documented
-//!   null-fill on both sides.
-//! - To force the ColumnStore path the base side is joined on a non-`id`
-//!   foreign-key column (`base.fk = joined.id`); the joined side stays on `id`,
-//!   which is the synthesized ColumnStore primary key
-//!   (`build_join_column_store` -> `with_primary_key(.., "id")`).
-//! - Unmatched LEFT rows carry joined columns as JSON `null`
-//!   (`build_null_row_data`); unmatched RIGHT rows are synthetic points whose
-//!   `id` is the right-side primary key and which lack base-only columns.
+//! - `Database::execute_single_join` (database/query_join.rs) takes the id
+//!   lookup or the secondary-index shortcut only for an INNER or LEFT join
+//!   with nothing pushed to the joined side; every other join, RIGHT and FULL
+//!   included, runs `velesql::hash_join` over the joined collection's points.
+//!   The base side joins on a non-`id` foreign-key column
+//!   (`base.fk = joined.id`), so these scenarios run the hash join.
+//! - Unmatched LEFT rows carry the joined collection's columns as JSON
+//!   `null`; unmatched RIGHT rows are the joined point's own row — its id,
+//!   its fields — and lack base-only columns.
 
 use std::collections::HashSet;
 
@@ -454,4 +450,47 @@ fn an_aggregate_over_no_joined_row_reports_its_empty_values() {
             .expect("aggregate over an empty JOIN");
         assert_eq!(result, json!({"n": 0}), "{predicate}");
     }
+}
+
+/// GIVEN customers whose payloads hold a nested object, an array, and a
+///       field whose type varies from one customer to the next
+/// WHEN orders join them
+/// THEN every joined field reads, as the customer's own payload holds it
+///      (the column-store copy core joined against dropped all three).
+#[test]
+fn every_joined_field_reads_whatever_its_shape() {
+    let (_dir, db) = create_test_db();
+    execute_sql(&db, "CREATE METADATA COLLECTION buyers;").expect("buyers");
+    execute_sql(&db, "CREATE METADATA COLLECTION sales;").expect("sales");
+    db.get_metadata_collection("buyers")
+        .expect("buyers")
+        .upsert(vec![
+            Point::metadata_only(
+                1,
+                json!({"meta": {"tier": "gold"}, "tags": ["a"], "code": 7}),
+            ),
+            Point::metadata_only(
+                2,
+                json!({"meta": {"tier": "free"}, "tags": [], "code": "x"}),
+            ),
+        ])
+        .expect("upsert buyers");
+    db.get_metadata_collection("sales")
+        .expect("sales")
+        .upsert(vec![
+            Point::metadata_only(10, json!({"buyer": 1})),
+            Point::metadata_only(11, json!({"buyer": 2})),
+        ])
+        .expect("upsert sales");
+
+    let rows = execute_sql(
+        &db,
+        "SELECT * FROM sales JOIN buyers ON sales.buyer = buyers.id \
+         WHERE buyers.meta.tier = 'gold' LIMIT 10",
+    )
+    .expect("JOIN reading a nested joined field");
+    assert_eq!(result_ids(&rows), HashSet::from([10]));
+    let payload = rows[0].point.payload.as_ref().expect("payload");
+    assert_eq!(payload["buyers"]["tags"], json!(["a"]));
+    assert_eq!(payload["buyers"]["code"], json!(7));
 }

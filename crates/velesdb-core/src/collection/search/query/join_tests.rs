@@ -1,9 +1,6 @@
 //! Tests for `join` module - JOIN execution for VelesQL.
 
-use super::join::{
-    adaptive_batch_size, execute_join, extract_join_keys, joined_to_aliased_search_results,
-    joined_to_search_results,
-};
+use super::join::{adaptive_batch_size, execute_join, extract_join_keys, joined_to_search_results};
 use crate::column_store::{ColumnStore, ColumnType, ColumnValue};
 use crate::point::Point;
 use crate::point::SearchResult;
@@ -198,24 +195,6 @@ fn test_joined_to_search_results() {
             .get("available")
             .and_then(serde_json::Value::as_bool),
         Some(true)
-    );
-}
-
-/// The query engine's form: the joined columns flat and under the alias.
-#[test]
-fn test_joined_to_aliased_search_results_scopes_the_side() {
-    let results = vec![make_search_result(1, 1)];
-    let column_store = make_column_store();
-    let join = make_join_clause();
-
-    let joined = execute_join(results, &join, &column_store, NO_LIMIT).unwrap();
-    let search_results = joined_to_aliased_search_results(joined, "inventory");
-
-    let payload = search_results[0].point.payload.as_ref().unwrap();
-    assert_eq!(payload.get("available"), Some(&serde_json::json!(true)));
-    assert_eq!(
-        payload.pointer("/inventory/available"),
-        Some(&serde_json::json!(true))
     );
 }
 

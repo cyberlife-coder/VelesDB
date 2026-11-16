@@ -177,6 +177,33 @@
       ]
     },
     {
+      "collection": "left_rj",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 1, "vector": [1.0, 0.0], "payload": { "k": "x" } },
+        { "id": 2, "vector": [0.0, 1.0], "payload": { "k": "y" } }
+      ]
+    },
+    {
+      "collection": "right_rj",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 7, "vector": [1.0, 0.0], "payload": { "k": "y" } },
+        { "id": 10, "vector": [0.0, 1.0], "payload": { "k": "z" } }
+      ]
+    },
+    {
+      "collection": "cities",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 51, "vector": [1.0, 0.0], "payload": { "name": "Alice", "city": "Lyon" } },
+        { "id": 52, "vector": [0.0, 1.0], "payload": { "name": "Carol", "city": "Nice" } }
+      ]
+    },
+    {
       "collection": "orders",
       "dimension": 2,
       "metric": "cosine",
@@ -306,6 +333,54 @@
       "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id WHERE NOT (customers.name = 'Alice') ORDER BY orders.id ASC",
       "expect_ids": [2],
       "note": "a negated joined-side predicate is evaluated on the joined row"
+    },
+    {
+      "id": "J011",
+      "query": "SELECT * FROM customers JOIN cities ON customers.name = cities.name ORDER BY customers.id ASC",
+      "expect_ids": [10],
+      "note": "D014: an INNER JOIN on a non-primary-key column no index covers (core refused it for want of an index)"
+    },
+    {
+      "id": "J012",
+      "query": "SELECT * FROM customers RIGHT JOIN cities ON customers.name = cities.name ORDER BY id ASC",
+      "expect_ids": [10, 52],
+      "note": "D014: RIGHT JOIN on any column; the city no customer matches (52) is a row of its own, with its own id (core required the primary key, WASM refused RIGHT JOIN)"
+    },
+    {
+      "id": "J013",
+      "query": "SELECT * FROM customers FULL JOIN cities ON customers.name = cities.name ORDER BY id ASC",
+      "expect_ids": [10, 20, 52],
+      "note": "D014: FULL JOIN keeps the unmatched customer (20) and the unmatched city (52)"
+    },
+    {
+      "id": "J014",
+      "query": "SELECT * FROM customers_u RIGHT JOIN orders_u ON customers_u.id = orders_u.id ORDER BY id ASC",
+      "expect_ids": [10, 20, 99],
+      "note": "a RIGHT JOIN on id = id keeps the unmatched joined row (99): core's id lookup shortcut answered it as an INNER join"
+    },
+    {
+      "id": "J015",
+      "query": "SELECT * FROM customers RIGHT JOIN cities ON customers.name = cities.name WHERE customers.id IS NULL ORDER BY id ASC",
+      "expect_ids": [52],
+      "note": "a RIGHT JOIN row without a base match reads the base side's id as NULL"
+    },
+    {
+      "id": "J016",
+      "query": "SELECT * FROM left_rj RIGHT JOIN right_rj ON left_rj.k = right_rj.k LIMIT 1",
+      "expect_ids": [2],
+      "note": "a RIGHT JOIN classifies a joined point as unmatched only against every base row: under LIMIT 1 core fetched base row 1 alone and returned point 7 as unmatched, though base row 2 matches it"
+    },
+    {
+      "id": "J017",
+      "query": "SELECT * FROM left_rj RIGHT JOIN right_rj ON left_rj.k = right_rj.k WHERE left_rj.id = 99 ORDER BY id ASC",
+      "expect_ids": [],
+      "note": "a base-side WHERE filters the RIGHT JOIN's rows, not the base rows before it: core filtered the base first, so the matched point 7 came back as unmatched"
+    },
+    {
+      "id": "J018",
+      "query": "SELECT * FROM left_rj RIGHT JOIN right_rj ON left_rj.k = right_rj.k JOIN customers ON left_rj.id = customers.id ORDER BY id ASC",
+      "expect_ids": [],
+      "note": "a join after a RIGHT JOIN reads the base id as the row carries it: the unmatched point 10 has a NULL left_rj.id, and core's id lookup joined it to customer 10 by the row's own id"
     }
   ],
   "aggregate_cases": [
@@ -1515,9 +1590,10 @@
     {
       "id": "D014",
       "area": "JOIN column acceptance (issue #2049 indexed joins vs WASM nested loop)",
-      "core_behavior": "core's JOIN executor accepts the column-store primary key or a non-PK column carrying a B-tree secondary index (try_indexed_join, database/query_join.rs); an unindexed non-PK join column is refused at runtime",
-      "wasm_behavior": "the WASM executor's nested-loop join (velesql_join.rs) compares payload fields directly — any column joins, indexed or not, so a query core refuses for want of an index runs on WASM",
-      "status": "accepted — no join_case pins an indexed non-PK join because the fixture schema cannot declare a secondary index (extra_collections carry collection+dimension+metric+points only); the acceptance gap is recorded here so it cannot be silently widened, and core's own indexed-join behaviour is covered by query_join_tests.rs"
+      "core_behavior": "RESOLVED: core joins on any column through velesql::hash_join, keeping the id-lookup and secondary-index shortcuts for INNER/LEFT joins. It used to refuse a non-primary-key column no index covered, and RIGHT/FULL joins on anything but the primary key",
+      "wasm_behavior": "RESOLVED: the WASM executor runs the same velesql::hash_join, RIGHT and FULL included. It used to join any column by its own nested loop and refuse RIGHT and FULL",
+      "status": "resolved — join_cases J011-J018 assert the rows on both engines",
+      "evidence": "crates/velesdb-core/src/velesql/hash_join.rs: hash_join(); crates/velesdb-core/src/database/query_join.rs: execute_single_join(); crates/velesdb-wasm/src/velesql_join.rs: joined_rows()"
     }
   ]
 }

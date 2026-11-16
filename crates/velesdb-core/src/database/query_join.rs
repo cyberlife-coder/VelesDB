@@ -1,32 +1,42 @@
-//! JOIN execution strategies: lookup join, filtered join, and condition pushdown stripping.
+//! JOIN execution strategies: the lookup and index shortcuts, the generic
+//! hash join, and condition pushdown stripping.
 
-use crate::{Result, SearchResult};
+use crate::{Error, Result, SearchResult};
 
 use super::Database;
 
-/// One cached JOIN-side `ColumnStore` with the counters it was built under.
+/// One cached joined collection's points, with the counters they were read
+/// under.
 ///
 /// See `Database::join_store_cache` (CACHE-03) for the validity contract.
 pub(super) struct JoinStoreEntry {
-    /// `(schema_version, write_generation)` read *before* the store was built,
-    /// so a mutation racing the build can only make the entry look stale.
+    /// `(schema_version, write_generation)` read *before* the points were
+    /// read, so a mutation racing the read can only make the entry look stale.
     stamp: (u64, u64),
-    /// The shared store, cloned out cheaply per query.
-    store: std::sync::Arc<crate::column_store::ColumnStore>,
+    /// The shared points, cloned out cheaply per query.
+    points: std::sync::Arc<Vec<crate::Point>>,
 }
 
 impl Database {
-    /// Returns `true` if the join condition references the primary key (`id`) on both sides.
-    ///
-    /// This enables the lookup join optimization path, which uses direct
-    /// `collection.get(&[ids])` instead of building a full `ColumnStore`.
-    pub(super) fn is_lookup_join_eligible(join: &crate::velesql::JoinClause) -> bool {
-        let Some(ref condition) = join.condition else {
+    /// Whether the join is `ON base.id = side.id` with the base id read on
+    /// the FROM side (the row's own point id), so the lookup path can fetch
+    /// the side's points by the rows' ids directly.
+    pub(super) fn is_lookup_join_eligible(
+        join: &crate::velesql::JoinClause,
+        prior_aliases: &[&str],
+    ) -> bool {
+        if join.condition.is_none() {
+            return false;
+        }
+        let Some(keys) = crate::velesql::JoinKeys::of(join) else {
             return false;
         };
-        let left_is_id = condition.left.column == "id";
-        let right_is_id = condition.right.column == "id";
-        left_is_id && right_is_id
+        let base_on_from = keys
+            .base
+            .table
+            .as_deref()
+            .is_none_or(|t| prior_aliases.first() == Some(&t));
+        keys.side == "id" && keys.base.column == "id" && base_on_from
     }
 
     /// Performs a lookup join by extracting keys from left-side results
@@ -164,44 +174,67 @@ impl Database {
     /// `row_budget` bounds how many joined rows are materialized (the query's
     /// effective `LIMIT + OFFSET`), preventing OOM on RIGHT/FULL joins over large
     /// stores. It never drops rows within the requested window.
+    /// `results` joined with `join`'s collection, on any column and for
+    /// every join type, through [`crate::velesql::hash_join`]. An INNER or
+    /// LEFT join on `id` or on an indexed column, with nothing pushed to its
+    /// side, takes the lookup or index shortcut instead, which answers it
+    /// without reading the whole side. RIGHT and FULL need every point of the
+    /// side, so they never do; nor does a join after one, whose rows for
+    /// unmatched points carry no base id, nor an index join whose base keys
+    /// include an array or object, which the index does not key.
     pub(super) fn execute_single_join(
         &self,
         results: Vec<SearchResult>,
         join: &crate::velesql::JoinClause,
-        pushed: &[crate::velesql::Condition],
-        row_budget: usize,
+        step: &super::query_engine_join::JoinStep<'_>,
     ) -> Result<Vec<SearchResult>> {
+        use crate::velesql::JoinType;
         let join_collection = self.resolve_collection(&join.table)?;
-
-        if Self::is_lookup_join_eligible(join) && pushed.is_empty() {
+        let shortcut = step.pushed.is_empty()
+            && !step.after_outer_join
+            && matches!(join.join_type, JoinType::Inner | JoinType::Left);
+        if shortcut && Self::is_lookup_join_eligible(join, step.prior_aliases) {
             return Ok(Self::execute_lookup_join(results, join, &join_collection));
         }
-        if pushed.is_empty() && Self::indexed_join_eligible(join, &join_collection) {
+        if shortcut
+            && Self::indexed_join_eligible(join, &join_collection)
+            && Self::base_keys_are_scalar(&results, join)
+        {
             return Ok(Self::execute_indexed_join(
                 results,
                 join,
                 &join_collection,
-                row_budget,
+                step.row_budget,
             ));
         }
-
-        let column_store = if pushed.is_empty() {
-            self.cached_join_column_store(&join.table, &join_collection)?
-        } else {
-            std::sync::Arc::new(Self::build_filtered_join_column_store(
-                &join_collection,
-                pushed,
-            )?)
-        };
-
-        let joined = crate::collection::search::query::join::execute_join(
+        let keys = crate::velesql::JoinKeys::of(join).ok_or_else(|| {
+            Error::Query(format!(
+                "JOIN on table '{}' must use ON condition or USING(single_column).",
+                join.table
+            ))
+        })?;
+        let side = self.join_side_points(&join.table, &join_collection, step.pushed);
+        Ok(crate::velesql::hash_join(
             results,
+            &side,
             join,
-            &column_store,
-            row_budget,
-        )?;
-        let alias = crate::velesql::side_alias(join.alias.as_deref(), &join.table);
-        Ok(crate::collection::search::query::join::joined_to_aliased_search_results(joined, alias))
+            &keys,
+            step.prior_aliases,
+            step.row_budget,
+        ))
+    }
+
+    /// Whether every row's base value for the indexed join is a scalar (or
+    /// absent): the secondary index keys strings, numbers and booleans only.
+    fn base_keys_are_scalar(results: &[SearchResult], join: &crate::velesql::JoinClause) -> bool {
+        let Some(condition) = crate::collection::search::query::join::resolve_join_condition(join)
+        else {
+            return false;
+        };
+        results.iter().all(|row| {
+            Self::left_join_value(row, &condition.right.column)
+                .is_none_or(|value| !value.is_array() && !value.is_object())
+        })
     }
 
     /// Answers an Inner/Left JOIN from a secondary index on the join-side
@@ -412,11 +445,11 @@ impl Database {
     /// older than it is, forcing a rebuild on the next query — never a stale
     /// hit. Collections carrying TTL points are never cached, because expiry
     /// is evaluated lazily at read time and does not bump `write_generation`.
-    pub(super) fn cached_join_column_store(
+    pub(super) fn cached_join_points(
         &self,
         name: &str,
         collection: &crate::collection::Collection,
-    ) -> Result<std::sync::Arc<crate::column_store::ColumnStore>> {
+    ) -> std::sync::Arc<Vec<crate::Point>> {
         let stamp = (
             self.schema_version
                 .load(std::sync::atomic::Ordering::Acquire),
@@ -424,24 +457,37 @@ impl Database {
         );
         if let Some(entry) = self.join_store_cache.read().get(name) {
             if entry.stamp == stamp {
-                return Ok(std::sync::Arc::clone(&entry.store));
+                return std::sync::Arc::clone(&entry.points);
             }
         }
 
-        let points = Self::fetch_join_points(collection);
-        let carries_ttl = Self::points_carry_ttl(&points);
-        let refs: Vec<&crate::Point> = points.iter().collect();
-        let store = std::sync::Arc::new(Self::build_column_store_from_points(&refs)?);
-        if !carries_ttl {
+        let points = std::sync::Arc::new(Self::fetch_join_points(collection));
+        if !Self::points_carry_ttl(&points) {
             self.join_store_cache.write().insert(
                 name.to_string(),
                 JoinStoreEntry {
                     stamp,
-                    store: std::sync::Arc::clone(&store),
+                    points: std::sync::Arc::clone(&points),
                 },
             );
         }
-        Ok(store)
+        points
+    }
+
+    /// The joined collection's points a join reads: every live point,
+    /// cached while the collection is unchanged, or those the predicates
+    /// pushed to that side keep.
+    fn join_side_points(
+        &self,
+        name: &str,
+        collection: &crate::collection::Collection,
+        pushed: &[crate::velesql::Condition],
+    ) -> std::sync::Arc<Vec<crate::Point>> {
+        if pushed.is_empty() {
+            self.cached_join_points(name, collection)
+        } else {
+            std::sync::Arc::new(Self::filtered_join_points(collection, pushed))
+        }
     }
 
     /// Returns `true` if any point carries the reserved durable-TTL payload key.
