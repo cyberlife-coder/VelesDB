@@ -304,6 +304,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Python: strict observer mode denies a write veto it cannot read, and
+  `all_point_ids` passes the read gate** (Python, 2026-11-16). With
+  `observer_strict=True`, a `ddl_request` / `dml_mutation_request` callback
+  returning anything but `None`, a bool or a str (a scope dict, `0`, `[]`)
+  allowed the DDL/DML; it now denies, as the read gate already did. And
+  `Collection.all_point_ids()` skipped the read gate that `all_ids()` — a
+  subset of the same ids — passes, so a denied or scoped caller got every
+  id; it is now gated and fails closed on a scope.
+
 - **The install wizard never runs a downloaded installer under `--yes`**
   (`scripts/wizard_embedder.py`). On Linux, Ollama is installed with
   Ollama's own script, which nothing verifies once downloaded; `--apply --yes`
