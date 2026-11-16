@@ -386,8 +386,8 @@ impl Database {
     ///
     /// Core already reports every completed read it runs or gates —
     /// `execute_query`, `execute_aggregate`, `gated_search` and
-    /// `run_gated_read` — timed over the read itself. Calling this after one
-    /// reports it a second time.
+    /// `run_gated_read` — once per statement or search. Calling this after
+    /// one reports it a second time.
     ///
     /// No-op when no observer is registered.
     #[deprecated(

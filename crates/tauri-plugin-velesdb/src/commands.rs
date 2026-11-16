@@ -535,13 +535,20 @@ pub async fn text_search<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
     let collection = request.collection.clone();
 
-    batch::run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
-        match filter {
-            Some(f) => coll.text_search_with_filter(&request.query, request.top_k, f),
-            None => coll.text_search(&request.query, request.top_k),
-        }
-        .map_err(crate::error::Error::Database)
-    })
+    let operation = velesdb_core::observer::QueryOperationKind::TextSearch;
+    batch::run_filtered_search(
+        &state,
+        collection,
+        operation,
+        parsed_filter,
+        move |coll, filter| {
+            match filter {
+                Some(f) => coll.text_search_with_filter(&request.query, request.top_k, f),
+                None => coll.text_search(&request.query, request.top_k),
+            }
+            .map_err(crate::error::Error::Database)
+        },
+    )
     .await
 }
 
@@ -555,24 +562,31 @@ pub async fn hybrid_search<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
     let collection = request.collection.clone();
 
-    batch::run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
-        match filter {
-            Some(f) => coll.hybrid_search_with_filter(
-                &request.vector,
-                &request.query,
-                request.top_k,
-                Some(request.vector_weight),
-                f,
-            ),
-            None => coll.hybrid_search(
-                &request.vector,
-                &request.query,
-                request.top_k,
-                Some(request.vector_weight),
-            ),
-        }
-        .map_err(crate::error::Error::Database)
-    })
+    let operation = velesdb_core::observer::QueryOperationKind::HybridSearch;
+    batch::run_filtered_search(
+        &state,
+        collection,
+        operation,
+        parsed_filter,
+        move |coll, filter| {
+            match filter {
+                Some(f) => coll.hybrid_search_with_filter(
+                    &request.vector,
+                    &request.query,
+                    request.top_k,
+                    Some(request.vector_weight),
+                    f,
+                ),
+                None => coll.hybrid_search(
+                    &request.vector,
+                    &request.query,
+                    request.top_k,
+                    Some(request.vector_weight),
+                ),
+            }
+            .map_err(crate::error::Error::Database)
+        },
+    )
     .await
 }
 

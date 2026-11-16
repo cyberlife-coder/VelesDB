@@ -342,9 +342,10 @@ impl Collection {
         // and takes no query vector, so it is valid on metadata/graph collections
         // that carry text fields — unlike the vector-only search paths. Because
         // `gated_search` resolves a *vector* collection leaf it cannot serve
-        // metadata/graph text search, so text search consults `authorize_read`
-        // (kind-agnostic) and AND-composes any observer scope filter into the
-        // text-search filter instead — same governance, no leaf mismatch.
+        // metadata/graph text search, so text search runs through
+        // `run_gated_search` (kind-agnostic) and AND-composes any observer
+        // scope filter into the text-search filter instead — same governance
+        // and telemetry, no leaf mismatch.
         let caller_filter = parse_optional_filter(py, filter)?;
         let query_owned = query.to_string();
 

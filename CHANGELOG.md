@@ -17,10 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not at all. Now `gated_search`, `execute_aggregate` and the new
   `Database::run_gated_read` — the read gate for searches with no
   `GatedRead` leaf (sparse, batch, multi-query, ids), which runs the read
-  and reports it — fire `on_query` once per completed read, timed over the
-  read alone. The server, Python, mobile and Tauri searches run through
-  them, so every one of them now reaches the observer once; nothing calls
-  `notify_query` any more. Point lookups, scrolls and graph reads stay
+  and reports it — fire `on_query` once per completed read. The server,
+  Python, mobile and Tauri searches run through them, so every one of them
+  now reaches the observer once; nothing calls `notify_query` any more. A
+  `VelesQL` statement with scalar subqueries reported each subquery as a
+  query of its own; it is now reported once, at the statement's entry
+  point, and `explain_analyze_query` reports the read it executes, MATCH
+  included. Tauri text and hybrid searches now carry their own operation
+  kind to the gate instead of `Select`. Point lookups, scrolls and graph reads stay
   gated and unreported, as before. **Embedder action:** a Rust caller that
   still invokes `notify_query` after one of these reads now reports it
   twice; drop the call.

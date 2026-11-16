@@ -227,8 +227,8 @@ pub(crate) fn extract_client_id(headers: &axum::http::HeaderMap) -> String {
 /// it in the Prometheus query-duration histogram.
 ///
 /// The `DatabaseObserver` hears of the read from core itself
-/// (`Database::run_gated_read`, `execute_aggregate`), timed over the read
-/// alone; this measures the whole request.
+/// (`Database::run_gated_read`, `execute_aggregate`), timed over the read;
+/// this measures the whole request.
 pub(crate) fn record_query_timing(
     state: &AppState,
     collection_name: &str,

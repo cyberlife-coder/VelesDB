@@ -7,7 +7,9 @@
 //! so the REST server measured them itself and called the deprecated
 //! `Database::notify_query` shim. Each case here asserts exactly one
 //! `on_query` naming the collection for a completed read, and none for a
-//! refused or failed one.
+//! refused or failed one. A statement is one read however many scalar
+//! subqueries it resolves: the subqueries are part of it, not reads of their
+//! own.
 
 #![cfg(feature = "persistence")]
 
@@ -58,8 +60,16 @@ fn seeded_db() -> (TempDir, Database, Arc<QuerySpy>) {
         db.get_vector_collection(name)
             .expect("test: collection")
             .upsert([
-                Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(json!({"tag": "a"}))),
-                Point::new(2, vec![0.0, 1.0, 0.0, 0.0], Some(json!({"tag": "b"}))),
+                Point::new(
+                    1,
+                    vec![1.0, 0.0, 0.0, 0.0],
+                    Some(json!({"tag": "a", "n": 1})),
+                ),
+                Point::new(
+                    2,
+                    vec![0.0, 1.0, 0.0, 0.0],
+                    Some(json!({"tag": "b", "n": 3})),
+                ),
             ])
             .expect("test: seed");
     }
@@ -98,7 +108,7 @@ fn a_refused_gated_search_reports_nothing() {
 #[test]
 fn execute_aggregate_reports_once() {
     let (_dir, db, spy) = seeded_db();
-    let query = Parser::parse("SELECT COUNT(*) FROM docs").expect("test: parse");
+    let query = parse("SELECT COUNT(*) FROM docs");
     db.execute_aggregate(&query, &HashMap::new())
         .expect("test: aggregate");
     assert_eq!(spy.calls(), vec!["docs".to_string()]);
@@ -153,4 +163,43 @@ fn run_gated_read_reports_neither_a_refusal_nor_a_failure() {
     assert!(failed.is_err(), "the read's own failure is the inner error");
 
     assert!(spy.calls().is_empty());
+}
+
+fn parse(sql: &str) -> velesdb_core::velesql::Query {
+    Parser::parse(sql).expect("test: parse")
+}
+
+#[test]
+fn a_select_reports_once_however_many_subqueries_it_resolves() {
+    let (_dir, db, spy) = seeded_db();
+    let params = HashMap::new();
+    let aggregate_sub = parse("SELECT * FROM docs WHERE n > (SELECT AVG(n) FROM docs)");
+    let rows = db
+        .execute_query(&aggregate_sub, &params)
+        .expect("test: aggregate subquery");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(spy.calls(), vec!["docs".to_string()]);
+
+    let scalar_sub = parse("SELECT * FROM docs WHERE n > (SELECT n FROM docs WHERE tag = 'a')");
+    db.execute_query(&scalar_sub, &params)
+        .expect("test: scalar subquery");
+    assert_eq!(spy.calls(), vec!["docs".to_string(); 2]);
+}
+
+#[test]
+fn an_aggregate_reports_once_however_many_subqueries_it_resolves() {
+    let (_dir, db, spy) = seeded_db();
+    let query = parse("SELECT COUNT(*) FROM docs WHERE n > (SELECT AVG(n) FROM docs)");
+    db.execute_aggregate(&query, &HashMap::new())
+        .expect("test: aggregate");
+    assert_eq!(spy.calls(), vec!["docs".to_string()]);
+}
+
+#[test]
+fn explain_analyze_reports_its_executed_read_once() {
+    let (_dir, db, spy) = seeded_db();
+    let query = parse("SELECT * FROM docs WHERE n > (SELECT AVG(n) FROM docs)");
+    db.explain_analyze_query(&query, &HashMap::new())
+        .expect("test: explain analyze");
+    assert_eq!(spy.calls(), vec!["docs".to_string()]);
 }

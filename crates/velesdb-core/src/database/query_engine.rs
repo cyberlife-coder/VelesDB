@@ -7,7 +7,7 @@ use crate::velesql::{
 };
 use crate::{Error, Result, SearchResult};
 
-use super::read_authorization::{narrow_where, AuthorizedQuery, GateDecisions};
+use super::read_authorization::{narrow_where, read_target, AuthorizedQuery, GateDecisions};
 use super::Database;
 
 /// Outcome of the non-VelesQL read gate ([`Database::read_gate_raw`]).
@@ -375,8 +375,11 @@ impl Database {
         let decisions = GateDecisions::default();
         let plan = self.explain_query_ctx(query, params, &decisions)?;
         let start = std::time::Instant::now();
+        // The executed read is the statement's one report, MATCH or not.
         let (results, nodes, edges, executed_strategy) =
-            self.execute_query_counted(query, params, &decisions)?;
+            self.report_statement(query, params, || {
+                self.execute_query_counted(query, params, &decisions)
+            })?;
         let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges)
             .with_executed_filter_strategy(executed_strategy);
         let node_stats = crate::velesql::build_leaf_node_stats(
@@ -411,21 +414,45 @@ impl Database {
         // gated here (Requirement 3.5); `SELECT EDGES`, a read routed as DML,
         // is.
         //
-        // Requirement 2: `execute_query_timed` wraps the single top-level
-        // `execute_query_inner` call so `on_query` telemetry fires exactly once
-        // after the data-plane op completes. Resolving the `Cow` to a `&Query`
-        // (via deref coercion on `&gated`) keeps the timing in one place rather
-        // than duplicated across the borrowed / owned arms.
-        self.execute_query_gated(query, params, None, &GateDecisions::default())
+        // Requirement 2: `on_query` fires once per statement, here at its
+        // boundary — never inside `execute_query_gated`, which the scalar
+        // subqueries this statement resolves re-enter.
+        self.report_statement(query, params, || {
+            self.execute_query_gated(query, params, None, &GateDecisions::default())
+        })
     }
 
-    /// Shared pre-flight + execution used by both the plain path and the
-    /// EXPLAIN ANALYZE counted path, so the two can never drift: scalar
-    /// subquery resolution, validation, the read-path gate, then the timed
+    /// Runs one whole statement and, when it completes, reports it to the
+    /// observer's `on_query` once, under the collection it reads first
+    /// ([`read_target`]) — `select.from`, or `_collection` for a MATCH or an
+    /// aggregate addressed through it, which is exactly the case a telemetry
+    /// hook must not lose.
+    ///
+    /// The statement is the unit: its scalar subqueries, compound operands
+    /// and JOIN stages run inside `run` and are folded into this one
+    /// measurement, so none of them is reported on its own. A refused or
+    /// failed statement reports nothing. With no observer registered this is
+    /// a single `Option` presence check (Requirement 2.4); see
+    /// [`report_read`](Self::report_read).
+    pub(super) fn report_statement<T>(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        run: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        self.report_read(read_target(query, params).unwrap_or(""), run)
+    }
+
+    /// Shared pre-flight + execution used by the plain path, the EXPLAIN
+    /// ANALYZE counted path and scalar subqueries, so they can never drift:
+    /// subquery resolution, validation, the read-path gate, then the
     /// execution — with an optional executed-strategy probe threaded to the
     /// base-collection call. `decisions` is the statement's gate memo
     /// (issue #2588): subqueries resolved below record into it, so a subquery
     /// on the outer statement's own collection is decided once.
+    ///
+    /// Unreported: a subquery is part of its statement, so telemetry belongs
+    /// to the statement's entry point ([`report_statement`](Self::report_statement)).
     pub(super) fn execute_query_gated(
         &self,
         query: &crate::velesql::Query,
@@ -438,7 +465,7 @@ impl Database {
         }
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
         let authorized = self.authorize_statement(query, params, decisions)?;
-        let mut results = self.execute_query_timed(&authorized, params, probe, decisions)?;
+        let mut results = self.execute_query_inner(&authorized, params, probe, decisions)?;
         // `search.max_results` is the deployment-wide ceiling on the rows one
         // query hands back (#2591). It clamps here, at the outermost boundary,
         // rather than inside the engine: compound operands, JOIN stages and
@@ -446,34 +473,6 @@ impl Database {
         // the caller receives is bounded.
         results.truncate(self.config.search.max_results);
         Ok(results)
-    }
-
-    /// Executes the resolved (post-gate) query and fires the `on_query`
-    /// telemetry hook exactly once after the data-plane op completes
-    /// (Requirement 2.2, 2.5).
-    ///
-    /// The timer wraps only the single top-level `execute_query_inner` call, so
-    /// compound / UNION / INTERSECT / EXCEPT and JOIN sub-executions that
-    /// re-enter `execute_single_select` are folded into this one measurement
-    /// and never fire their own telemetry.
-    ///
-    /// When no observer is registered, this is a single `Option` presence check
-    /// with no timer and no notification beyond that check (Requirement 2.4);
-    /// see [`report_read`](Self::report_read), shared with the gated reads
-    /// that build no `VelesQL` query.
-    fn execute_query_timed(
-        &self,
-        authorized: &AuthorizedQuery<'_>,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        probe: Option<&crate::database::StrategyProbeSlot>,
-        decisions: &GateDecisions,
-    ) -> Result<Vec<SearchResult>> {
-        // Report the collection the gate decided on — `select.from` is ""
-        // for a MATCH addressed through `_collection`, which is exactly the
-        // case a telemetry hook must not lose.
-        self.report_read(authorized.target().unwrap_or(""), || {
-            self.execute_query_inner(authorized, params, probe, decisions)
-        })
     }
 
     /// Non-VelesQL read-path gate, shared by
