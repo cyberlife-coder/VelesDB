@@ -280,7 +280,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by `similarity(field, $v)` — the row's own vector or the payload's named
   one, a row without one last — instead of refusing it. A browser MATCH
   orders by `similarity(alias.vector, $v)` and by arithmetic over its
-  target, as core's MATCH does, instead of refusing them.
+  target, as core's MATCH does, instead of refusing them; and a browser
+  `UPDATE ... SET vector = $v` replaces the embedding, as core's does, instead
+  of refusing it (D008).
 
 - **A `similarity()` threshold filters the whole collection** (core,
   2026-11-15). It filtered a window of `LIMIT × 10` points nearest the query

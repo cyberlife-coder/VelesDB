@@ -159,8 +159,9 @@ FUSION` over a single `NEAR`, and `NEAR_FUSED` weighted/rsf, which core
 refuses), a `similarity()` threshold without `NEAR` came back unranked with
 score 0.0, and `SELECT DISTINCT` ignored `ORDER BY` and the default `LIMIT`.
 The accepted gaps that remain are the fixture's `documented_divergences`:
-D004 (MATCH data model), D005 (multi-query rsf), D007 (WASM DELETE accepts
-any WHERE, core only id predicates) and D008 (core UPDATE may set `vector`).
+D004 (MATCH data model), D005 (multi-query rsf) and D007 (WASM DELETE
+accepts any WHERE, core only id predicates). D008 (core UPDATE may set
+`vector`) was closed on 2026-11-16: WASM's UPDATE sets it too.
 D003 (set-operation row order) was closed on 2026-11-15: both run
 `velesql::execute_compound`. D009 (an unranked row scored 1.0 on core,
 0.0 on WASM) was closed on 2026-11-15: both report

@@ -1,9 +1,10 @@
 //! UPDATE dispatch for the WASM VelesQL executor (S4-13).
 //!
-//! Scope: payload-only `SET column = value` updates with a standard WHERE
-//! clause (including IN / BETWEEN / LIKE / AND / OR). The `vector` column
-//! is NOT writable via UPDATE — reassigning the embedding of an existing
-//! point requires UPSERT instead, matching the Mobile executor semantics.
+//! `SET column = value` updates with a standard WHERE clause (including IN /
+//! BETWEEN / LIKE / AND / OR). As in core (`apply_assignments_to_point`),
+//! `SET vector = $v` replaces the embedding of a vector collection's rows —
+//! refused on a metadata-only collection, and a vector of another dimension
+//! refused — while every other column is a payload field.
 
 use velesdb_core::velesql::{UpdateAssignment, UpdateStatement};
 
@@ -37,9 +38,6 @@ fn validate_assignments(assignments: &[UpdateAssignment]) -> Result<(), String> 
         if a.column == "id" {
             return Err("UPDATE cannot modify the 'id' column".to_string());
         }
-        if a.column == "vector" {
-            return Err("UPDATE cannot modify the 'vector' column (use UPSERT)".to_string());
-        }
     }
     Ok(())
 }
@@ -57,17 +55,50 @@ fn apply_updates(
         .map(|a| resolve_value(&a.value, params).map(|v| (a.column.clone(), v)))
         .collect::<Result<_, _>>()?;
 
+    let vector = resolved
+        .iter()
+        .find(|(col, _)| col == "vector")
+        .map(|(_, value)| new_vector(&store.borrow(), value))
+        .transpose()?;
+
     let mut borrowed = store.borrow_mut();
+    let dimension = borrowed.dimension;
     for &idx in indices {
+        if let Some(vector) = &vector {
+            borrowed.data[idx * dimension..(idx + 1) * dimension].copy_from_slice(vector);
+        }
         let Some(slot) = borrowed.payloads.get_mut(idx) else {
             continue;
         };
         let map = ensure_object(slot);
-        for (col, val) in &resolved {
+        for (col, val) in resolved.iter().filter(|(col, _)| col != "vector") {
             map.insert(col.clone(), val.clone());
         }
     }
     Ok(())
+}
+
+/// The embedding `SET vector = value` assigns, as core reads it: an array
+/// of finite numbers of the collection's dimension, on a vector collection.
+fn new_vector(
+    store: &crate::store_state::StoreState,
+    value: &serde_json::Value,
+) -> Result<Vec<f32>, String> {
+    if store.dimension == 0 {
+        return Err("UPDATE on metadata-only collection cannot set 'vector'".to_string());
+    }
+    let Some(items) = value.as_array() else {
+        return Err("'vector' must be an array of numbers".to_string());
+    };
+    let vector = crate::velesql_value::json_to_f32_vec(value, "vector")?;
+    if vector.len() != store.dimension {
+        return Err(format!(
+            "[VELES-004] Vector dimension mismatch: expected {}, got {}",
+            store.dimension,
+            items.len()
+        ));
+    }
+    Ok(vector)
 }
 
 /// Ensures the payload at `slot` is a JSON object we can mutate.
