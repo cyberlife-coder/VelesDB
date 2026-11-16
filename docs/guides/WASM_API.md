@@ -138,7 +138,7 @@ Inserting an id that already exists replaces the previous entry — `insert` and
 | `search_with_quality(query, k, quality)` | `[[id, score], …]` | Accepts the Python/Server quality strings (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`). **All modes return identical results in WASM** — there is no HNSW graph; the parameter exists for API parity, and is checked as the server checks it: each ef in 16–4096, or it throws (#2275). |
 | `search_with_filter(query, k, filter)` | `[{id, score, payload}, …]` | Metadata-filtered search. |
 | `text_search(query, k, field?)` | `[{id, score: null, payload}, …]` | Case-insensitive substring match over payload fields, in insertion order. It selects without ranking, so `score` is always `null`. |
-| `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion. |
+| `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion: `vectorWeight × vector score + (1 − vectorWeight) × text match` (0 or 1), best first. Under a distance metric (`euclidean`, `hamming`) the vector score is the negated distance, so the blend stays higher-is-better and every row is kept; under a similarity metric a row whose blend is not above 0 is dropped. |
 | `multi_query_search(vectors, numVectors, k, strategy, rrfK?, weights?)` | `[[id, score], …]` | Multi-query fusion (MQG). |
 | `batch_search(vectors, numVectors, k)` | `[[[id, score], …], …]` | One result list per query vector. |
 | `similarity_search(query, threshold, operator, k)` | `[[id, score], …]` | Threshold-based selection. |
@@ -146,8 +146,11 @@ Inserting an id that already exists replaces the previous entry — `insert` and
 | `sparse_search(indices, values, k)` | `[{doc_id, score}, …]` | Same kernel, but returns `[]` instead of throwing when empty. |
 | `query(vector, k)` | `[{nodeId, vectorScore, graphScore, fusedScore, bindings, columnData}, …]` | Multi-model result shape. |
 
-A query whose length differs from `store.dimension` throws before any scoring
-happens — the error names both the expected and the received length.
+Before any scoring, as core does for a collection, a vector search throws when
+the store is metadata-only (`VELES-015`), when the query's length differs from
+`store.dimension` (`VELES-004`, naming both lengths), or when a component is
+`NaN` or infinite (`VELES-005`). Every insert refuses a non-finite component
+too.
 
 ### Filter format
 
