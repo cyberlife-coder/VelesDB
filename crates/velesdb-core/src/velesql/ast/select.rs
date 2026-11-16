@@ -27,6 +27,10 @@ use super::with_clause::WithClause;
 ///   outer `LIMIT` caps the merged result.
 pub const DEFAULT_SELECT_LIMIT: u64 = 10;
 
+/// The largest `LIMIT` any engine honours: a larger one is capped to it, as
+/// is the fetch of a compound operand or a JOIN side.
+pub const MAX_SELECT_LIMIT: u64 = 100_000;
+
 /// DISTINCT mode for SELECT queries (EPIC-052 US-001).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[non_exhaustive]

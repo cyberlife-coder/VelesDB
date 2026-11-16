@@ -89,6 +89,11 @@ fn insert_row(
     let payload = build_payload(&stmt.columns, row, id_idx, vector_idx, params)?;
 
     if is_metadata {
+        // Core refuses a vector on a metadata-only collection rather than
+        // dropping it (`build_insert_point`): the same words here.
+        if vector_idx.is_some() {
+            return Err("INSERT on metadata-only collection cannot set 'vector'".to_string());
+        }
         insert_metadata_row(store, id, payload);
         return Ok(());
     }

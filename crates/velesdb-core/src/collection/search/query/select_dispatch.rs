@@ -544,7 +544,7 @@ impl Collection {
         results
             .iter()
             .map(|r| {
-                super::ordering::evaluate_let_bindings(
+                crate::velesql::evaluate_let_bindings(
                     let_bindings,
                     r.score,
                     r.point.payload.as_ref(),

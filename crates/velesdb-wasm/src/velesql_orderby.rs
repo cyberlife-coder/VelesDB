@@ -6,11 +6,11 @@
 //! expressions over the per-row score + payload.
 //!
 //! Sorting operates on core [`SearchResult`] values so the same rows can be
-//! projected through velesdb-core's projection engine afterwards (#3b). The
-//! arithmetic evaluator mirrors core's `ordering::evaluate_arithmetic`: score
-//! variables resolve to the row's search score, payload variables to their
-//! numeric value (0.0 when missing/non-numeric), and division by zero yields
-//! 0.0.
+//! projected through velesdb-core's projection engine afterwards (#3b). A
+//! score variable (`score`, `vector_score`, ...) and an arithmetic key resolve
+//! through core's own [`velesdb_core::velesql::ScoreContext`] — the same
+//! resolution order (LET, search score, component scores, `id`, payload) as
+//! core's ORDER BY, so no name reads differently in the browser.
 //!
 //! Genuinely unevaluable forms — `similarity(field, $v)` against a named
 //! vector, which WASM does not store, and aggregate ORDER BY outside an
@@ -21,12 +21,9 @@ use std::cmp::Ordering;
 
 use velesdb_core::point::SearchResult;
 use velesdb_core::velesql::{
-    ArithmeticExpr, ArithmeticOp, OrderByExpr, SelectOrderBy, SelectStatement,
+    evaluate_arithmetic, is_builtin_score_variable, ArithmeticExpr, OrderByExpr, ScoreContext,
+    SelectOrderBy, SelectStatement,
 };
-
-/// Maximum recursion depth for arithmetic evaluation (mirrors core's
-/// `MAX_ARITHMETIC_DEPTH`).
-const MAX_ARITHMETIC_DEPTH: u8 = 64;
 
 /// Sorts a result set in place according to the SELECT's ORDER BY clause.
 ///
@@ -112,14 +109,18 @@ fn compare_with_spec(a: &SearchResult, b: &SearchResult, spec: &SelectOrderBy) -
     }
 }
 
-/// Compares a pair of rows by the given column. `id` and `score` are
-/// resolved from their dedicated fields; everything else from the payload.
+/// Compares a pair of rows by the given column: `id` is the point id, a
+/// score variable resolves as core resolves it, any other name is a payload
+/// field.
 fn compare_field(a: &SearchResult, b: &SearchResult, name: &str) -> Ordering {
     if name == "id" {
         return a.point.id.cmp(&b.point.id);
     }
-    if name == "score" {
-        return compare_scores(a, b);
+    if is_builtin_score_variable(name) {
+        return compare_f32(
+            score_context(a).resolve_variable(name),
+            score_context(b).resolve_variable(name),
+        );
     }
     let va = extract_payload_field(a, name);
     let vb = extract_payload_field(b, name);
@@ -151,73 +152,22 @@ fn extract_payload_field(result: &SearchResult, column: &str) -> Option<serde_js
         .and_then(|p| velesdb_core::velesql::row_field(p, column).cloned())
 }
 
-/// Evaluates an arithmetic ORDER BY expression for a single row, mirroring
-/// core's `ordering::evaluate_arithmetic` semantics.
+/// Evaluates an arithmetic ORDER BY expression for a single row through
+/// core's evaluator.
 fn eval_arithmetic(expr: &ArithmeticExpr, result: &SearchResult) -> f32 {
-    eval_arithmetic_inner(expr, result, 0)
+    evaluate_arithmetic(expr, &score_context(result))
 }
 
-fn eval_arithmetic_inner(expr: &ArithmeticExpr, result: &SearchResult, depth: u8) -> f32 {
-    if depth >= MAX_ARITHMETIC_DEPTH {
-        return 0.0;
-    }
-    match expr {
-        #[allow(clippy::cast_possible_truncation)]
-        ArithmeticExpr::Literal(v) => *v as f32,
-        ArithmeticExpr::Variable(name) => resolve_variable(name, result),
-        // Only bare similarity() reaches arithmetic (validation rejects the
-        // named form); it resolves to the row search score.
-        ArithmeticExpr::Similarity(_) => result.score,
-        ArithmeticExpr::BinaryOp { left, op, right } => {
-            let l = eval_arithmetic_inner(left, result, depth + 1);
-            let r = eval_arithmetic_inner(right, result, depth + 1);
-            apply_op(*op, l, r)
-        }
-        // `ArithmeticExpr` is non_exhaustive; an unknown future variant has no
-        // defined WASM semantics, so contribute a neutral 0.0 to the sort key.
-        _ => 0.0,
-    }
-}
-
-/// Applies a binary arithmetic operator; division by zero yields 0.0.
-fn apply_op(op: ArithmeticOp, l: f32, r: f32) -> f32 {
-    match op {
-        ArithmeticOp::Add => l + r,
-        ArithmeticOp::Sub => l - r,
-        ArithmeticOp::Mul => l * r,
-        ArithmeticOp::Div => {
-            if r == 0.0 {
-                0.0
-            } else {
-                l / r
-            }
-        }
-        // `ArithmeticOp` is non_exhaustive; a future operator has no defined
-        // WASM semantics, so fall back to the left operand rather than guess.
-        _ => l,
-    }
-}
-
-/// Resolves a variable name to a numeric value for arithmetic ORDER BY.
-///
-/// Score built-ins (`score`, `similarity`, `vector_score`, …) resolve to the
-/// row search score — WASM scores only the primary vector, so absent
-/// component scores fall back to the search score (core's legacy/untagged
-/// path). Any other name is a payload field (0.0 when missing/non-numeric).
-fn resolve_variable(name: &str, result: &SearchResult) -> f32 {
-    match name {
-        "score" | "similarity" | "fused_score" | "vector_score" | "graph_score" | "bm25_score"
-        | "sparse_score" => result.score,
-        _ => extract_payload_field(result, name)
-            .as_ref()
-            .and_then(serde_json::Value::as_f64)
-            .map_or(0.0, |v| {
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    v as f32
-                }
-            }),
-    }
+/// What a row's score variables read: its search score, its component
+/// breakdown (a NEAR row carries `vector_score`, as in core) and its id.
+fn score_context(result: &SearchResult) -> ScoreContext<'_> {
+    ScoreContext::with_let_bindings(
+        result.score,
+        result.point.payload.as_ref(),
+        result.component_scores.as_deref(),
+        None,
+    )
+    .for_point(result.point.id)
 }
 
 #[cfg(test)]

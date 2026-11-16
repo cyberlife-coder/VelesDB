@@ -93,11 +93,15 @@ pub use param_binding::{bind_condition, bind_match_clause, bind_value};
 pub(crate) mod condition_tree;
 mod join_row;
 mod pattern_match;
+mod score_context;
 mod set_operation;
 mod similarity_threshold;
 mod vector_predicates;
 pub use join_row::{merge_side, scope_base, side_alias};
 pub use pattern_match::{element_property, has_every_label, inline_properties_hold};
+pub use score_context::{
+    evaluate_arithmetic, evaluate_let_bindings, is_builtin_score_variable, ScoreContext,
+};
 pub use set_operation::{
     compound_window, execute_compound, operand_queries, row_key, CompoundWindow,
 };
@@ -299,6 +303,7 @@ pub use ast::{
     WithValue,
     // Implicit LIMIT contract (every SELECT without LIMIT)
     DEFAULT_SELECT_LIMIT,
+    MAX_SELECT_LIMIT,
 };
 pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks
