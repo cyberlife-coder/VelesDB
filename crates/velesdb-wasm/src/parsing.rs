@@ -44,7 +44,7 @@ pub fn parse_storage_mode(mode: &str) -> Result<StorageMode, JsValue> {
 
 /// Delegates to the `FromStr` impl of [`velesdb_core::StorageMode`] (single source of truth)
 /// and maps to the local WASM `StorageMode` enum.
-fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
+pub(crate) fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
     let core: velesdb_core::StorageMode = mode.parse()?;
     Ok(core_to_wasm_storage_mode(core))
 }

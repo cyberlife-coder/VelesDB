@@ -58,7 +58,15 @@ fn create_collection(
     match &stmt.kind {
         CreateCollectionKind::Metadata => db.create_metadata_collection(&stmt.name),
         CreateCollectionKind::Vector(params) => {
-            db.create_collection(&stmt.name, params.dimension, &params.metric)
+            // Read as core's DDL executor reads it: an unknown mode is refused.
+            // `m` / `ef_construction` tune an HNSW graph WASM does not build.
+            let mode = params
+                .storage
+                .as_deref()
+                .map(crate::parsing::parse_storage_mode_inner)
+                .transpose()?
+                .unwrap_or(crate::StorageMode::Full);
+            db.create_collection_with_mode(&stmt.name, params.dimension, &params.metric, mode)
         }
         CreateCollectionKind::Graph(_) => {
             Err("Graph collections are not supported in WASM (use GraphStore directly)".to_string())
