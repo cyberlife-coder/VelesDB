@@ -7,10 +7,16 @@
 
 import type {
   QueryApiResponse,
+  QueryResponseMeta,
   ExplainResponse,
+  ExplainPlanStep,
+  ExplainCost,
+  ExplainFeatures,
+  ActualStats,
+  NodeStats,
   CollectionSanityResponse,
 } from '../types';
-import type { BaseTransport } from './shared';
+import type { BaseTransport, TransportResponse } from './shared';
 import { throwOnError, collectionPath } from './shared';
 
 /** REST API shape for EXPLAIN responses. */
@@ -109,20 +115,51 @@ export function isLikelyDdlOrMutationQuery(queryString: string): boolean {
     || /^\s*SELECT\s+EDGES\b/i.test(queryString);
 }
 
-export async function query(
+/** Wrap the raw `result` payload of an `/aggregate` answer. */
+function aggregationResponse(rawData: Record<string, unknown>): QueryApiResponse {
+  return {
+    result: rawData.result as Record<string, unknown> | unknown[],
+    stats: {
+      executionTimeMs: (rawData.timing_ms as number | undefined) ?? 0,
+      strategy: 'aggregation',
+      scannedNodes: 0,
+    },
+  };
+}
+
+/** Map the `meta` section of a `/query` response (`QueryResponseMeta`), when present. */
+function queryMeta(rawData: Record<string, unknown> | undefined): QueryResponseMeta | undefined {
+  const meta = rawData?.meta;
+  if (meta == null) return undefined;
+  const m = meta as Record<string, unknown>;
+  return {
+    velesqlContractVersion: m.velesql_contract_version as string,
+    count: m.count as number,
+  };
+}
+
+/** Project the rows of a `/query` answer — shape depends on the SELECT clause. */
+function selectResponse(rawData: Record<string, unknown> | undefined): QueryApiResponse {
+  return {
+    results: (rawData?.results ?? []) as Record<string, unknown>[],
+    stats: {
+      executionTimeMs: (rawData?.timing_ms as number | undefined) ?? 0,
+      strategy: 'select',
+      scannedNodes: (rawData?.rows_returned as number | undefined) ?? 0,
+    },
+    tookMs: (rawData?.took_ms as number | undefined) ?? undefined,
+    meta: queryMeta(rawData),
+  };
+}
+
+/** POST the query, falling back from `/aggregate` to `/query` on a BAD_REQUEST refusal. */
+async function postQuery(
   transport: QueryTransport,
   collection: string,
   queryString: string,
-  params?: Record<string, unknown>
-): Promise<QueryApiResponse> {
-  // `/aggregate` is an optimisation endpoint that only accepts aggregation
-  // queries; `/query` executes everything. The aggregation heuristic is a
-  // regex over the raw text, so a SELECT whose string literals merely contain
-  // "GROUP BY"/"COUNT(" would be misrouted and refused with a 422 — fall back
-  // to `/query` (which runs aggregations too) instead of surfacing that
-  // refusal as the query's error.
-  const useAggregate =
-    !isLikelyDdlOrMutationQuery(queryString) && isLikelyAggregationQuery(queryString);
+  params: Record<string, unknown> | undefined,
+  useAggregate: boolean
+): Promise<TransportResponse<Record<string, unknown>>> {
   const body = {
     query: queryString,
     params: params ?? {},
@@ -140,40 +177,121 @@ export async function query(
       body
     );
   }
+  return response;
+}
+
+export async function query(
+  transport: QueryTransport,
+  collection: string,
+  queryString: string,
+  params?: Record<string, unknown>
+): Promise<QueryApiResponse> {
+  // `/aggregate` is an optimisation endpoint that only accepts aggregation
+  // queries; `/query` executes everything. The aggregation heuristic is a
+  // regex over the raw text, so a SELECT whose string literals merely contain
+  // "GROUP BY"/"COUNT(" would be misrouted and refused with a 422 — fall back
+  // to `/query` (which runs aggregations too) instead of surfacing that
+  // refusal as the query's error.
+  const useAggregate =
+    !isLikelyDdlOrMutationQuery(queryString) && isLikelyAggregationQuery(queryString);
+  const response = await postQuery(transport, collection, queryString, params, useAggregate);
 
   throwOnError(response, `Collection '${collection}'`);
 
   const rawData = response.data; // Record<string, unknown> | undefined
   if (rawData != null && Object.prototype.hasOwnProperty.call(rawData, 'result')) {
-    return {
-      result: rawData.result as Record<string, unknown> | unknown[],
-      stats: {
-        executionTimeMs: (rawData.timing_ms as number | undefined) ?? 0,
-        strategy: 'aggregation',
-        scannedNodes: 0,
-      },
-    };
+    return aggregationResponse(rawData);
   }
+  // v3.0.0: Results are projected rows — `took_ms` (whole-ms compat helper)
+  // and `meta` are forwarded too — they are part of the server's
+  // QueryResponse and were previously dropped.
+  return selectResponse(rawData);
+}
 
-  // v3.0.0: Results are projected rows — shape depends on SELECT clause.
-  // `took_ms` (whole-ms compat helper) and `meta` are forwarded too — they are
-  // part of the server's QueryResponse and were previously dropped.
+function mapPlanStep(step: QueryExplainApiResponse['plan'][number]): ExplainPlanStep {
   return {
-    results: ((rawData?.results ?? []) as Record<string, unknown>[]),
-    stats: {
-      executionTimeMs: (rawData?.timing_ms as number | undefined) ?? 0,
-      strategy: 'select',
-      scannedNodes: (rawData?.rows_returned as number | undefined) ?? 0,
-    },
-    tookMs: (rawData?.took_ms as number | undefined) ?? undefined,
-    meta:
-      rawData?.meta != null
-        ? {
-            velesqlContractVersion: (rawData.meta as Record<string, unknown>)
-              .velesql_contract_version as string,
-            count: (rawData.meta as Record<string, unknown>).count as number,
-          }
-        : undefined,
+    step: step.step,
+    operation: step.operation,
+    description: step.description,
+    estimatedRows: step.estimated_rows,
+    estimationMethod: step.estimation_method ?? null,
+  };
+}
+
+function mapExplainCost(cost: QueryExplainApiResponse['estimated_cost']): ExplainCost {
+  return {
+    usesIndex: cost.uses_index,
+    indexName: cost.index_name,
+    selectivity: cost.selectivity,
+    complexity: cost.complexity,
+  };
+}
+
+function mapExplainFeatures(features: QueryExplainApiResponse['features']): ExplainFeatures {
+  return {
+    hasVectorSearch: features.has_vector_search,
+    hasFilter: features.has_filter,
+    hasOrderBy: features.has_order_by,
+    hasGroupBy: features.has_group_by,
+    hasAggregation: features.has_aggregation,
+    hasJoin: features.has_join,
+    hasFusion: features.has_fusion,
+    limit: features.limit,
+    offset: features.offset,
+  };
+}
+
+function mapActualStats(
+  stats: QueryExplainApiResponse['actual_stats']
+): ActualStats | null | undefined {
+  if (stats === null) return null;
+  if (!stats) return undefined;
+  return {
+    actualRows: stats.actual_rows,
+    actualTimeMs: stats.actual_time_ms,
+    loops: stats.loops,
+    nodesVisited: stats.nodes_visited,
+    edgesTraversed: stats.edges_traversed,
+    traversalCountersApproximate: stats.traversal_counters_approximate ?? undefined,
+    executedFilterStrategy: stats.executed_filter_strategy ?? undefined,
+  };
+}
+
+function mapNodeStats(
+  nodeStats: QueryExplainApiResponse['node_stats']
+): NodeStats[] | null | undefined {
+  if (nodeStats === null) return null;
+  if (!nodeStats) return undefined;
+  return nodeStats.map((ns) => ({
+    nodeLabel: ns.node_label,
+    actualTimeMs: ns.actual_time_ms,
+    actualRowsIn: ns.actual_rows_in,
+    actualRowsOut: ns.actual_rows_out,
+    loops: ns.loops,
+    estimated: ns.estimated,
+  }));
+}
+
+/** `?? undefined` as a helper so the mapping functions stay under the complexity budget. */
+function nullish<T>(value: T | null | undefined): T | undefined {
+  return value ?? undefined;
+}
+
+/** Map the wire EXPLAIN response to the SDK's camelCase {@link ExplainResponse}. */
+function mapExplainData(data: QueryExplainApiResponse): ExplainResponse {
+  return {
+    query: data.query,
+    queryType: data.query_type,
+    collection: data.collection,
+    plan: data.plan.map(mapPlanStep),
+    estimatedCost: mapExplainCost(data.estimated_cost),
+    features: mapExplainFeatures(data.features),
+    cacheHit: nullish(data.cache_hit),
+    planReuseCount: nullish(data.plan_reuse_count),
+    estimatedCostMs: nullish(data.estimated_cost_ms),
+    actualTimeMs: nullish(data.actual_time_ms),
+    actualStats: mapActualStats(data.actual_stats),
+    nodeStats: mapNodeStats(data.node_stats),
   };
 }
 
@@ -199,63 +317,7 @@ export async function queryExplain(
 
   throwOnError(response);
 
-  const data = response.data!;
-  return {
-    query: data.query,
-    queryType: data.query_type,
-    collection: data.collection,
-    plan: data.plan.map(step => ({
-      step: step.step,
-      operation: step.operation,
-      description: step.description,
-      estimatedRows: step.estimated_rows,
-      estimationMethod: step.estimation_method ?? null,
-    })),
-    estimatedCost: {
-      usesIndex: data.estimated_cost.uses_index,
-      indexName: data.estimated_cost.index_name,
-      selectivity: data.estimated_cost.selectivity,
-      complexity: data.estimated_cost.complexity,
-    },
-    features: {
-      hasVectorSearch: data.features.has_vector_search,
-      hasFilter: data.features.has_filter,
-      hasOrderBy: data.features.has_order_by,
-      hasGroupBy: data.features.has_group_by,
-      hasAggregation: data.features.has_aggregation,
-      hasJoin: data.features.has_join,
-      hasFusion: data.features.has_fusion,
-      limit: data.features.limit,
-      offset: data.features.offset,
-    },
-    cacheHit: data.cache_hit ?? undefined,
-    planReuseCount: data.plan_reuse_count ?? undefined,
-    estimatedCostMs: data.estimated_cost_ms ?? undefined,
-    actualTimeMs: data.actual_time_ms ?? undefined,
-    actualStats: data.actual_stats
-      ? {
-          actualRows: data.actual_stats.actual_rows,
-          actualTimeMs: data.actual_stats.actual_time_ms,
-          loops: data.actual_stats.loops,
-          nodesVisited: data.actual_stats.nodes_visited,
-          edgesTraversed: data.actual_stats.edges_traversed,
-          traversalCountersApproximate:
-            data.actual_stats.traversal_counters_approximate ?? undefined,
-          executedFilterStrategy:
-            data.actual_stats.executed_filter_strategy ?? undefined,
-        }
-      : data.actual_stats === null ? null : undefined,
-    nodeStats: data.node_stats
-      ? data.node_stats.map(ns => ({
-          nodeLabel: ns.node_label,
-          actualTimeMs: ns.actual_time_ms,
-          actualRowsIn: ns.actual_rows_in,
-          actualRowsOut: ns.actual_rows_out,
-          loops: ns.loops,
-          estimated: ns.estimated,
-        }))
-      : data.node_stats === null ? null : undefined,
-  };
+  return mapExplainData(response.data!);
 }
 
 export async function collectionSanity(

@@ -46,31 +46,14 @@ function fusionToWire(fusion: SearchFusionOptions): Record<string, unknown> {
   };
 }
 
-/**
- * Build a full `SearchRequest` body (`api_types/requests.rs`) from the option
- * bag: every field the server accepts is forwarded — `top_k`, `mode` (from
- * `quality`), `ef_search`, `timeout_ms`, `filter`, `sparse_vector`,
- * `sparse_vectors`, `sparse_index`, and `fusion`.
- */
-function searchBody(
+type SearchOptionsBag = SearchOptions | BatchSearchItem;
+
+/** Forward the sparse fields (`sparse_vector`, `sparse_vectors`, `sparse_index`). */
+function addSparseFields(
+  body: Record<string, unknown>,
   transport: SearchTransport,
-  vector: number[] | Float32Array | undefined,
-  options?: SearchOptions | BatchSearchItem
-): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    top_k: options?.k ?? 10,
-    filter: normalizeFilter(options?.filter),
-    ...searchQualityToMode(options?.quality),
-  };
-  if (vector !== undefined) {
-    body.vector = toNumberArray(vector);
-  }
-  if (options?.efSearch !== undefined) {
-    body.ef_search = options.efSearch;
-  }
-  if (options?.timeoutMs !== undefined) {
-    body.timeout_ms = options.timeoutMs;
-  }
+  options?: SearchOptionsBag
+): void {
   if (options?.sparseVector) {
     body.sparse_vector = transport.sparseToRest(options.sparseVector);
   }
@@ -84,9 +67,46 @@ function searchBody(
   if (options?.sparseIndexName) {
     body.sparse_index = options.sparseIndexName;
   }
+}
+
+/** Forward the REST-only option fields (`ef_search`, `timeout_ms`, `fusion`) plus sparse. */
+function addOptionFields(
+  body: Record<string, unknown>,
+  transport: SearchTransport,
+  options?: SearchOptionsBag
+): void {
+  if (options?.efSearch !== undefined) {
+    body.ef_search = options.efSearch;
+  }
+  if (options?.timeoutMs !== undefined) {
+    body.timeout_ms = options.timeoutMs;
+  }
   if (options?.fusion) {
     body.fusion = fusionToWire(options.fusion);
   }
+  addSparseFields(body, transport, options);
+}
+
+/**
+ * Build a full `SearchRequest` body (`api_types/requests.rs`) from the option
+ * bag: every field the server accepts is forwarded — `top_k`, `mode` (from
+ * `quality`), `ef_search`, `timeout_ms`, `filter`, `sparse_vector`,
+ * `sparse_vectors`, `sparse_index`, and `fusion`.
+ */
+function searchBody(
+  transport: SearchTransport,
+  vector: number[] | Float32Array | undefined,
+  options?: SearchOptionsBag
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    top_k: options?.k ?? 10,
+    filter: normalizeFilter(options?.filter),
+    ...searchQualityToMode(options?.quality),
+  };
+  if (vector !== undefined) {
+    body.vector = toNumberArray(vector);
+  }
+  addOptionFields(body, transport, options);
   return body;
 }
 

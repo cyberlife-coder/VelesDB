@@ -39,39 +39,6 @@ function asNumber(value: unknown): number {
   return typeof value === 'number' ? value : Number(value);
 }
 
-/** Map one SSE `data:` payload to a typed event. Unknown events are skipped. */
-function parseSseEvent(event: string, data: string): TraverseStreamEvent | null {
-  const payload = safeJsonParseLike(data);
-  switch (event) {
-    case 'node':
-      return {
-        type: 'node',
-        id: (payload.id as string | number) ?? 0,
-        depth: asNumber(payload.depth),
-        path: Array.isArray(payload.path)
-          ? (payload.path as Array<string | number>)
-          : [],
-      };
-    case 'stats':
-      return {
-        type: 'stats',
-        nodesVisited: asNumber(payload.nodes_visited),
-        elapsedMs: asNumber(payload.elapsed_ms),
-      };
-    case 'done':
-      return {
-        type: 'done',
-        totalNodes: asNumber(payload.total_nodes),
-        maxDepthReached: asNumber(payload.max_depth_reached),
-        elapsedMs: asNumber(payload.elapsed_ms),
-      };
-    case 'error':
-      return { type: 'error', message: String(payload.error ?? data) };
-    default:
-      return null;
-  }
-}
-
 /** Tolerant JSON parse that returns the raw string's fields or a stub. */
 function safeJsonParseLike(data: string): Record<string, unknown> {
   try {
@@ -85,38 +52,98 @@ function safeJsonParseLike(data: string): Record<string, unknown> {
   return {};
 }
 
+/** One SSE event name → how to build its typed payload from the `data:` JSON. */
+type EventBuilder = (payload: Record<string, unknown>, data: string) => TraverseStreamEvent;
+
+const EVENT_BUILDERS: Record<string, EventBuilder> = {
+  node: (p) => ({
+    type: 'node',
+    id: (p.id as string | number) ?? 0,
+    depth: asNumber(p.depth),
+    path: Array.isArray(p.path) ? (p.path as Array<string | number>) : [],
+  }),
+  stats: (p) => ({
+    type: 'stats',
+    nodesVisited: asNumber(p.nodes_visited),
+    elapsedMs: asNumber(p.elapsed_ms),
+  }),
+  done: (p) => ({
+    type: 'done',
+    totalNodes: asNumber(p.total_nodes),
+    maxDepthReached: asNumber(p.max_depth_reached),
+    elapsedMs: asNumber(p.elapsed_ms),
+  }),
+  error: (p, data) => ({ type: 'error', message: String(p.error ?? data) }),
+};
+
+/** Map one SSE `data:` payload to a typed event. Unknown events are skipped. */
+function parseSseEvent(event: string, data: string): TraverseStreamEvent | null {
+  const builder = EVENT_BUILDERS[event];
+  return builder ? builder(safeJsonParseLike(data), data) : null;
+}
+
 /**
- * Open the SSE traversal stream and yield its events as they arrive.
- *
- * The HTTP status is checked first: a 4xx/5xx answers a JSON error body and
- * throws the typed error (same mapping as the other raw-stream endpoints).
- * An `error` SSE event (the server sends it alone when the traversal worker
- * fails) is yielded as data, not thrown.
+ * Incremental SSE framing: accumulates the `event:`/`data:` lines of one
+ * event block, then turns the completed block into a typed event.
  */
-export async function* streamTraverse(
+class SseEventParser {
+  private event = 'message';
+  private data: string[] = [];
+
+  pushLine(line: string): void {
+    if (line.startsWith('event:')) {
+      this.event = line.slice(6).trim();
+    } else if (line.startsWith('data:')) {
+      this.data.push(line.slice(5).trimStart());
+    }
+    // comment lines (`:`) and other fields are ignored
+  }
+
+  flush(): TraverseStreamEvent | null {
+    const event = this.event;
+    const data = this.data.join('\n');
+    this.event = 'message';
+    this.data = [];
+    return data ? parseSseEvent(event, data) : null;
+  }
+}
+
+/** Feed one raw event block (no blank line) through the parser, yielding its event. */
+function* eventsInBlock(parser: SseEventParser, block: string): Generator<TraverseStreamEvent> {
+  for (const line of block.split('\n')) {
+    parser.pushLine(line);
+  }
+  const parsed = parser.flush();
+  if (parsed) yield parsed;
+}
+
+function buildStreamUrl(
   transport: SseTransport,
   collection: string,
   request: StreamTraverseRequest
-): AsyncIterable<TraverseStreamEvent> {
-  const url =
+): string {
+  return (
     `${transport.baseUrl}${collectionPath(collection)}/graph/traverse/stream` +
-    `?${streamTraverseQuery(request)}`;
+    `?${streamTraverseQuery(request)}`
+  );
+}
+
+function streamHeaders(transport: SseTransport): Record<string, string> {
   const headers: Record<string, string> = { Accept: 'text/event-stream' };
   if (transport.apiKey) {
     headers['Authorization'] = `Bearer ${transport.apiKey}`;
   }
+  return headers;
+}
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), transport.timeout);
-  let response: Response;
+async function fetchStream(
+  url: string,
+  headers: Record<string, string>,
+  signal: AbortSignal
+): Promise<Response> {
   try {
-    response = await fetch(url, {
-      method: 'GET',
-      headers,
-      signal: controller.signal,
-    });
+    return await fetch(url, { method: 'GET', headers, signal });
   } catch (error) {
-    clearTimeout(timeoutId);
     if (error instanceof Error && error.name === 'AbortError') {
       throw new ConnectionError('Request timeout');
     }
@@ -125,63 +152,67 @@ export async function* streamTraverse(
       error instanceof Error ? error : undefined
     );
   }
+}
 
+/**
+ * A 4xx/5xx answers a JSON error body, not a stream — throw the typed error
+ * (same mapping as the other raw-stream endpoints).
+ */
+async function throwUnlessStreamOk(response: Response): Promise<void> {
+  if (response.ok && response.body) return;
+  const data = await safeJsonParse(response);
+  const ep = extractErrorPayload(data);
+  throw new VelesDBError(
+    ep.message ?? `HTTP ${response.status}`,
+    ep.code ?? mapStatusToErrorCode(response.status)
+  );
+}
+
+/** Read the response body as SSE frames (events separated by a blank line) and yield them. */
+async function* readStreamEvents(response: Response): AsyncIterable<TraverseStreamEvent> {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  const parser = new SseEventParser();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      yield* eventsInBlock(parser, block);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    yield* eventsInBlock(parser, buffer);
+  }
+}
+
+/**
+ * Open the SSE traversal stream and yield its events as they arrive.
+ *
+ * The HTTP status is checked first: a 4xx/5xx throws the typed error. An
+ * `error` SSE event (the server sends it alone when the traversal worker
+ * fails) is yielded as data, not thrown.
+ */
+export async function* streamTraverse(
+  transport: SseTransport,
+  collection: string,
+  request: StreamTraverseRequest
+): AsyncIterable<TraverseStreamEvent> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), transport.timeout);
   try {
-    if (!response.ok || !response.body) {
-      const data = await safeJsonParse(response);
-      const ep = extractErrorPayload(data);
-      throw new VelesDBError(
-        ep.message ?? `HTTP ${response.status}`,
-        ep.code ?? mapStatusToErrorCode(response.status)
-      );
-    }
-
-    // SSE framing: events separated by a blank line; each event has
-    // `event: <name>` and one or more `data: <line>` fields.
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let currentEvent = 'message';
-    let currentData: string[] = [];
-
-    const flush = (): TraverseStreamEvent | null => {
-      const event = currentEvent;
-      const data = currentData.join('\n');
-      currentEvent = 'message';
-      currentData = [];
-      if (!data) return null;
-      return parseSseEvent(event, data);
-    };
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let sep: number;
-      while ((sep = buffer.indexOf('\n\n')) !== -1) {
-        const rawEvent = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
-        for (const line of rawEvent.split('\n')) {
-          if (line.startsWith('event:')) {
-            currentEvent = line.slice(6).trim();
-          } else if (line.startsWith('data:')) {
-            currentData.push(line.slice(5).trimStart());
-          }
-          // comment lines (`:`) and other fields are ignored
-        }
-        const parsed = flush();
-        if (parsed) yield parsed;
-      }
-    }
-    buffer += decoder.decode();
-    if (buffer.trim()) {
-      for (const line of buffer.split('\n')) {
-        if (line.startsWith('event:')) currentEvent = line.slice(6).trim();
-        else if (line.startsWith('data:')) currentData.push(line.slice(5).trimStart());
-      }
-      const parsed = flush();
-      if (parsed) yield parsed;
-    }
+    const response = await fetchStream(
+      buildStreamUrl(transport, collection, request),
+      streamHeaders(transport),
+      controller.signal
+    );
+    await throwUnlessStreamOk(response);
+    yield* readStreamEvents(response);
   } finally {
     clearTimeout(timeoutId);
   }
