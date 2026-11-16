@@ -319,6 +319,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tauri example and RAG demo run core calls off the async runtime**
+  (Tauri, 2026-11-16). `examples/graph-and-memory` and
+  `demos/tauri-rag-app` called `VelesDbState::with_db` from `async`
+  commands, running synchronous, fsync-ing core calls on a runtime worker —
+  the pattern `with_db`'s own documentation warns against. They use
+  `run_db`, which moves the call to the blocking pool; the demo now times
+  only the search itself, inside the blocking task.
+
 - **Tauri: every write and delete emits `collection-updated`** (core, Tauri,
   2026-11-16). The plugin emitted the event by hand from a few commands:
   `delete_points` never did although documented, `VelesQL` `INSERT` /

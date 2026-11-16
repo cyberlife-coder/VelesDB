@@ -21,7 +21,8 @@ src/graph-and-memory.js          <- the frontend half: edges, traversal, memory,
 **1. Graph nodes cannot be created from the frontend.** `add_edge` refuses an
 edge whose endpoints have no stored node payload (#1442), and no IPC command
 upserts a node payload. The nodes have to be created on the Rust side —
-`velesdb_setup.rs` does it through `VelesDbState::with_db`.
+`velesdb_setup.rs` does it through `VelesDbState::run_db`, which runs the core
+call on the blocking pool rather than on an async runtime worker.
 
 Call `seed_graph_nodes` from your own `#[tauri::command]`, or from the `setup`
 hook once the plugin has opened the database. Either way it must run **after**
