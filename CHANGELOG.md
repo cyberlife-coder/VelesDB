@@ -369,6 +369,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors as VELES-009 (a caller configuration error); they keep core's code
   (an invalid edge label is VELES-021).
 
+- **The Tauri plugin's TypeScript bindings cover every command**
+  (tauri-plugin-velesdb, 2026-11-16). `guest-js/index.ts` wrapped 38 of the
+  69 registered commands: `search_ids`, `compact_storage`, the guardrail
+  pair, `enable_streaming`, `add_edges_batch` and 25 agent-memory commands
+  (semantic TTL store and dimension; delete and serialize/deserialize for
+  all three stores; episodic recall and age queries; procedural reinforce
+  and listing; TTL, eviction, snapshot versioning and the VelesQL bridge)
+  were reachable only through a raw,
+  untyped `invoke`. Each now has a typed function whose request and result
+  interfaces mirror the Rust DTOs field for field, passing the argument name
+  the command reads (`request`, `name`, `limits` or `data`). A test beside
+  the permission drift gates parses the `invoke_handler` registration and
+  the bindings and fails on a command missing from either side. The plugin
+  reference no longer claims every command takes `request` but
+  `delete_collection`.
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with

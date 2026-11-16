@@ -671,6 +671,44 @@ fn test_build_rs_commands_match_lib_rs_registration() {
     );
 }
 
+/// Extracts the command names the guest-js bindings invoke: every
+/// `'plugin:velesdb|<name>'` literal in `guest-js/index.ts`.
+fn commands_invoked_by_guest_js() -> Vec<String> {
+    const PREFIX: &str = "'plugin:velesdb|";
+    include_str!("../guest-js/index.ts")
+        .split(PREFIX)
+        .skip(1)
+        .filter_map(|rest| rest.split_once('\''))
+        .map(|(cmd, _)| cmd.to_string())
+        .collect()
+}
+
+/// Drift gate: the guest-js surface must mirror the `invoke_handler`
+/// registration in `lib.rs` 1:1. A registered command with no binding is
+/// reachable from the webview only through a raw, untyped `invoke`; a
+/// binding for an unregistered command fails at runtime on every call.
+#[test]
+fn test_guest_js_bindings_match_lib_rs_registration() {
+    let registered: std::collections::BTreeSet<String> =
+        commands_registered_in_lib_rs().into_iter().collect();
+    let invoked: std::collections::BTreeSet<String> =
+        commands_invoked_by_guest_js().into_iter().collect();
+    let missing: Vec<&String> = registered.difference(&invoked).collect();
+    let orphaned: Vec<&String> = invoked.difference(&registered).collect();
+    assert!(
+        missing.is_empty(),
+        "Commands registered in lib.rs invoke_handler but with no binding in \
+         guest-js/index.ts: {missing:?}.\n\
+         Add an exported function invoking 'plugin:velesdb|<name>' for each."
+    );
+    assert!(
+        orphaned.is_empty(),
+        "guest-js/index.ts invokes commands not registered in lib.rs invoke_handler: \
+         {orphaned:?}.\n\
+         Remove the stale bindings or register the commands."
+    );
+}
+
 /// Parses `permissions/default.toml` and returns the `[default]` permission
 /// strings.
 fn default_permission_strings() -> Vec<String> {
