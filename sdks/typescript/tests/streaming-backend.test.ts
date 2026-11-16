@@ -117,6 +117,25 @@ describe('streamUpsertPoints', () => {
     expect(parsed.sparse_vector).toEqual({ 5: 0.8, 10: 0.3 });
   });
 
+  it('should include sparse_vectors (named map) in NDJSON when present', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ message: 'ok', inserted: 1, malformed: 0, failed_upserts: 0, network_errors: 0 }),
+    });
+
+    const transport = buildTransport();
+    const docs = [
+      { id: 1, vector: [1.0, 0.0], sparseVectors: { keywords: { 7: 0.9, 42: 0.4 } } },
+    ];
+
+    await streamUpsertPoints(transport, 'col', docs);
+
+    const body = (mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string;
+    const parsed = JSON.parse(body);
+    expect(parsed.sparse_vectors).toEqual({ keywords: { 7: 0.9, 42: 0.4 } });
+  });
+
   it('should throw BackpressureError on 429 response', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,

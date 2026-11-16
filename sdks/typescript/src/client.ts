@@ -8,10 +8,12 @@ import type {
   Collection,
   VectorDocument,
   SearchOptions,
-  SearchQuality,
   SearchResult,
+  BatchSearchItem,
+  HybridSearchOptions,
   TextSearchResult,
   IVelesDBBackend,
+  IVelesDBMaintenanceBackend,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
   SparseVector,
@@ -53,18 +55,31 @@ import type {
   RelateRequest,
   RelateResponse,
   RelationsResponse,
+  AddEdgesBatchResponse,
+  HealthStatus,
+  VacuumResult,
+  CompactResult,
+  ReorderResult,
+  CollectionDiagnostics,
+  StreamTraverseRequest,
+  TraverseStreamEvent,
 } from './types';
 import type { FilterInput } from './filter';
 import type { CapabilityMap } from './capabilities';
-import { ValidationError } from './types';
+import { ValidationError, VelesDBError } from './types';
 import { WasmBackend } from './backends/wasm';
 import { RestBackend } from './backends/rest';
 import { AgentMemoryClient } from './agent-memory';
 import {
   requireNonEmptyString,
+  requireDimensionInRange,
   validateDocsBatch,
   validateDocument,
   validateRestPointId,
+  refuseRestOnlyOptions,
+  refuseUnsupportedBatchFields,
+  refuseNamedSparseOnDocs,
+  refuseSparseOnStreamInsert,
 } from './client/validation';
 import * as searchMethods from './client/search-methods';
 import * as graphMethods from './client/graph-methods';
@@ -143,8 +158,13 @@ export class VelesDB {
     this.ensureInitialized();
     requireNonEmptyString(name, 'Collection name');
     const isMetadataOnly = config.collectionType === 'metadata_only';
-    if (!isMetadataOnly && (!config.dimension || config.dimension <= 0)) {
-      throw new ValidationError('Dimension must be a positive integer for vector collections');
+    if (!isMetadataOnly) {
+      if (config.dimension === undefined) {
+        throw new ValidationError('Dimension is required for vector collections');
+      }
+      // Core's validate_dimension (VELES-032): integer in 1..=65536 — checked
+      // here so the WASM path refuses what core refuses, not only REST.
+      requireDimensionInRange(config.dimension);
     }
     await this.backend.createCollection(name, config);
   }
@@ -177,12 +197,14 @@ export class VelesDB {
   async upsert(collection: string, doc: VectorDocument): Promise<void> {
     this.ensureInitialized();
     validateDocument(doc, this.config);
+    refuseNamedSparseOnDocs([doc], this.backend.capabilities().namedSparseIndexes, this.config.backend);
     await this.backend.upsert(collection, doc);
   }
 
   async upsertBatch(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
     validateDocsBatch(docs, doc => { validateDocument(doc, this.config); });
+    refuseNamedSparseOnDocs(docs, this.backend.capabilities().namedSparseIndexes, this.config.backend);
     await this.backend.upsertBatch(collection, docs);
   }
 
@@ -200,6 +222,7 @@ export class VelesDB {
   async upsertBatchRaw(collection: string, docs: VectorDocument[]): Promise<number> {
     this.ensureInitialized();
     validateDocsBatch(docs, doc => { validateDocument(doc, this.config); });
+    refuseNamedSparseOnDocs(docs, this.backend.capabilities().namedSparseIndexes, this.config.backend);
     return this.backend.upsertBatchRaw(collection, docs);
   }
 
@@ -240,15 +263,22 @@ export class VelesDB {
 
   // ========================================================================
   // Search & Query -- delegates to client/search-methods.ts
+  // (capability guards live in client/validation.ts to keep this file small)
   // ========================================================================
 
   async search(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
+    refuseRestOnlyOptions(this.config.backend, options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
     return searchMethods.search(this.backend, collection, query, options);
   }
 
-  async searchBatch(collection: string, searches: Array<{ vector: number[] | Float32Array; k?: number; filter?: FilterInput; quality?: SearchQuality }>): Promise<SearchResult[][]> {
+  async searchBatch(collection: string, searches: BatchSearchItem[]): Promise<SearchResult[][]> {
     this.ensureInitialized();
+    // search-methods validates the array shape; guard the per-entry options
+    // only once it is one.
+    if (Array.isArray(searches)) {
+      refuseUnsupportedBatchFields(searches);
+    }
     return searchMethods.searchBatch(this.backend, collection, searches);
   }
 
@@ -257,8 +287,9 @@ export class VelesDB {
     return searchMethods.textSearch(this.backend, collection, query, options);
   }
 
-  async hybridSearch(collection: string, vector: number[] | Float32Array, textQuery: string, options?: { k?: number; vectorWeight?: number; filter?: FilterInput }): Promise<SearchResult[]> {
+  async hybridSearch(collection: string, vector: number[] | Float32Array, textQuery: string, options?: HybridSearchOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
+    refuseRestOnlyOptions(this.config.backend, options, ['rrfK']);
     return searchMethods.hybridSearch(this.backend, collection, vector, textQuery, options);
   }
 
@@ -281,6 +312,7 @@ export class VelesDB {
    */
   async sparseSearchNamed(collection: string, query: SparseVector, indexName: string, options?: SparseSearchNamedOptions): Promise<SearchResult[]> {
     this.ensureInitialized();
+    refuseRestOnlyOptions(this.config.backend, options, ['efSearch', 'timeoutMs']);
     return searchMethods.sparseSearchNamed(this.backend, collection, query, indexName, options);
   }
 
@@ -316,16 +348,19 @@ export class VelesDB {
 
   async streamInsert(collection: string, docs: VectorDocument[]): Promise<void> {
     this.ensureInitialized();
+    refuseSparseOnStreamInsert(docs);
     return searchMethods.streamInsert(this.backend, this.config, collection, docs);
   }
 
   async streamUpsertPoints(collection: string, docs: VectorDocument[]): Promise<StreamUpsertResponse> {
     this.ensureInitialized();
+    refuseNamedSparseOnDocs(docs, this.backend.capabilities().namedSparseIndexes, this.config.backend);
     return searchMethods.streamUpsertPoints(this.backend, this.config, collection, docs);
   }
 
   async searchIds(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<Array<{ id: number; score: number }>> {
     this.ensureInitialized();
+    refuseRestOnlyOptions(this.config.backend, options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
     return searchMethods.searchIds(this.backend, collection, query, options);
   }
 
@@ -526,6 +561,103 @@ export class VelesDB {
   async setTtlDurable(collection: string, pointId: GraphNodeId, ttlSeconds: number): Promise<void> {
     this.ensureInitialized();
     return graphMethods.setTtlDurable(this.backend, collection, pointId, ttlSeconds);
+  }
+
+  // ========================================================================
+  // Maintenance / ops (REST routes; other backends refuse NOT_SUPPORTED)
+  // ========================================================================
+
+  /**
+   * Refuse an optional maintenance/ops route the connected backend does not
+   * implement, with the same typed `NOT_SUPPORTED` code the WASM stubs use.
+   * The method is invoked with the backend as receiver (class methods use
+   * `this.ensureInitialized()`).
+   */
+  private requireOps<K extends keyof IVelesDBMaintenanceBackend>(
+    method: K,
+    ...args: Parameters<NonNullable<IVelesDBMaintenanceBackend[K]>>
+  ): ReturnType<NonNullable<IVelesDBMaintenanceBackend[K]>> {
+    const impl = (this.backend as IVelesDBMaintenanceBackend)[method];
+    if (impl === undefined) {
+      throw new VelesDBError(
+        `${String(method)} is not supported by the '${this.config.backend}' backend. Use REST backend.`,
+        'NOT_SUPPORTED'
+      );
+    }
+    return (impl as (...a: unknown[]) => ReturnType<NonNullable<IVelesDBMaintenanceBackend[K]>>).apply(
+      this.backend,
+      args
+    ) as ReturnType<NonNullable<IVelesDBMaintenanceBackend[K]>>;
+  }
+
+  /** `POST /collections/{name}/graph/edges/batch` — insert many edges at once. */
+  async addEdgesBatch(collection: string, edges: AddEdgeRequest[]): Promise<AddEdgesBatchResponse> {
+    this.ensureInitialized();
+    return graphMethods.addEdgesBatch(this.backend, collection, edges);
+  }
+
+  /** `POST /collections/{name}/vacuum` — compact tombstoned index entries. */
+  async vacuumCollection(collection: string): Promise<VacuumResult> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.requireOps('vacuumCollection', collection);
+  }
+
+  /** `POST /collections/{name}/compact` — rewrite vector storage contiguously. */
+  async compactCollection(collection: string): Promise<CompactResult> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.requireOps('compactCollection', collection);
+  }
+
+  /** `POST /collections/{name}/locality/reorder` — cache-locality reordering. */
+  async reorderForLocality(collection: string): Promise<ReorderResult> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.requireOps('reorderForLocality', collection);
+  }
+
+  /** `GET /collections/{name}/diagnostics` — index health snapshot. */
+  async collectionDiagnostics(collection: string): Promise<CollectionDiagnostics> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    return this.requireOps('collectionDiagnostics', collection);
+  }
+
+  /** `GET /health` — server liveness probe. */
+  async healthCheck(): Promise<HealthStatus> {
+    this.ensureInitialized();
+    return this.requireOps('healthCheck');
+  }
+
+  /** `GET /ready` — server readiness probe (throws SERVICE_UNAVAILABLE while not ready). */
+  async readyCheck(): Promise<HealthStatus> {
+    this.ensureInitialized();
+    return this.requireOps('readyCheck');
+  }
+
+  /**
+   * `GET /collections/{name}/graph/traverse/stream` — stream a graph
+   * traversal as SSE events (`node` / `stats` / `done` / `error`).
+   *
+   * Returns an async iterable: consume it with `for await (const ev of
+   * db.streamTraverse(...))`. REST only.
+   */
+  streamTraverse(
+    collection: string,
+    request: StreamTraverseRequest
+  ): AsyncIterable<TraverseStreamEvent> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    const ops = this.backend as IVelesDBMaintenanceBackend;
+    const fn = ops.streamTraverse;
+    if (!fn) {
+      throw new VelesDBError(
+        `streamTraverse is not supported by the '${this.config.backend}' backend. Use REST backend.`,
+        'NOT_SUPPORTED'
+      );
+    }
+    return fn.call(this.backend, collection, request);
   }
 
   // ========================================================================

@@ -402,3 +402,16 @@ fn outside_roots_error_never_echoes_resolved_target() {
         "error must never echo the resolved target: {message}"
     );
 }
+
+#[test]
+fn paths_exposes_the_canonical_roots_to_any_caller() {
+    // The allowlist accessor is not `mcp`-gated: language bindings (which
+    // compile this crate without the `mcp` feature) read it to build the
+    // anchoring allowlist handed to `AnchorRoot::open`.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let roots = roots_for(dir.path());
+    let paths = roots.paths();
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0], fs::canonicalize(dir.path()).expect("canonical"));
+    assert!(paths[0].is_absolute());
+}

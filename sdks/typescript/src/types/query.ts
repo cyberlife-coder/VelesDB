@@ -61,6 +61,17 @@ export interface ActualStats {
   loops: number;
   nodesVisited: number;
   edgesTraversed: number;
+  /**
+   * When true, `nodesVisited`/`edgesTraversed` are strategy-dependent
+   * approximations (a lower bound), not exact counts (server
+   * `traversal_counters_approximate`).
+   */
+  traversalCountersApproximate?: boolean;
+  /**
+   * Filter strategy the executor actually ran (`executed_filter_strategy`),
+   * present for single SELECTs that went through filtered vector search.
+   */
+  executedFilterStrategy?: string | null;
 }
 
 /**
@@ -85,6 +96,15 @@ export interface NodeStats {
   estimated: boolean;
 }
 
+/** Per-index statistics in a collection stats response (`IndexStatsResponse`). */
+export interface IndexStatsDetail {
+  name: string;
+  indexType: string;
+  entryCount: number;
+  depth: number;
+  sizeBytes: number;
+}
+
 /** Collection statistics response */
 export interface CollectionStatsResponse {
   totalPoints: number;
@@ -93,8 +113,11 @@ export interface CollectionStatsResponse {
   deletedCount: number;
   avgRowSizeBytes: number;
   payloadSizeBytes: number;
-  lastAnalyzedEpochMs: number;
+  /** Epoch ms of the last ANALYZE, or `null` when never analyzed (server `Option<u64>`). */
+  lastAnalyzedEpochMs: number | null;
   columnStats?: Record<string, ColumnStatsDetail>;
+  /** Per-index statistics (`index_stats`), keyed by index name. */
+  indexStats?: Record<string, IndexStatsDetail>;
 }
 
 /** Collection configuration response. Mirrors `velesdb_core::api_types::CollectionConfigResponse`. */
@@ -147,12 +170,24 @@ export interface QueryStats {
   scannedNodes: number;
 }
 
+/** Metadata section of a `/query` response (`QueryResponseMeta`). */
+export interface QueryResponseMeta {
+  /** VelesQL contract version used by this response. */
+  velesqlContractVersion: string;
+  /** Number of rows in `results`. */
+  count: number;
+}
+
 /** Full query response with results and stats */
 export interface QueryResponse {
   /** Query results */
   results: QueryResult[];
   /** Execution statistics */
   stats: QueryStats;
+  /** Whole-millisecond execution time (`took_ms` on the wire). */
+  tookMs?: number;
+  /** Response metadata (`meta` on the wire). */
+  meta?: QueryResponseMeta;
 }
 
 /** Aggregation query response from VelesQL (`GROUP BY`, `COUNT`, `SUM`, etc.). */
@@ -209,6 +244,14 @@ export interface ExplainResponse {
   plan: ExplainPlanStep[];
   estimatedCost: ExplainCost;
   features: ExplainFeatures;
+  /** Whether the plan was served from the compiled plan cache (`cache_hit`). */
+  cacheHit?: boolean | null;
+  /** How many times the cached plan has been reused (`plan_reuse_count`). */
+  planReuseCount?: number | null;
+  /** Estimated cost in ms (`estimated_cost_ms`), for comparison with actual. */
+  estimatedCostMs?: number | null;
+  /** Actual execution time in ms, only when `analyze: true` (`actual_time_ms`). */
+  actualTimeMs?: number | null;
   actualStats?: ActualStats | null;
   nodeStats?: NodeStats[] | null;
 }

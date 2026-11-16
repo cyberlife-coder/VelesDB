@@ -12,7 +12,9 @@ import type {
   MultiQuerySearchOptions,
   SparseVector,
   SparseSearchNamedOptions,
-  SearchQuality,
+  BatchSearchItem,
+  HybridSearchOptions,
+  SearchFusionOptions,
 } from '../types';
 import type { FilterInput } from '../filter';
 import { normalizeFilter } from '../filter';
@@ -31,32 +33,93 @@ export interface SearchTransport extends BaseTransport {
   sparseToRest(sv: SparseVector): Record<string, number>;
 }
 
+/** Map {@link SearchFusionOptions} to the `FusionRequest` wire (snake_case). */
+function fusionToWire(fusion: SearchFusionOptions): Record<string, unknown> {
+  return {
+    strategy: fusion.strategy,
+    k: fusion.k,
+    dense_w: fusion.denseWeight,
+    sparse_w: fusion.sparseWeight,
+    avg_w: fusion.avgWeight,
+    max_w: fusion.maxWeight,
+    hit_w: fusion.hitWeight,
+  };
+}
+
+type SearchOptionsBag = SearchOptions | BatchSearchItem;
+
+/** Forward the sparse fields (`sparse_vector`, `sparse_vectors`, `sparse_index`). */
+function addSparseFields(
+  body: Record<string, unknown>,
+  transport: SearchTransport,
+  options?: SearchOptionsBag
+): void {
+  if (options?.sparseVector) {
+    body.sparse_vector = transport.sparseToRest(options.sparseVector);
+  }
+  if (options?.sparseVectors) {
+    const named: Record<string, Record<string, number>> = {};
+    for (const [indexName, sv] of Object.entries(options.sparseVectors)) {
+      named[indexName] = transport.sparseToRest(sv);
+    }
+    body.sparse_vectors = named;
+  }
+  if (options?.sparseIndexName) {
+    body.sparse_index = options.sparseIndexName;
+  }
+}
+
+/** Forward the REST-only option fields (`ef_search`, `timeout_ms`, `fusion`) plus sparse. */
+function addOptionFields(
+  body: Record<string, unknown>,
+  transport: SearchTransport,
+  options?: SearchOptionsBag
+): void {
+  if (options?.efSearch !== undefined) {
+    body.ef_search = options.efSearch;
+  }
+  if (options?.timeoutMs !== undefined) {
+    body.timeout_ms = options.timeoutMs;
+  }
+  if (options?.fusion) {
+    body.fusion = fusionToWire(options.fusion);
+  }
+  addSparseFields(body, transport, options);
+}
+
+/**
+ * Build a full `SearchRequest` body (`api_types/requests.rs`) from the option
+ * bag: every field the server accepts is forwarded — `top_k`, `mode` (from
+ * `quality`), `ef_search`, `timeout_ms`, `filter`, `sparse_vector`,
+ * `sparse_vectors`, `sparse_index`, and `fusion`.
+ */
+function searchBody(
+  transport: SearchTransport,
+  vector: number[] | Float32Array | undefined,
+  options?: SearchOptionsBag
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    top_k: options?.k ?? 10,
+    filter: normalizeFilter(options?.filter),
+    ...searchQualityToMode(options?.quality),
+  };
+  if (vector !== undefined) {
+    body.vector = toNumberArray(vector);
+  }
+  addOptionFields(body, transport, options);
+  return body;
+}
+
 export async function search(
   transport: SearchTransport,
   collection: string,
   query: number[] | Float32Array,
   options?: SearchOptions
 ): Promise<SearchResult[]> {
-  const queryVector = toNumberArray(query);
-
-  const body: Record<string, unknown> = {
-    vector: queryVector,
-    top_k: options?.k ?? 10,
-    filter: normalizeFilter(options?.filter),
-    ...searchQualityToMode(options?.quality),
-  };
-
-  if (options?.sparseVector) {
-    body.sparse_vector = transport.sparseToRest(options.sparseVector);
-  }
-  if (options?.sparseIndexName) {
-    body.sparse_index = options.sparseIndexName;
-  }
-
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
     `${collectionPath(collection)}/search`,
-    body
+    searchBody(transport, query, options)
   );
 
   throwOnError(response, `Collection '${collection}'`);
@@ -67,19 +130,10 @@ export async function search(
 export async function searchBatch(
   transport: SearchTransport,
   collection: string,
-  searches: Array<{
-    vector: number[] | Float32Array;
-    k?: number;
-    filter?: FilterInput;
-    quality?: SearchQuality;
-  }>
+  searches: BatchSearchItem[]
 ): Promise<SearchResult[][]> {
-  const formattedSearches = searches.map((s) => ({
-    vector: toNumberArray(s.vector),
-    top_k: s.k ?? 10,
-    filter: normalizeFilter(s.filter),
-    ...searchQualityToMode(s.quality),
-  }));
+  // Each entry is a full SearchRequest server-side, so forward every field.
+  const formattedSearches = searches.map((s) => searchBody(transport, s.vector, s));
 
   const response = await transport.requestJson<BatchSearchResponse>(
     'POST',
@@ -118,20 +172,24 @@ export async function hybridSearch(
   collection: string,
   vector: number[] | Float32Array,
   textQuery: string,
-  options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
+  options?: HybridSearchOptions
 ): Promise<SearchResult[]> {
-  const queryVector = toNumberArray(vector);
+  const body: Record<string, unknown> = {
+    vector: toNumberArray(vector),
+    query: textQuery,
+    top_k: options?.k ?? 10,
+    vector_weight: options?.vectorWeight ?? 0.5,
+    filter: normalizeFilter(options?.filter),
+  };
+  // `rrf_k` comes from HybridSearchRequestWithRrf (flattened on the wire).
+  if (options?.rrfK !== undefined) {
+    body.rrf_k = options.rrfK;
+  }
 
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
     `${collectionPath(collection)}/search/hybrid`,
-    {
-      vector: queryVector,
-      query: textQuery,
-      top_k: options?.k ?? 10,
-      vector_weight: options?.vectorWeight ?? 0.5,
-      filter: normalizeFilter(options?.filter),
-    }
+    body
   );
 
   throwOnError(response, `Collection '${collection}'`);
@@ -248,17 +306,15 @@ export async function sparseSearchNamed(
   indexName: string,
   options?: SparseSearchNamedOptions
 ): Promise<SearchResult[]> {
-  const body: Record<string, unknown> = {
-    sparse_vectors: { [indexName]: transport.sparseToRest(query) },
-    sparse_index: indexName,
-    top_k: options?.k ?? 10,
-    filter: normalizeFilter(options?.filter),
-    ...searchQualityToMode(options?.quality),
-  };
-
-  if (options?.vector) {
-    body.vector = Array.from(options.vector);
-  }
+  const body = searchBody(transport, options?.vector, {
+    k: options?.k,
+    filter: options?.filter,
+    quality: options?.quality,
+    efSearch: options?.efSearch,
+    timeoutMs: options?.timeoutMs,
+    sparseVectors: { [indexName]: query },
+    sparseIndexName: indexName,
+  });
 
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
@@ -277,19 +333,12 @@ export async function searchIds(
   query: number[] | Float32Array,
   options?: SearchOptions
 ): Promise<Array<{ id: number; score: number }>> {
-  const queryVector = toNumberArray(query);
-
   const response = await transport.requestJson<{
     results: Array<{ id: number; score: number }>;
   }>(
     'POST',
     `${collectionPath(collection)}/search/ids`,
-    {
-      vector: queryVector,
-      top_k: options?.k ?? 10,
-      filter: normalizeFilter(options?.filter),
-      ...searchQualityToMode(options?.quality),
-    }
+    searchBody(transport, query, options)
   );
 
   throwOnError(response, `Collection '${collection}'`);
