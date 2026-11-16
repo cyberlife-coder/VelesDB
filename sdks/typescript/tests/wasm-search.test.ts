@@ -937,7 +937,7 @@ describe('wasmMultiQuerySearch — fusionParams reach the binding or are refused
   );
 
   it('passes relative_score its branchWeights, one per query vector', async () => {
-    const multi = vi.fn(() => []);
+    const multi = multiQuerySearchStub([]);
     const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
 
     await wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2], [0.3, 0.4]], {
@@ -946,11 +946,11 @@ describe('wasmMultiQuerySearch — fusionParams reach the binding or are refused
     });
 
     expect(multi).toHaveBeenCalledTimes(1);
-    expect(Array.from(multi.mock.calls[0]![5] as unknown as Float32Array)).toEqual([0.75, 0.25]);
+    expect(Array.from(multi.mock.calls[0]![5] as Float32Array)).toEqual([0.75, 0.25]);
   });
 
   it('refuses relative_score branchWeights whose count is not the vector count', async () => {
-    const multi = vi.fn(() => []);
+    const multi = multiQuerySearchStub([]);
     const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
 
     const outcome = await settle(
