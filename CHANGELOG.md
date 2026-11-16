@@ -328,6 +328,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python: the facade forwards `principal` / `tenant`, and a scipy sparse
+  query reads like its dict** (Python, 2026-11-16). The `Collection` every
+  `Database` call returns defined `search`, `batch_search`,
+  `multi_query_search`, `search_batch_parallel` and `search_with_quality`
+  without the identity keywords the binding takes, so passing them raised
+  `TypeError` and an identity-keyed policy only ever saw `None`; they now
+  forward them, and a test fails when a facade override drops one. A scipy
+  sparse query was densified (out of memory on a 2^31-wide vocabulary), had
+  its rows flattened into one query and lost weights at or below
+  `f32::EPSILON`; a one-row matrix is now read through `tocoo()` with every
+  stored weight kept, and several rows are refused.
+
 - **Python: traversal steps, `FusionStrategy.weighted` keywords and
   `add_edge(..., id=)` read as written** (Python, 2026-11-16). A reverse or
   bidirectional `GraphStore.traverse_bfs` step reported `source == target`;
