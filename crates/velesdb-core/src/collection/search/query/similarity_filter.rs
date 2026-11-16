@@ -2,12 +2,8 @@
 //!
 //! Extracted from query/mod.rs for complexity reduction (EPIC-044).
 
-// Reason: Numeric casts in similarity filtering are intentional:
-// - f64->f32 for similarity thresholds: precision loss acceptable for filtering
-
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
-use crate::error::Result;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 
@@ -27,344 +23,74 @@ pub(crate) struct TrackedScan {
     pub(crate) unscanned_ids: usize,
 }
 
-/// Per-scan invariants for the NOT-similarity loop, hoisted once.
-struct NotSimilarityScanCtx<'a> {
-    vector_storage: &'a crate::storage::MmapStorage,
-    payload_storage: &'a crate::storage::LogPayloadStorage,
-    metric: crate::distance::DistanceMetric,
-    now_secs: u64,
-    /// The `similarity()` field this scan reports a score for.
-    sim_field: &'a str,
-    /// Resolved query vector for that leaf.
-    sim_vec: &'a [f32],
-}
+/// One `similarity(field, vector) <op> threshold` leaf, its query vector
+/// resolved: `(field, query vector, operator, threshold)`.
+pub(crate) type SimilarityLeaf = (String, Vec<f32>, crate::velesql::CompareOp, f64);
 
 impl Collection {
-    /// Filter search results by similarity threshold.
+    /// Keeps the candidates every `similarity()` leaf of `leaves` holds for
+    /// (an AND cascade), each paired with its score against the FIRST leaf —
+    /// the score a row carries when no NEAR ranks it.
     ///
-    /// For similarity() function queries, we need to check if results meet the threshold.
+    /// Each leaf is recomputed against its own query vector and field, never
+    /// read from the candidates' NEAR scores (BUG-2): `similarity(vector, $v)`
+    /// reads the point's own vector, `similarity(field, $v)` the payload's
+    /// named vector. A candidate a leaf cannot score — no such named vector,
+    /// another dimension — is excluded rather than given a fabricated score
+    /// (a fake 0.0 used to read as a perfect match for distance metrics).
     ///
-    /// **BUG-2 FIX:** Recomputes similarity using `query_vec`, not the cached NEAR scores.
-    /// This is critical when NEAR and similarity() use different vectors.
-    ///
-    /// **Metric-aware semantics:**
-    /// - For similarity metrics (Cosine, DotProduct, Jaccard): higher score = more similar
-    ///   - `similarity() > 0.8` keeps results with score > 0.8
-    /// - For distance metrics (Euclidean, Hamming): lower score = more similar
-    ///   - `similarity() > 0.8` is interpreted as "more similar than threshold"
-    ///   - which means distance < 0.8 (comparison inverted)
-    #[allow(clippy::too_many_arguments)]
+    /// The comparison is metric-aware ([`crate::velesql::similarity_holds`]):
+    /// under a distance metric `similarity() > t` keeps the candidates
+    /// closer than `t`.
     pub(crate) fn filter_by_similarity(
         &self,
         candidates: Vec<SearchResult>,
-        field: &str,
-        query_vec: &[f32],
-        op: crate::velesql::CompareOp,
-        threshold: f64,
+        leaves: &[SimilarityLeaf],
         limit: usize,
-    ) -> Vec<SearchResult> {
-        let config = self.storage.config.read();
-        let higher_is_better = config.metric.higher_is_better();
-        drop(config);
-
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        // Reason: threshold is a user-provided f64 similarity score in [0.0, 1.0] range;
-        // precision loss and truncation to f32 are acceptable for comparison purposes.
-        let threshold_f32 = threshold as f32;
-
+    ) -> Vec<(SearchResult, f32)> {
+        let higher_is_better = self.storage.config.read().metric.higher_is_better();
         candidates
             .into_iter()
-            .filter_map(|mut r| {
-                // Multi-vector support (P1-A): use named payload vector if field != "vector".
-                let candidate_vec: std::borrow::Cow<[f32]> = if field == "vector" {
-                    std::borrow::Cow::Borrowed(&r.point.vector)
-                } else {
-                    match self.get_vector_for_field(r.point.id, field) {
-                        Ok(Some(v)) => std::borrow::Cow::Owned(v),
-                        Ok(None) => return None,
-                        Err(e) => {
-                            tracing::warn!(
-                                point_id = r.point.id, field = field, error = %e,
-                                "filter_by_similarity: failed to retrieve named vector field; point skipped"
-                            );
-                            return None;
-                        }
-                    }
-                };
-
-                // BUG-2 FIX: Recompute similarity using the similarity() vector, not NEAR scores.
-                // A length mismatch can't be scored; exclude rather than fabricate a score
-                // (a fake 0.0 used to read as a perfect match for distance metrics).
-                let score = self.compute_metric_score(&candidate_vec, query_vec)?;
-                let passes = Self::compare_similarity(score, threshold_f32, op, higher_is_better);
-
-                if passes {
-                    // EPIC-044 US-001: Update score to reflect THIS similarity filter's score.
-                    r.score = score;
-                    Some(r)
-                } else {
-                    None
+            .filter_map(|r| {
+                let mut scores = leaves
+                    .iter()
+                    .map(|leaf| self.score_if_holds(&r, leaf, higher_is_better));
+                let first = scores.next()??;
+                if scores.any(|score| score.is_none()) {
+                    return None;
                 }
+                Some((r, first))
             })
             .take(limit)
             .collect()
     }
 
-    /// EPIC-044 US-003: Execute a `NOT similarity()` query via full scan.
-    ///
-    /// Handles queries like `WHERE NOT similarity(v, $v) > 0.8`, and any
-    /// boolean combination around that leaf.
-    ///
-    /// # The whole condition is evaluated, not just the negated leaf
-    ///
-    /// Each candidate is decided by
-    /// [`evaluate_where_condition_for_record`](Self::evaluate_where_condition_for_record)
-    /// — the same evaluator the graph and aggregation paths use — so there is
-    /// one WHERE semantics in the engine rather than one per execution path.
-    ///
-    /// The predecessor inverted the similarity leaf and separately pushed the
-    /// metadata leaves down through `extract_metadata_filter`, which wraps
-    /// what it finds under a `NOT` in its own `NOT`, then AND-ed the two.
-    /// That distributes the negation over the connective — De Morgan's error —
-    /// so `NOT (sim AND meta)` was executed as `NOT sim AND NOT meta`.
-    /// Measured on a three-row fixture, the correct `[2, 3]` came back as
-    /// `[]`, and `NOT (sim OR meta)` returned `[2, 3]` for a correct `[3]`.
-    /// No error was raised in either case.
-    ///
-    /// The similarity leaf is still extracted, but only to score the rows that
-    /// pass: the score reported is that leaf's, as it always was.
-    ///
-    /// **Performance Warning**: This requires scanning ALL documents.
-    /// Always use with LIMIT for acceptable performance.
-    /// With `candidates` (GraphFirst anchor ids), only those ids are
-    /// scanned, so the fetch is exact at `limit` within the graph matches;
-    /// `None` scans the whole collection.
-    // The two storage guards are handed to `MatchStorageGuards` by reference
-    // and read throughout the scan, including through `PayloadMemo`. They are
-    // acquired once precisely so the scan does not re-take them mid-flight.
-    #[expect(clippy::significant_drop_tightening)]
-    pub(crate) fn execute_not_similarity_query_over(
+    /// The score of candidate `r` against `leaf` when the leaf holds for it;
+    /// `None` when it does not, or cannot be scored.
+    fn score_if_holds(
         &self,
-        condition: &crate::velesql::Condition,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        limit: usize,
-        candidates: Option<&std::collections::HashSet<u64>>,
-    ) -> Result<Vec<SearchResult>> {
-        // Extracted for the reported score only — the pass/fail decision comes
-        // from evaluating `condition` itself, below.
-        let (sim_field, sim_vec, _, _) = Self::extract_not_similarity_condition(condition, params)?;
-
-        let all_ids = match candidates {
-            Some(ids) => {
-                let mut sorted: Vec<u64> = ids.iter().copied().collect();
-                sorted.sort_unstable();
-                sorted
-            }
-            None => self.storage.vector_storage.read().ids(),
-        };
-        let total_count = all_ids.len();
-        Self::guard_not_similarity_scan(total_count)?;
-        Self::warn_large_scan(total_count, limit);
-
-        let mut results = Vec::new();
-
-        // LOCK ORDER: metric snapshot (config, rank 1) first, then
-        // vector_storage (2) before payload_storage (3) — the order a real
-        // HTTP deadlock was traced to (tests/tokio_blocking_lock_contention_repro.rs).
-        // The guards are then handed to the evaluator so a nested MATCH leaf
-        // reuses them instead of re-acquiring the same locks mid-scan.
-        let metric = self.storage.config.read().metric;
-        let now_secs = now_unix_secs();
-        let vector_storage = self.storage.vector_storage.read();
-        let payload_storage = self.storage.payload_storage.read();
-        let match_guards = crate::collection::search::query::match_exec::MatchStorageGuards {
-            metric,
-            vector_guard: &vector_storage,
-            payload_guard: &payload_storage,
-            payload_memo: crate::collection::search::query::match_exec::PayloadMemo::new(
-                &payload_storage,
-            ),
-            where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
-        };
-        let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
-        let scan = NotSimilarityScanCtx {
-            vector_storage: &vector_storage,
-            payload_storage: &payload_storage,
-            metric,
-            now_secs,
-            sim_field: &sim_field,
-            sim_vec: &sim_vec,
-        };
-        for id in all_ids {
-            if let Some(result) = self.eval_not_similarity_candidate(
-                id,
-                condition,
-                params,
-                &scan,
-                &match_guards,
-                &mut graph_cache,
-            )? {
-                results.push(result);
-                if results.len() >= limit {
-                    break;
+        r: &SearchResult,
+        (field, query_vec, op, threshold): &SimilarityLeaf,
+        higher_is_better: bool,
+    ) -> Option<f32> {
+        let candidate_vec: std::borrow::Cow<[f32]> = if field
+            == crate::velesql::PRIMARY_VECTOR_FIELD
+        {
+            std::borrow::Cow::Borrowed(&r.point.vector)
+        } else {
+            match self.get_vector_for_field(r.point.id, field) {
+                Ok(vector) => std::borrow::Cow::Owned(vector?),
+                Err(e) => {
+                    tracing::warn!(
+                        point_id = r.point.id, field = field, error = %e,
+                        "filter_by_similarity: failed to retrieve named vector field; point skipped"
+                    );
+                    return None;
                 }
             }
-        }
-
-        Ok(results)
-    }
-
-    /// Evaluates one candidate against the full condition, hydrating it when
-    /// the condition holds.
-    ///
-    /// The similarity leaf is scored a second time here, only to fill
-    /// `SearchResult::score`; the admit/reject decision was already made by
-    /// the shared evaluator. A row whose vector cannot be scored still gets a
-    /// score of `0.0` — it can only have reached here because the metadata
-    /// alone settled the condition, so no similarity value exists to report.
-    fn eval_not_similarity_candidate(
-        &self,
-        id: u64,
-        condition: &crate::velesql::Condition,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        scan: &NotSimilarityScanCtx<'_>,
-        guards: &crate::collection::search::query::match_exec::MatchStorageGuards<'_>,
-        graph_cache: &mut super::where_eval::GraphMatchEvalCache,
-    ) -> Result<Option<SearchResult>> {
-        let Some(vector) = Self::retrieve_vector_for_scan_in(
-            scan.vector_storage,
-            scan.payload_storage,
-            id,
-            scan.sim_field,
-        ) else {
-            return Ok(None);
         };
-        let payload = scan.payload_storage.retrieve(id).ok().flatten();
-        if is_payload_expired(payload.as_ref(), scan.now_secs) {
-            return Ok(None);
-        }
-
-        if !self.evaluate_where_condition_for_record(
-            condition,
-            id,
-            payload.as_ref(),
-            Some(&vector),
-            params,
-            &[],
-            graph_cache,
-            Some(guards),
-        )? {
-            return Ok(None);
-        }
-
-        let score = if vector.len() == scan.sim_vec.len() && !vector.is_empty() {
-            scan.metric.calculate(&vector, scan.sim_vec)
-        } else {
-            0.0
-        };
-        Ok(Some(SearchResult::new(
-            Point {
-                id,
-                vector,
-                payload,
-                sparse_vectors: None,
-            },
-            score,
-        )))
-    }
-
-    /// Compares a similarity score against a threshold using the given operator.
-    ///
-    /// Delegates to [`Self::compare_score`] in `where_eval.rs` for the shared
-    /// metric-aware comparison logic.
-    fn compare_similarity(
-        score: f32,
-        threshold: f32,
-        op: crate::velesql::CompareOp,
-        higher_is_better: bool,
-    ) -> bool {
-        Self::compare_score(score, threshold, op, higher_is_better)
-    }
-
-    /// Retrieves a vector for a given field, logging warnings on failure.
-    fn retrieve_vector_for_scan_in(
-        vector_storage: &crate::storage::MmapStorage,
-        payload_storage: &crate::storage::LogPayloadStorage,
-        id: u64,
-        field: &str,
-    ) -> Option<Vec<f32>> {
-        match Self::get_vector_for_field_in(vector_storage, payload_storage, id, field) {
-            Ok(Some(v)) => Some(v),
-            Ok(None) => None,
-            Err(e) => {
-                tracing::warn!(
-                    point_id = id, field = %field, error = %e,
-                    "failed to retrieve vector field; point skipped"
-                );
-                None
-            }
-        }
-    }
-
-    /// Server-side hard ceiling on the number of vectors a single
-    /// `NOT similarity()` query may scan (#901).
-    ///
-    /// A `NOT similarity()` predicate has no index acceleration and may scan
-    /// the entire collection. Beyond this generous ceiling the query is a
-    /// likely DoS vector, so it is **rejected** rather than merely warned.
-    /// This is a SERVER-controlled constant and cannot be raised by the query.
-    const NOT_SIMILARITY_MAX_SCAN: usize = 5_000_000;
-
-    /// Rejects a `NOT similarity()` full scan whose collection size exceeds the
-    /// server-side ceiling [`Self::NOT_SIMILARITY_MAX_SCAN`] (#901).
-    fn guard_not_similarity_scan(total_count: usize) -> Result<()> {
-        if total_count > Self::NOT_SIMILARITY_MAX_SCAN {
-            return Err(crate::error::Error::Config(format!(
-                "NOT similarity() would scan {total_count} vectors, exceeding the \
-                 server scan limit of {}. Add a more selective metadata filter or \
-                 use a positive similarity() predicate (index-accelerated).",
-                Self::NOT_SIMILARITY_MAX_SCAN
-            )));
-        }
-        Ok(())
-    }
-
-    /// Emits a performance warning for large NOT-similarity scans.
-    fn warn_large_scan(total_count: usize, limit: usize) {
-        if total_count > 10_000 && limit > 1000 {
-            tracing::warn!(
-                "NOT similarity() query scanning {} documents with LIMIT {}. \
-                Consider using a smaller LIMIT for better performance.",
-                total_count,
-                limit
-            );
-        }
-    }
-
-    /// Extract similarity condition from inside a NOT clause.
-    pub(crate) fn extract_not_similarity_condition(
-        condition: &crate::velesql::Condition,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<(String, Vec<f32>, crate::velesql::CompareOp, f64)> {
-        match condition {
-            crate::velesql::Condition::Not(inner) => {
-                // Extract from inside NOT
-                let conditions = Self::extract_all_similarity_conditions(inner, params)?;
-                conditions.into_iter().next().ok_or_else(|| {
-                    crate::error::Error::Query(
-                        "NOT clause does not contain a similarity condition".to_string(),
-                    )
-                })
-            }
-            crate::velesql::Condition::And(left, right) => {
-                // Try left, then right
-                Self::extract_not_similarity_condition(left, params)
-                    .or_else(|_| Self::extract_not_similarity_condition(right, params))
-            }
-            _ => Err(crate::error::Error::Query(
-                "Expected NOT similarity() condition".to_string(),
-            )),
-        }
+        let score = self.compute_metric_score(&candidate_vec, query_vec)?;
+        crate::velesql::similarity_holds(*op, score, *threshold, higher_is_better).then_some(score)
     }
 
     /// Fallback method for metadata-only queries without vector search.
@@ -520,7 +246,7 @@ impl Collection {
                         payload,
                         sparse_vectors: None,
                     },
-                    1.0,
+                    crate::velesql::METADATA_MATCH_SCORE,
                 ));
             }
             if results.len() >= limit {

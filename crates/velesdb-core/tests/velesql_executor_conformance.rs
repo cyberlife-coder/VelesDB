@@ -259,7 +259,7 @@ fn test_velesql_executor_conformance_fixture_cases() {
 #[test]
 fn test_velesql_executor_conformance_near_cases() {
     let fixture = load_fixture();
-    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
     assert_cases_with(&db, &fixture.near_cases, &fixture.query_params);
 }
 
@@ -267,7 +267,7 @@ fn test_velesql_executor_conformance_near_cases() {
 #[test]
 fn test_velesql_executor_conformance_fusion_cases() {
     let fixture = load_fixture();
-    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
     assert_cases_with(&db, &fixture.fusion_cases, &fixture.query_params);
 }
 

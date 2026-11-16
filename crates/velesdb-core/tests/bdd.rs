@@ -101,6 +101,8 @@ mod match_where_similarity_score;
 mod metrics_ranking_conformance;
 #[path = "bdd/near_exact_ranking.rs"]
 mod near_exact_ranking;
+#[path = "bdd/near_fused_exactness.rs"]
+mod near_fused_exactness;
 #[path = "bdd/near_fused_parse_only.rs"]
 mod near_fused_parse_only;
 #[path = "bdd/not_filters_exact.rs"]
@@ -123,6 +125,8 @@ mod scalar_subqueries;
 mod secondary_index_bitmap_in;
 #[path = "bdd/set_operations.rs"]
 mod set_operations;
+#[path = "bdd/similarity_threshold_exactness.rs"]
+mod similarity_threshold_exactness;
 #[path = "bdd/sparse_near_conformance.rs"]
 mod sparse_near_conformance;
 #[path = "bdd/temporal_computed_orderby.rs"]

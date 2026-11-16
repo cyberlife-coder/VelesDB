@@ -4,7 +4,7 @@
 
 // Reason: Numeric casts in selectivity estimation are intentional:
 // - usize->f64 for selectivity ratios: values are small counts
-// - f64->usize for clamped oversampled k: result is bounded to [min(k+10, 10_000), 10_000]
+// - f64->usize for oversampled k: saturating, then clamped to [k+10, max(k+10, 10_000)]
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
@@ -231,38 +231,35 @@ pub(crate) fn ef_to_quality(ef_search: usize) -> crate::SearchQuality {
     crate::SearchQuality::Custom(ef_search)
 }
 
-/// Hard upper bound on the oversampled HNSW candidate budget.
-const OVERSAMPLE_CAP: f64 = 10_000.0;
+/// The most candidates a filter's oversampling asks HNSW for beyond the
+/// points wanted.
+const OVERSAMPLE_CAP: usize = 10_000;
 
 /// Computes the oversampled candidate count for filtered search.
 ///
-/// The result is bounded to `[min(k + 10, 10_000), 10_000]`: the candidate
-/// budget saturates at the cap for any `k >= 9_990`, so callers requesting
-/// huge `k` (e.g. LIMIT close to `MAX_LIMIT`) get at most 10_000 candidates
-/// instead of panicking — `f64::clamp` asserts `min <= max`, and an
-/// unbounded lower bound of `k + 10` used to violate that for large `k`.
+/// `k / selectivity` candidates, so the filter leaves `k` of them, bounded to
+/// `[k + 10, max(k + 10, 10_000)]`: the ceiling bounds the oversampling, never
+/// the `k` points asked for — a search for more than 10 000 points whose
+/// filter passes them all still finds `k`. The bounds stay ordered for any
+/// `k`, so the clamp cannot panic.
 pub(super) fn compute_oversampled_k(
     k: usize,
     filter: &crate::filter::Filter,
     stats: Option<&crate::collection::stats::CollectionStats>,
 ) -> usize {
     // Clamp to a tiny positive value so that a zero-selectivity filter (e.g. empty
-    // IN clause) never produces NaN (0.0/0.0 when k=0) or Inf (k>0/0.0). Both would
-    // be handled by the clamp below, but NaN→usize is implementation-defined (LLVM
-    // saturates to 0, giving zero candidates instead of the minimum sensible count).
+    // IN clause) never produces NaN (0.0/0.0 when k=0) or Inf (k>0/0.0); the
+    // float-to-int cast below saturates an infinite quotient to `usize::MAX`.
     let selectivity = stats
         .map_or_else(
             || estimate_filter_selectivity(filter),
             |s| s.estimate_runtime_filter_selectivity(filter),
         )
         .max(1e-9);
-    #[allow(clippy::cast_precision_loss)]
-    let k_f64 = k as f64;
-    #[allow(clippy::cast_precision_loss)]
-    let lower = ((k.saturating_add(10)) as f64).min(OVERSAMPLE_CAP);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let clamped = (k_f64 / selectivity).ceil().clamp(lower, OVERSAMPLE_CAP) as usize;
-    clamped
+    let floor = k.saturating_add(10);
+    let ceiling = OVERSAMPLE_CAP.max(floor);
+    let wanted = (k as f64 / selectivity).ceil() as usize;
+    wanted.clamp(floor, ceiling)
 }
 
 /// Heuristic selectivity estimate based on filter structure.

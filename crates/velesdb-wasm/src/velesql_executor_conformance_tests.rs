@@ -211,7 +211,8 @@ fn number_literal(n: &serde_json::Number) -> String {
 /// Builds the dataset *through the WASM executor* by issuing one
 /// `INSERT INTO <coll> (id, vector, <payload keys...>) VALUES (...)` per point,
 /// with the vector bound to the `$v` parameter (the canonical WASM vector-
-/// insert contract — inline vector literals are unsupported).
+/// insert contract — inline vector literals are unsupported) and each array
+/// or object payload value to a `$pN` parameter.
 fn build_dataset(ds: &Dataset) -> DatabaseInner {
     let mut db = DatabaseInner::new();
     seed_dataset(&mut db, ds);
@@ -232,9 +233,18 @@ fn seed_dataset(db: &mut DatabaseInner, ds: &Dataset) {
         };
         let mut columns = vec!["id".to_string(), "vector".to_string()];
         let mut values = vec![point.id.to_string(), "$v".to_string()];
+        let mut bound = serde_json::Map::new();
+        bound.insert("v".to_string(), serde_json::json!(point.vector));
         for (key, val) in obj {
             columns.push(key.clone());
-            values.push(payload_literal(val));
+            // VelesQL has no array or object literal: those bind as `$pN`.
+            if val.is_array() || val.is_object() {
+                let name = format!("p{}", bound.len());
+                values.push(format!("${name}"));
+                bound.insert(name, val.clone());
+            } else {
+                values.push(payload_literal(val));
+            }
         }
         let sql = format!(
             "INSERT INTO {} ({}) VALUES ({})",
@@ -242,9 +252,7 @@ fn seed_dataset(db: &mut DatabaseInner, ds: &Dataset) {
             columns.join(", "),
             values.join(", ")
         );
-        let vector_json =
-            serde_json::to_string(&point.vector).expect("test: serialize fixture vector");
-        let params = format!("{{\"v\": {vector_json}}}");
+        let params = Value::Object(bound).to_string();
         execute(db, &sql, Some(&params))
             .unwrap_or_else(|e| panic!("test: seed point {} failed: {e}", point.id));
     }
@@ -474,6 +482,9 @@ fn test_wasm_velesql_executor_match_cases() {
 fn test_wasm_velesql_executor_near_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
     let params = params_json(&fixture);
     assert_cases_with(&mut db, &fixture.near_cases, Some(&params));
 }
@@ -484,6 +495,9 @@ fn test_wasm_velesql_executor_near_cases() {
 fn test_wasm_velesql_executor_fusion_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
     let params = params_json(&fixture);
     assert_cases_with(&mut db, &fixture.fusion_cases, Some(&params));
 }

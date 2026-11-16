@@ -582,14 +582,12 @@ fn test_and_similarity_with_predicate_still_filters_correctly() {
 }
 
 // =========================================================================
-// Multiple similarity() conditions (finding H)
+// Multiple similarity() conditions
 // =========================================================================
 //
-// `SimilarityEvaluator` pre-computes scores for ONE query vector. When
-// the WHERE clause contains two `similarity()` predicates referencing
-// DIFFERENT vectors, the evaluator silently reuses the first vector's
-// scores for both thresholds — returning wrong rows. We fail loud
-// instead (option 2: explicit error, no silent wrong answers).
+// Each leaf is scored against its own query vector, as core's cascade
+// filters: under AND every threshold must hold, and the row carries the
+// first leaf's score. Under OR the query is refused, as in core.
 
 #[test]
 fn test_multiple_similarity_same_vector_is_accepted() {
@@ -610,28 +608,29 @@ fn test_multiple_similarity_same_vector_is_accepted() {
 }
 
 #[test]
-fn test_multiple_similarity_different_params_returns_error_and() {
-    // Two similarity() predicates referencing DIFFERENT params must be
-    // rejected with a clear error rather than silently scored against
-    // only `$q1`.
+fn test_multiple_similarity_different_params_filter_in_cascade() {
+    // q1 > 0.5 keeps ids 1 and 2; q2 > 0.05 keeps id 2 (≈0.110) only.
     let mut db = db_with_vectors();
-    let err = execute(
+    let r = execute(
         &mut db,
-        "SELECT * FROM vecs WHERE similarity(vector, $q1) > 0.5 AND similarity(vector, $q2) > 0.3 LIMIT 10",
+        "SELECT * FROM vecs WHERE similarity(vector, $q1) > 0.5 AND similarity(vector, $q2) > 0.05 LIMIT 10",
         Some(r#"{"q1": [1.0, 0.0, 0.0, 0.0], "q2": [0.0, 1.0, 0.0, 0.0]}"#),
-    );
-    assert!(err.is_err(), "multi-vector similarity must fail loud");
-    let msg = err.expect_err("test: err");
+    )
+    .expect("test: two similarity thresholds");
+    assert_eq!(r.row_count(), 1);
+    let row = r.row(0).expect("test: row");
+    assert_eq!(row.id(), 2);
     assert!(
-        msg.contains("Multiple similarity()"),
-        "error should name the feature, got: {msg}"
+        (row.score() - 0.993_884).abs() < 1e-5,
+        "first leaf's score, got {}",
+        row.score()
     );
 }
 
 #[test]
 fn test_multiple_similarity_different_params_returns_error_or() {
-    // Same check under OR composition: the evaluator still pre-computes
-    // for one vector only, so we must reject.
+    // Under OR the query would be a union of vector searches: refused, as
+    // core refuses it.
     let mut db = db_with_vectors();
     let err = execute(
         &mut db,
@@ -661,18 +660,17 @@ fn test_multiple_similarity_same_literal_vector_is_accepted() {
 }
 
 #[test]
-fn test_multiple_similarity_different_literals_returns_error() {
-    // Two distinct literal vectors → same rejection.
+fn test_multiple_similarity_different_literals_filter_in_cascade() {
+    // [1,0,0,0] > 0.5 keeps ids 1 and 2; [0,1,0,0] < 0.05 keeps id 1.
     let mut db = db_with_vectors();
-    let err = execute(
+    let r = execute(
         &mut db,
-        "SELECT * FROM vecs WHERE similarity(vector, [1.0, 0.0, 0.0, 0.0]) > 0.5 AND similarity(vector, [0.0, 1.0, 0.0, 0.0]) > 0.3 LIMIT 10",
+        "SELECT * FROM vecs WHERE similarity(vector, [1.0, 0.0, 0.0, 0.0]) > 0.5 AND similarity(vector, [0.0, 1.0, 0.0, 0.0]) < 0.05 LIMIT 10",
         None,
-    );
-    assert!(err.is_err());
-    assert!(err
-        .expect_err("test: err")
-        .contains("Multiple similarity()"));
+    )
+    .expect("test: two literal thresholds");
+    assert_eq!(r.row_count(), 1);
+    assert_eq!(r.row(0).expect("test: row").id(), 1);
 }
 
 // =========================================================================

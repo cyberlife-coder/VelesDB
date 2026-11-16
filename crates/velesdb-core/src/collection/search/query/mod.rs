@@ -34,7 +34,7 @@ mod aggregation;
 mod bounded_top_k;
 #[cfg(test)]
 mod component_scores_tests;
-pub(crate) mod condition_tree;
+pub(crate) use crate::velesql::condition_tree;
 mod early_return;
 mod execution_paths;
 mod extraction;
@@ -83,8 +83,8 @@ mod scan_cap_observability_tests;
 mod select_dispatch;
 pub(crate) mod set_operations;
 mod similarity_filter;
+mod similarity_scan;
 mod sparse_dispatch;
-mod union_query;
 mod validation;
 pub(crate) mod vector_group_by;
 mod where_eval;
@@ -389,17 +389,11 @@ impl Collection {
     // moved to early_return.rs (NLOC/CC resolution batch 3)
 
     // NOTE: dispatch_sparse_query, execute_sparse_or_hybrid, filter_by_graph_predicates,
-    // finalize_sparse_results, resolve_fusion_strategy moved to sparse_dispatch.rs (T3-3)
+    // finalize_ranked_results, resolve_fusion_strategy moved to sparse_dispatch.rs (T3-3)
 
     // NOTE: compute_cbo_strategy, dispatch_main_select, dispatch_match_query,
     // analyze_join_pushdown, apply_select_postprocessing moved to select_dispatch.rs
 
     // NOTE: apply_distinct and compute_distinct_key moved to distinct.rs
     // (EPIC-061/US-003 refactoring), then to velesql/distinct_evaluator.rs
-
-    // NOTE: filter_by_similarity, execute_not_similarity_query, extract_not_similarity_condition,
-    // execute_scan_query moved to similarity_filter.rs (Plan 04-04)
-
-    // NOTE: execute_union_query, matches_metadata_filter, split_or_condition_with_outer_filter
-    // moved to union_query.rs (Plan 04-04)
 }

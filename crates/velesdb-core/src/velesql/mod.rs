@@ -90,8 +90,15 @@ mod orderby_multi_tests;
 mod parallel_aggregation_tests;
 mod param_binding;
 pub use param_binding::{bind_condition, bind_match_clause, bind_value};
+pub(crate) mod condition_tree;
 mod pattern_match;
+mod similarity_threshold;
+mod vector_predicates;
 pub use pattern_match::{element_property, has_every_label, inline_properties_hold};
+pub use similarity_threshold::{similarity_holds, SIMILARITY_EQ_TOLERANCE};
+pub use vector_predicates::{
+    payload_vector, validate_vector_predicates, METADATA_MATCH_SCORE, PRIMARY_VECTOR_FIELD,
+};
 mod parser;
 #[cfg(test)]
 mod parser_tests;

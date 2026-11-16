@@ -15,7 +15,7 @@
 //!   (`>=` it, or `<=` under a distance metric), and rows are ordered by
 //!   score before any `ORDER BY`.
 
-use velesdb_core::velesql::{CompareOp, Condition, SimilarityCondition};
+use velesdb_core::velesql::{Condition, SimilarityCondition};
 
 use crate::velesql_match_nodes::MatchNodes;
 use crate::velesql_value::{resolve_vector, Params};
@@ -112,8 +112,16 @@ fn where_truth(
             Ok(where_truth(inner, bound, nodes, params, other_leaf)?.map(|known| !known))
         }
         Condition::Group(inner) => where_truth(inner, bound, nodes, params, other_leaf),
-        Condition::Similarity(sim) => Ok(leaf_score(sim, bound, nodes, params)?
-            .map(|(score, higher_is_better)| compare(sim, score, higher_is_better))),
+        Condition::Similarity(sim) => Ok(leaf_score(sim, bound, nodes, params)?.map(
+            |(score, higher_is_better)| {
+                velesdb_core::velesql::similarity_holds(
+                    sim.operator,
+                    score,
+                    sim.threshold,
+                    higher_is_better,
+                )
+            },
+        )),
         leaf => other_leaf(leaf),
     }
 }
@@ -170,32 +178,6 @@ fn leaf_score(
         metric.calculate(vector, &query),
         metric.higher_is_better(),
     )))
-}
-
-/// Core's `compare_score`.
-fn compare(sim: &SimilarityCondition, score: f32, higher_is_better: bool) -> bool {
-    #[allow(clippy::cast_possible_truncation)]
-    let threshold = sim.threshold as f32;
-    let op = if higher_is_better {
-        sim.operator
-    } else {
-        match sim.operator {
-            CompareOp::Gt => CompareOp::Lt,
-            CompareOp::Lt => CompareOp::Gt,
-            CompareOp::Gte => CompareOp::Lte,
-            CompareOp::Lte => CompareOp::Gte,
-            other => other,
-        }
-    };
-    match op {
-        CompareOp::Gt => score > threshold,
-        CompareOp::Gte => score >= threshold,
-        CompareOp::Lt => score < threshold,
-        CompareOp::Lte => score <= threshold,
-        CompareOp::Eq => (score - threshold).abs() < f32::EPSILON,
-        CompareOp::NotEq => (score - threshold).abs() >= f32::EPSILON,
-        _ => false,
-    }
 }
 
 #[cfg(test)]

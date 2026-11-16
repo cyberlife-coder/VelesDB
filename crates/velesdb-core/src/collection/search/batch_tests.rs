@@ -254,3 +254,53 @@ fn test_multi_query_euclidean_average_ranks_nearest_first() {
         results.iter().map(|r| r.score).collect::<Vec<_>>()
     );
 }
+
+/// GIVEN 10 050 points, every one of them passing the filter, searched
+///       exactly (`SearchQuality::Perfect`, so the index's approximation plays
+///       no part)
+/// WHEN a filtered search, then a filtered fusion, asks for 10 040
+/// THEN each returns 10 040: the filter's oversampling ceiling (10 000
+///      candidates) bounds the extra candidates, never the points asked for.
+#[test]
+fn test_filtered_search_deeper_than_the_oversampling_ceiling_is_filled() {
+    use crate::distance::DistanceMetric;
+    const POINTS: u64 = 10_050;
+    const WANTED: usize = 10_040;
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let col = Collection::create(
+        std::path::PathBuf::from(dir.path()),
+        2,
+        DistanceMetric::Euclidean,
+    )
+    .expect("test: collection");
+    col.upsert(
+        (1..=POINTS)
+            .map(|id| {
+                let x = f32::from(u16::try_from(id).expect("test: id fits u16"));
+                make_point_with_payload(id, vec![x, 0.0], serde_json::json!({ "kind": "any" }))
+            })
+            .collect::<Vec<_>>(),
+    )
+    .expect("test: upsert");
+    col.set_runtime_search_quality(crate::SearchQuality::Perfect);
+    let all = Filter::new(Condition::Eq {
+        field: "kind".to_string(),
+        value: serde_json::json!("any"),
+    });
+    let query = [0.0_f32, 0.0];
+
+    let searched = col
+        .search_with_filter(&query, WANTED, &all)
+        .expect("test: filtered search");
+    assert_eq!(searched.len(), WANTED, "search_with_filter");
+
+    let fused = col
+        .multi_query_search(
+            &[&query],
+            WANTED,
+            crate::fusion::FusionStrategy::RRF { k: 60 },
+            Some(&all),
+        )
+        .expect("test: filtered fusion");
+    assert_eq!(fused.len(), WANTED, "multi_query_search");
+}

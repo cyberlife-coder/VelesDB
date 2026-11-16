@@ -232,6 +232,18 @@
         { "id": 9, "vector": [1.0, 0.0], "payload": { "x": 0.00000000000000001 } },
         { "id": 10, "vector": [1.0, 0.0], "payload": { "x": 0.9999999999999999 } }
       ]
+    },
+    {
+      "collection": "named",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 41, "vector": [1.0, 0.0], "payload": { "alt": [0.0, 1.0] } },
+        { "id": 42, "vector": [0.0, 1.0], "payload": { "alt": [1.0, 0.0] } },
+        { "id": 43, "vector": [1.0, 1.0], "payload": { "alt": [1.0, 0.5] } },
+        { "id": 44, "vector": [1.0, 0.0], "payload": {} },
+        { "id": 45, "vector": [0.0, 1.0], "payload": { "alt": [1.0, 0.0, 0.0] } }
+      ]
     }
   ],
   "join_cases": [
@@ -561,7 +573,10 @@
   "query_params": {
     "a": [0.1, 0.2, 0.3, 0.4],
     "b": [0.2, 0.4, 0.0, 0.1],
-    "e": [0.0, 0.0]
+    "e": [0.0, 0.0],
+    "f": [2.6, 1.0],
+    "x": [1.0, 0.0],
+    "y": [0.0, 1.0]
   },
   "near_cases": [
     {
@@ -647,6 +662,106 @@
       "expect_ids": [1],
       "expect_scores": [0.182574],
       "note": "similarity() upper bound"
+    },
+    {
+      "id": "N013",
+      "query": "SELECT * FROM docs_l2 WHERE similarity(vector, $e) > 1.5 ORDER BY id ASC",
+      "expect_ids": [21, 24],
+      "note": "under a distance metric `similarity() > t` keeps the rows CLOSER than t: docs_l2 sits at distances 1, 3, 2, 0.5 from $e"
+    },
+    {
+      "id": "N014",
+      "query": "SELECT * FROM docs_l2 WHERE similarity(vector, $e) <= 1.5 ORDER BY id ASC",
+      "expect_ids": [22, 23],
+      "note": "the complement of N013: not closer than 1.5"
+    },
+    {
+      "id": "N015",
+      "query": "SELECT * FROM docs_l2 WHERE similarity(vector, $e) = 2.0",
+      "expect_ids": [23],
+      "note": "equality allows velesql::SIMILARITY_EQ_TOLERANCE"
+    },
+    {
+      "id": "N016",
+      "query": "SELECT * FROM named WHERE similarity(alt, $x) > 0.5 ORDER BY id ASC",
+      "expect_ids": [42, 43],
+      "note": "a named vector: similarity(alt, $x) scores the payload's `alt` array; a row without one (44) or with another dimension (45) cannot be scored, so the leaf is UNKNOWN there"
+    },
+    {
+      "id": "N017",
+      "query": "SELECT * FROM named WHERE NOT similarity(alt, $x) > 0.5 ORDER BY id ASC",
+      "expect_ids": [41],
+      "note": "NOT of an UNKNOWN leaf is UNKNOWN: 44 and 45 stay out of the complement too"
+    },
+    {
+      "id": "N018",
+      "query": "SELECT * FROM named WHERE similarity(vector, $x) > 0.5 AND similarity(alt, $y) > 0.5 ORDER BY id ASC",
+      "expect_ids": [41],
+      "expect_scores": [1.0],
+      "note": "two similarity() leaves on different vectors filter in cascade: 43 passes the first (0.707) but not the second (0.447)"
+    },
+    {
+      "id": "N019",
+      "query": "SELECT * FROM named WHERE similarity(vector, $x) > 0.5 AND similarity(vector, $y) > 0.5",
+      "expect_ids": [43],
+      "expect_scores": [0.707107],
+      "note": "two query vectors on the row's own vector: each leaf is scored against its own vector (WASM used to refuse distinct vectors)"
+    },
+    {
+      "id": "N020",
+      "query": "SELECT * FROM named WHERE similarity(vector, $x) > 0.5 AND similarity(alt, $x) > 0.5",
+      "expect_ids": [43],
+      "expect_scores": [0.707107],
+      "note": "a row carries its FIRST similarity() leaf's score: 43 is 0.707 from $x by its own vector, 0.894 by `alt` (core used to report the last leaf's)"
+    },
+    {
+      "id": "N021",
+      "query": "SELECT * FROM named WHERE similarity(alt, $x) > 0.5 AND similarity(vector, $x) > 0.5",
+      "expect_ids": [43],
+      "expect_scores": [0.894427],
+      "note": "N020 with the leaves swapped: the score follows the first leaf"
+    },
+    {
+      "id": "N022",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a AND similarity(vector, $b) > 0.3 LIMIT 5",
+      "expect_ids": [5, 2, 1],
+      "expect_scores": [0.387298, 0.365148, 0.182574],
+      "note": "NEAR ranks the rows and gives their score; the similarity() threshold only filters (ids 3 and 4 are within 0.3 of $b). Core used to report each row's similarity to $b while ranking by NEAR"
+    },
+    {
+      "id": "N023",
+      "query": "SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
+      "expect_ids": [5, 3],
+      "expect_scores": [1.0, 1.0],
+      "note": "a row no vector predicate scored carries velesql::METADATA_MATCH_SCORE on both engines (D009; WASM reported 0.0)"
+    },
+    {
+      "id": "N024",
+      "query": "SELECT * FROM docs_l2 WHERE similarity(vector, $e) > 0.8 OR grp = 'y'",
+      "expect_ids": [24, 22],
+      "expect_scores": [0.5, 3.0],
+      "note": "a threshold OR-ed with metadata: every row is scored by its real distance and ranked closest first (24 passes the threshold, 22 the predicate). Core scored the metadata side 1.0 and sorted descending whatever the metric"
+    },
+    {
+      "id": "N025",
+      "query": "SELECT * FROM docs WHERE NOT similarity(vector, $a) > 0.5 LIMIT 3",
+      "expect_ids": [5, 2, 1],
+      "expect_scores": [0.387298, 0.365148, 0.182574],
+      "note": "a negated threshold ranks by the similarity, best first, and LIMIT keeps the best (core returned the lowest ids)"
+    },
+    {
+      "id": "N026",
+      "query": "SELECT * FROM named WHERE similarity(alt, $x) > 0.5",
+      "expect_ids": [42, 43],
+      "expect_scores": [1.0, 0.894427],
+      "note": "without NEAR the rows are ranked by the named vector the threshold reads (core ranked a window of points near $x by their own vectors)"
+    },
+    {
+      "id": "N027",
+      "query": "SELECT * FROM named WHERE similarity(alt, $x) > 0.5 OR id = 44",
+      "expect_ids": [42, 43, 44],
+      "expect_scores": [1.0, 0.894427, 1.0],
+      "note": "a row the first similarity() cannot score (44 has no `alt`) passes through the OR, ranks after the scored rows and carries velesql::METADATA_MATCH_SCORE"
     }
   ],
   "fusion_cases": [
@@ -691,6 +806,20 @@
       "expect_ids": [5, 4, 2, 3, 1],
       "expect_scores": [0.032266, 0.032018, 0.031754, 0.031514, 0.031258],
       "note": "a trailing USING FUSION clause over a NEAR_FUSED is valid"
+    },
+    {
+      "id": "F007",
+      "query": "SELECT * FROM docs_l2 WHERE vector NEAR_FUSED [$e, $f] USING FUSION 'maximum' LIMIT 4",
+      "expect_ids": [24, 21, 22, 23],
+      "expect_scores": [0.5, 1, 1.07703, 1.16619],
+      "note": "euclidean: `maximum` keeps each point's BEST (smallest) distance across the vectors, lower first"
+    },
+    {
+      "id": "F008",
+      "query": "SELECT * FROM docs_l2 WHERE vector NEAR_FUSED [$e, $f] USING FUSION 'average' LIMIT 4",
+      "expect_ids": [24, 21, 23, 22],
+      "expect_scores": [1.41297, 1.4434, 1.58309, 2.03852],
+      "note": "euclidean: `average` of the two distances, lower first; $e and $f were chosen so no two points tie"
     }
   ],
   "rejected_cases": [
@@ -789,6 +918,12 @@
       "expected_code": "V012",
       "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'weighted_rrf' LIMIT 5",
       "note": "NEAR_FUSED refuses weighted_rrf like weighted/rsf: a per-branch-weighted fusion is ill-defined over homogeneous query vectors (V012); #2369 added the name to the same rejection list"
+    },
+    {
+      "id": "R017",
+      "expected_code": "V001",
+      "query": "SELECT * FROM docs WHERE similarity(vector, $a) > 0.5 OR similarity(vector, $b) > 0.5",
+      "note": "several similarity() under one OR would be a union of vector searches: both engines refuse it (V001)"
     }
   ],
   "dml_cases": [
@@ -1197,9 +1332,9 @@
       "id": "D009",
       "area": "score of rows that no vector ranked",
       "core_behavior": "a scan with no NEAR, NEAR_FUSED or similarity() predicate returns every row with score 1.0",
-      "wasm_behavior": "the same rows carry score 0.0 (QueryResultRow::score in the JavaScript API)",
-      "status": "accepted — the value carries no ranking on either engine and SELECT * does not project it; only the vector cases (near_cases, fusion_cases, and the dml_cases that end in a NEAR) assert scores",
-      "evidence": "scalar-only cases (X001-X020) on both engines; crates/velesdb-wasm/src/velesql_select.rs: execute_plain()"
+      "wasm_behavior": "RESOLVED: the same rows carry velesql::METADATA_MATCH_SCORE (1.0), as do the rows a similarity() threshold passes without scoring them; they used to carry 0.0",
+      "status": "resolved — locked by near_cases N023",
+      "evidence": "crates/velesdb-wasm/src/velesql_select.rs: execute_plain()"
     },
     {
       "id": "D010",

@@ -390,3 +390,63 @@ fn test_window_function_coexists_with_vector_search_near() {
         "ROW_NUMBER over NEAR-ranked rows emits a contiguous 1..6 permutation, not a constant/garbage"
     );
 }
+
+// =========================================================================
+// Window functions over the paths that rank their own rows
+// =========================================================================
+
+/// GIVEN three points whose own and named (`alt`) vectors all face `$x`
+/// WHEN a window function runs over a query each rank-their-own-rows path
+///      answers — the exact similarity() scan (a named-vector threshold, an
+///      upper bound) and `NEAR_FUSED`
+/// THEN every row carries the window column, and ORDER BY reads it: those
+///      paths finalize through the same SELECT post-processing as the rest.
+#[test]
+fn window_functions_run_on_every_ranked_path() {
+    let (_dir, db) = create_test_db();
+    execute_sql(
+        &db,
+        "CREATE COLLECTION w (dimension = 2, metric = 'cosine')",
+    )
+    .expect("test: create w");
+    let w = db.get_vector_collection("w").expect("test: w");
+    w.upsert(
+        (1..=3_u64)
+            .map(|id| {
+                Point::new(
+                    id,
+                    vec![1.0, 0.01 * f32::from(u8::try_from(id).expect("test: id"))],
+                    Some(serde_json::json!({"alt": [1.0, 0.0]})),
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+    .expect("test: upsert w");
+    let params =
+        std::collections::HashMap::from([("x".to_string(), serde_json::json!([1.0, 0.0]))]);
+
+    for predicate in [
+        "similarity(alt, $x) > 0.5",
+        "similarity(vector, $x) < 2.0",
+        "vector NEAR_FUSED [$x, $x]",
+    ] {
+        let sql = format!(
+            "SELECT id, ROW_NUMBER() OVER (ORDER BY id ASC) AS rn FROM w \
+             WHERE {predicate} ORDER BY rn DESC LIMIT 10"
+        );
+        let rows = super::helpers::execute_sql_with_params(&db, &sql, &params)
+            .unwrap_or_else(|e| panic!("test: {sql}: {e}"));
+        let numbered: Vec<(u64, Option<u64>)> = rows
+            .iter()
+            .map(|r| {
+                let rn = r.point.payload.as_ref().and_then(|p| p["rn"].as_u64());
+                (r.point.id, rn)
+            })
+            .collect();
+        assert_eq!(
+            numbered,
+            [(3, Some(3)), (2, Some(2)), (1, Some(1))],
+            "{predicate}"
+        );
+    }
+}

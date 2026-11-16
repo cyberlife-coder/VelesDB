@@ -12,7 +12,7 @@
 //! exhausted, or the farthest seed already fails the seeding leaf — every
 //! node beyond it is farther still, so none of them can start a row.
 
-use super::where_eval::{compare_score, resolve_query_vector};
+use super::where_eval::resolve_query_vector;
 use super::{MatchResult, MatchSources, StartNodes};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -23,8 +23,7 @@ use std::collections::HashMap;
 
 impl Collection {
     /// Executes a MATCH the planner chose `VectorFirst` for, starting with
-    /// `top_k` seeds; `threshold` is the seeding leaf's, as the planner
-    /// read it.
+    /// `top_k` seeds.
     ///
     /// # Errors
     ///
@@ -37,7 +36,6 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
         ctx: &QueryContext,
         top_k: usize,
-        threshold: f32,
         sources: &MatchSources,
     ) -> Result<Vec<MatchResult>> {
         let (seed, limit) = MatchQueryPlanner::seeding_similarity(match_clause)
@@ -66,7 +64,12 @@ impl Collection {
             )?;
             let exhausted = seeds.len() < wanted || wanted >= total;
             let past_threshold = seeds.last().is_some_and(|farthest| {
-                !compare_score(seed.operator, farthest.score, threshold, higher_is_better)
+                !crate::velesql::similarity_holds(
+                    seed.operator,
+                    farthest.score,
+                    seed.threshold,
+                    higher_is_better,
+                )
             });
             if rows.len() >= limit || exhausted || past_threshold {
                 return Ok(rows);

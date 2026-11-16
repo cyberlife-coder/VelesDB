@@ -38,40 +38,6 @@ fn ordering_holds(op: crate::velesql::CompareOp, ordering: std::cmp::Ordering) -
     }
 }
 
-/// Compares a similarity score against a threshold, inverting for distance metrics.
-pub(super) fn compare_score(
-    op: crate::velesql::CompareOp,
-    score: f32,
-    threshold: f32,
-    higher_is_better: bool,
-) -> bool {
-    use crate::velesql::CompareOp;
-    match op {
-        CompareOp::Eq => (score - threshold).abs() < f32::EPSILON,
-        CompareOp::NotEq => (score - threshold).abs() >= f32::EPSILON,
-        CompareOp::Gt | CompareOp::Gte | CompareOp::Lt | CompareOp::Lte => {
-            if higher_is_better {
-                apply_ord_op(op, &score, &threshold)
-            } else {
-                // Invert: "similarity > X" ↔ "distance < X"
-                apply_ord_op(invert_order(op), &score, &threshold)
-            }
-        }
-    }
-}
-
-/// Flips a relational operator (Gt↔Lt, Gte↔Lte). Eq/NotEq pass through.
-const fn invert_order(op: crate::velesql::CompareOp) -> crate::velesql::CompareOp {
-    use crate::velesql::CompareOp;
-    match op {
-        CompareOp::Gt => CompareOp::Lt,
-        CompareOp::Lt => CompareOp::Gt,
-        CompareOp::Gte => CompareOp::Lte,
-        CompareOp::Lte => CompareOp::Gte,
-        other => other,
-    }
-}
-
 /// Resolves a query vector from a `VectorExpr`, looking up parameters as needed.
 pub(super) fn resolve_query_vector(
     vector: &crate::velesql::VectorExpr,
@@ -507,13 +473,10 @@ impl Collection {
 
         let score = metric.calculate(&node_vector, &query_vector);
 
-        #[allow(clippy::cast_possible_truncation)]
-        let threshold = sim.threshold as f32;
-
-        Ok(Some(compare_score(
+        Ok(Some(crate::velesql::similarity_holds(
             sim.operator,
             score,
-            threshold,
+            sim.threshold,
             higher_is_better,
         )))
     }

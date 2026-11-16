@@ -1,13 +1,12 @@
 //! `NEAR_FUSED` multi-vector fusion for the WASM VelesQL executor.
 //!
-//! Mirrors core's
-//! `Collection::dispatch_fused_query` semantics with
-//! WASM's brute-force primitives: resolve the N query vectors from the
-//! `VectorFusedSearch`, run a per-vector brute-force similarity scan, fuse the N
-//! ranked lists via the [`FusionStrategy`] mapped from the fusion config
-//! (`rrf(k)` / `average` / `maximum`; any other strategy falls back to RRF —
-//! matching core's `fused_config_to_strategy`), then apply the residual metadata
-//! AND-filter as a pre-fusion filter.
+//! Core's `Collection::multi_query_search` contract, over WASM's brute-force
+//! scoring: at most `velesdb_core::fusion::MAX_FUSED_VECTORS` query vectors;
+//! one branch per vector holding the `branch_depth(LIMIT + OFFSET)` best points
+//! that pass the residual metadata filter (every passing point for an
+//! aggregation, see [`branch_depth`]); the branches fused, in the
+//! metric's score direction, by the strategy core maps from the fusion
+//! config ([`velesdb_core::velesql::FusionConfig::near_fused_strategy`]).
 //!
 //! Isolation contract (mirrors core's `validate_similarity_query_structure`):
 //! a `NEAR_FUSED` leaf must be the only vector predicate and cannot appear under
@@ -15,8 +14,7 @@
 //! / `SPARSE_NEAR`, or a fused under `OR`/`NOT` is rejected so the fused vectors
 //! are never silently dropped to a non-fused scan.
 
-use velesdb_core::fusion::FusionStrategy;
-use velesdb_core::velesql::{Condition, FusionConfig, SelectStatement, VectorFusedSearch};
+use velesdb_core::velesql::{Condition, SelectStatement, VectorFusedSearch};
 
 use crate::database::DatabaseInner;
 use crate::velesql_scan::OwnedScanRow;
@@ -24,8 +22,8 @@ use crate::velesql_value::{resolve_vector, Params};
 use crate::velesql_where;
 
 /// Finds a top-level `NEAR_FUSED` leaf in the WHERE clause, recursing through
-/// the boolean combinators (the isolation contract is enforced separately by
-/// [`validate_fused_structure`]).
+/// the boolean combinators (the isolation contract is enforced before
+/// dispatch by `velesdb_core::velesql::validate_vector_predicates`).
 pub(crate) fn find_fused_search(cond: Option<&Condition>) -> Option<&VectorFusedSearch> {
     let cond = cond?;
     match cond {
@@ -48,8 +46,6 @@ pub(crate) fn execute_fused_search(
     fused: &VectorFusedSearch,
     params: &Params,
 ) -> Result<Vec<OwnedScanRow>, String> {
-    validate_fused_structure(stmt.where_clause.as_ref())?;
-
     let store = db.get_shared_store(&stmt.from)?;
     let borrowed = store.borrow();
     if borrowed.dimension == 0 {
@@ -61,9 +57,14 @@ pub(crate) fn execute_fused_search(
 
     let vectors = resolve_fused_vectors(fused, &borrowed, params)?;
     let residual = residual_metadata_filter(stmt.where_clause.as_ref());
-    let branches = score_branches(&vectors, &borrowed, residual.as_ref(), params)?;
-    let strategy = config_to_strategy(&fused.fusion);
-    let fused_scores = strategy.fuse(branches).unwrap_or_default();
+    let depth = branch_depth(stmt);
+    let branches = score_branches(&vectors, &borrowed, residual.as_ref(), params, depth)?;
+    let directions = vec![borrowed.metric.score_direction(); branches.len()];
+    let fused_scores = fused
+        .fusion
+        .near_fused_strategy()
+        .fuse_with_directions(branches, &directions)
+        .map_err(|e| format!("Fusion error: {e}"))?;
 
     // Hydrate rows via the shared collector (same id->idx map + drop-unknown
     // semantics as the single-vector fusion path).
@@ -80,6 +81,13 @@ fn resolve_fused_vectors(
     if fused.vectors.is_empty() {
         return Err("NEAR_FUSED requires at least one query vector".to_string());
     }
+    let max = velesdb_core::fusion::MAX_FUSED_VECTORS;
+    if fused.vectors.len() > max {
+        return Err(format!(
+            "multi_query_search supports at most {max} vectors, got {}",
+            fused.vectors.len()
+        ));
+    }
     let mut out = Vec::with_capacity(fused.vectors.len());
     for expr in &fused.vectors {
         let v = resolve_vector(expr, params)?;
@@ -95,14 +103,15 @@ fn resolve_fused_vectors(
     Ok(out)
 }
 
-/// Builds one ranked branch per query vector via brute-force scoring, applying
-/// the residual metadata filter pre-fusion (matching core's
-/// `apply_pre_fusion_filter`).
+/// One ranked branch per query vector: the `depth` best points that pass the
+/// residual metadata filter, best first (core's `multi_query_search` takes
+/// them from `search_with_filter`).
 fn score_branches(
     vectors: &[Vec<f32>],
     store: &crate::store_state::StoreState,
     residual: Option<&Condition>,
     params: &Params,
+    depth: usize,
 ) -> Result<Vec<Vec<(u64, f32)>>, String> {
     let keep = passing_ids(store, residual, params)?;
     let mut branches = Vec::with_capacity(vectors.len());
@@ -111,9 +120,36 @@ fn score_branches(
         if let Some(allowed) = keep.as_ref() {
             scored.retain(|(id, _)| allowed.contains(id));
         }
+        scored.truncate(depth);
         branches.push(scored);
     }
     Ok(branches)
+}
+
+/// How many points each branch holds.
+///
+/// A search (rows, or a vector GROUP BY) follows core's `multi_query_search`:
+/// the `branch_depth(LIMIT + OFFSET)` best points passing the filter. An
+/// aggregation reads the whole collection, as core's `execute_aggregate`
+/// does, where a vector leaf filters no point: every branch then holds every
+/// passing point, so neither LIMIT nor the default window bounds what an
+/// aggregate counts.
+fn branch_depth(stmt: &SelectStatement) -> usize {
+    if stmt.is_aggregation_query() {
+        usize::MAX
+    } else {
+        velesdb_core::fusion::branch_depth(fetch_limit(stmt))
+    }
+}
+
+/// The rows a SELECT window needs: `LIMIT` (core's default when absent) plus
+/// `OFFSET` (core's `compute_fetch_limit`).
+fn fetch_limit(stmt: &SelectStatement) -> usize {
+    let limit = stmt
+        .limit
+        .unwrap_or(velesdb_core::velesql::DEFAULT_SELECT_LIMIT);
+    let offset = stmt.offset.unwrap_or(0);
+    usize::try_from(limit.saturating_add(offset)).unwrap_or(usize::MAX)
 }
 
 /// Returns the set of ids passing the residual metadata predicate, or `None`
@@ -137,20 +173,6 @@ fn passing_ids(
     Ok(Some(keep))
 }
 
-/// Maps a `NEAR_FUSED` [`FusionConfig`] to a [`FusionStrategy`], mirroring
-/// core's `fused_config_to_strategy`: `average` / `maximum` map directly,
-/// everything else (incl. `weighted` / `weighted_rrf` / `rsf` / unknown)
-/// falls back to `rrf`.
-fn config_to_strategy(config: &FusionConfig) -> FusionStrategy {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let k = config.params.get("k").map_or(60, |v| *v as u32);
-    match config.strategy.to_lowercase().as_str() {
-        "average" => FusionStrategy::Average,
-        "maximum" => FusionStrategy::Maximum,
-        _ => FusionStrategy::RRF { k },
-    }
-}
-
 /// Strips every vector / fused / sparse leaf from the WHERE clause, leaving the
 /// residual metadata predicate (mirrors core's `extract_metadata_filter`).
 ///
@@ -166,61 +188,6 @@ fn residual_metadata_filter(cond: Option<&Condition>) -> Option<Condition> {
                 | Condition::SparseVectorSearch(_)
         )
     })
-}
-
-// --- Isolation contract --------------------------------------------------
-
-/// Rejects fused shapes the executor cannot honor, mirroring core's
-/// `validate_similarity_query_structure`: a `NEAR_FUSED` must be the only vector
-/// predicate and cannot appear under `OR` / `NOT`.
-fn validate_fused_structure(cond: Option<&Condition>) -> Result<(), String> {
-    let Some(cond) = cond else {
-        return Ok(());
-    };
-    let fused_count = count_leaves(cond, &|c| matches!(c, Condition::VectorFusedSearch(_)));
-    if fused_count == 0 {
-        return Ok(());
-    }
-    let other_vector = count_leaves(cond, &|c| {
-        matches!(
-            c,
-            Condition::VectorSearch(_)
-                | Condition::SparseVectorSearch(_)
-                | Condition::Similarity(_)
-        )
-    });
-    if fused_count > 1 || other_vector > 0 || fused_under_or_not(cond) {
-        return Err(
-            "NEAR_FUSED must be the only vector predicate and cannot appear under \
-                    OR/NOT; combine it only with AND <metadata filter>."
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-/// Counts leaves matching `pred` across the condition tree.
-fn count_leaves(cond: &Condition, pred: &dyn Fn(&Condition) -> bool) -> usize {
-    match cond {
-        Condition::And(l, r) | Condition::Or(l, r) => count_leaves(l, pred) + count_leaves(r, pred),
-        Condition::Not(inner) | Condition::Group(inner) => count_leaves(inner, pred),
-        c => usize::from(pred(c)),
-    }
-}
-
-/// True if any `NEAR_FUSED` leaf sits under an `OR` or `NOT`.
-fn fused_under_or_not(cond: &Condition) -> bool {
-    let has_fused =
-        |c: &Condition| count_leaves(c, &|x| matches!(x, Condition::VectorFusedSearch(_))) > 0;
-    match cond {
-        Condition::Or(l, r) => {
-            has_fused(l) || has_fused(r) || fused_under_or_not(l) || fused_under_or_not(r)
-        }
-        Condition::Not(inner) => has_fused(inner) || fused_under_or_not(inner),
-        Condition::And(l, r) => fused_under_or_not(l) || fused_under_or_not(r),
-        Condition::Group(inner) => fused_under_or_not(inner),
-        _ => false,
-    }
 }
 
 #[cfg(test)]

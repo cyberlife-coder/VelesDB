@@ -150,7 +150,8 @@ node, drops rows past the threshold and orders by score.
 | Practical ceiling | ~100 K vectors (browser RAM) | millions |
 
 The single-collection executor supports `SELECT` (with `WHERE`, `NEAR`,
-`NEAR_FUSED`, `similarity()` thresholds ranked by that similarity as in core),
+`NEAR_FUSED`, `similarity()` thresholds — on the point's own vector or a named
+payload vector, several under `AND` — read and ranked as in core),
 `SELECT DISTINCT` (core's dedup key, applied before `ORDER BY` and `LIMIT`),
 projection / aliases / window functions
 (`ROW_NUMBER`, `RANK`, `DENSE_RANK`), `GROUP BY` / `HAVING`, aggregates,
@@ -190,7 +191,6 @@ reference from `@wiscale/velesdb-wasm@4.0.0`.
 | Variable-length relationship (`[*1..3]`) | `Variable-length relationships (e.g. [*1..3]) are not yet supported in WASM` |
 | `ALTER COLLECTION` | `ALTER COLLECTION is not supported in WASM yet` |
 | Graph collections in DDL | `Graph collections are not supported in WASM (use GraphStore directly)` |
-| `similarity()` threshold in `WHERE` | `similarity() threshold filters are not supported in WASM` |
 | Graph `MATCH` predicate in `WHERE` | `Graph MATCH predicates are not supported in WASM` |
 | BM25 `MATCH` condition in `WHERE` | `MATCH (BM25) conditions are not supported in WASM` |
 | `CONTAINS` / `CONTAINS_TEXT` | `CONTAINS / CONTAINS_TEXT conditions are not supported in WASM` |
@@ -215,7 +215,14 @@ One case deserves more than a one-liner:
 - On a **multi-vector `NEAR_FUSED`** query, `rrf` (the default, with an
   optional `k`), `average` and `maximum` run exactly as in core, scores
   included; `weighted` and `rsf` are refused, being ill-defined over
-  homogeneous query vectors.
+  homogeneous query vectors. Each query vector contributes the same number of
+  best points passing the metadata filter as in core
+  (`fusion::branch_depth`), at most `fusion::MAX_FUSED_VECTORS` vectors, and a
+  distance metric fuses closest-first.
+- The vector-predicate shapes core refuses (`NEAR_FUSED` under `OR` / `NOT` or
+  beside another vector predicate, several `SPARSE_NEAR`, several
+  `similarity()` under one `OR`) are refused by the same check
+  (`velesql::validate_vector_predicates`).
 
 Both rules, and the ranking of every accepted shape, are pinned against core by
 `conformance/velesql_executor_cases.json` (`fusion_cases`, `rejected_cases`).

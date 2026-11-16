@@ -860,8 +860,8 @@ LIMIT 5
 
 Every row carries its `NEAR` score. This differs from a `similarity()`
 threshold under `OR`, which is a real predicate: `similarity(...) > 0.8 OR
-category = 'other'` returns the union of both sides, the metadata-only rows
-scored 1.0.
+category = 'other'` returns the rows either side holds for, each scored by its
+real similarity and ranked by it (see `similarity()` semantics below).
 
 ### Sparse Vector Search (SPARSE_NEAR, v2.2+)
 
@@ -957,10 +957,41 @@ similarity(field, vector_expr) <operator> threshold
 
 | Parameter | Description |
 |-----------|-------------|
-| `field` | The vector field name (e.g., `vector`, `embedding`) |
+| `field` | `vector` for the point's own vector, or the payload field holding a named vector (e.g. `embedding`) |
 | `vector_expr` | A parameter (`$v`) or literal vector (`[0.1, 0.2, ...]`) |
-| `operator` | Comparison: `>`, `>=`, `<`, `<=`, `=` |
-| `threshold` | Similarity score (0.0 to 1.0 for cosine/dot) |
+| `operator` | Comparison: `>`, `>=`, `<`, `<=`, `=`, `!=` |
+| `threshold` | The metric's score: a similarity (cosine, dot) or a distance (euclidean, hamming) |
+
+#### Semantics
+
+One definition serves every engine (`velesql::similarity_holds`, core and
+WASM):
+
+- **Direction.** `>` means *more similar than*. Under a distance metric that
+  is *closer than*: `similarity(vector, $v) > 1.5` keeps the points at a
+  distance below 1.5.
+- **Equality** `=` / `!=` allows a tolerance of `0.001`
+  (`velesql::SIMILARITY_EQ_TOLERANCE`); scores compare in `f64`.
+- **Named vectors.** `similarity(embedding, $v)` scores the numeric array the
+  payload holds under `embedding`. A point with no such array, or one of
+  another dimension, cannot be scored: the predicate is UNKNOWN for it (see
+  three-valued logic above), so neither `similarity(...) > t` nor its `NOT`
+  keeps it.
+- **Several thresholds.** Under `AND` each `similarity()` filters with its
+  own field and query vector. Several under one `OR` are refused (V001): that
+  would be a union of vector searches.
+- **Score.** Without a `NEAR`, a row carries its similarity to the first
+  `similarity()` of the `WHERE`, and rows come back most similar first; a row
+  that leaf cannot score (one that passed through an `OR`) comes after them
+  with the metadata score `1.0`. With a `NEAR`, the `NEAR` ranks the rows and
+  gives their score; the threshold only filters.
+- **Completeness.** A threshold filters the whole collection: `LIMIT n`
+  returns the `n` best rows the `WHERE` holds for, however selective its other
+  predicates. A threshold of the form `similarity(vector, $v) > t` (or `>=`),
+  or any threshold beside a `NEAR`, is served by the vector index, searched
+  until it has `n` passing rows or no closer point remains. Every other shape —
+  a negated threshold, one under `OR`, one on a named vector, `<` / `<=` /
+  `=` / `!=` — is an exhaustive scan, refused above 5 000 000 vectors.
 
 #### Examples
 
@@ -1191,7 +1222,7 @@ matter how it ranks globally. This covers `vector NEAR` (anchor sets up to
 10 000 ids are scored exactly; larger ones go through the bitmap-filtered
 HNSW path), metadata-only fetches (the anchors are hydrated directly),
 sparse-only fetches (anchors feed the sparse index's per-id filter), and
-`NOT similarity()` scans (restricted to the anchors).
+exhaustive `similarity()` scans (restricted to the anchors).
 
 **Execution note (over-fetch window, residual shapes).** Query shapes that
 cannot use the anchored fetch keep the windowed execution: graph predicates
@@ -1674,8 +1705,7 @@ take a dedicated early-return execution path bypass that stage, so the engine
 | Graph pattern | `MATCH (...) RETURN ...` | `LET bindings are not supported with MATCH queries in this version` |
 | Sparse vector | `WHERE vector SPARSE_NEAR ...` | `LET bindings are not supported with SPARSE_NEAR queries in this version` |
 | Multi-vector fusion | `WHERE vector NEAR_FUSED ...` | `LET bindings are not supported with NEAR_FUSED queries in this version` |
-| Negated similarity | `WHERE NOT similarity(...) ...` | `LET bindings are not supported with NOT similarity() queries in this version` |
-| OR / union | `WHERE similarity(...) OR ...` | `LET bindings are not supported with OR/union queries in this version` |
+| Exhaustive similarity scan | `WHERE NOT similarity(...)`, `similarity(...) OR ...`, or, without `NEAR`, a first `similarity()` on a named vector or not of the form `> t` / `>= t` | `LET bindings are not supported with exhaustive similarity() scan queries in this version` |
 
 LET **is** supported on dense `NEAR`, text `MATCH '...'`, hybrid `NEAR + MATCH`
 text, and scalar-filter SELECTs.
