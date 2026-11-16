@@ -329,6 +329,7 @@ Prebuilt binaries, one per target declared in `package.json` `napi.targets`:
 | `[INTERNAL] storage error: [VELES-031] Database is already opened by another process: <path>` | The single-writer lock is held — a second `MemoryService` on the same directory. | Keep one instance per store, or give the second one its own path. |
 | `[NOT_FOUND] memory 999999999 does not exist` on `relate` / `feedback` | The id was rounded by JS number arithmetic, or came from a different store. | Never convert an id with `Number()`; pass the decimal string through verbatim. |
 | `[INVALID_INPUT] invalid id 'not-an-id' (expected a decimal u64 string)` | A non-numeric value reached an id argument (often an object or `undefined`). | Pass the exact string `remember` resolved to. |
+| `[INVALID_INPUT] k must be a whole number in 0..=4294967295, got Infinity` | A count (`k`, `ttlSeconds`, `maxHops`, `limit`, `reserveTokens`, `fragmentIndex`, `hops`, `pool`) was negative, fractional, non-finite or above 2^32 − 1. Such a value used to wrap silently (`Infinity` → 0). | Pass a whole number in range. |
 | `[INTERNAL] extraction error: ... ollama request failed: ... Connection refused` | `rememberExtracted` needs a running Ollama, whatever embedder the store uses. | Start Ollama and pull the model, or use `remember` with explicit `links`. |
 | `EPERM` / `EBUSY` deleting a store directory on Windows | The `velesdb.lock` file is still held; the release finalizer is not deterministic. | Retry the delete, or drop the directory on the next run. |
 

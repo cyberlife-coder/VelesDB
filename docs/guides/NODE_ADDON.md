@@ -70,7 +70,7 @@ category travels as a token at the front of the message:
 
 | Code | Meaning | Typical trigger |
 |---|---|---|
-| `[INVALID_INPUT]` | Bad caller input | empty fact, oversized metadata, unknown filter operator, malformed id |
+| `[INVALID_INPUT]` | Bad caller input | empty fact, oversized metadata, unknown filter operator, malformed id, a count (`k`, `ttlSeconds`, `maxHops`, `limit`, …) that is not a whole number in `0..=2^32-1` |
 | `[NOT_FOUND]` | A referenced id or handle does not exist | `feedback` on an unknown id, `relate` to a missing endpoint, an expired `ctx://source/` handle |
 | `[INTERNAL]` | Storage, embedding or extraction failure | store locked by another process, Ollama unreachable |
 
