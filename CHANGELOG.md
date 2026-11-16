@@ -319,6 +319,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Node: a count argument is checked, never wrapped** (Node, 2026-11-16).
+  `recall`'s `k`, `remember`'s `ttlSeconds`, `why`'s `maxHops`,
+  `listMemories`' `limit`, `suggestBudget`'s `reserveTokens`,
+  `explainCompilation`'s `fragmentIndex` and `recallFused`'s `hops` / `pool`
+  went through napi's `u32` conversion, JS `ToUint32`, which wraps:
+  `recall(q, Infinity)` returned `[]`, a `ttlSeconds` of `-1` stored a
+  136-year TTL and `2**32 + 60` a 60-second one. A count must now be a whole
+  number in `0..=2^32-1`; anything else rejects with `INVALID_INPUT`.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
