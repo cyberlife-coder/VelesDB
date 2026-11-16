@@ -25,8 +25,10 @@
 //!   rank by score in the metric's direction (most similar first, closest
 //!   first under a distance), ties keeping the order they were met in.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use crate::distance::rank_scores;
 use crate::point::SearchResult;
 
 use super::distinct_evaluator::{compute_distinct_key, key_columns};
@@ -217,11 +219,7 @@ fn adopt_if_better(kept: &mut SearchResult, other: &SearchResult, higher_is_bett
 
 /// Whether score `a` beats `b` in the metric's direction.
 fn is_better(a: f32, b: f32, higher_is_better: bool) -> bool {
-    if higher_is_better {
-        a > b
-    } else {
-        a < b
-    }
+    rank_scores(a, b, higher_is_better) == Ordering::Less
 }
 
 /// The names a SELECT's window functions write their outputs under.
@@ -239,16 +237,9 @@ fn window_outputs(columns: &SelectColumns) -> impl Iterator<Item = String> + '_ 
     })
 }
 
-/// Stable sort, best score first in the metric's direction.
+/// Stable sort, best score first in the metric's direction, NaN last.
 fn rank_by_score(rows: &mut [SearchResult], higher_is_better: bool) {
-    rows.sort_by(|a, b| {
-        let ascending = a.score.total_cmp(&b.score);
-        if higher_is_better {
-            ascending.reverse()
-        } else {
-            ascending
-        }
-    });
+    rows.sort_by(|a, b| rank_scores(a.score, b.score, higher_is_better));
 }
 
 /// Writes each row's listed column `i` under the first operand's column `i`

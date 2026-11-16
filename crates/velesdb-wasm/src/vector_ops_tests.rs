@@ -28,6 +28,26 @@ fn test_sort_results_lower() {
     assert_eq!(results[0].0, 3);
 }
 
+/// A NaN score ranks last, as in core. The previous `partial_cmp` fallback
+/// called NaN equal to every score, which is not a total order: the NaN
+/// landed wherever the sort happened to leave it.
+#[test]
+fn test_sort_results_ranks_nan_last_like_core() {
+    for higher_is_better in [true, false] {
+        for nan in [f32::NAN, -f32::NAN] {
+            let mut results = vec![(1, 0.5), (2, nan), (3, 0.9), (4, 0.3)];
+            sort_results(&mut results, higher_is_better);
+            let order: Vec<u64> = results.iter().map(|r| r.0).collect();
+            let expected = if higher_is_better {
+                [3, 1, 4, 2]
+            } else {
+                [4, 1, 3, 2]
+            };
+            assert_eq!(order, expected, "higher_is_better: {higher_is_better}");
+        }
+    }
+}
+
 #[test]
 fn test_filtered_scores_test_a_point_without_payload_like_core() {
     // Core and REST test a payload-less point with a `null` payload, so

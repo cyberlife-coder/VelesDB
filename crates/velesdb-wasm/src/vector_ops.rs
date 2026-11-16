@@ -27,11 +27,7 @@ pub fn compute_scores(
 
 /// Sort results by relevance.
 pub fn sort_results(results: &mut [(u64, f32)], higher_is_better: bool) {
-    if higher_is_better {
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    } else {
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    }
+    results.sort_by(|a, b| velesdb_core::distance::rank_scores(a.1, b.1, higher_is_better));
 }
 
 /// Compute scores with payload filtering.
