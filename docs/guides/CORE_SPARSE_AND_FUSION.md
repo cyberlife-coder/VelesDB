@@ -127,6 +127,7 @@ name `weighted_rrf`.
 | `Weighted { .. }` | yes | `weighted` | `WEIGHTED` | `FusionStrategy.weighted()` | yes | `weighted` | `weighted` |
 | `RelativeScore { .. }` | yes | `relative_score` | `RSF` | `FusionStrategy.relative_score()` | yes | `relative_score` / `rsf` | `relative_score` / `rsf` |
 | `WeightedRRF { weights, k }` | yes | `weighted_rrf` + `branch_weights` | `weighted_rrf` (`dense_weight`/`sparse_weight`) | `FusionStrategy.weighted_rrf()` | `WeightedRrf { weights, k }` | `weighted_rrf` + `branchWeights` | `weighted_rrf` + `weights` key |
+| `WeightedRelativeScore { weights }` | yes | `relative_score` + `branch_weights` | — (two branches: `RelativeScore`) | `FusionStrategy.from_name("rsf", weights=...)` | no | `relative_score` + `branchWeights` | `relative_score` + `weights` key |
 
 The per-branch weights each surface spells its own way: `branch_weights` on
 `/search/multi` (one per query vector, in vector order — the server refuses a
@@ -137,6 +138,15 @@ kwarg on Python, the `weights` argument of `multi_query_search` on WASM,
 `fusionParams.branchWeights` on the TS SDK, `WeightedRrf { weights, k }` on
 mobile, a `weights`/`branch_weights`/`branchWeights` key in Tauri's
 `fusion_params`, and `--branch-weights` on the CLI's `search` subcommand.
+
+`relative_score` / `rsf` reads the same per-branch weights: given, they are
+its weights (one per branch, summing to 1.0) and its dense and sparse weights
+do not apply. Without them it weighs two branches by `dense_weight` /
+`sparse_weight` and more branches equally, `1/N` each; unequal dense and
+sparse weights over three branches or more are refused, since they name a
+dense and a sparse branch. Every branch is fused: a document absent from a
+branch gets `0` from it. Mobile's `FusionStrategy` enum has no per-branch
+`RelativeScore` case yet.
 
 `WeightedRRF` is the variant the engine's own documentation calls *"the
 correct strategy for hybrid dense + text search where branches carry

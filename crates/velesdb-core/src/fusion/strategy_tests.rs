@@ -1145,3 +1145,48 @@ fn test_fused_score_cmp_keeps_nan_order() {
         std::cmp::Ordering::Less
     );
 }
+
+// =============================================================================
+// WeightedRelativeScore (per-branch RSF weights, D005)
+// =============================================================================
+
+/// Each branch is min-max normalized, then weighed by its own weight; a
+/// document absent from a branch gets `0` from it.
+#[test]
+fn test_weighted_rsf_weighs_each_branch_by_its_weight() {
+    let strategy = FusionStrategy::weighted_relative_score(vec![0.5, 0.3, 0.2]).unwrap();
+    let fused = strategy
+        .fuse(vec![
+            vec![(1_u64, 10.0_f32), (2, 0.0)],
+            vec![(2_u64, 4.0_f32), (3, 2.0)],
+            vec![(3_u64, 7.0_f32), (1, 1.0)],
+        ])
+        .unwrap();
+    // Normalized: b0 {1: 1, 2: 0}, b1 {2: 1, 3: 0}, b2 {3: 1, 1: 0}.
+    let expected = [(1_u64, 0.5_f32), (2, 0.3), (3, 0.2)];
+    assert_eq!(fused.len(), expected.len());
+    for ((id, score), (want_id, want)) in fused.iter().zip(expected) {
+        assert_eq!(*id, want_id);
+        assert!((score - want).abs() < 1e-6, "doc {id}: {score}");
+    }
+}
+
+#[test]
+fn test_weighted_rsf_needs_one_weight_per_branch() {
+    let strategy = FusionStrategy::weighted_relative_score(vec![0.5, 0.5]).unwrap();
+    assert_eq!(
+        strategy.fuse(vec![vec![(1, 1.0)], vec![(2, 1.0)], vec![(3, 1.0)]]),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
+    );
+}
+
+#[test]
+fn test_weighted_rsf_validates_its_weights() {
+    assert!(FusionStrategy::weighted_relative_score(vec![]).is_err());
+    assert!(FusionStrategy::weighted_relative_score(vec![0.7, 0.7]).is_err());
+    assert!(FusionStrategy::weighted_relative_score(vec![1.5, -0.5]).is_err());
+    assert!(FusionStrategy::weighted_relative_score(vec![f32::NAN, 1.0]).is_err());
+}

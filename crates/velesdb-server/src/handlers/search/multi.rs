@@ -37,14 +37,18 @@ use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_co
 pub(super) fn build_fusion_strategy(
     req: &MultiQuerySearchRequestWithWeights,
 ) -> Result<velesdb_core::FusionStrategy, String> {
-    if req.base.strategy.eq_ignore_ascii_case("weighted_rrf")
+    let reads_branch_weights = ["weighted_rrf", "relative_score", "rsf"]
+        .iter()
+        .any(|name| req.base.strategy.eq_ignore_ascii_case(name));
+    if reads_branch_weights
         && req
             .branch_weights
             .as_ref()
-            .is_some_and(|w| w.len() != req.base.vectors.len())
+            .is_some_and(|w| !w.is_empty() && w.len() != req.base.vectors.len())
     {
         return Err(format!(
-            "weighted_rrf requires one weight per query vector: {} weights for {} vectors",
+            "{} requires one weight per query vector: {} weights for {} vectors",
+            req.base.strategy,
             req.branch_weights.as_ref().map_or(0, Vec::len),
             req.base.vectors.len(),
         ));

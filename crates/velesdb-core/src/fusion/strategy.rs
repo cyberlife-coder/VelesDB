@@ -224,6 +224,18 @@ pub enum FusionStrategy {
         /// advantage of the top rank.
         k: f32,
     },
+
+    /// Relative Score Fusion with one weight per branch.
+    ///
+    /// Each branch is min-max normalized independently, then weighed by its
+    /// own weight: `final = Σᵢ weights[i] * norm_i`. A doc absent from a
+    /// branch gets 0 from it. What `relative_score` / `rsf` builds from
+    /// per-branch weights, e.g. one per query vector of a multi-query search.
+    WeightedRelativeScore {
+        /// Per-branch non-negative weights summing to 1.0; one per branch
+        /// passed to [`FusionStrategy::fuse`].
+        weights: Vec<f32>,
+    },
 }
 
 impl FusionStrategy {
@@ -244,6 +256,17 @@ impl FusionStrategy {
         validate_non_negative(&weights)?;
         validate_smoothing_constant(k)?;
         Ok(Self::WeightedRRF { weights, k })
+    }
+
+    /// Creates a `WeightedRelativeScore` strategy with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is no weight, if any weight is negative or
+    /// non-finite, or if the weights do not sum to 1.0 (within 0.001).
+    pub fn weighted_relative_score(weights: Vec<f32>) -> Result<Self, FusionError> {
+        validate_relative_score_weights(&weights)?;
+        Ok(Self::WeightedRelativeScore { weights })
     }
 
     /// Creates a `RelativeScore` strategy with validation.
@@ -449,6 +472,16 @@ impl FusionStrategy {
                 sparse_weight,
             } => Self::fuse_relative_score(&results, *dense_weight, *sparse_weight),
             Self::WeightedRRF { weights, k } => Self::fuse_weighted_rrf(results, weights, *k),
+            Self::WeightedRelativeScore { weights } => {
+                validate_relative_score_weights(weights)?;
+                if weights.len() != results.len() {
+                    return Err(FusionError::WeightCountMismatch {
+                        weights: weights.len(),
+                        branches: results.len(),
+                    });
+                }
+                Ok(fuse_normalized(&results, weights))
+            }
         }
     }
 
@@ -598,17 +631,7 @@ impl FusionStrategy {
         validate_non_negative(&[dense_weight, sparse_weight])?;
         validate_weight_sum(dense_weight + sparse_weight)?;
         let weights = rsf_branch_weights(results.len(), dense_weight, sparse_weight)?;
-
-        let mut fused: HashMap<u64, f32> = HashMap::new();
-        for (branch, weight) in results.iter().zip(weights) {
-            for (id, normalized) in min_max_normalize(branch) {
-                *fused.entry(id).or_insert(0.0) += weight * normalized;
-            }
-        }
-
-        let mut fused: Vec<(u64, f32)> = fused.into_iter().collect();
-        sort_fused_results(&mut fused);
-        Ok(fused)
+        Ok(fuse_normalized(results, &weights))
     }
 
     /// Weighted 0-based RRF: Σᵢ `weight_i / (rank_i + k)`.
@@ -744,6 +767,31 @@ pub(crate) fn fused_score_cmp(a: f32, b: f32) -> std::cmp::Ordering {
     // result an unspecified sign, which moves it in `total_cmp`'s order.
     let unsigned_zero = |x: f32| if x == 0.0 { 0.0 } else { x };
     unsigned_zero(a).total_cmp(&unsigned_zero(b))
+}
+
+/// Relative Score Fusion of `results` by `weights`, one per branch (extra
+/// branches or weights unused): each branch min-max normalized, a document
+/// absent from a branch getting `0` from it.
+fn fuse_normalized(results: &[Vec<(u64, f32)>], weights: &[f32]) -> Vec<(u64, f32)> {
+    let mut fused: HashMap<u64, f32> = HashMap::new();
+    for (branch, weight) in results.iter().zip(weights) {
+        for (id, normalized) in min_max_normalize(branch) {
+            *fused.entry(id).or_insert(0.0) += weight * normalized;
+        }
+    }
+    let mut fused: Vec<(u64, f32)> = fused.into_iter().collect();
+    sort_fused_results(&mut fused);
+    fused
+}
+
+/// Per-branch RSF weights: at least one, each finite and non-negative,
+/// summing to 1.0.
+fn validate_relative_score_weights(weights: &[f32]) -> Result<(), FusionError> {
+    if weights.is_empty() {
+        return Err(FusionError::InvalidWeightSum { sum: 0.0 });
+    }
+    validate_non_negative(weights)?;
+    validate_weight_sum(weights.iter().sum())
 }
 
 /// The weight of each of `branches` RSF branches: `dense_weight` and

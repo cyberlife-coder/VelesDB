@@ -294,6 +294,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   branches and `1/N` each beyond. Unequal weights over three branches or
   more are refused (`WeightCountMismatch`), since they name a dense and a
   sparse branch. Two-branch dense + sparse fusion is unchanged (D005).
+  `relative_score` also reads per-branch weights now — the
+  `branch_weights` of `/search/multi`, the CLI's `--branch-weights`, WASM's
+  and the TS SDK's `branchWeights`, Python's `from_name(..., weights=...)` —
+  which it used to ignore without a word: one weight per branch, summing to
+  1.0, in place of the dense and sparse weights
+  (`FusionStrategy::WeightedRelativeScore`).
 
 - **`DELETE` takes any metadata `WHERE`** (core, 2026-11-16). Core refused
   every `DELETE` whose `WHERE` was not `id = N` or `id IN (...)`, though the

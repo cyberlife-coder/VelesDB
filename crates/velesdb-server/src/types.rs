@@ -8,7 +8,7 @@
 pub use velesdb_core::api_types::*;
 
 /// `/search/multi`'s request: core's `MultiQuerySearchRequest`
-/// plus the `branch_weights` `weighted_rrf` reads.
+/// plus the `branch_weights` `weighted_rrf` and `relative_score` read.
 ///
 /// Kept server-side on purpose: the core DTO is a published,
 /// externally-constructible struct, so a new pub field would break
@@ -20,9 +20,10 @@ pub struct MultiQuerySearchRequestWithWeights {
     /// Every field core's DTO declares.
     #[serde(flatten)]
     pub base: velesdb_core::api_types::MultiQuerySearchRequest,
-    /// `weighted_rrf` only: one weight per query vector, in vector order —
-    /// the parameter the strategy cannot default. Ignored by every other
-    /// strategy, like the scalar weight fields.
+    /// One weight per query vector, in vector order: `weighted_rrf`'s, the
+    /// parameter it cannot default, and `relative_score` / `rsf`'s, which
+    /// then replace its `dense_weight` / `sparse_weight`. Ignored by every
+    /// other strategy, like the scalar weight fields.
     #[serde(default)]
     pub branch_weights: Option<Vec<f32>>,
 }

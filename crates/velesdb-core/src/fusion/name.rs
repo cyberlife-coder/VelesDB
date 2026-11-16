@@ -132,16 +132,20 @@ impl FusionStrategy {
     }
 
     /// Builds the strategy a name stands for, with `params` filling its scalar
-    /// parameters and `weights` carrying `weighted_rrf`'s per-branch weights.
+    /// parameters and `weights` carrying per-branch weights: `weighted_rrf`'s,
+    /// which it cannot default, and `relative_score`'s, which make it a
+    /// [`FusionStrategy::WeightedRelativeScore`]: given, they are the weights
+    /// it reads, and its dense and sparse weights do not apply.
     ///
     /// `weights` is the companion channel the vector parameter needs:
     /// [`FusionParams`] stays `Copy`, so it cannot hold the per-branch
-    /// vector — the one parameter `weighted_rrf` cannot default. As with
-    /// scalar params, weights a named strategy does not read are ignored.
+    /// vector. As with scalar params, weights a named strategy does not read
+    /// are ignored.
     ///
     /// # Errors
     ///
-    /// Same contract as [`FusionStrategy::from_name`].
+    /// Same contract as [`FusionStrategy::from_name`], plus the error of
+    /// [`FusionStrategy::weighted_relative_score`] for weights it refuses.
     // `rrf_k` is a rank offset in the same magnitude as `RRF`'s `u32` k —
     // far below 2^24, so the u32→f32 widening is exact.
     #[allow(clippy::cast_precision_loss)]
@@ -173,6 +177,9 @@ impl FusionStrategy {
                 params.hit_weight.unwrap_or(DEFAULT_WEIGHTED_HIT_WEIGHT),
             ),
             "relative_score" | "rsf" => {
+                if let Some(weights) = weights.filter(|w| !w.is_empty()) {
+                    return Self::weighted_relative_score(weights.to_vec());
+                }
                 let (dense, sparse) = params.relative_score_weights();
                 Self::relative_score(dense, sparse)
             }
