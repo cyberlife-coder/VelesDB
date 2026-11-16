@@ -329,7 +329,10 @@ fn parse_weighted_call(
         return Err(weighted_shape_error());
     }
     let positional = |index: usize| args.get_item(index).ok();
-    let avg = merge_slot(positional(0), avg_weight.cloned(), "avg_weight")?;
+    // A `None` avg_weight is "not given" (the keyword legacy shape
+    // `weighted(None, max_weight=…, hit_weight=…)`), not a weight.
+    let avg = merge_slot(positional(0), avg_weight.cloned(), "avg_weight")?
+        .filter(|value| !value.is_none());
     let max = merge_slot(
         positional(1).map(|v| v.extract::<f32>()).transpose()?,
         max_weight,

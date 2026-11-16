@@ -979,6 +979,8 @@ class TestFusionStrategy:
             velesdb.FusionStrategy.weighted(0.5, max_weight=0.5)
         full = velesdb.FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.1)
         assert repr(full) == repr(velesdb.FusionStrategy.weighted(0.6, 0.3, 0.1))
+        keyword_legacy = velesdb.FusionStrategy.weighted(None, max_weight=0.3, hit_weight=0.1)
+        assert repr(keyword_legacy) == repr(velesdb.FusionStrategy.weighted(0.3, 0.1))
         legacy = velesdb.FusionStrategy.weighted(0.3, 0.1)
         assert repr(legacy) == repr(velesdb.FusionStrategy.weighted(max_weight=0.3, hit_weight=0.1))
 

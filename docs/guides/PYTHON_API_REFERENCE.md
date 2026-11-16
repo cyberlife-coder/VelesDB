@@ -371,6 +371,8 @@ strategy = FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.
 strategy = FusionStrategy.weighted({"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1})
 strategy = FusionStrategy.weighted(0.3, 0.1)  # legacy: max_weight, hit_weight
 strategy = FusionStrategy.weighted(max_weight=0.3, hit_weight=0.1)  # legacy kwargs
+# Only two *positional* weights are the legacy pair: a keyword set without
+# hit_weight, or a weight given both positionally and by keyword, raises ValueError.
 
 # Relative Score Fusion -- linear blend of dense and sparse scores
 strategy = FusionStrategy.relative_score(dense_weight=0.7, sparse_weight=0.3)
