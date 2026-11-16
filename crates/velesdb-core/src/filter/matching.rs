@@ -342,11 +342,7 @@ fn get_field<'a>(record: Record<'a>, field: &str) -> Option<Cow<'a, Value>> {
     if field == POINT_ID_FIELD {
         return record.id.map(|id| Cow::Owned(Value::from(id)));
     }
-    let mut current = record.payload;
-    for part in field.split('.') {
-        current = current.get(part)?;
-    }
-    Some(Cow::Borrowed(current))
+    crate::velesql::json_path::payload_path(record.payload, field).map(Cow::Borrowed)
 }
 
 /// The three-valued truth of `operand = literal`, as a WHERE `=` decides

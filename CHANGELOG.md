@@ -300,6 +300,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which it used to ignore without a word: one weight per branch, summing to
   1.0, in place of the dense and sparse weights
   (`FusionStrategy::WeightedRelativeScore`).
+- **One reading of a dotted field path** (core, WASM, 2026-11-16). Ten
+  copies of the `meta.lang` walk (WHERE, MATCH WHERE and RETURN, GROUP BY
+  and DISTINCT, projection, window functions, set operations, scalar
+  subqueries, and two in the browser) are now one, `velesql::json_path::payload_path`,
+  with `velesql::json_path::column_value` for a row's `id`-or-path value.
+  The MATCH RETURN copy refused a path deeper than 10 segments: a REST
+  `/match` clause whose RETURN named such a path (VelesQL's `RETURN` takes
+  one segment) came back without the value, while `WHERE` on the same path
+  matched the node. It now reads it.
 
 - **`DELETE` takes any metadata `WHERE`** (core, 2026-11-16). Core refused
   every `DELETE` whose `WHERE` was not `id = N` or `id IN (...)`, though the

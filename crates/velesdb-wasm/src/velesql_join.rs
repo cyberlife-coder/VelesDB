@@ -10,6 +10,7 @@
 //! `velesql_select` — so `o.amount`, `c.name` and a self-join's two `name`s
 //! read as in core.
 
+use velesdb_core::velesql::json_path::payload_path;
 use velesdb_core::velesql::{
     merge_side, scope_base, side_alias, JoinClause, JoinType, SelectStatement,
 };
@@ -179,14 +180,14 @@ fn rows_match(
 /// Looks up a (possibly alias-qualified) key in the joined row's flat/nested
 /// map. `"users.id"` walks `users → id` via the nested alias object; `"id"`
 /// falls back to the flat root. Keeps the lookup symmetric with the WHERE
-/// evaluator's `get_nested_field` semantics.
+/// evaluator's dotted-path reading (core's `payload_path`).
 fn lookup_join_key(
     values: &serde_json::Map<String, serde_json::Value>,
     key: &str,
 ) -> Option<serde_json::Value> {
     if let Some((head, tail)) = key.split_once('.') {
         if let Some(nested) = values.get(head) {
-            if let Some(v) = crate::filter::get_nested_field(nested, tail) {
+            if let Some(v) = payload_path(nested, tail) {
                 return Some(v.clone());
             }
         }
@@ -200,9 +201,7 @@ fn extract_right_value(row: &OwnedScanRow, key: &str, alias: &str) -> Option<ser
     if col == "id" {
         return Some(serde_json::json!(*id));
     }
-    payload
-        .as_ref()
-        .and_then(|p| crate::filter::get_nested_field(p, col).cloned())
+    payload.as_ref().and_then(|p| payload_path(p, col).cloned())
 }
 
 #[cfg(test)]

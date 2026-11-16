@@ -5,6 +5,7 @@
 //! post-processing (DISTINCT, ORDER BY, LIMIT).
 
 use crate::point::SearchResult;
+use crate::velesql::json_path::column_value;
 use crate::velesql::{SelectColumns, SimilarityScoreExpr};
 
 /// Projects a list of `SearchResult` according to the parsed SELECT expressions.
@@ -73,7 +74,7 @@ fn project_columns(result: &SearchResult, columns: &[crate::velesql::Column]) ->
 
     for col in columns {
         let output_key = col.alias.as_deref().unwrap_or(&col.name);
-        let value = extract_field_value(result, &col.name);
+        let value = column_value(result, &col.name);
         map.insert(output_key.to_string(), value);
     }
 
@@ -155,7 +156,7 @@ fn insert_named_columns(
 ) {
     for col in columns {
         let output_key = col.alias.as_deref().unwrap_or(&col.name);
-        let value = extract_field_value(result, &col.name);
+        let value = column_value(result, &col.name);
         map.insert(output_key.to_string(), value);
     }
 }
@@ -196,38 +197,6 @@ fn insert_window_values(
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         map.insert(alias.to_string(), value);
-    }
-}
-
-/// Extracts a field value from a `SearchResult`, supporting nested paths.
-///
-/// - `"title"` → `payload["title"]`
-/// - `"meta.source"` → `payload["meta"]["source"]`
-/// - `"id"` → system point ID (takes precedence over payload)
-fn extract_field_value(result: &SearchResult, field_path: &str) -> serde_json::Value {
-    if field_path == "id" {
-        return serde_json::Value::from(result.point.id);
-    }
-
-    let Some(payload) = result.point.payload.as_ref() else {
-        return serde_json::Value::Null;
-    };
-
-    if field_path.contains('.') {
-        // Nested path traversal
-        let mut current = payload;
-        for segment in field_path.split('.') {
-            match current.get(segment) {
-                Some(next) => current = next,
-                None => return serde_json::Value::Null,
-            }
-        }
-        current.clone()
-    } else {
-        payload
-            .get(field_path)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null)
     }
 }
 

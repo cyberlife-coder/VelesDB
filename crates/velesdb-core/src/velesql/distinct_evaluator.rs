@@ -115,7 +115,7 @@ pub(crate) fn compute_distinct_key(
                     Some(Cow::Owned(serde_json::Value::from(result.point.id)))
                 } else {
                     payload
-                        .and_then(|p| super::grouping::payload_path(p, col))
+                        .and_then(|p| super::json_path::payload_path(p, col))
                         .map(Cow::Borrowed)
                 };
                 value.map_or_else(

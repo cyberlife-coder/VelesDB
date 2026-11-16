@@ -15,3 +15,7 @@ crates/velesdb-python/src/graph.rs fn node_to_dict
 # and re-exported from lib.rs by `pub use`: the public path is unchanged,
 # not a removal.
 crates/velesdb-node/src/lib.rs struct NodeMemoryService
+# Duplicate dotted-path reader removed: `filter` is a private module of the
+# cdylib, so it was unreachable from the published package. Every caller now
+# reads paths through velesdb-core's velesql::json_path::payload_path.
+crates/velesdb-wasm/src/filter.rs fn get_nested_field

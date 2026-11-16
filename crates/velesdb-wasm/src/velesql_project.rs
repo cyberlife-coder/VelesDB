@@ -19,6 +19,7 @@
 //!   similarity-score materialization, window-alias dedup).
 
 use velesdb_core::point::{Point, SearchResult};
+use velesdb_core::velesql::json_path::{column_value, payload_path};
 use velesdb_core::velesql::{
     Column, SelectColumns, SelectStatement, SimilarityScoreExpr, WindowFunction,
 };
@@ -170,23 +171,14 @@ fn insert_wildcard_fields(map: &mut JsonMap, result: &SearchResult, skip: &[&str
 fn insert_named_columns(map: &mut JsonMap, result: &SearchResult, columns: &[Column]) {
     for col in columns {
         let key = col.alias.as_deref().unwrap_or(&col.name);
-        map.insert(key.to_string(), extract_field_value(result, &col.name));
+        map.insert(key.to_string(), column_value(result, &col.name));
     }
-}
-
-/// Extracts a field value (supporting dotted paths); `id` takes precedence
-/// over any payload `id`.
-fn extract_field_value(result: &SearchResult, field_path: &str) -> serde_json::Value {
-    if field_path == "id" {
-        return serde_json::Value::from(result.point.id);
-    }
-    payload_field(result, field_path).unwrap_or(serde_json::Value::Null)
 }
 
 /// Looks up a (possibly dotted) payload field.
 fn payload_field(result: &SearchResult, path: &str) -> Option<serde_json::Value> {
     let payload = result.point.payload.as_ref()?;
-    crate::filter::get_nested_field(payload, path).cloned()
+    payload_path(payload, path).cloned()
 }
 
 /// The materialized search score as a JSON number.
