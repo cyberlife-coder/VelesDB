@@ -19,3 +19,7 @@ crates/velesdb-node/src/lib.rs struct NodeMemoryService
 # cdylib, so it was unreachable from the published package. Every caller now
 # reads paths through velesdb-core's velesql::json_path::payload_path.
 crates/velesdb-wasm/src/filter.rs fn get_nested_field
+# Superseded by validate_query_vector / validate_ingest_vector, which add the
+# metadata-only and finite-component checks core runs: `store_search` is a
+# private module of the cdylib, so it was unreachable from the published package.
+crates/velesdb-wasm/src/store_search.rs fn validate_dimension
