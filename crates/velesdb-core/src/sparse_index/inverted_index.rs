@@ -42,6 +42,9 @@ pub(crate) struct FrozenSegment {
     pub(crate) postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
     /// Tombstone set: doc IDs that have been logically deleted.
     tombstones: FxHashSet<u64>,
+    /// Every doc ID this segment was built with, tombstoned or not: the O(1)
+    /// membership test `contains_live` needs on every insert.
+    doc_ids: FxHashSet<u64>,
     /// Number of documents originally in this segment (used by persistence layer).
     pub(crate) doc_count: usize,
 }
@@ -55,8 +58,24 @@ impl FrozenSegment {
     /// layers that synthesise `FrozenSegment` values therefore exercise
     /// the assertion during local / CI test runs before shipping a release
     /// binary that relies on the invariant.
+    #[cfg(feature = "persistence")]
     pub(crate) fn new(
         postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
+        doc_count: usize,
+    ) -> Self {
+        let doc_ids = postings
+            .values()
+            .flat_map(|(entries, _)| entries.iter().map(|e| e.doc_id))
+            .collect();
+        Self::with_doc_ids(postings, doc_ids, doc_count)
+    }
+
+    /// [`Self::new`] for a caller that knows the segment's documents: the
+    /// freeze path, whose `doc_set` also holds documents indexed with an
+    /// empty vector, which no posting list names.
+    fn with_doc_ids(
+        postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
+        doc_ids: FxHashSet<u64>,
         doc_count: usize,
     ) -> Self {
         debug_assert!(
@@ -68,20 +87,14 @@ impl FrozenSegment {
         Self {
             postings,
             tombstones: FxHashSet::default(),
+            doc_ids,
             doc_count,
         }
     }
 
-    /// Returns `true` if `point_id` has a live (non-tombstoned) entry in this segment.
+    /// Returns `true` if `point_id` is live (held and not tombstoned) here.
     fn contains_live(&self, point_id: u64) -> bool {
-        if self.tombstones.contains(&point_id) {
-            return false;
-        }
-        self.postings.values().any(|(entries, _)| {
-            entries
-                .binary_search_by_key(&point_id, |e| e.doc_id)
-                .is_ok()
-        })
+        self.doc_ids.contains(&point_id) && !self.tombstones.contains(&point_id)
     }
 }
 
@@ -119,18 +132,22 @@ impl SparseInvertedIndex {
         }
     }
 
-    /// Inserts or updates a sparse vector for the given point ID.
+    /// Upserts the sparse vector of `point_id`: afterwards the document's
+    /// postings are exactly `vector`'s.
     ///
-    /// `doc_count` is incremented only when this is a genuinely new document.
-    /// Re-inserting the same `point_id` (upsert) updates the posting weights
-    /// in-place without incrementing the count.
+    /// The document is first retired from every segment (removed from the
+    /// mutable one, tombstoned in the frozen ones), so a term the previous
+    /// vector had and `vector` lacks stops matching, and a document re-upserted
+    /// after its segment froze is not held — and scored — twice. `doc_count`
+    /// grows only for a genuinely new document.
     ///
     /// If the mutable segment reaches [`FREEZE_THRESHOLD`] documents,
     /// it is automatically frozen into an immutable segment.
     pub fn insert(&self, point_id: u64, vector: &SparseVector) {
         let mut seg = self.mutable.write();
-        let is_new = seg.insert(point_id, vector);
-        if is_new {
+        let retired = self.retire_locked(&mut seg, &FxHashSet::from_iter([point_id]));
+        seg.insert(point_id, vector);
+        if retired == 0 {
             self.doc_count.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -139,27 +156,33 @@ impl SparseInvertedIndex {
         }
     }
 
-    /// Inserts a batch of sparse vectors while acquiring the mutable lock once.
+    /// Upserts a batch of sparse vectors while acquiring the mutable lock once.
     ///
     /// Acquires the write lock once for the entire slice, making this significantly
     /// faster than calling `insert` per document in a parallel/bulk context.
     /// Callers building a parallel bulk-import pipeline should chunk their input
     /// and call this method once per chunk rather than calling `insert` per document.
     ///
-    /// Preserves the current per-term upsert semantics of repeated `insert()`:
-    /// later entries in the batch overwrite earlier entries for the same
-    /// `(term_id, doc_id)` pair, while untouched terms from prior inserts remain.
+    /// Same semantics as repeated [`Self::insert`]: each document ends up with
+    /// exactly the postings of its **last** entry in the batch.
     pub fn insert_batch_chunk(&self, docs: &[(u64, SparseVector)]) {
         if docs.is_empty() {
             return;
         }
 
-        let (batch_postings, batch_max_weights, batch_doc_ids) = Self::build_batch_buffers(docs);
+        let mut last: FxHashMap<u64, &SparseVector> = FxHashMap::default();
+        for (point_id, vector) in docs {
+            last.insert(*point_id, vector);
+        }
+        let ids: FxHashSet<u64> = last.keys().copied().collect();
+        let (batch_postings, batch_max_weights) = Self::build_batch_buffers(&last);
 
         let mut seg = self.mutable.write();
-        let new_docs = Self::merge_doc_ids(&mut seg, batch_doc_ids);
-        if new_docs > 0 {
-            self.doc_count.fetch_add(new_docs, Ordering::Relaxed);
+        let retired = self.retire_locked(&mut seg, &ids);
+        let new_docs = Self::merge_doc_ids(&mut seg, ids);
+        let net_new = new_docs.saturating_sub(retired);
+        if net_new > 0 {
+            self.doc_count.fetch_add(net_new, Ordering::Relaxed);
         }
 
         Self::merge_batch_into_segment(&mut seg, batch_postings, &batch_max_weights);
@@ -169,27 +192,39 @@ impl SparseInvertedIndex {
         }
     }
 
-    /// Pre-computes posting entries and max weights from a batch of documents.
-    #[allow(clippy::type_complexity)]
+    /// Retires every document of `ids` from every segment — removed from the
+    /// mutable one, tombstoned in each frozen one that holds it live — and
+    /// returns how many distinct documents the index held. Takes the frozen
+    /// lock after the caller's mutable guard (lock order position 9).
+    fn retire_locked(&self, seg: &mut MutableSegment, ids: &FxHashSet<u64>) -> u64 {
+        let mut held = seg.delete_many(ids);
+        let mut frozen_vec = self.frozen.write();
+        for frozen_seg in frozen_vec.iter_mut() {
+            for &id in ids {
+                if frozen_seg.contains_live(id) {
+                    frozen_seg.tombstones.insert(id);
+                    held.insert(id);
+                }
+            }
+        }
+        drop(frozen_vec);
+        held.len() as u64
+    }
+
+    /// Pre-computes posting entries and max weights from a deduplicated batch.
     fn build_batch_buffers(
-        docs: &[(u64, SparseVector)],
-    ) -> (
-        FxHashMap<u32, Vec<PostingEntry>>,
-        FxHashMap<u32, f32>,
-        FxHashSet<u64>,
-    ) {
+        docs: &FxHashMap<u64, &SparseVector>,
+    ) -> (FxHashMap<u32, Vec<PostingEntry>>, FxHashMap<u32, f32>) {
         let mut batch_postings: FxHashMap<u32, Vec<PostingEntry>> = FxHashMap::default();
         let mut batch_max_weights: FxHashMap<u32, f32> = FxHashMap::default();
-        let mut batch_doc_ids: FxHashSet<u64> = FxHashSet::default();
 
-        for (point_id, vector) in docs {
-            batch_doc_ids.insert(*point_id);
+        for (&point_id, vector) in docs {
             for (&term_id, &weight) in vector.indices.iter().zip(vector.values.iter()) {
                 batch_postings
                     .entry(term_id)
                     .or_default()
                     .push(PostingEntry {
-                        doc_id: *point_id,
+                        doc_id: point_id,
                         weight,
                     });
                 let abs_weight = weight.abs();
@@ -200,7 +235,7 @@ impl SparseInvertedIndex {
             }
         }
 
-        (batch_postings, batch_max_weights, batch_doc_ids)
+        (batch_postings, batch_max_weights)
     }
 
     /// Merges batch doc IDs into the mutable segment, returning the count of new docs.
@@ -245,10 +280,10 @@ impl SparseInvertedIndex {
             frozen_postings.insert(term_id, (entries, max_w));
         }
 
-        // Route through `FrozenSegment::new` so the debug_assert on the
-        // sorted-by-doc_id invariant fires for freeze-path segments too,
-        // not only for those synthesised by the persistence layer.
-        let frozen_seg = FrozenSegment::new(frozen_postings, old.doc_count);
+        // `with_doc_ids` carries the debug_assert on the sorted-by-doc_id
+        // invariant, so it fires for freeze-path segments too, not only for
+        // those synthesised by the persistence layer.
+        let frozen_seg = FrozenSegment::with_doc_ids(frozen_postings, old.doc_set, old.doc_count);
 
         let mut frozen_vec = self.frozen.write();
         frozen_vec.push(frozen_seg);
@@ -256,33 +291,33 @@ impl SparseInvertedIndex {
 
     /// Deletes a point from the index.
     ///
-    /// Removes entries from the mutable segment and adds a tombstone to frozen
-    /// segments that actually contain the point as a live entry.
-    /// `doc_count` is decremented **only** if the point was actually present,
-    /// preventing underflow on double-delete or delete of a non-existent ID.
+    /// Removes it from the mutable segment and tombstones it in every frozen
+    /// segment that holds it live. `doc_count` is decremented **only** if the
+    /// point was actually present, preventing underflow on double-delete or
+    /// delete of a non-existent ID.
     pub fn delete(&self, point_id: u64) {
         // Lock ordering: mutable before frozen (position 9 in canonical order).
         let mut seg = self.mutable.write();
-        let was_in_mutable = seg.delete(point_id);
-
-        let mut frozen_vec = self.frozen.write();
-        let mut was_in_frozen = false;
-        for frozen_seg in frozen_vec.iter_mut() {
-            // Only insert a tombstone — and only count as "found" — if the
-            // point was live in this segment (not already tombstoned).
-            if frozen_seg.contains_live(point_id) {
-                frozen_seg.tombstones.insert(point_id);
-                was_in_frozen = true;
-            }
+        let retired = self.retire_locked(&mut seg, &FxHashSet::from_iter([point_id]));
+        drop(seg);
+        if retired > 0 {
+            self.doc_count.fetch_sub(retired, Ordering::Relaxed);
         }
-        // Both segments are updated; the count below is a Relaxed heuristic
-        // (see `doc_count`) and needs neither guard.
+    }
+
+    /// Returns `true` if the index holds a live document `point_id`.
+    #[must_use]
+    pub fn contains(&self, point_id: u64) -> bool {
+        // Lock ordering: mutable before frozen (position 9 in canonical order).
+        let seg = self.mutable.read();
+        if seg.doc_set.contains(&point_id) {
+            return true;
+        }
+        let frozen_vec = self.frozen.read();
+        let live = frozen_vec.iter().any(|f| f.contains_live(point_id));
         drop(frozen_vec);
         drop(seg);
-
-        if was_in_mutable || was_in_frozen {
-            self.doc_count.fetch_sub(1, Ordering::Relaxed);
-        }
+        live
     }
 
     /// Returns the approximate document count in this index.

@@ -12,25 +12,15 @@ fn test_sparse_index_insert_search_basic() {
 
     assert_eq!(index.doc_count(), 5);
 
-    // Manually test accumulation for query = {10: 1.0, 20: 1.0}
-    // Doc 1: 1.0*1.0 + 0.5*1.0 = 1.5
-    // Doc 2: 0.8*1.0 = 0.8
-    // Doc 3: 0.9*1.0 = 0.9
-    // Doc 4: 0.3*1.0 + 1.5*1.0 = 1.8
-    let mut accum: std::collections::HashMap<u64, f32> = std::collections::HashMap::new();
-    let query_terms: &[(u32, f32)] = &[(10, 1.0), (20, 1.0)];
-    for &(term_id, q_w) in query_terms {
-        if let Some(list) = index.postings.get(&term_id) {
-            for &(doc_id, d_w) in list {
-                *accum.entry(doc_id).or_insert(0.0) += q_w * d_w;
-            }
-        }
-    }
-    let mut results: Vec<(u64, f32)> = accum.into_iter().collect();
-    results.sort_by(|a, b| b.1.total_cmp(&a.1));
-
-    assert_eq!(results[0].0, 4); // Doc 4 = 1.8
-    assert_eq!(results[1].0, 1); // Doc 1 = 1.5
+    // Query {10: 1.0, 20: 1.0}: doc 4 = 0.3 + 1.5 = 1.8, doc 1 = 1.0 + 0.5 = 1.5,
+    // doc 3 = 0.9, doc 2 = 0.8.
+    let results: Vec<u64> = index
+        .search_scored(&[10, 20], &[1.0, 1.0], 10)
+        .unwrap()
+        .iter()
+        .map(SparseSearchResult::doc_id)
+        .collect();
+    assert_eq!(results, vec![4, 1, 3, 2]);
 }
 
 #[test]
@@ -132,7 +122,7 @@ fn test_sparse_index_remove_all_then_reinsert() {
     index.remove(2);
 
     assert_eq!(index.doc_count(), 0);
-    assert!(index.postings.is_empty(), "empty terms are dropped");
+    assert_eq!(index.inner.term_count(), 0, "empty terms are dropped");
 
     index.insert(1, &[10], &[2.0]).unwrap();
     assert_eq!(index.doc_count(), 1);
@@ -185,4 +175,31 @@ fn test_rrf_fusion_basic() {
     assert_eq!(results[0].0, 2);
     // Doc 3 also in both
     assert_eq!(results[1].0, 3);
+}
+
+#[test]
+fn test_sparse_index_keeps_a_small_nonzero_weight() {
+    // The binding dropped any weight under f32::EPSILON; core keeps every
+    // nonzero weight (sub-unit TF-IDF and SPLADE scores are legitimate).
+    let mut index = SparseIndex::new();
+    index.insert(1, &[10], &[1e-9]).unwrap();
+    let results = index.search_scored(&[10], &[1.0], 10).unwrap();
+    assert_eq!(results.len(), 1, "a 1e-9 weight still matches");
+}
+
+#[test]
+fn test_sparse_index_refuses_a_non_finite_weight() {
+    let mut index = SparseIndex::new();
+    for weight in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(
+            sparse_vector("", &[10], &[weight]).is_err(),
+            "weight {weight} is refused"
+        );
+    }
+    assert_eq!(index.doc_count(), 0);
+    index.insert(1, &[10], &[1.0]).unwrap();
+    let err = index
+        .search_scored(&[10], &[f32::NAN], 10)
+        .expect_err("a NaN query weight is refused");
+    assert!(err.contains("VELES-005"), "{err}");
 }

@@ -146,18 +146,6 @@ impl Collection {
         self.apply_range_index_changes(changes);
     }
 
-    /// Collects sparse vectors from a point into the batch buffer.
-    pub(super) fn collect_sparse_vectors(
-        point: &Point,
-        sparse_batch: &mut Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>,
-    ) {
-        if let Some(sv_map) = &point.sparse_vectors {
-            if !sv_map.is_empty() {
-                sparse_batch.push((point.id, sv_map.clone()));
-            }
-        }
-    }
-
     /// Updates the BM25 text index for a single point (WAL-then-apply).
     ///
     /// Applies the BM25 side of a whole batch under ONE durability barrier.
@@ -392,34 +380,44 @@ impl Collection {
         Ok(())
     }
 
-    /// Applies buffered sparse vector upserts with WAL-before-apply semantics.
+    /// Replaces the sparse vectors of the upserted points, WAL-before-apply.
+    ///
+    /// Upsert replaces a point, and its sparse vectors with it: each point
+    /// ends up with exactly the sparse vectors of its **last** occurrence in
+    /// the batch, and leaves every sparse index that version does not name —
+    /// a point upserted without sparse vectors leaves them all, as a point
+    /// upserted without a payload loses its payload.
     // The comment below is the contract: WAL append and in-memory apply stay
     // indivisible with respect to compaction, which takes this lock through
     // its reset.
     #[expect(clippy::significant_drop_tightening)]
-    pub(super) fn apply_sparse_batch_upsert(
-        &self,
-        sparse_batch: &[(u64, BTreeMap<String, crate::index::sparse::SparseVector>)],
-    ) -> Result<()> {
-        if sparse_batch.is_empty() {
-            return Ok(());
-        }
+    pub(super) fn apply_sparse_batch_upsert(&self, points: &[Point]) -> Result<()> {
+        let latest = latest_versions(points);
         // Keep WAL append and in-memory apply indivisible with respect to
         // compaction, which takes this lock exclusively through the reset.
         let mut indexes = self.query.sparse_indexes.write();
+        let dropped = dropped_sparse_entries(&indexes, &latest);
         #[cfg(feature = "persistence")]
         {
-            self.append_sparse_wal_entries(sparse_batch.iter().flat_map(|(point_id, sv_map)| {
-                sv_map
-                    .iter()
-                    .map(move |(name, sv)| (name.as_str(), *point_id, sv))
-            }))?;
-        }
-        for (point_id, sv_map) in sparse_batch {
-            for (name, sv) in sv_map {
-                let idx = indexes.entry(name.clone()).or_default();
-                idx.insert(*point_id, sv);
+            for (name, ids) in &dropped {
+                let wal_path =
+                    crate::index::sparse::persistence::wal_path_for_name(&self.storage.path, name);
+                crate::index::sparse::persistence::wal_append_delete_batch(&wal_path, ids)?;
             }
+            self.append_sparse_wal_entries(sparse_entries(&latest))?;
+        }
+        for (name, ids) in &dropped {
+            if let Some(idx) = indexes.get(name) {
+                for &id in ids {
+                    idx.delete(id);
+                }
+            }
+        }
+        for (name, point_id, sv) in sparse_entries(&latest) {
+            indexes
+                .entry(name.to_owned())
+                .or_default()
+                .insert(point_id, sv);
         }
         Ok(())
     }
@@ -514,4 +512,51 @@ impl Collection {
             .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
         inserted
     }
+}
+
+/// The last occurrence of each point id in `points`, ordered by id: the
+/// version an upsert batch leaves behind.
+fn latest_versions(points: &[Point]) -> BTreeMap<u64, &Point> {
+    points.iter().map(|point| (point.id, point)).collect()
+}
+
+/// `(index name, point id, vector)` for every sparse vector of `latest`.
+fn sparse_entries<'a, 'b>(
+    latest: &'b BTreeMap<u64, &'a Point>,
+) -> impl Iterator<Item = (&'a str, u64, &'a crate::index::sparse::SparseVector)> + 'b
+where
+    'a: 'b,
+{
+    latest.values().flat_map(|point| {
+        point
+            .sparse_vectors
+            .iter()
+            .flatten()
+            .map(move |(name, sv)| (name.as_str(), point.id, sv))
+    })
+}
+
+/// Per existing sparse index, the points of `latest` it holds although
+/// their new version carries no vector for it.
+fn dropped_sparse_entries(
+    indexes: &BTreeMap<String, crate::index::sparse::SparseInvertedIndex>,
+    latest: &BTreeMap<u64, &Point>,
+) -> Vec<(String, Vec<u64>)> {
+    indexes
+        .iter()
+        .filter_map(|(name, idx)| {
+            let ids: Vec<u64> = latest
+                .values()
+                .filter(|point| {
+                    !point
+                        .sparse_vectors
+                        .as_ref()
+                        .is_some_and(|map| map.contains_key(name))
+                })
+                .map(|point| point.id)
+                .filter(|&id| idx.contains(id))
+                .collect();
+            (!ids.is_empty()).then(|| (name.clone(), ids))
+        })
+        .collect()
 }

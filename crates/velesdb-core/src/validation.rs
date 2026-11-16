@@ -79,6 +79,28 @@ pub fn validate_vector_is_finite(vector: &[f32]) -> Result<()> {
     Ok(())
 }
 
+/// Validates that every weight of a sparse vector is finite.
+///
+/// The sparse twin of [`validate_vector_is_finite`]: a `NaN` weight makes
+/// every score that touches its term `NaN`, and an infinite one swamps them,
+/// whether it sits in a stored document or in a query. Only the REST request
+/// parser refused them; the engine boundary now does, for every surface.
+///
+/// # Errors
+///
+/// Returns [`crate::error::Error::InvalidVector`] naming the first offending
+/// term and its weight.
+pub fn validate_sparse_vector_is_finite(vector: &crate::sparse_index::SparseVector) -> Result<()> {
+    for (&term, &weight) in vector.indices.iter().zip(&vector.values) {
+        if !weight.is_finite() {
+            return Err(Error::InvalidVector(format!(
+                "sparse weight of term {term} is not finite: {weight}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Validates that a collection name is safe for use as a filesystem directory.
 ///
 /// # Rules

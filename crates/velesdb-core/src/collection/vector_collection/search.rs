@@ -404,13 +404,15 @@ impl VectorCollection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the named sparse index does not exist.
+    /// Returns an error if the named sparse index does not exist, or
+    /// [`crate::error::Error::InvalidVector`] if a query weight is not finite.
     pub fn sparse_search(
         &self,
         query: &crate::index::sparse::SparseVector,
         k: usize,
         index_name: &str,
     ) -> Result<Vec<SearchResult>> {
+        crate::validation::validate_sparse_vector_is_finite(query)?;
         let k = self.capped_k(k);
         let indexes = self.inner.query.sparse_indexes.read();
         let index = indexes.get(index_name).ok_or_else(|| {

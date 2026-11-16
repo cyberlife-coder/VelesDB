@@ -475,6 +475,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   core exception (`DimensionMismatchError`, ...) instead of `RuntimeError`.
   The server's own dimension pre-check is gone.
 
+- **A point's sparse vectors are what its last upsert said** (core, WASM,
+  every binding, 2026-11-16). The sparse index merged instead of replacing:
+  a re-upserted point kept every term it ever had, so it still matched
+  words its new vector dropped, and a point upserted again without sparse
+  vectors (or without one named index) stayed in those indexes. A point
+  re-upserted after its segment froze was held — and scored — twice.
+  `upsert` now replaces a point's sparse vectors as it replaces its payload
+  (the last duplicate in a batch wins; WAL replay agrees), while
+  `upsert_bulk` keeps a named index the point does not mention, as it keeps
+  a payload. Non-finite sparse weights, which only the REST parser refused,
+  are now refused by core itself on upsert and on every sparse query
+  (`VELES-005`), for Python, Node, Tauri, mobile and WASM alike.
+- **WASM `SparseIndex` is core's sparse index** (WASM, 2026-11-16). The
+  binding reimplemented the index and dropped every weight under
+  `f32::EPSILON` (sub-unit TF-IDF and SPLADE scores matched nothing); it now
+  delegates storage, replacement, removal and scoring to
+  `velesdb_core::sparse_index`.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
