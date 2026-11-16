@@ -319,6 +319,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM `SemanticMemory.query()` answers** (WASM, 2026-11-16). Since 4.0.0
+  it threw `Invalid search results` on every call: it ran the store's
+  JavaScript-facing `search`, then tried to re-read the array it returned as
+  a JSON string. It now reads the store's typed top-k, and returns the
+  nearest facts as `{ id, score, content }`. Pinned by
+  `crates/velesdb-wasm/tests/semantic_memory_web.rs`, run under Node by the
+  wasm-bindgen CI step.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
