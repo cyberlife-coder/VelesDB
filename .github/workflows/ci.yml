@@ -2233,6 +2233,12 @@ jobs:
       # `npm test` (not a hardcoded filename) so every __test__/*.spec.mjs file —
       # including new ones like skills-sync.spec.mjs — is picked up automatically;
       # see package.json's "test" script for the single source of truth on the glob.
+      # NOTE: no `cargo test -p velesdb-node --lib` here — the test binary
+      # links against napi symbols that only exist inside the Node process,
+      # so it links on macOS but fails on Linux/lld and MSVC. The crate's
+      # Rust unit tests (error mapping, task trampoline) run on macOS dev
+      # machines; in CI the crate is exercised through the built addon by
+      # the step below.
       - name: Build napi addon + run Node tests
         if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/run-node-binding-tests.py --root .

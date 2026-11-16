@@ -52,6 +52,18 @@ pub fn invalid_input(msg: impl AsRef<str>) -> Error {
     )
 }
 
+/// Build an `INTERNAL` napi error for binding-internal failures — above all
+/// the serialization of DOMAIN types, which cannot fail on caller input and
+/// so must never be reported as a 4xx-style "fix your input" error. (The
+/// inverse mistake — reporting these as `INVALID_INPUT` — is what this
+/// helper exists to prevent; it used to be copy-pasted per call site.)
+pub fn internal(msg: impl AsRef<str>) -> Error {
+    Error::new(
+        Status::GenericFailure,
+        format!("[{CODE_INTERNAL}] {}", msg.as_ref()),
+    )
+}
+
 /// A startup setting the caller got wrong: always their input to correct.
 pub fn setting_error(error: velesdb_memory::SettingError) -> Error {
     invalid_input(error.to_string())

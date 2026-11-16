@@ -3,12 +3,12 @@
 //! both worlds, so the dependency boundary is auditable by inspection.
 
 use serde_json::Value;
+use velesdb_memory::context::ingest::{resolve_transcript_path, IngestRoots};
 use velesdb_memory::context::CompileRequest;
-use velesdb_memory::limits;
-use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions, Link, Metadata};
+use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions, Link, MemoryError, Metadata};
 
 use crate::dto::{ColumnFilterJs, FusionOptionsJs, LinkJs};
-use crate::error::{invalid_input, to_napi_err};
+use crate::error::{internal, invalid_input, to_napi_err};
 
 /// Format a `u64` id as a decimal string (JS `number` loses precision >2^53).
 pub fn id_to_string(id: u64) -> String {
@@ -68,25 +68,20 @@ pub fn to_filters(filters: Vec<ColumnFilterJs>) -> napi::Result<Vec<ColumnFilter
         .collect()
 }
 
-/// JS `{hops?, graphBoost?, pool?}` → engine [`FusionOptions`]. An omitted
-/// object, or an omitted field within it, falls back to
-/// [`FusionOptions::default`]'s proven value. `hops` and `pool` are each
-/// capped at their shared `DoS` limit ([`limits::MAX_WHY_HOPS`],
-/// [`limits::MAX_RECALL_LIMIT`]) — `pool` feeds the same oversampled vector
-/// search `k`/`hops` do, so an uncapped caller-supplied value is exactly as
-/// much of an unbounded-scan risk as an uncapped `k` or `hops` would be.
+/// JS `{hops?, graphBoost?, pool?}` → engine [`FusionOptions`]. Routed
+/// through [`FusionOptions::from_knobs`] — the same constructor the MCP tool
+/// and the PyO3 binding use — so the defaults and the `DoS` clamps
+/// (`MAX_WHY_HOPS`, `MAX_RECALL_LIMIT`) live in exactly one place and a knob
+/// added upstream reaches this binding the day it exists. A hand-written
+/// mirror here is how the two would drift.
 pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> FusionOptions {
-    let defaults = FusionOptions::default();
-    let Some(opts) = opts else {
-        return defaults;
-    };
-    FusionOptions {
-        hops: limits::clamp_hops(opts.hops.map_or(defaults.hops, |h| h as usize)),
-        graph_boost: opts.graph_boost.unwrap_or(defaults.graph_boost),
-        pool: opts
-            .pool
-            .map(|p| limits::clamp_recall_limit(p as usize))
-            .or(defaults.pool),
+    match opts {
+        None => FusionOptions::default(),
+        Some(o) => FusionOptions::from_knobs(
+            o.hops.map(|h| h as usize),
+            o.graph_boost,
+            o.pool.map(|p| p as usize),
+        ),
     }
 }
 
@@ -124,12 +119,10 @@ pub fn to_retrieve_source_js(
     handle: &str,
     source: &velesdb_memory::context::ContextSource,
 ) -> napi::Result<Value> {
-    let internal =
-        |what: &str| napi::Error::from_reason(format!("[INTERNAL] context source: {what}"));
-    let Value::Object(fields) =
-        serde_json::to_value(source).map_err(|err| internal(&format!("serialize: {err}")))?
+    let Value::Object(fields) = serde_json::to_value(source)
+        .map_err(|err| internal(format!("context source serialization: {err}")))?
     else {
-        return Err(internal("not an object"));
+        return Err(internal("context source is not an object"));
     };
     let mut map = serde_json::Map::new();
     map.insert("handle".to_owned(), Value::String(handle.to_owned()));
@@ -162,8 +155,42 @@ pub fn build_transcript_compile_request(
     let (request, report) =
         velesdb_memory::context::build_transcript_compile_request(input).map_err(to_napi_err)?;
     let segmentation_value = serde_json::to_value(&report)
-        .map_err(|err| invalid_input(format!("segmentation report serialization: {err}")))?;
+        .map_err(|err| internal(format!("segmentation report serialization: {err}")))?;
     Ok((request, segmentation_value))
+}
+
+/// Transcript-or-path resolution for `compileTranscript`: `path` is a
+/// transcript-level field, not part of the bridge's input struct, so it is
+/// pulled out here, resolved under the ingest allowlist, and fed back as
+/// `transcript` — exactly the MCP tool's resolution. Both fields at once, or
+/// a non-string `path`, is `INVALID_INPUT`; a `path` with ingestion disabled
+/// fails closed (`IngestDisabled`, mapped by [`to_napi_err`]). The
+/// containment check itself runs at the sink
+/// ([`velesdb_memory::context::ingest`]), never here.
+pub fn resolve_transcript_input(
+    request: Value,
+    roots: Option<&IngestRoots>,
+) -> napi::Result<Value> {
+    // A non-object request is handed through unchanged: the bridge's own
+    // deserialization rejects it with INVALID_INPUT.
+    let mut map = match request {
+        Value::Object(map) => map,
+        other => return Ok(other),
+    };
+    let has_transcript = map.contains_key("transcript");
+    match (has_transcript, map.remove("path")) {
+        (true, Some(_)) => Err(invalid_input(
+            "pass either `transcript` or `path`, not both",
+        )),
+        (false, Some(Value::String(path))) => {
+            let roots = roots.ok_or_else(|| to_napi_err(MemoryError::IngestDisabled))?;
+            let text = resolve_transcript_path(&path, roots).map_err(to_napi_err)?;
+            map.insert("transcript".to_owned(), Value::String(text));
+            Ok(Value::Object(map))
+        }
+        (false, Some(_)) => Err(invalid_input("`path` must be a string")),
+        (_, None) => Ok(Value::Object(map)),
+    }
 }
 
 /// Marshal a compiled context into its JS shape: serialize to the wire JSON,

@@ -50,6 +50,12 @@ exclude_paths:
   # SDK test suites
   - "sdks/**/tests/**"
   - "sdks/**/__tests__/**"
+  # Node addon test harness (node --test): same standing as the other test
+  # suites above — eslint's base-config `no-unused-vars` mis-fires on the
+  # test-callback param, and the fs fixtures legitimately write to
+  # non-literal mkdtemp paths. Test quality is enforced by `node --test`
+  # in CI, not static analysis.
+  - "crates/**/__test__/**"
   # Integration test suites (Python) — assert is idiomatic in pytest,
   # /tmp usage is for test fixtures, builtin shadowing is non-issue in tests
   - "integrations/**/tests/**"
