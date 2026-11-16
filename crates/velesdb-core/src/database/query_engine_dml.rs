@@ -112,21 +112,12 @@ impl Database {
         let collection = self.resolve_writable_collection(&stmt.table)?;
 
         let assignments = Self::resolve_update_assignments(stmt, params)?;
-        let filter = Self::build_update_filter(stmt.where_clause.as_ref(), params)?;
-
-        // `WHERE id = n` / `id IN (...)` name their points, as DELETE's
-        // WHERE does: read those, not the whole collection. `get` reads the
-        // scan universe — in a vector collection a point must carry its
-        // vector — so an UPDATE mutates exactly the rows a SELECT over the
-        // same ids sees; a payload-only id `all_point_ids` lists comes
-        // back `None` and is skipped by `apply_update_assignments`.
-        let ids = filter
-            .as_ref()
-            .and_then(|f| f.condition.point_ids())
-            .unwrap_or_else(|| collection.all_point_ids());
-        let rows = collection.get(&ids);
-        let updated_points =
-            Self::apply_update_assignments(&collection, rows, filter.as_ref(), &assignments)?;
+        let filter = Self::build_dml_filter("UPDATE", stmt.where_clause.as_ref(), params)?;
+        let rows = Self::matching_points(&collection, filter.as_ref());
+        let updated_points = rows
+            .iter()
+            .map(|point| Self::apply_assignments_to_point(&collection, point, &assignments))
+            .collect::<Result<Vec<_>>>()?;
 
         let point_count = updated_points.len();
         let results = Self::upsert_and_collect(&collection, updated_points)?;
@@ -175,25 +166,25 @@ impl Database {
         Ok(results)
     }
 
-    /// Applies field assignments to matching points, producing updated points.
-    fn apply_update_assignments(
+    /// The points a DML WHERE `filter` selects — the rows UPDATE writes and a
+    /// general DELETE removes. `WHERE id = n` / `id IN (...)` name their
+    /// points: those are read, not the whole collection. `get` reads the scan
+    /// universe — in a vector collection a point must carry its vector — so a
+    /// DML statement touches exactly the rows a SELECT with the same WHERE
+    /// sees.
+    pub(super) fn matching_points(
         collection: &crate::collection::Collection,
-        rows: Vec<Option<crate::Point>>,
         filter: Option<&crate::Filter>,
-        assignments: &[(String, serde_json::Value)],
-    ) -> Result<Vec<crate::Point>> {
-        let mut updated_points = Vec::new();
-        for point in rows.into_iter().flatten() {
-            if !Self::matches_update_filter(&point, filter) {
-                continue;
-            }
-            updated_points.push(Self::apply_assignments_to_point(
-                collection,
-                &point,
-                assignments,
-            )?);
-        }
-        Ok(updated_points)
+    ) -> Vec<crate::Point> {
+        let ids = filter
+            .and_then(|f| f.condition.point_ids())
+            .unwrap_or_else(|| collection.all_point_ids());
+        collection
+            .get(&ids)
+            .into_iter()
+            .flatten()
+            .filter(|point| Self::matches_dml_filter(point, filter))
+            .collect()
     }
 
     /// Applies field assignments to a single point, producing the updated point.

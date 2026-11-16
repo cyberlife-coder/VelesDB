@@ -739,15 +739,29 @@ fn test_insert_edge_into_nonexistent_collection() {
 }
 
 #[test]
-fn test_delete_with_unsupported_where_returns_error() {
+fn test_delete_with_a_payload_where_removes_the_matching_points() {
     let dir = tempdir().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");
 
-    db.create_vector_collection("del_bad", 4, crate::DistanceMetric::Cosine)
+    db.create_vector_collection("del_payload", 4, crate::DistanceMetric::Cosine)
         .expect("create");
+    let vc = db.get_vector_collection("del_payload").expect("get");
+    vc.upsert(vec![
+        crate::Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(serde_json::json!({"name": "test"})),
+        ),
+        crate::Point::new(
+            2,
+            vec![0.0, 1.0, 0.0, 0.0],
+            Some(serde_json::json!({"name": "keep"})),
+        ),
+    ])
+    .expect("upsert");
 
     let dml = DmlStatement::Delete(DeleteStatement {
-        table: "del_bad".to_string(),
+        table: "del_payload".to_string(),
         where_clause: Condition::Comparison(Comparison {
             column: "name".to_string(),
             operator: CompareOp::Eq,
@@ -755,11 +769,9 @@ fn test_delete_with_unsupported_where_returns_error() {
         }),
     });
 
-    let err = execute_dml(&db, dml).expect_err("should fail");
-    assert!(
-        matches!(err, crate::Error::Query(_)),
-        "Expected Query error for unsupported WHERE, got: {err:?}"
-    );
+    execute_dml(&db, dml).expect("DELETE by a payload column");
+    assert!(vc.get(&[1])[0].is_none(), "the matching point is gone");
+    assert!(vc.get(&[2])[0].is_some(), "the other point stays");
 }
 
 #[test]

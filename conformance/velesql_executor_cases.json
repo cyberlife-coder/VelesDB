@@ -1074,7 +1074,7 @@
       "statements": ["DELETE FROM docs WHERE id IN (2, 5)"],
       "query": "SELECT * FROM docs ORDER BY year ASC",
       "expect_ids": [1, 3, 4],
-      "note": "DELETE by id list. Only id predicates are common to both engines — see documented_divergences D007"
+      "note": "DELETE by id list"
     },
     {
       "id": "W008",
@@ -1091,6 +1091,13 @@
       "expect_ids": [1, 4],
       "expect_scores": [1.0, 0.730297],
       "note": "UPDATE SET vector replaces the embedding on both engines: point 1 is now $a itself (D008; WASM refused the assignment)"
+    },
+    {
+      "id": "W010",
+      "statements": ["DELETE FROM docs WHERE category = 'other' AND year > 2020"],
+      "query": "SELECT * FROM docs ORDER BY year ASC",
+      "expect_ids": [5, 1, 2, 4],
+      "note": "DELETE removes the rows any metadata WHERE selects, on both engines (D007: core accepted only id predicates, though the spec shows `DELETE FROM logs WHERE level = 'debug'`)"
     }
   ],
   "projection_cases": [
@@ -1434,10 +1441,10 @@
     {
       "id": "D007",
       "area": "DELETE WHERE predicate shapes",
-      "core_behavior": "DELETE accepts only `id = N` or `id IN (N1, N2, ...)`; any other WHERE is refused with \"DELETE WHERE must use 'id = N' or 'id IN (N1, N2, ...)'\"",
-      "wasm_behavior": "DELETE evaluates any WHERE predicate row by row and removes every match (e.g. `DELETE FROM docs WHERE category = 'other'`)",
-      "status": "accepted — WASM is a superset: every DELETE core accepts gives the same rows on both engines (dml_cases W007/W008), and the extra WASM shapes are refused by core rather than answered differently. Narrowing the browser engine would break callers for no correctness gain",
-      "evidence": "crates/velesdb-core/src/database/dml_executor.rs: extract_delete_ids(); crates/velesdb-wasm/src/velesql_delete.rs: collect_matching_indices()"
+      "core_behavior": "RESOLVED: DELETE removes the rows any metadata WHERE selects, as UPDATE selects them (`id = N` / `id IN (...)` still name their points outright); a vector or graph predicate is refused. It used to refuse every WHERE but an id predicate",
+      "wasm_behavior": "DELETE evaluates any WHERE predicate row by row and removes every match",
+      "status": "resolved — locked by dml_cases W010",
+      "evidence": "crates/velesdb-core/src/database/dml_executor.rs: execute_delete(); query_engine_dml.rs: matching_points()"
     },
     {
       "id": "D008",

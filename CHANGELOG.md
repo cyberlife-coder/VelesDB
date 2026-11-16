@@ -266,6 +266,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`DELETE` takes any metadata `WHERE`** (core, 2026-11-16). Core refused
+  every `DELETE` whose `WHERE` was not `id = N` or `id IN (...)`, though the
+  VelesQL spec shows `DELETE FROM logs WHERE level = 'debug'` and the WASM
+  executor ran it. It now removes the rows the `WHERE` selects, as `UPDATE`
+  selects them (`Database::matching_points`); `id` predicates still name
+  their points outright, and a vector or graph predicate is refused with the
+  same words as `UPDATE`'s (D007).
+
 - **ORDER BY reads `score`, `vector_score` and `id` the same in every
   engine** (core, WASM, 2026-11-15). Core read `ORDER BY score` and `score`
   inside arithmetic as a payload field, though `score` is a reserved word for

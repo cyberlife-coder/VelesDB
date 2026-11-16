@@ -58,7 +58,8 @@ impl Database {
         Ok(as_f32)
     }
 
-    pub(super) fn build_update_filter(
+    pub(super) fn build_dml_filter(
+        statement: &str,
         where_clause: Option<&crate::velesql::Condition>,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Option<crate::Filter>> {
@@ -67,10 +68,9 @@ impl Database {
         };
 
         if Self::contains_non_metadata_condition(condition) {
-            return Err(Error::Query(
-                "UPDATE WHERE supports metadata predicates only (no similarity/NEAR/MATCH)"
-                    .to_string(),
-            ));
+            return Err(Error::Query(format!(
+                "{statement} WHERE supports metadata predicates only (no similarity/NEAR/MATCH)"
+            )));
         }
 
         // Resolve parameter placeholders before the filter conversion, which
@@ -104,10 +104,7 @@ impl Database {
         }
     }
 
-    pub(super) fn matches_update_filter(
-        point: &crate::Point,
-        filter: Option<&crate::Filter>,
-    ) -> bool {
+    pub(super) fn matches_dml_filter(point: &crate::Point, filter: Option<&crate::Filter>) -> bool {
         match filter {
             Some(filter) => Self::point_matches_filter(point, filter),
             None => true,

@@ -512,9 +512,9 @@ silently relied upon:
   cap — a LIMIT-less `GROUP BY` still returns every group). Locked by
   `aggregate_cases` G005 above and
   `crates/velesdb-core/tests/velesql_group_by_limit.rs`.
-- **D007** — `DELETE` on core accepts only `id = N` / `id IN (...)`; WASM
-  evaluates any `WHERE`. WASM is a superset, so the fixture's `dml_cases`
-  delete by id.
+- ~~D007~~ — **fixed 2026-11-16**: `DELETE` removes the rows any metadata
+  `WHERE` selects on both engines (core accepted only `id` predicates).
+  Locked by `dml_cases` W010.
 - ~~D008~~ — **fixed 2026-11-16**: `UPDATE ... SET vector = ...` replaces the
   embedding on both engines. Locked by `dml_cases` W009.
 - ~~D009~~ — **fixed 2026-11-15**: a row no vector ranked scores
