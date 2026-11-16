@@ -170,8 +170,20 @@ impl StoreState {
 
     /// k-NN search. Returns [[id, score], ...].
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
+        store_search::to_js(&self.top_k(query, k)?)
+    }
+
+    /// [`search_scored`](Self::search_scored) for a caller-supplied query:
+    /// the `k` `(id, score)` pairs nearest `query`, best first, once its
+    /// dimension is checked — the typed search [`Self::search`] renders for
+    /// JavaScript.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `query` does not have the store's dimension.
+    pub(crate) fn top_k(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>, JsValue> {
         store_search::validate_dimension(query.len(), self.dimension)?;
-        store_search::search(query, &self.ids, &self.data, self.dimension, self.metric, k)
+        Ok(self.search_scored(query, k))
     }
 
     /// k-NN search with a named quality mode (API parity with Server/Python/Mobile).
@@ -192,11 +204,10 @@ impl StoreState {
         k: usize,
         quality: &str,
     ) -> Result<JsValue, JsValue> {
-        store_search::validate_dimension(query.len(), self.dimension)?;
         // Validate the quality string for API parity. The value is unused
         // because WASM search is brute-force (no HNSW graph).
         parsing::parse_search_quality(quality)?;
-        store_search::search(query, &self.ids, &self.data, self.dimension, self.metric, k)
+        self.search(query, k)
     }
 
     /// Similarity search with threshold. Operators: >, >=, <, <=, =, !=.
