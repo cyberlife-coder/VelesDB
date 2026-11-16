@@ -47,28 +47,38 @@ impl Database {
         // joined rows are the answer: fetch that many base rows, more while
         // an INNER join or a filter drops some.
         let mut fetch = if bounded { row_budget.max(1) } else { ceiling };
+        let plan = JoinPlan {
+            select: budget_select,
+            joins: &joins,
+            analysis: &analysis,
+            row_budget,
+            collection: &base_collection,
+            params,
+        };
         loop {
-            query.select.limit = Some(u64::try_from(fetch).unwrap_or(u64::MAX));
-            let base = match probe {
-                Some(slot) => base_collection.execute_query_probed(&query, params, slot)?,
-                None => base_collection.execute_query(&query, params)?,
-            };
+            let base = Self::base_rows(&base_collection, &mut query, fetch, params, probe)?;
             let exhausted = base.len() < fetch || fetch >= ceiling;
-            let joined = self.join_base_rows(
-                base,
-                &JoinPlan {
-                    select: budget_select,
-                    joins: &joins,
-                    analysis: &analysis,
-                    row_budget,
-                    collection: &base_collection,
-                    params,
-                },
-            )?;
+            let joined = self.join_base_rows(base, &plan)?;
             if !bounded || joined.len() >= row_budget || exhausted {
                 return Ok(joined);
             }
             fetch = fetch.saturating_mul(2).min(ceiling);
+        }
+    }
+
+    /// The first `fetch` base rows of `query` (its joins and join-side
+    /// predicates removed), through the strategy probe when one is given.
+    fn base_rows(
+        collection: &crate::collection::Collection,
+        query: &mut crate::velesql::Query,
+        fetch: usize,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
+    ) -> Result<Vec<SearchResult>> {
+        query.select.limit = Some(u64::try_from(fetch).unwrap_or(u64::MAX));
+        match probe {
+            Some(slot) => collection.execute_query_probed(query, params, slot),
+            None => collection.execute_query(query, params),
         }
     }
 
