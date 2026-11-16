@@ -266,6 +266,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ORDER BY reads `score`, `vector_score` and `id` the same in every
+  engine** (core, WASM, 2026-11-15). Core read `ORDER BY score` and `score`
+  inside arithmetic as a payload field, though `score` is a reserved word for
+  the row's search score; WASM read `vector_score` as a payload field and `id`
+  in arithmetic as 0. Both now resolve every score variable and arithmetic key
+  through one `velesql::ScoreContext` (moved from core's SELECT ordering): a
+  LET binding, then `score` / `fused_score` / `similarity`, then the result's
+  component scores (a NEAR row carries `vector_score` in both engines), then
+  `id`, then the payload. WASM also refuses a vector in an INSERT on a
+  metadata-only collection, with core's words, instead of dropping it, and
+  caps a LIMIT at `velesql::MAX_SELECT_LIMIT` (100 000) as core does.
+
 - **A `similarity()` threshold filters the whole collection** (core,
   2026-11-15). It filtered a window of `LIMIT × 10` points nearest the query
   vector, so a selective metadata filter returned fewer rows than `LIMIT`

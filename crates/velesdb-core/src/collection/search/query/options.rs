@@ -5,6 +5,9 @@
 /// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
 pub(crate) const MAX_LIMIT: usize = 100_000;
 
+// One ceiling: the engine's and the one the WASM executor caps a LIMIT to.
+const _: () = assert!(MAX_LIMIT as u64 == crate::velesql::MAX_SELECT_LIMIT);
+
 /// Query-time search options extracted from the WITH clause.
 ///
 /// Consolidates `mode`, `ef_search`, `rerank`, and `fusion_clause` into a single

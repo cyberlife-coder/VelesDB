@@ -155,7 +155,8 @@ payload vector, several under `AND` — read and ranked as in core),
 `SELECT DISTINCT` (core's dedup key, applied before `ORDER BY` and `LIMIT`),
 projection / aliases / window functions
 (`ROW_NUMBER`, `RANK`, `DENSE_RANK`), `GROUP BY` / `HAVING`, aggregates,
-`ORDER BY` (payload columns, `similarity()`, arithmetic expressions, and
+`ORDER BY` (payload columns, `similarity()`, `score` and the component scores
+resolved by core's `velesql::ScoreContext`, arithmetic expressions, and
 aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
 `UNION` / `INTERSECT` / `EXCEPT` (core's semantics, `velesql::execute_compound`;
 an operand cannot join or aggregate), `INNER` / `LEFT JOIN` (core's joined row,

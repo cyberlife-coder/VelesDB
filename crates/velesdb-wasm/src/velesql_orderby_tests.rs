@@ -120,7 +120,29 @@ fn test_sort_named_similarity_is_rejected() {
 
 #[test]
 fn test_division_by_zero_yields_zero() {
-    assert_eq!(apply_op(ArithmeticOp::Div, 5.0, 0.0), 0.0);
+    let expr = ArithmeticExpr::BinaryOp {
+        left: Box::new(ArithmeticExpr::Literal(5.0)),
+        op: ArithmeticOp::Div,
+        right: Box::new(ArithmeticExpr::Literal(0.0)),
+    };
+    assert!(eval_arithmetic(&expr, &mk(1, 0.5, serde_json::json!({}))).abs() < f32::EPSILON);
+}
+
+/// Score variables and `id` resolve as core's `ScoreContext` resolves them:
+/// `score` is the search score, `id` the point id, a component the row's
+/// breakdown (0.0 when a tagged row lacks it).
+#[test]
+fn score_variables_and_id_resolve_as_in_core() {
+    let mut row = mk(7, 0.25, serde_json::json!({"score": 99}));
+    row.component_scores = Some(std::iter::once(("vector_score", 0.25)).collect());
+    let var = |name: &str| ArithmeticExpr::Variable(name.to_string());
+    assert!(
+        (eval_arithmetic(&var("score"), &row) - 0.25).abs() < f32::EPSILON,
+        "not the payload's 99"
+    );
+    assert!((eval_arithmetic(&var("id"), &row) - 7.0).abs() < f32::EPSILON);
+    assert!((eval_arithmetic(&var("vector_score"), &row) - 0.25).abs() < f32::EPSILON);
+    assert!(eval_arithmetic(&var("bm25_score"), &row).abs() < f32::EPSILON);
 }
 
 #[test]

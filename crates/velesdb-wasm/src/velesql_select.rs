@@ -554,6 +554,17 @@ fn window_plain(
     higher_is_better: bool,
 ) -> Result<Vec<SearchResult>, String> {
     let mut results = velesql_project::to_search_results(rows);
+    if find_vector_search(stmt.where_clause.as_ref()).is_some()
+        && crate::velesql_fused::find_fused_search(stmt.where_clause.as_ref()).is_none()
+    {
+        // A NEAR row's score is its vector component, as core tags its
+        // search results (`tag_vector_component_scores`): `vector_score` then
+        // reads it and `bm25_score` reads 0.0.
+        for result in &mut results {
+            result.component_scores =
+                Some(std::iter::once(("vector_score", result.score)).collect());
+        }
+    }
     if stmt.distinct == DistinctMode::All {
         results = apply_distinct(results, &stmt.columns);
     }
@@ -574,7 +585,12 @@ fn window_plain(
 /// `u64::MAX` so a LIMIT-less GROUP BY still returns every group.
 fn apply_limit_offset<T>(stmt: &SelectStatement, rows: Vec<T>, default_limit: u64) -> Vec<T> {
     let offset = usize::try_from(stmt.offset.unwrap_or(0)).unwrap_or(usize::MAX);
-    let limit = usize::try_from(stmt.limit.unwrap_or(default_limit)).unwrap_or(usize::MAX);
+    // A LIMIT past the ceiling is capped to it, as core caps it.
+    let limit = stmt
+        .limit
+        .unwrap_or(default_limit)
+        .min(velesdb_core::velesql::MAX_SELECT_LIMIT);
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     rows.into_iter().skip(offset).take(limit).collect()
 }
 

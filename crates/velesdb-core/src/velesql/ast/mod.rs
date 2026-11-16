@@ -48,6 +48,7 @@ pub use result_kind::QueryResultKind;
 pub use select::{
     ArithmeticExpr, ArithmeticOp, Column, DistinctMode, LetBinding, OrderByExpr, SelectColumns,
     SelectOrderBy, SelectStatement, SimilarityOrderBy, SimilarityScoreExpr, DEFAULT_SELECT_LIMIT,
+    MAX_SELECT_LIMIT,
 };
 pub use train::TrainStatement;
 pub use values::{

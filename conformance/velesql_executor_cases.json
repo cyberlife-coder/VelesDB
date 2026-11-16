@@ -811,6 +811,36 @@
       "expect_ids": [42, 43, 44],
       "expect_scores": [1.0, 0.894427, 1.0],
       "note": "a row the first similarity() cannot score (44 has no `alt`) passes through the OR, ranks after the scored rows and carries velesql::METADATA_MATCH_SCORE"
+    },
+    {
+      "id": "N028",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY vector_score ASC LIMIT 3",
+      "expect_ids": [1, 2, 5],
+      "note": "`vector_score` is the NEAR row's vector component in both engines (WASM read it as a payload field)"
+    },
+    {
+      "id": "N029",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY score ASC LIMIT 3",
+      "expect_ids": [1, 2, 5],
+      "note": "`score` is a reserved word: the row's search score, not a payload field (core read a payload field; VELESQL_SPEC reserved keywords)"
+    },
+    {
+      "id": "N030",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY id * 1 DESC LIMIT 3",
+      "expect_ids": [5, 4, 3],
+      "note": "`id` in an arithmetic ORDER BY is the point id (WASM read 0)"
+    },
+    {
+      "id": "N031",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY score * -1 DESC LIMIT 3",
+      "expect_ids": [1, 2, 5],
+      "note": "`score` inside arithmetic is the search score too"
+    },
+    {
+      "id": "N032",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY bm25_score DESC, id ASC LIMIT 3",
+      "expect_ids": [1, 2, 3],
+      "note": "a component a NEAR row does not carry (`bm25_score`) reads 0.0, so the next key decides"
     }
   ],
   "fusion_cases": [
