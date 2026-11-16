@@ -60,11 +60,15 @@ impl Database {
         }
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
         let authorized = self.authorize_statement(query, params, decisions)?;
-        if !authorized.query().select.joins.is_empty() {
-            return self.aggregate_joined(authorized.query(), params);
-        }
-        let collection = self.resolve_read_target(&authorized, AGGREGATE_TARGET_MISSING)?;
-        collection.execute_aggregate(authorized.query(), params)
+        // Reported like any `execute_query` read: once, under the collection
+        // the gate decided on, after the aggregate completes.
+        self.report_read(authorized.target().unwrap_or(""), || {
+            if !authorized.query().select.joins.is_empty() {
+                return self.aggregate_joined(authorized.query(), params);
+            }
+            let collection = self.resolve_read_target(&authorized, AGGREGATE_TARGET_MISSING)?;
+            collection.execute_aggregate(authorized.query(), params)
+        })
     }
 
     /// An aggregation over a JOIN: the joined rows, WHERE applied and

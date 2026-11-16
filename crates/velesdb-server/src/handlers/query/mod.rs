@@ -230,11 +230,8 @@ fn execute_standard_query(
 /// Both callers ([`execute_standard_query`] and [`execute_mutation_query`])
 /// dispatch through [`Database::execute_query`](velesdb_core::Database::execute_query),
 /// which already fires the observer's `on_query` telemetry exactly once
-/// internally. This function must therefore NOT also call the deprecated
-/// `notify_query_timing`/`notify_query` shim — doing so would double-count
-/// every `/query` request for any registered `DatabaseObserver` (RBAC/audit/
-/// usage billing). Only the Prometheus histogram, which is unrelated to the
-/// observer, is recorded here.
+/// internally, as every gated read does. Only the Prometheus histogram,
+/// which is unrelated to the observer, is recorded here.
 fn build_query_response(
     state: &Arc<AppState>,
     start: std::time::Instant,

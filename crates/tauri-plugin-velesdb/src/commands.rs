@@ -493,32 +493,34 @@ pub async fn search_ids<R: Runtime>(
     state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
-            let scope = crate::helpers::authorize_collection_read(
+            crate::helpers::run_gated_search(
                 &db,
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
-            )?;
-            let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
-            // Optimized id-only path only when no filter and no quality; both
-            // require the full search that hydrates results before projecting.
-            let scored: Vec<IdScoreOutput> = if parsed_filter.is_none() && parsed_quality.is_none()
-            {
-                coll.search_ids(&request.vector, request.top_k)?
-                    .into_iter()
-                    .map(|r| IdScoreOutput {
-                        id: r.id,
-                        score: r.score,
-                    })
-                    .collect()
-            } else {
-                project_search_ids(search_full(
-                    &coll,
-                    &request,
-                    parsed_filter.as_ref(),
-                    parsed_quality.as_ref(),
-                )?)
-            };
-            Ok(scored)
+                |scope| {
+                    let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
+                    // Optimized id-only path only when no filter and no quality; both
+                    // require the full search that hydrates results before projecting.
+                    let scored: Vec<IdScoreOutput> =
+                        if parsed_filter.is_none() && parsed_quality.is_none() {
+                            coll.search_ids(&request.vector, request.top_k)?
+                                .into_iter()
+                                .map(|r| IdScoreOutput {
+                                    id: r.id,
+                                    score: r.score,
+                                })
+                                .collect()
+                        } else {
+                            project_search_ids(search_full(
+                                &coll,
+                                &request,
+                                parsed_filter.as_ref(),
+                                parsed_quality.as_ref(),
+                            )?)
+                        };
+                    Ok(scored)
+                },
+            )
         })
         .await
         .map_err(CommandError::from)
@@ -724,23 +726,26 @@ pub async fn multi_query_search<R: Runtime>(
     let results = state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
-            let scope = crate::helpers::authorize_collection_read(
+            crate::helpers::run_gated_search(
                 &db,
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
-            )?;
-            let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
+                |scope| {
+                    let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
 
-            let vector_refs: Vec<&[f32]> = request.vectors.iter().map(Vec::as_slice).collect();
+                    let vector_refs: Vec<&[f32]> =
+                        request.vectors.iter().map(Vec::as_slice).collect();
 
-            let search_results = coll.multi_query_search(
-                &vector_refs,
-                request.top_k,
-                fusion_strategy,
-                parsed_filter.as_ref(),
-            )?;
+                    let search_results = coll.multi_query_search(
+                        &vector_refs,
+                        request.top_k,
+                        fusion_strategy,
+                        parsed_filter.as_ref(),
+                    )?;
 
-            Ok(map_core_results(search_results))
+                    Ok(map_core_results(search_results))
+                },
+            )
         })
         .await
         .map_err(CommandError::from)?;

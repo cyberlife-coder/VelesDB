@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use velesdb_core::velesql::Query;
 
-use crate::handlers::helpers::notify_query_timing;
+use crate::handlers::helpers::record_query_timing;
 use crate::types::{
     AggregationResponse, QueryRequest, QueryResponseMeta, VELESQL_CONTRACT_VERSION,
 };
@@ -56,10 +56,7 @@ pub(crate) fn execute_aggregation_query(
 
     let elapsed = start.elapsed();
     let timing_ms = elapsed.as_secs_f64() * 1000.0;
-    notify_query_timing(state, collection_name, start);
-    state
-        .query_duration_histogram
-        .observe(elapsed.as_secs_f64());
+    record_query_timing(state, collection_name, elapsed);
     let count = aggregation_result_count(&result);
 
     Json(AggregationResponse {

@@ -5,9 +5,11 @@ PyO3 binding. Root [`AGENTS.md`](../../AGENTS.md) is the contract.
 - **Excluded from the strict workspace clippy line** (PyO3 link) — lint it
   alone: `PYO3_PYTHON=python3 cargo clippy -p velesdb-python --lib -- -D warnings`.
 - **Observer events come from core, never from the binding.** Core reports
-  every write to a registered collection (`on_upsert`) and every VelesQL read
-  (`on_query`) itself; a binding that also fires them double-counts. If an
-  event is missing, fix core, not this crate.
+  every write to a registered collection (`on_upsert`) and every completed
+  search or VelesQL read (`on_query`) itself; a binding that also fires them
+  double-counts. A search with no `GatedRead` leaf goes through
+  `Collection::run_gated_search` (core's `run_gated_read`), not
+  `authorize` plus a search. If an event is missing, fix core, not this crate.
 - **`#[allow(clippy::too_many_arguments)]` only on a `#[pymethods]` signature**,
   whose keyword arguments are the Python API. An internal helper takes a
   parameter object instead (`SearchPlan`, `ReadIdentity`, `TrainRequest`).

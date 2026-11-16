@@ -16,8 +16,9 @@ use crate::AppState;
 use super::outcome::{finish_search_ids_with_cb, finish_search_with_cb, read_refused};
 use super::pipeline::{id_score_results, parse_filter_or_400, validate_query_dimension};
 use super::workers::run_blocking_search;
-use crate::handlers::helpers::authorize_unscoped_read;
-use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
+use crate::handlers::helpers::{
+    apply_pre_check, extract_client_id, get_vector_collection_or_404, scope_unsupported,
+};
 
 /// Build the `FusionStrategy` a multi-query request asks for, or the message
 /// explaining why it cannot be built.
@@ -197,19 +198,6 @@ pub async fn multi_query_search(
         None => None,
     };
 
-    // Gate the read (CORE-2) before the off-thread fusion. A denied decision —
-    // or a scope narrowing, which the multi-query fusion kernel has no channel
-    // to apply — refuses the query (fail closed).
-    if let Err(refusal) = authorize_unscoped_read(
-        &state,
-        &name,
-        velesdb_core::observer::QueryOperationKind::VectorSearch,
-        "multi-query search",
-    ) {
-        state.operational_metrics.inc_errors();
-        return read_refused(&refusal);
-    }
-
     let start = std::time::Instant::now();
 
     // F-01 sweep: multi-vector fusion is CPU-bound (multiple HNSW
@@ -219,13 +207,23 @@ pub async fn multi_query_search(
     // `Vec<Vec<f32>>`) into the closure and rebuild the `&[f32]` slice
     // view inside, because `spawn_blocking` requires a 'static closure
     // and borrowed slice references cannot cross the boundary.
+    //
+    // The read goes through the control-plane gate (CORE-2) inside the worker,
+    // which also reports it to the observer. A denial — or a scope narrowing,
+    // which the fusion kernel has no channel to apply — refuses the query
+    // (fail closed).
     let collection_for_work = collection.clone();
+    let state_for_work = Arc::clone(&state);
+    let name_for_work = name.clone();
     let vectors = req.base.vectors;
     let top_k = req.base.top_k;
 
     let work_result = run_blocking_search(move || {
         let query_refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-        Ok(collection_for_work.multi_query_search(&query_refs, top_k, strategy, filter.as_ref()))
+        run_unscoped_vector_read(&state_for_work, &name_for_work, || {
+            collection_for_work.multi_query_search(&query_refs, top_k, strategy, filter.as_ref())
+        })
+        .map_err(|refusal| read_refused(&refusal))
     })
     .await;
 
@@ -289,27 +287,22 @@ pub async fn multi_query_search_ids(
             .into_response();
     }
 
-    // Gate the read (CORE-2) before the off-thread ids-only fusion.
-    if let Err(refusal) = authorize_unscoped_read(
-        &state,
-        &name,
-        velesdb_core::observer::QueryOperationKind::VectorSearch,
-        "multi-query search",
-    ) {
-        state.operational_metrics.inc_errors();
-        return read_refused(&refusal);
-    }
-
+    // Gated (CORE-2) and reported inside the worker, as `/search/multi`.
     let start = std::time::Instant::now();
     let collection_for_work = collection.clone();
+    let state_for_work = Arc::clone(&state);
+    let name_for_work = name.clone();
     let vectors = req.base.vectors;
     let top_k = req.base.top_k;
 
     let work_result = run_blocking_search(move || {
         let query_refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-        Ok(collection_for_work
-            .multi_query_search_ids(&query_refs, top_k, strategy)
-            .map(id_score_results))
+        run_unscoped_vector_read(&state_for_work, &name_for_work, || {
+            collection_for_work
+                .multi_query_search_ids(&query_refs, top_k, strategy)
+                .map(id_score_results)
+        })
+        .map_err(|refusal| read_refused(&refusal))
     })
     .await;
 
@@ -322,4 +315,24 @@ pub async fn multi_query_search_ids(
     };
 
     finish_search_ids_with_cb(&state, &name, start, &collection, search_result)
+}
+
+/// Runs a multi-query fusion through the read gate, which reports it. The
+/// outer error is the gate's refusal; a scope narrowing — which the fusion
+/// kernels have no channel to apply — fails closed as the inner one.
+fn run_unscoped_vector_read<T>(
+    state: &AppState,
+    name: &str,
+    read: impl FnOnce() -> velesdb_core::Result<T>,
+) -> velesdb_core::Result<velesdb_core::Result<T>> {
+    state.db.run_gated_read(
+        name,
+        velesdb_core::observer::QueryOperationKind::VectorSearch,
+        None,
+        None,
+        |scope| match scope {
+            None => read(),
+            Some(_) => Err(scope_unsupported("multi-query search")),
+        },
+    )
 }

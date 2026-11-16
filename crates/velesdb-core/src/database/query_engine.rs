@@ -458,10 +458,9 @@ impl Database {
     /// and never fire their own telemetry.
     ///
     /// When no observer is registered, this is a single `Option` presence check
-    /// with no timer and no notification beyond that check (Requirement 2.4).
-    /// The duration is reported in microseconds; `elapsed().as_micros()` is a
-    /// `u128`, converted with a bounds-guarded `try_from` that saturates at
-    /// `u64::MAX` rather than panicking (no `unwrap`/`expect`).
+    /// with no timer and no notification beyond that check (Requirement 2.4);
+    /// see [`report_read`](Self::report_read), shared with the gated reads
+    /// that build no `VelesQL` query.
     fn execute_query_timed(
         &self,
         authorized: &AuthorizedQuery<'_>,
@@ -469,18 +468,12 @@ impl Database {
         probe: Option<&crate::database::StrategyProbeSlot>,
         decisions: &GateDecisions,
     ) -> Result<Vec<SearchResult>> {
-        let Some(observer) = self.observer.as_ref() else {
-            return self.execute_query_inner(authorized, params, probe, decisions);
-            // zero-overhead fast path
-        };
-        let started = std::time::Instant::now();
-        let results = self.execute_query_inner(authorized, params, probe, decisions)?;
-        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
         // Report the collection the gate decided on — `select.from` is ""
         // for a MATCH addressed through `_collection`, which is exactly the
         // case a telemetry hook must not lose.
-        observer.on_query(authorized.target().unwrap_or(""), duration_us);
-        Ok(results)
+        self.report_read(authorized.target().unwrap_or(""), || {
+            self.execute_query_inner(authorized, params, probe, decisions)
+        })
     }
 
     /// Non-VelesQL read-path gate, shared by

@@ -9,7 +9,8 @@ Scope note: ``collection_created`` / ``collection_deleted`` fire directly from
 the core engine, and so does ``upsert``: core reports every write to a
 collection the database registered, whether it comes through VelesQL or the
 collection API, so the binding adds nothing of its own. The ``query`` event
-fires on the VelesQL path (core-internal); the REST server's end-to-end wiring
+comes from core as well, for every completed search or VelesQL read; the REST
+server's end-to-end wiring
 is covered by ``crates/velesdb-server/tests/observer_lifecycle_tests.rs``.
 """
 
@@ -246,6 +247,34 @@ def test_upsert_event_fires_once_on_bulk_and_graph_writes():
         graph.upsert_node(3, {"name": "c"})
         upserts = [(e["collection"], e["point_count"]) for e in recorder.events_of("upsert")]
         assert upserts == [("kg", 2), ("kg", 1)]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_query_event_fires_once_per_direct_search():
+    """Each direct search reports one ``query`` event naming the collection.
+
+    Dense searches go through core's gated search; sparse, batch and
+    multi-query searches through its gated read runner. Both report the read
+    themselves, so the binding never fires the event.
+    """
+    temp_dir = tempfile.mkdtemp()
+    try:
+        recorder = Recorder()
+        db = Database(temp_dir, observer=recorder)
+        col = db.create_collection("docs", dimension=DIM)
+        col.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"t": "hello"}}])
+        searches = [
+            lambda: col.search([1.0, 0.0, 0.0, 0.0], top_k=1),
+            lambda: col.search_ids([1.0, 0.0, 0.0, 0.0], top_k=1),
+            lambda: col.text_search("hello", top_k=1),
+            lambda: col.batch_search([{"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1}]),
+            lambda: col.multi_query_search([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]], top_k=1),
+        ]
+        for run in searches:
+            recorder.events.clear()
+            run()
+            assert [e["collection"] for e in recorder.events_of("query")] == ["docs"]
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

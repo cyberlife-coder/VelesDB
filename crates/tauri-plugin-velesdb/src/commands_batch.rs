@@ -47,36 +47,39 @@ async fn batch_search_per_query(
     state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
-            let scope = crate::helpers::authorize_collection_read(
+            crate::helpers::run_gated_search(
                 &db,
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
-            )?;
-            let mut all_results = Vec::with_capacity(request.searches.len());
-            for s in &request.searches {
-                let filter = crate::helpers::and_scope(parse_filter(&s.filter)?, scope.clone());
-                #[cfg(feature = "persistence")]
-                let quality = parse_search_quality(&s.quality)
-                    .map_err(|e| crate::error::Error::InvalidConfig(e.to_string()))?;
-                #[cfg(not(feature = "persistence"))]
-                let quality: Option<()> = {
-                    crate::helpers::reject_unsupported_quality(s.quality.as_ref())?;
-                    None
-                };
+                |scope| {
+                    let mut all_results = Vec::with_capacity(request.searches.len());
+                    for s in &request.searches {
+                        let filter =
+                            crate::helpers::and_scope(parse_filter(&s.filter)?, scope.clone());
+                        #[cfg(feature = "persistence")]
+                        let quality = parse_search_quality(&s.quality)
+                            .map_err(|e| crate::error::Error::InvalidConfig(e.to_string()))?;
+                        #[cfg(not(feature = "persistence"))]
+                        let quality: Option<()> = {
+                            crate::helpers::reject_unsupported_quality(s.quality.as_ref())?;
+                            None
+                        };
 
-                let search_results = if let Some(ref f) = filter {
-                    coll.search_with_filter(&s.vector, s.top_k, f)?
-                } else {
-                    dispatch_quality_search(&coll, &s.vector, s.top_k, quality.as_ref())?
-                };
-                all_results.push(
-                    search_results
-                        .into_iter()
-                        .map(crate::helpers::map_core_result)
-                        .collect(),
-                );
-            }
-            Ok(all_results)
+                        let search_results = if let Some(ref f) = filter {
+                            coll.search_with_filter(&s.vector, s.top_k, f)?
+                        } else {
+                            dispatch_quality_search(&coll, &s.vector, s.top_k, quality.as_ref())?
+                        };
+                        all_results.push(
+                            search_results
+                                .into_iter()
+                                .map(crate::helpers::map_core_result)
+                                .collect(),
+                        );
+                    }
+                    Ok(all_results)
+                },
+            )
         })
         .await
         .map_err(CommandError::from)
@@ -90,41 +93,43 @@ async fn batch_search_bulk(
     state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
-            let scope = crate::helpers::authorize_collection_read(
+            crate::helpers::run_gated_search(
                 &db,
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
-            )?;
+                |scope| {
+                    let query_refs: Vec<&[f32]> = request
+                        .searches
+                        .iter()
+                        .map(|s| s.vector.as_slice())
+                        .collect();
+                    let filters: Vec<Option<velesdb_core::Filter>> = request
+                        .searches
+                        .iter()
+                        .map(|s| {
+                            parse_filter(&s.filter)
+                                .map(|f| crate::helpers::and_scope(f, scope.clone()))
+                        })
+                        .collect::<crate::error::Result<Vec<_>>>()?;
 
-            let query_refs: Vec<&[f32]> = request
-                .searches
-                .iter()
-                .map(|s| s.vector.as_slice())
-                .collect();
-            let filters: Vec<Option<velesdb_core::Filter>> = request
-                .searches
-                .iter()
-                .map(|s| {
-                    parse_filter(&s.filter).map(|f| crate::helpers::and_scope(f, scope.clone()))
-                })
-                .collect::<crate::error::Result<Vec<_>>>()?;
+                    // Use the maximum top_k across all searches so that every individual
+                    // query retrieves enough candidates before per-query truncation.
+                    let top_k = request.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
+                    let results = coll.search_batch_with_filters(&query_refs, top_k, &filters)?;
 
-            // Use the maximum top_k across all searches so that every individual
-            // query retrieves enough candidates before per-query truncation.
-            let top_k = request.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
-            let results = coll.search_batch_with_filters(&query_refs, top_k, &filters)?;
-
-            Ok(results
-                .into_iter()
-                .zip(request.searches.iter().map(|s| s.top_k))
-                .map(|(search_results, k)| {
-                    search_results
+                    Ok(results
                         .into_iter()
-                        .take(k)
-                        .map(crate::helpers::map_core_result)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>())
+                        .zip(request.searches.iter().map(|s| s.top_k))
+                        .map(|(search_results, k)| {
+                            search_results
+                                .into_iter()
+                                .take(k)
+                                .map(crate::helpers::map_core_result)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>())
+                },
+            )
         })
         .await
         .map_err(CommandError::from)
