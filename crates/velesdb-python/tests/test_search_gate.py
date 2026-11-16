@@ -501,3 +501,63 @@ def test_a_scope_on_id_never_widens_post_filtered_reads():
     assert _ids(batch[0]) == {1}
     assert got[0] is not None and got[0]["id"] == 1
     assert got[1] is None
+
+
+# ---------------------------------------------------------------------------
+# The facade forwards the caller identity (principal / tenant) to the gate.
+# ---------------------------------------------------------------------------
+
+QUERY = [1.0, 0.0, 0.0, 0.0]
+
+
+def _facade_calls(collection):
+    """Every facade search method, called with an identity."""
+    who = {"principal": "alice", "tenant": "acme"}
+    return {
+        "search": lambda: collection.search(QUERY, top_k=2, **who),
+        "batch_search": lambda: collection.batch_search([QUERY], top_k=2, **who),
+        "multi_query_search": lambda: collection.multi_query_search([QUERY], top_k=2, **who),
+        "search_batch_parallel": lambda: collection.search_batch_parallel([QUERY], top_k=2, **who),
+        "search_with_quality": lambda: collection.search_with_quality(QUERY, "fast", top_k=2, **who),
+    }
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["search", "batch_search", "multi_query_search", "search_batch_parallel", "search_with_quality"],
+)
+def test_facade_search_forwards_principal_and_tenant(method):
+    """The facade ``Collection`` every ``Database`` call returns used to
+    define these methods without ``principal`` / ``tenant``: a call raised
+    ``TypeError``, so a policy keyed on identity only ever saw ``None``."""
+    seen = []
+
+    def record(event, **fields):
+        if event == "query_request":
+            seen.append((fields.get("principal"), fields.get("tenant")))
+        return None
+
+    with _Db(observer=record) as db:
+        collection = _seed(db)
+        seen.clear()
+        _facade_calls(collection)[method]()
+    assert ("alice", "acme") in seen, f"{method} reached the gate as {seen}"
+
+
+def test_every_facade_override_keeps_the_raw_identity_parameters():
+    """Drift gate: a facade method shadowing a raw binding method that takes
+    ``principal`` / ``tenant`` must take them too."""
+    import inspect
+
+    import velesdb
+
+    raw = velesdb._RawCollection if hasattr(velesdb, "_RawCollection") else None
+    if raw is None:
+        pytest.skip("raw binding class not exposed")
+    for name, member in vars(velesdb.Collection).items():
+        raw_member = getattr(raw, name, None)
+        signature = getattr(raw_member, "__text_signature__", None) or ""
+        if not callable(member) or "principal" not in signature:
+            continue
+        params = inspect.signature(member).parameters
+        assert {"principal", "tenant"} <= set(params), f"Collection.{name} drops the identity"

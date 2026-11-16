@@ -339,6 +339,9 @@ class Collection:
         filter: dict[str, Any] | None = None,
         sparse_vector: Any | None = None,
         sparse_index_name: str | None = None,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search for similar vectors: dense, sparse, or hybrid (fused with RRF).
 
@@ -352,6 +355,8 @@ class Collection:
             k=top_k,
             filter=filter,
             sparse_index_name=sparse_index_name,
+            principal=principal,
+            tenant=tenant,
         )
         return self._inner.search_request(opts)
 
@@ -372,6 +377,9 @@ class Collection:
         self,
         queries: list[Any],
         top_k: int = 10,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[list[dict[str, Any]]]:
         if queries and isinstance(queries[0], dict):
             # Pass dicts through to Rust, injecting the default top_k only
@@ -384,7 +392,7 @@ class Collection:
                 searches.append(entry)
         else:
             searches = [{"vector": list(v), "top_k": int(top_k)} for v in queries]
-        return self._inner.batch_search(searches)
+        return self._inner.batch_search(searches, principal=principal, tenant=tenant)
 
     def multi_query_search(
         self,
@@ -392,6 +400,9 @@ class Collection:
         top_k: int = 10,
         fusion: Any = None,
         filter: dict[str, Any] | None = None,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[dict[str, Any]]:
         """Multi-query search with result fusion.
 
@@ -402,7 +413,12 @@ class Collection:
             filter: Optional metadata filter dict.
         """
         return self._inner.multi_query_search(
-            vectors, top_k=top_k, fusion=fusion, filter=filter,
+            vectors,
+            top_k=top_k,
+            fusion=fusion,
+            filter=filter,
+            principal=principal,
+            tenant=tenant,
         )
 
     def stream_insert(self, points: list[dict[str, Any]]) -> int:
@@ -413,15 +429,23 @@ class Collection:
         self,
         vectors: list[list[float]],
         top_k: int = 10,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[list[dict[str, Any]]]:
         """Parallel batch search using rayon."""
-        return self._inner.search_batch_parallel(vectors, top_k=top_k)
+        return self._inner.search_batch_parallel(
+            vectors, top_k=top_k, principal=principal, tenant=tenant,
+        )
 
     def search_with_quality(
         self,
         vector: Any,
         quality: str,
         top_k: int = 10,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[dict]:
         """Search with a named quality mode.
 
@@ -439,7 +463,9 @@ class Collection:
             ValueError: If ``quality`` names no mode, or gives an ef outside
                 16-4096.
         """
-        return self._inner.search_with_quality(vector, quality, top_k)
+        return self._inner.search_with_quality(
+            vector, quality, top_k, principal=principal, tenant=tenant,
+        )
 
     def count(self) -> int:
         """Return the number of points in the collection."""
