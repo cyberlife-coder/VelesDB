@@ -161,15 +161,25 @@ fn test_order_by_arithmetic_sorts_by_formula() {
 }
 
 #[test]
-fn test_order_by_similarity_named_field_rejected_loudly() {
-    // WASM has no named/secondary vectors. `ORDER BY similarity(image_vec, $q)`
-    // cannot be evaluated and must reject loudly (parity with the MATCH path),
-    // never silently return scan order.
+fn test_order_by_similarity_on_a_named_vector_scores_the_payload_vector() {
+    // `ORDER BY similarity(image_vec, $q)` scores the payload's `image_vec`
+    // as core does; the rows without one take the worst key and come after,
+    // by id.
     let mut db = db_with_vectors();
-    let err = execute(
+    execute(
+        &mut db,
+        "INSERT INTO vecs (id, vector, price, cat, image_vec) VALUES (5, $v, 2.0, 'tech', $iv)",
+        Some(r#"{"v": [0.0, 0.0, 0.0, 1.0], "iv": [1.0, 0.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: seed a named vector");
+    let r = execute(
         &mut db,
         "SELECT * FROM vecs WHERE vector NEAR $q ORDER BY similarity(image_vec, $q) DESC",
         Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
-    );
-    assert!(err.is_err(), "named-vector similarity ORDER BY must error");
+    )
+    .expect("test: ORDER BY a named vector");
+    let ids: Vec<u64> = (0..r.row_count() as usize)
+        .map(|i| r.row(i).expect("test: row").id())
+        .collect();
+    assert_eq!(ids, vec![5, 1, 2, 3, 4]);
 }
