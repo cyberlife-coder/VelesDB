@@ -143,12 +143,10 @@ const DEFAULT_SEARCH_QUALITY: SearchQuality = 'balanced';
  * `parse_search_quality` (velesdb-wasm) is the single implementation of the
  * preset grammar — `fast`/`balanced`/`accurate`/`perfect`/`autotune`,
  * `custom:<ef>`, `adaptive:<min>:<max>`. Restating it here would be a second
- * copy free to drift from it, so the check delegates to the binding, which
- * exposes the parser on `search_with_quality` alone. A metadata-only store
- * holds no vectors and has dimension 0, so it parses the preset and scans
- * nothing: every search path is refused alike, including the filtered and
- * sparse-only paths, which have no quality-taking binding method, and a
- * `k <= 0` search, which runs no search at all.
+ * copy free to drift from it, so the check delegates to the binding
+ * ({@link parseWithBinding}). Every search path is refused alike, including
+ * the filtered and sparse-only paths, which have no quality-taking binding
+ * method, and a `k <= 0` search, which runs no search at all.
  *
  * An untyped (JavaScript) caller can pass any value here, which is why the
  * refusal cannot be left to the type.
@@ -162,14 +160,32 @@ function requireParsableQuality(ctx: WasmContext, quality: unknown): void {
   if (!isSet(quality)) {
     return;
   }
-  const probe = ctx.wasmModule.VectorStore.new_metadata_only();
   try {
-    probe.search_with_quality(new Float32Array(0), 0, quality as SearchQuality);
+    parseWithBinding(ctx, quality as SearchQuality);
   } catch (thrown) {
     throw new VelesDBError(
       `WASM backend: ${describeWasmThrow(thrown)}`,
       'BAD_REQUEST'
     );
+  }
+}
+
+/**
+ * Run the binding's preset parser: `VectorStore.validate_search_quality`
+ * where the binding has it. A binding released before it exposes the parser
+ * on `search_with_quality` alone, over a metadata-only store that parses the
+ * preset and scans nothing — a probe the newer binding refuses outright,
+ * since it rejects any vector search on a metadata-only store as core does.
+ */
+function parseWithBinding(ctx: WasmContext, quality: SearchQuality): void {
+  const stores = ctx.wasmModule.VectorStore;
+  if (typeof stores.validate_search_quality === 'function') {
+    stores.validate_search_quality(quality);
+    return;
+  }
+  const probe = stores.new_metadata_only();
+  try {
+    probe.search_with_quality(new Float32Array(0), 0, quality);
   } finally {
     probe.free();
   }

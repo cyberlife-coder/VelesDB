@@ -168,3 +168,35 @@ fn test_reinserting_a_derived_id_edge_overwrites_it() {
     assert!(g.delete_edge_by_id(first));
     assert!(g.edges().is_empty());
 }
+
+/// A derived id that an unrelated explicit edge already holds is a
+/// collision, refused without touching that edge — not an overwrite of it.
+#[test]
+fn test_a_derived_id_held_by_another_edge_is_refused_untouched() {
+    let mut g = WasmGraphStore::new();
+    let derived = velesdb_core::hash_edge_id(1, 2, "CITES");
+    g.insert_edge(
+        Some(derived),
+        3,
+        4,
+        "KNOWS".to_string(),
+        Some(serde_json::json!({"w": 1})),
+    )
+    .expect("test: explicit edge");
+    let err = g
+        .insert_edge(
+            None,
+            1,
+            2,
+            "CITES".to_string(),
+            Some(serde_json::json!({"w": 2})),
+        )
+        .expect_err("the derived id is taken by another edge");
+    assert!(err.contains("held by another edge"), "{err}");
+    let kept = &g.edges()[0];
+    assert_eq!(
+        (kept.source, kept.target, kept.label.as_str()),
+        (3, 4, "KNOWS")
+    );
+    assert_eq!(kept.payload, Some(serde_json::json!({"w": 1})));
+}

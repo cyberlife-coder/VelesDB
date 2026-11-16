@@ -507,7 +507,7 @@ impl StoreState {
         dimension: usize,
     ) -> Result<(), JsValue> {
         store_insert::insert_batch_raw(self, ids, vectors, dimension)
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(WasmError::into_js_value)
     }
 }
 

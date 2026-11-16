@@ -1,5 +1,6 @@
 //! Insert operations for `VectorStore`.
 
+use crate::wasm_error::WasmError;
 use crate::{store_search, StoreState};
 
 #[cfg(test)]
@@ -16,7 +17,9 @@ pub fn insert_vector(store: &mut StoreState, id: u64, vector: &[f32]) {
 
 /// Validates a flat raw batch against the store geometry.
 ///
-/// Checks that `dimension` matches the store, delegates the `checked_mul`
+/// Each refusal carries core's `VELES-XXX` code: VELES-004 for a dimension
+/// other than the store's, VELES-005 for a length mismatch or a non-finite
+/// component. Checks that `dimension` matches the store, delegates the `checked_mul`
 /// overflow guard and `ids.len() * dimension` length check to
 /// [`store_search::validate_multi_vector_len`], and refuses a non-finite
 /// component as core's ingest does.
@@ -25,15 +28,11 @@ fn validate_raw_batch(
     ids: &[u64],
     vectors: &[f32],
     dimension: usize,
-) -> Result<(), String> {
-    if dimension != store.dimension {
-        return Err(format!(
-            "dimension mismatch: expected {}, got {dimension}",
-            store.dimension
-        ));
-    }
-    store_search::validate_multi_vector_len(vectors.len(), ids.len(), dimension)?;
-    velesdb_core::validation::validate_vector_is_finite(vectors).map_err(|e| e.to_string())
+) -> Result<(), WasmError> {
+    store_search::validate_dimension_structured(dimension, store.dimension)?;
+    store_search::validate_multi_vector_len(vectors.len(), ids.len(), dimension)
+        .map_err(|e| WasmError::from(velesdb_core::Error::InvalidVector(e)))?;
+    velesdb_core::validation::validate_vector_is_finite(vectors).map_err(WasmError::from)
 }
 
 /// Bulk insert from a flat row-major `vectors` buffer plus parallel `ids`.
@@ -47,7 +46,7 @@ pub fn insert_batch_raw(
     ids: &[u64],
     vectors: &[f32],
     dimension: usize,
-) -> Result<(), String> {
+) -> Result<(), WasmError> {
     validate_raw_batch(store, ids, vectors, dimension)?;
     store.ids.reserve(ids.len());
     store.data.reserve(vectors.len());

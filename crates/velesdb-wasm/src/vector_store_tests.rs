@@ -155,3 +155,22 @@ fn given_create_collection_with_a_storage_mode_then_it_is_honoured_or_refused() 
     )
     .is_err());
 }
+
+/// The preset parser runs without a store: the SDK validates a `quality`
+/// with it ahead of a search, now that a metadata-only store refuses one.
+#[test]
+fn given_a_valid_preset_when_validating_then_no_store_is_needed() {
+    for preset in [
+        "fast",
+        "balanced",
+        "accurate",
+        "perfect",
+        "autotune",
+        "custom:128",
+    ] {
+        assert!(
+            VectorStore::validate_search_quality(preset).is_ok(),
+            "{preset}"
+        );
+    }
+}

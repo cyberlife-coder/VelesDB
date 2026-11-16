@@ -130,7 +130,17 @@ impl WasmGraphStore {
         });
         if let Some(existing) = self.edges.iter_mut().find(|e| e.id == id) {
             // Only a derived id reaches here (an explicit one was refused
-            // above): same id, same logical edge — overwrite it.
+            // above). It names the same logical edge only when the triple
+            // matches; an explicit edge that happens to hold this id is
+            // another edge, and is left untouched.
+            if (existing.source, existing.target, existing.label.as_str())
+                != (source, target, label.as_str())
+            {
+                return Err(format!(
+                    "Edge id {id} derived for ({source})-[{label}]->({target}) is held by \
+                     another edge; give this edge an explicit id"
+                ));
+            }
             existing.payload = payload;
             return Ok(id);
         }

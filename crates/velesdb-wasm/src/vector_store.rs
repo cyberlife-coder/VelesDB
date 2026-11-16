@@ -62,6 +62,16 @@ impl VectorStore {
         StoreState::new(dimension, metric).map(Self::from_state)
     }
 
+    /// Checks a search-quality preset (`fast`, `balanced`, `accurate`,
+    /// `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`) with
+    /// the parser `search_with_quality` runs, without a store or a search:
+    /// what a caller validating a preset ahead of a search asks. Throws the
+    /// parser's refusal; returns nothing otherwise.
+    #[wasm_bindgen]
+    pub fn validate_search_quality(quality: &str) -> Result<(), JsValue> {
+        crate::parsing::parse_search_quality(quality)
+    }
+
     /// Creates a metadata-only store (no vectors, only payloads).
     #[wasm_bindgen]
     pub fn new_metadata_only() -> VectorStore {
