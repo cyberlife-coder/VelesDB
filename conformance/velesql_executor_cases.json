@@ -841,6 +841,18 @@
       "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY bm25_score DESC, id ASC LIMIT 3",
       "expect_ids": [1, 2, 3],
       "note": "a component a NEAR row does not carry (`bm25_score`) reads 0.0, so the next key decides"
+    },
+    {
+      "id": "N033",
+      "query": "SELECT * FROM named ORDER BY similarity(alt, $x) DESC LIMIT 5",
+      "expect_ids": [42, 43, 41, 44, 45],
+      "note": "ORDER BY similarity(field, $v) scores the payload's named vector; a row without one (44) or of another dimension (45) takes the worst key, last under DESC (WASM refused the form)"
+    },
+    {
+      "id": "N034",
+      "query": "SELECT * FROM named ORDER BY similarity(vector, $y) DESC, id ASC LIMIT 5",
+      "expect_ids": [42, 45, 43, 41, 44],
+      "note": "similarity(vector, $v) in ORDER BY scores the row's own vector, ties broken by the next key"
     }
   ],
   "fusion_cases": [

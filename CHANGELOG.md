@@ -275,8 +275,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   LET binding, then `score` / `fused_score` / `similarity`, then the result's
   component scores (a NEAR row carries `vector_score` in both engines), then
   `id`, then the payload. WASM also refuses a vector in an INSERT on a
-  metadata-only collection, with core's words, instead of dropping it, and
-  caps a LIMIT at `velesql::MAX_SELECT_LIMIT` (100 000) as core does.
+  metadata-only collection, with core's words, instead of dropping it, caps
+  a LIMIT at `velesql::MAX_SELECT_LIMIT` (100 000) as core does, and orders
+  by `similarity(field, $v)` — the row's own vector or the payload's named
+  one, a row without one last — instead of refusing it.
 
 - **A `similarity()` threshold filters the whole collection** (core,
   2026-11-15). It filtered a window of `LIMIT × 10` points nearest the query

@@ -16,7 +16,7 @@ fn by_field(name: &str, desc: bool) -> Vec<SelectOrderBy> {
 fn sort(stmt_order: Vec<SelectOrderBy>, rows: &mut [SearchResult]) {
     let mut stmt = SelectStatement::empty();
     stmt.order_by = Some(stmt_order);
-    sort_rows(&stmt, rows, true).expect("test: sort");
+    sort_rows(&stmt, rows, &OrderContext::without_vectors(true)).expect("test: sort");
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn test_sort_by_arithmetic_formula() {
 }
 
 #[test]
-fn test_sort_named_similarity_is_rejected() {
+fn named_similarity_over_rows_of_no_collection_is_rejected() {
     use velesdb_core::velesql::{SimilarityOrderBy, VectorExpr};
     let mut rows = vec![mk(1, 0.5, serde_json::json!({}))];
     let mut stmt = SelectStatement::empty();
@@ -114,7 +114,7 @@ fn test_sort_named_similarity_is_rejected() {
         }),
         descending: true,
     }]);
-    let err = sort_rows(&stmt, &mut rows, true);
+    let err = sort_rows(&stmt, &mut rows, &OrderContext::without_vectors(true));
     assert!(err.is_err());
 }
 
@@ -158,7 +158,7 @@ fn test_similarity_desc_puts_the_nearest_row_first_under_a_distance_metric() {
         expr: OrderByExpr::SimilarityBare,
         descending: true,
     }]);
-    sort_rows(&stmt, &mut rows, false).expect("test: sort");
+    sort_rows(&stmt, &mut rows, &OrderContext::without_vectors(false)).expect("test: sort");
     let ids: Vec<u64> = rows.iter().map(|r| r.point.id).collect();
     assert_eq!(ids, [2, 3, 1]);
 }
