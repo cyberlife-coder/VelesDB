@@ -1,4 +1,5 @@
 use super::*;
+use crate::velesql_value::Params;
 
 fn cand(node_id: u64, value: serde_json::Value) -> MatchCandidate {
     MatchCandidate {
@@ -7,6 +8,17 @@ fn cand(node_id: u64, value: serde_json::Value) -> MatchCandidate {
         value,
         binding: MatchBinding::default(),
         score: None,
+    }
+}
+
+/// An ordering with no node store, in the metric's `higher_is_better`
+/// direction.
+fn order(higher_is_better: bool) -> MatchOrder<'static> {
+    static PARAMS: std::sync::OnceLock<Params> = std::sync::OnceLock::new();
+    MatchOrder {
+        higher_is_better,
+        nodes: None,
+        params: PARAMS.get_or_init(Params::new),
     }
 }
 
@@ -25,7 +37,7 @@ fn test_order_by_property_asc_then_limit() {
         expr: OrderByExpr::Field("a.age".to_string()),
         descending: false,
     }];
-    order_and_limit(&mut c, Some(&ob), Some(2), true).expect("test: order");
+    order_and_limit(&mut c, Some(&ob), Some(2), &order(true)).expect("test: order");
     // Sorted by age asc (10,20,30) THEN limited to 2 -> ids 2,3.
     assert_eq!(ids(&c), vec![2, 3]);
 }
@@ -43,7 +55,7 @@ fn test_limit_before_sort_bug_regression() {
         expr: OrderByExpr::Field("a.age".to_string()),
         descending: false,
     }];
-    order_and_limit(&mut c, Some(&ob), Some(1), true).expect("test: order");
+    order_and_limit(&mut c, Some(&ob), Some(1), &order(true)).expect("test: order");
     assert_eq!(ids(&c), vec![3], "smallest age survives, not first-seen");
 }
 
@@ -57,7 +69,7 @@ fn test_order_by_property_desc() {
         expr: OrderByExpr::Field("a.age".to_string()),
         descending: true,
     }];
-    order_and_limit(&mut c, Some(&ob), None, true).expect("test: order");
+    order_and_limit(&mut c, Some(&ob), None, &order(true)).expect("test: order");
     assert_eq!(ids(&c), vec![1, 2]);
 }
 
@@ -68,7 +80,7 @@ fn test_no_order_by_only_limits() {
         cand(3, serde_json::json!({"a": {}})),
         cand(9, serde_json::json!({"a": {}})),
     ];
-    order_and_limit(&mut c, None, Some(2), true).expect("test: order");
+    order_and_limit(&mut c, None, Some(2), &order(true)).expect("test: order");
     // Traversal order preserved (no sort), just truncated.
     assert_eq!(ids(&c), vec![5, 3]);
 }
@@ -84,7 +96,7 @@ fn test_tie_break_by_baseline() {
         expr: OrderByExpr::Field("a.k".to_string()),
         descending: false,
     }];
-    order_and_limit(&mut c, Some(&ob), None, true).expect("test: order");
+    order_and_limit(&mut c, Some(&ob), None, &order(true)).expect("test: order");
     assert_eq!(
         ids(&c),
         vec![1, 2, 3],
@@ -110,7 +122,7 @@ fn test_multi_node_baseline_is_total_order() {
         expr: OrderByExpr::Field("a.k".to_string()),
         descending: false,
     }];
-    order_and_limit(&mut c, Some(&ob), None, true).expect("test: order");
+    order_and_limit(&mut c, Some(&ob), None, &order(true)).expect("test: order");
     assert_eq!(
         c.iter().map(|x| x.baseline.clone()).collect::<Vec<_>>(),
         vec![vec![1, 4], vec![1, 9]],
@@ -126,16 +138,18 @@ fn reject_err(expr: OrderByExpr) -> String {
         expr,
         descending: false,
     }];
-    order_and_limit(&mut c, Some(&ob), None, true).expect_err("test: must be rejected")
+    order_and_limit(&mut c, Some(&ob), None, &order(true)).expect_err("test: must be rejected")
 }
 
 #[test]
-fn test_unsupported_arithmetic_rejected() {
-    use velesdb_core::velesql::ArithmeticExpr;
-    let err = reject_err(OrderByExpr::Arithmetic(ArithmeticExpr::Variable(
-        "year".to_string(),
-    )));
-    assert!(err.contains("arithmetic"), "got: {err}");
+fn an_aggregate_is_rejected() {
+    use velesdb_core::velesql::{AggregateArg, AggregateFunction, AggregateType};
+    let err = reject_err(OrderByExpr::Aggregate(AggregateFunction {
+        function_type: AggregateType::Count,
+        argument: AggregateArg::Wildcard,
+        alias: None,
+    }));
+    assert!(err.contains("aggregate"), "got: {err}");
 }
 
 /// A candidate carrying a `similarity()` score.
@@ -152,12 +166,12 @@ fn test_order_by_similarity_desc_is_most_similar_first() {
         descending: true,
     }];
     let mut similarities = vec![scored(1, 0.6), scored(2, 1.0), scored(3, 0.8)];
-    order_and_limit(&mut similarities, Some(&ob), None, true).expect("test: order");
+    order_and_limit(&mut similarities, Some(&ob), None, &order(true)).expect("test: order");
     assert_eq!(ids(&similarities), vec![2, 3, 1]);
 
     // Under a distance metric the smallest score is the most similar.
     let mut distances = vec![scored(1, 0.9), scored(2, 0.0), scored(3, 0.6)];
-    order_and_limit(&mut distances, Some(&ob), None, false).expect("test: order");
+    order_and_limit(&mut distances, Some(&ob), None, &order(false)).expect("test: order");
     assert_eq!(ids(&distances), vec![2, 3, 1]);
 }
 
@@ -168,12 +182,12 @@ fn test_order_by_similarity_puts_unscored_rows_last() {
         descending: true,
     }];
     let mut c = vec![cand(1, serde_json::json!({})), scored(2, 0.5)];
-    order_and_limit(&mut c, Some(&ob), None, true).expect("test: order");
+    order_and_limit(&mut c, Some(&ob), None, &order(true)).expect("test: order");
     assert_eq!(ids(&c), vec![2, 1]);
 }
 
 #[test]
 fn test_bare_field_rejected() {
     let err = reject_err(OrderByExpr::Field("name".to_string()));
-    assert!(err.contains("not supported in WASM"), "got: {err}");
+    assert!(err.contains("is not supported"), "got: {err}");
 }

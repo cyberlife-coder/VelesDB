@@ -230,3 +230,25 @@ fn execute_query_rows_carry_the_where_similarity_score() {
     assert!((scores[0] - 1.0).abs() < 1e-5, "{scores:?}");
     assert!((scores[1] - 0.8).abs() < 1e-5, "{scores:?}");
 }
+
+/// `ORDER BY similarity(d.vector, $v)` scores the vector of the node `d`
+/// binds and an arithmetic key reads the target, as core's MATCH ORDER BY
+/// does (WASM refused both).
+#[test]
+fn match_order_by_a_node_vector_and_arithmetic_as_in_core() {
+    let mut db = kg("cosine");
+    let by_similarity = run(
+        &mut db,
+        "MATCH (a:Person)-[:WROTE]->(d:Doc) RETURN d.name ORDER BY similarity(d.vector, $v) DESC",
+    );
+    assert_eq!(
+        docs(&by_similarity),
+        [3, 2, 1],
+        "cosine to [1, 0]: 1.0, 0.8, 0.6"
+    );
+    let by_arithmetic = run(
+        &mut db,
+        "MATCH (a:Person)-[:WROTE]->(d:Doc) RETURN d.name ORDER BY id * -1 ASC",
+    );
+    assert_eq!(docs(&by_arithmetic), [3, 2, 1], "-3 < -2 < -1");
+}

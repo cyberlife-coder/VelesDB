@@ -7,17 +7,31 @@
 //! resolve to a total, deterministic order. Sorting happens BEFORE the LIMIT
 //! truncation (the caller collects the full candidate set first).
 //!
-//! Supported keys: `depth` (constant within a single pattern, so a defined
-//! no-op), an `alias.property` path, and bare `similarity()` (the row's score,
-//! [`crate::velesql_match_score`]), most-similar-first under every metric as
-//! in core. `similarity(field, $v)`, arithmetic and aggregate expressions are
-//! rejected with a clear error rather than silently mis-ordered.
+//! Supported keys, as in core: `depth` (constant within a single pattern, so
+//! a defined no-op), an `alias.property` path, bare `similarity()` (the row's
+//! score, [`crate::velesql_match_score`]), `similarity(field, $v)` (the vector
+//! of the node `alias.` names, else the row's target), and arithmetic over
+//! the target (`year - 2000`, `id`, through core's `ScoreContext`). The
+//! similarity keys are most-similar-first under every metric. Aggregates are
+//! refused, as core refuses them.
 
 use std::cmp::Ordering;
 
-use velesdb_core::velesql::{OrderByExpr, OrderByItem};
+use velesdb_core::velesql::{
+    evaluate_arithmetic, ArithmeticExpr, OrderByExpr, OrderByItem, ScoreContext, SimilarityOrderBy,
+};
 
+use crate::velesql_match_nodes::MatchNodes;
 use crate::velesql_result::QueryResultRow;
+use crate::velesql_value::Params;
+
+/// What a MATCH ORDER BY reads besides the rows: the metric's direction,
+/// the walk's nodes (their vectors and own payloads) and the parameters.
+pub(crate) struct MatchOrder<'a> {
+    pub(crate) higher_is_better: bool,
+    pub(crate) nodes: Option<&'a MatchNodes<'a>>,
+    pub(crate) params: &'a Params,
+}
 
 /// A MATCH result row paired with the data needed to order it.
 pub(crate) struct MatchCandidate {
@@ -69,7 +83,7 @@ pub(crate) fn order_and_limit(
     candidates: &mut Vec<MatchCandidate>,
     order_by: Option<&[OrderByItem]>,
     limit: Option<u64>,
-    higher_is_better: bool,
+    order: &MatchOrder<'_>,
 ) -> Result<(), String> {
     if let Some(items) = order_by {
         // Deterministic baseline: the bound-node-id tuple is unique per row, so
@@ -77,7 +91,7 @@ pub(crate) fn order_and_limit(
         candidates.sort_by(|a, b| a.baseline.cmp(&b.baseline));
         // Apply least-significant key first so the most-significant wins.
         for item in items.iter().rev() {
-            sort_by_key(candidates, &item.expr, item.descending, higher_is_better)?;
+            sort_by_key(candidates, &item.expr, item.descending, order)?;
         }
     }
     if let Some(limit) = limit {
@@ -92,8 +106,9 @@ fn sort_by_key(
     candidates: &mut [MatchCandidate],
     expr: &OrderByExpr,
     descending: bool,
-    higher_is_better: bool,
+    order: &MatchOrder<'_>,
 ) -> Result<(), String> {
+    let higher_is_better = order.higher_is_better;
     match expr {
         OrderByExpr::Field(f) if f == "depth" => {
             // WASM patterns have a fixed depth per query, so this is a defined
@@ -116,19 +131,116 @@ fn sort_by_key(
             });
             Ok(())
         }
-        OrderByExpr::Similarity(_) => reject_unsupported("similarity(field, $v)"),
-        OrderByExpr::Arithmetic(_) => reject_unsupported("arithmetic expressions"),
-        _ => reject_unsupported("aggregate expressions"),
+        OrderByExpr::Similarity(sim) => {
+            let keys = similarity_keys(candidates, sim, order)?;
+            sort_by_keys(candidates, &keys, descending);
+            Ok(())
+        }
+        OrderByExpr::Arithmetic(expr) => {
+            let keys: Vec<f32> = candidates
+                .iter()
+                .map(|c| arithmetic_key(c, expr, order.nodes))
+                .collect();
+            sort_by_keys(candidates, &keys, descending);
+            Ok(())
+        }
+        _ => Err(
+            "MATCH ORDER BY aggregate expression is not supported (use similarity(), depth, \
+             alias.property, or arithmetic over properties)"
+                .to_string(),
+        ),
     }
 }
 
-/// Uniform rejection for ORDER BY forms the WASM MATCH path does not evaluate
-/// (`similarity(field, $v)`, arithmetic and aggregates; `depth`,
-/// `alias.property` and bare `similarity()` work).
-fn reject_unsupported(form: &str) -> Result<(), String> {
-    Err(format!(
-        "MATCH ORDER BY {form} is not supported in WASM (use depth, alias.property or similarity())"
-    ))
+/// The row's target: the last bound node (core's `MatchResult::node_id`).
+fn target(candidate: &MatchCandidate) -> Option<u64> {
+    candidate.binding.nodes.last().map(|node| node.id)
+}
+
+/// Core's `sort_match_by_similarity` key per row: the vector of the node
+/// `alias.` names (the target for a bare field) against the query vector, a
+/// distance negated so a larger key is more similar; an unscorable row
+/// `-inf`.
+fn similarity_keys(
+    candidates: &[MatchCandidate],
+    sim: &SimilarityOrderBy,
+    order: &MatchOrder<'_>,
+) -> Result<Vec<f32>, String> {
+    let query = crate::velesql_value::resolve_vector(&sim.vector, order.params)?;
+    let alias = sim.field.split_once('.').map(|(alias, _)| alias);
+    let space = order.nodes.and_then(MatchNodes::vector_space);
+    Ok(candidates
+        .iter()
+        .map(|c| {
+            let node = match alias {
+                Some(alias) => c
+                    .binding
+                    .nodes
+                    .iter()
+                    .find(|n| n.alias.as_deref() == Some(alias))
+                    .map(|n| n.id),
+                None => target(c),
+            };
+            node.zip(order.nodes)
+                .and_then(|(id, nodes)| nodes.vector(id))
+                .zip(space)
+                .filter(|(vector, _)| vector.len() == query.len() && !vector.is_empty())
+                .map_or(f32::NEG_INFINITY, |(vector, (_, metric))| {
+                    let raw = metric.calculate(vector, &query);
+                    if metric.higher_is_better() {
+                        raw
+                    } else {
+                        -raw
+                    }
+                })
+        })
+        .collect())
+}
+
+/// Core's `sort_match_by_arithmetic` key: the expression over the target's
+/// own payload and id, the row's score as `score`.
+fn arithmetic_key(
+    candidate: &MatchCandidate,
+    expr: &ArithmeticExpr,
+    nodes: Option<&MatchNodes<'_>>,
+) -> f32 {
+    let Some(id) = target(candidate) else {
+        return 0.0;
+    };
+    let payload = nodes
+        .and_then(|n| n.get(id))
+        .and_then(|n| n.payload.as_ref());
+    let ctx = ScoreContext::new(candidate.score.unwrap_or(0.0), payload).for_point(id);
+    evaluate_arithmetic(expr, &ctx)
+}
+
+/// Stable sort of the candidates by one precomputed key each.
+fn sort_by_keys(candidates: &mut [MatchCandidate], keys: &[f32], descending: bool) {
+    let mut order: Vec<usize> = (0..candidates.len()).collect();
+    order.sort_by(|&i, &j| {
+        let ascending = keys[i].total_cmp(&keys[j]);
+        if descending {
+            ascending.reverse()
+        } else {
+            ascending
+        }
+    });
+    apply_order(candidates, &order);
+}
+
+/// Rearranges `items` so position `k` holds the item `order[k]` named.
+fn apply_order<T>(items: &mut [T], order: &[usize]) {
+    let mut position: Vec<usize> = vec![0; order.len()];
+    for (k, &from) in order.iter().enumerate() {
+        position[from] = k;
+    }
+    for start in 0..items.len() {
+        while position[start] != start {
+            let target = position[start];
+            items.swap(start, target);
+            position.swap(start, target);
+        }
+    }
 }
 
 /// Sorts by an `alias.property` JSON path (dot-nested), nulls last in ASC.
@@ -138,7 +250,10 @@ fn sort_by_property(
     descending: bool,
 ) -> Result<(), String> {
     if !path.contains('.') {
-        return reject_unsupported(&format!("expression '{path}'"));
+        return Err(format!(
+            "MATCH ORDER BY expression '{path}' is not supported \
+             (use similarity(), depth, or alias.property)"
+        ));
     }
     sort_stable(candidates, descending, |a, b| {
         let va = crate::filter::get_nested_field(&a.value, path);

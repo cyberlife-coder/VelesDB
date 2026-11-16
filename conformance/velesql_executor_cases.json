@@ -617,6 +617,14 @@
       "binding": "a",
       "expect_ids": [2],
       "note": "a bare WHERE column reads the walk's target, the last node"
+    },
+    {
+      "id": "M006",
+      "query": "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a ORDER BY id * -1",
+      "params": {"_collection": "people"},
+      "binding": "a",
+      "expect_ids": [3, 2, 1],
+      "note": "an arithmetic MATCH ORDER BY reads the row's target (b = 4, 3, 2 here), through core's ScoreContext in both engines (WASM refused arithmetic)"
     }
   ],
   "query_params": {

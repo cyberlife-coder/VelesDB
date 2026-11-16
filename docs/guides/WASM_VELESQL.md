@@ -200,7 +200,7 @@ reference from `@wiscale/velesdb-wasm@4.0.0`.
 | `CONTAINS` / `CONTAINS_TEXT` | `CONTAINS / CONTAINS_TEXT conditions are not supported in WASM` |
 | Geospatial conditions | `Geospatial conditions are not supported in WASM` |
 | Inline vectors in `INSERT` | `… inline vectors are not supported in WASM INSERT` |
-| `ORDER BY similarity(field, $v)`, arithmetic or an aggregate in a `MATCH` | `MATCH ORDER BY <form> is not supported in WASM (use depth, alias.property or similarity())` |
+| An aggregate `ORDER BY` in a `MATCH` | `MATCH ORDER BY aggregate expression is not supported …` (as in core) |
 
 One case deserves more than a one-liner:
 
@@ -236,8 +236,9 @@ Both rules, and the ranking of every accepted shape, are pinned against core by
 scores each row as core does: `vector` against the row's own vector, any other
 field against the payload's named vector, a row without one of the query's
 dimension taking the worst key (last under `DESC`). It is refused only over
-grouped rows. The `MATCH` path rejects arithmetic `ORDER BY`; order by
-`depth`, `alias.property` or `similarity()` there.
+grouped rows. A `MATCH` orders as core's does: `depth`, `alias.property`,
+`similarity()`, `similarity(alias.vector, $v)` (the node `alias` binds, the
+target for a bare field) and arithmetic over the target.
 
 ## Error surface: mixed, coerce before reading
 
