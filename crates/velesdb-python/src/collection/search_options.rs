@@ -121,7 +121,6 @@ impl SearchOptions {
     ///     ef_search: Optional HNSW ef override in [16, 4096] for dense search.
     ///     quality: Optional search-quality profile name for dense search.
     #[new]
-    #[allow(clippy::too_many_arguments)] // additive governance kwargs on an existing builder
     #[pyo3(signature = (
         vector = None,
         *,
@@ -136,7 +135,7 @@ impl SearchOptions {
         ef_search = None,
         quality = None,
     ))]
-    #[allow(clippy::too_many_arguments)] // additive tuning kwargs on the builder
+    #[allow(clippy::too_many_arguments)] // Reason: PyO3 maps each keyword argument of the Python constructor to one Rust parameter; grouping them would change the Python signature.
     pub fn new(
         vector: Option<Py<PyAny>>,
         sparse_vector: Option<Py<PyAny>>,

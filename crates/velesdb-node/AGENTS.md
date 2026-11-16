@@ -10,6 +10,14 @@ N-API binding for Node. Root [`AGENTS.md`](../../AGENTS.md) is the contract.
   CI fails on an unnamed addition.
 - **Build profile:** `release-node` (and `release-mobile` for device builds)
   — both `panic = "unwind"`, required by the N-API link.
+- **The crate's Rust unit tests run in CI** (`node-binding-tests`:
+  `cargo test -p velesdb-node --lib -- --test-threads=1`), and the strict
+  workspace clippy sweeps lint it with `--all-targets` like any other crate.
+  Both rely on napi's `dyn-symbols` feature (`Cargo.toml`): it resolves the
+  Node-API entry points at runtime, so a test executable links on Linux
+  without Node. Keep it when trimming napi's features, and never replace it
+  with linker flags in `build.rs` — `--unresolved-symbols`, lazy binding and
+  partial RELRO were all tried and fail at load time.
 - 0.x crate: MINOR is the breaking component (see `velesdb-memory/AGENTS.md`).
 - **Documentation & examples are part of the crate change — update them in
   the same commit/PR, never in a follow-up.** Any change to this crate's

@@ -145,32 +145,24 @@ pub async fn upsert_points(
     // Must use spawn_blocking to avoid blocking the async runtime.
     let result = tokio::task::spawn_blocking(move || collection.upsert_bulk(&points)).await;
 
-    upsert_result_to_response(&state, &name, result)
+    upsert_result_to_response(result)
 }
 
 /// Convert a `spawn_blocking` bulk-upsert result into an HTTP response.
 ///
-/// On success it notifies the observer and returns `{message, count}`; a core
-/// error maps via [`auto_core_error_response`] and a task panic yields a 500.
+/// On success it returns `{message, count}` (core has already reported the
+/// write to the observer); a core error maps via [`auto_core_error_response`]
+/// and a task panic yields a 500.
 /// Shared by [`upsert_points`] and [`raw::upsert_points_raw`].
 pub(super) fn upsert_result_to_response(
-    state: &AppState,
-    name: &str,
     result: Result<velesdb_core::Result<usize>, tokio::task::JoinError>,
 ) -> axum::response::Response {
     match result {
-        Ok(Ok(inserted)) => {
-            // Programmatic `Collection` upsert path; core does not fire `on_upsert`
-            // here (only via the VelesQL DML path), so this shim is the sole,
-            // non-double-counting telemetry source. See deprecation note.
-            #[allow(deprecated)]
-            state.db.notify_upsert(name, inserted);
-            Json(serde_json::json!({
-                "message": "Points upserted",
-                "count": inserted
-            }))
-            .into_response()
-        }
+        Ok(Ok(inserted)) => Json(serde_json::json!({
+            "message": "Points upserted",
+            "count": inserted
+        }))
+        .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
         Err(e) => auto_core_error_response(&worker_failure("blocking", &e)),
     }

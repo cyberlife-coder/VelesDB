@@ -532,8 +532,6 @@ impl Database {
     /// Example:
     ///     >>> db.train_pq("documents", m=8, k=256)
     ///     >>> db.train_pq("documents", m=16, k=128, opq=True)
-    #[allow(clippy::too_many_arguments)] // py token + training knobs
-    #[allow(clippy::too_many_arguments)] // py token + training knobs
     #[pyo3(signature = (collection_name, m=8, k=256, opq=false))]
     fn train_pq(
         &self,
@@ -552,7 +550,15 @@ impl Database {
         // text at all, so there is no charset rule to keep in step.
         // `velesdb-mobile` and `tauri-plugin-velesdb` build it the same way.
         let quantizer = if opq { "opq" } else { "pq" };
-        let results = self.run_train(py, collection_name, quantizer, m, k, false, None)?;
+        let request = ops::TrainRequest {
+            collection: collection_name,
+            quantizer,
+            m,
+            k,
+            force: false,
+            sample_limit: None,
+        };
+        let results = self.run_train(py, &request)?;
         Ok(format!("PQ training complete: {results} results"))
     }
 

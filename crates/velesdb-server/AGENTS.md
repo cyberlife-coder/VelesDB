@@ -16,5 +16,9 @@ contract; this file holds what only applies here.
 - **Conformance is a gate.** The `velesql-conformance` CI job runs the
   VelesQL cargo suites plus an npm contract fixture; handler changes keep it
   green.
+- **Handlers fire no write telemetry.** Core reports every write to a
+  registered collection to the `DatabaseObserver` itself (`on_upsert`); a
+  handler that also calls the deprecated `notify_upsert` double-counts. A
+  missing event is a core defect, fixed in core.
 - **Tests:** unit tests beside their module as `*_tests.rs`, integration
   suites in `tests/` — run single-threaded (`--test-threads=1`).

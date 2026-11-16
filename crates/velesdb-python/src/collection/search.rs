@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
 use velesdb_core::{GatedRead, QueryOperationKind, SearchResult};
 
-use super::{and_scope, deny_if_scoped, retain_by_filters};
+use super::{and_scope, deny_if_scoped, retain_by_filters, ReadIdentity, SearchPlan};
 
 use crate::collection_helpers::{
     core_err, id_score_pairs_to_dicts, parse_filter, parse_optional_filter, parse_sparse_vector,
@@ -89,20 +89,21 @@ impl Collection {
             .transpose()?;
 
         // Phase 2: Release GIL during Rust computation
-        let results = py.detach(|| {
-            self.dispatch_search(
-                dense,
-                sparse,
-                top_k,
-                filter_obj.as_ref(),
-                sparse_index_name.as_deref(),
-                fusion.as_ref(),
-                principal.as_deref(),
-                tenant.as_deref(),
-                ef_search,
-                quality.as_ref(),
-            )
-        })?;
+        let plan = SearchPlan {
+            dense,
+            sparse,
+            top_k,
+            filter: filter_obj.as_ref(),
+            sparse_index_name: sparse_index_name.as_deref(),
+            fusion: fusion.as_ref(),
+            ef_search,
+            quality: quality.as_ref(),
+        };
+        let identity = ReadIdentity {
+            principal: principal.as_deref(),
+            tenant: tenant.as_deref(),
+        };
+        let results = py.detach(|| self.dispatch_search(plan, identity))?;
 
         // Phase 3: Convert results (GIL held — required for Py<PyAny> creation)
         Ok(search_results_to_dicts(py, results, include_vectors))

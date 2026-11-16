@@ -57,6 +57,7 @@ impl Collection {
         self.apply_histogram_replace_dedup(&points, &old_payloads);
 
         self.bump_generation_with_mirror_upserts(&points);
+        self.report_upsert(points.len());
         Ok(())
     }
 
@@ -508,6 +509,7 @@ impl Collection {
         self.apply_histogram_replace_dedup(&points, &old_payloads_for_hist);
 
         self.bump_generation_with_mirror_upserts(&points);
+        self.report_upsert(points.len());
         Ok(())
     }
 

@@ -152,7 +152,7 @@ impl Database {
                 // `Collection` clones share every `Arc`, so the limits pushed
                 // into this handle are the ones the registered value carries.
                 let inner = typed.inner().clone();
-                self.admit_collection(&inner, || {
+                self.admit_collection(name, &inner, || {
                     typed.insert_into(
                         &self.vector_colls,
                         &self.graph_colls,

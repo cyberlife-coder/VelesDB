@@ -35,9 +35,15 @@ velesdb-memory = { path = "../velesdb-memory", default-features = false, feature
     "extractor-http",
     "context",
 ] }
+# `dyn-symbols` (napi's default, kept when the others are dropped) resolves
+# the Node-API entry points at runtime from the host process instead of at
+# link time. Without it the crate's own test binary referenced `napi_*`
+# symbols that exist only inside Node, so `cargo test -p velesdb-node`
+# linked on macOS alone and its Rust unit tests ran in no CI job.
 napi = { version = "3", default-features = false, features = [
     "napi9",
     "serde-json",
+    "dyn-symbols",
 ] }
 napi-derive = "3"
 serde_json = { workspace = true }
