@@ -31,22 +31,33 @@ impl Database {
         Ok(Vec::new())
     }
 
-    /// Executes a DELETE FROM statement.
-    ///
-    /// Extracts point IDs from the WHERE clause and deletes them
-    /// from the resolved collection.
+    /// Executes a DELETE FROM statement: removes the points its WHERE
+    /// selects.
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not found, or the WHERE
-    /// clause does not match a supported ID pattern.
+    /// Returns an error if the collection is not found or not writable, a
+    /// named id is not a point id, or the WHERE holds a vector or graph
+    /// predicate (DML filters on metadata).
     pub(super) fn execute_delete(
         &self,
         stmt: &crate::velesql::DeleteStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         self.check_dml_mutation("DELETE", &stmt.table)?;
-        let ids = extract_delete_ids(&stmt.where_clause)?;
         let collection = self.resolve_writable_collection(&stmt.table)?;
+        // `id = N` / `id IN (...)` name the points to remove, whatever they
+        // carry (a graph node without a vector included). Any other WHERE
+        // removes the rows it selects, as UPDATE selects them.
+        let ids = if let Some(named) = point_ids_named(&stmt.where_clause) {
+            named?
+        } else {
+            let filter = Self::build_dml_filter("DELETE", Some(&stmt.where_clause), params)?;
+            Self::matching_points(&collection, filter.as_ref())
+                .iter()
+                .map(|point| point.id)
+                .collect()
+        };
         collection.delete(&ids)?;
         Ok(Vec::new())
     }
@@ -208,34 +219,28 @@ fn resolve_edge_properties(
         .collect()
 }
 
-/// Extracts point IDs from a DELETE WHERE clause.
-///
-/// Supports two patterns:
-/// - `id = N` (single ID)
-/// - `id IN (N1, N2, ...)` (multi-ID)
+/// The point ids a DELETE WHERE names outright — `id = N` or
+/// `id IN (N1, N2, ...)` — or `None` for any other WHERE.
 ///
 /// # Errors
 ///
-/// Returns an error if the WHERE clause does not match a supported pattern.
-fn extract_delete_ids(condition: &crate::velesql::Condition) -> Result<Vec<u64>> {
+/// A named id that is not a point id.
+fn point_ids_named(condition: &crate::velesql::Condition) -> Option<Result<Vec<u64>>> {
     match condition {
-        crate::velesql::Condition::Comparison(cmp) if cmp.column == "id" => extract_single_id(cmp),
-        crate::velesql::Condition::In(in_cond) if in_cond.column == "id" && !in_cond.negated => {
-            extract_in_ids(in_cond)
+        crate::velesql::Condition::Comparison(cmp)
+            if cmp.column == "id" && cmp.operator == crate::velesql::CompareOp::Eq =>
+        {
+            Some(extract_single_id(cmp))
         }
-        _ => Err(Error::Query(
-            "DELETE WHERE must use 'id = N' or 'id IN (N1, N2, ...)'".to_string(),
-        )),
+        crate::velesql::Condition::In(in_cond) if in_cond.column == "id" && !in_cond.negated => {
+            Some(extract_in_ids(in_cond))
+        }
+        _ => None,
     }
 }
 
 /// Extracts a single ID from a comparison `id = N`.
 fn extract_single_id(cmp: &crate::velesql::Comparison) -> Result<Vec<u64>> {
-    if cmp.operator != crate::velesql::CompareOp::Eq {
-        return Err(Error::Query(
-            "DELETE WHERE id must use '=' operator".to_string(),
-        ));
-    }
     let id = value_to_u64(&cmp.value)?;
     Ok(vec![id])
 }
