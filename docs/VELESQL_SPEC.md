@@ -28,8 +28,8 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | ORDER BY | Stable | 2.0 |
 | GROUP BY, HAVING | Stable | 2.0 |
 | JOIN (INNER ... ON) | Stable | 2.0 |
-| JOIN (LEFT, RIGHT, FULL OUTER) | Stable (column-store, primary-key join only — see `crates/velesdb-core/src/collection/search/query/join.rs:155-171`) | 2.0 |
-| JOIN USING | Stable (single-column only; multi-column `USING (a, b, …)` parses but is rejected at execution by `validate_join_condition`) | 2.0 |
+| JOIN (LEFT, RIGHT, FULL OUTER) | Stable (any column, indexed or not — `velesql::hash_join`) | 2.0 |
+| JOIN USING | Stable (single-column only; multi-column `USING (a, b, …)` parses but is rejected at execution) | 2.0 |
 | Set Operations (UNION, INTERSECT, EXCEPT) | Stable | 2.0 |
 | USING FUSION | Stable | 2.0 |
 | NOW() / INTERVAL temporal | Stable | 2.1 |
@@ -318,20 +318,22 @@ FROM <table1> [[AS] <alias1>]
 | Type | Keyword | Description | Runtime |
 |------|---------|-------------|---------|
 | Inner | `JOIN` or `INNER JOIN` | Only matching rows from both sides | Fully executed |
-| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left rows; unmatched right side gets `NULL`s for joined columns | Fully executed (column-store; primary key or a secondary-indexed field — see the constraint below) |
-| Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right rows; unmatched left side gets `NULL`s | Fully executed (`join.rs:155-162`) |
-| Full | `FULL JOIN` or `FULL OUTER JOIN` | All rows from both sides with `NULL`s on the unmatched side | Fully executed (`join.rs:155-171`) |
+| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left rows; unmatched right side gets `NULL`s for joined columns | Fully executed |
+| Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right rows; unmatched left side gets `NULL`s | Fully executed |
+| Full | `FULL JOIN` or `FULL OUTER JOIN` | All rows from both sides with `NULL`s on the unmatched side | Fully executed |
 
-> **Constraint:** the join column must be either the right-side
-> collection's column-store **primary key**, or — for **INNER** and
-> **LEFT** joins only — a payload field covered by a **secondary index**
-> (`create_index`; string, number or boolean keys). An indexed non-PK key
-> may match several right-side points: one merged row is emitted per
-> match. RIGHT and FULL joins, and any non-PK column without a secondary
-> index, are rejected at runtime with
-> `"JOIN on table 'T' requires primary key 'PK', got 'other_col'"`
-> (see `validate_join_condition` in `join.rs` and
-> `Database::try_indexed_join` in `database/query_join.rs`).
+> **Join column:** any column of either side, indexed or not, of any JSON
+> type; `id` reads the point id. Two values match when a WHERE `=` finds
+> them equal (`1` and `1.0` are one number, `"1"` is not); `NULL` or an
+> absent value matches nothing. Every engine runs one algorithm,
+> `velesql::hash_join`, core and WASM alike. An INNER or LEFT join on `id`
+> or on a column with a secondary index takes a shortcut (see *JOIN
+> Optimizations*) that returns the same rows.
+>
+> A JOIN's `ON` is oriented by which side names the joined collection: its
+> alias first, then its table name, so a self-join written
+> `FROM t JOIN t AS m ON t.boss = m.id` reads `m` as the joined side. When
+> neither side names it, `ON base = joined` is read in the order written.
 
 ### Joined rows
 
@@ -346,7 +348,11 @@ payload carries each side twice:
 - **flat**, every field at the root, a later side overwriting an earlier one
   of the same name, so a bare `amount` still reads.
 
-A LEFT JOIN row without a match carries the alias with a `null` id.
+A LEFT or FULL row without a match carries every column of the joined
+collection as `null`, flat and under the alias, the alias's `id` included. A
+RIGHT or FULL row for a joined point no base row matched is that point's own
+row: its id, score `0`, its fields flat and under its alias, and every
+earlier side's alias with a `null` id, so `WHERE o.id IS NULL` finds it.
 
 As in SQL, WHERE filters the joined rows, then DISTINCT, ORDER BY, OFFSET and
 LIMIT (10 by default) apply to them, and an aggregate groups them. Only a
@@ -380,8 +386,7 @@ JOIN customers AS c USING (customer_id)
 
 > **Limitation:** `USING` currently supports a single column only.
 > Multi-column `USING (a, b, …)` parses successfully but is rejected at
-> execution by `validate_join_condition`
-> (`collection/search/query/join.rs:177`) with the error
+> execution with the error
 > `"JOIN on table 'T' must use ON condition or USING(single_column)"`.
 
 ### Self-Join
@@ -419,7 +424,7 @@ LIMIT 20
 
 The query engine automatically applies two optimizations to cross-collection JOINs:
 
-**Filter Pushdown**: WHERE conditions that reference only one INNER-joined table (using qualified column names like `inventory.price > 100`) are also pushed down and evaluated before loading points into the ColumnStore. This reduces memory usage and I/O for large joined collections; the condition is still evaluated on the joined row.
+**Filter Pushdown**: WHERE conditions that reference only one INNER-joined table (using qualified column names like `inventory.price > 100`) are also pushed down and evaluated before the joined collection's points are read into the join. This reduces memory usage and I/O for large joined collections; the condition is still evaluated on the joined row.
 
 ```sql
 -- inventory.stock > 0 is pushed down to filter inventory before JOIN
@@ -428,9 +433,9 @@ JOIN inventory ON products.id = inventory.id
 WHERE inventory.stock > 0
 ```
 
-**Lookup Join**: When the JOIN condition references the primary key (`id`) on both sides and no pushdown filters apply, the engine uses direct `collection.get()` lookups instead of building a full ColumnStore, achieving O(K) instead of O(N) retrieval.
+**Lookup Join**: When an INNER or LEFT JOIN condition references the primary key (`id`) on both sides, the base side's `id` being the FROM row's own, and no pushdown filters apply, the engine uses direct `collection.get()` lookups instead of reading the whole joined collection, achieving O(K) instead of O(N) retrieval.
 
-**Indexed Join**: When the join-side column carries a secondary index (and the join is INNER or LEFT, with no pushdown filters), the engine resolves matches through the index — `secondary_index_lookup` per left row — instead of materializing the ColumnStore, and emits one merged row per indexed match.
+**Indexed Join**: When the join-side column carries a secondary index (and the join is INNER or LEFT, with no pushdown filters), the engine resolves matches through the index — `secondary_index_lookup` per distinct key — instead of reading the whole joined collection, and emits one merged row per indexed match. Every other join reads the joined collection's points (cached while the collection is unchanged) into `velesql::hash_join`.
 
 ```sql
 -- Uses optimized lookup path (both sides reference id)

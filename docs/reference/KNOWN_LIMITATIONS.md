@@ -531,6 +531,11 @@ silently relied upon:
 - ~~D012~~ — **fixed 2026-10-29**: WASM `SELECT DISTINCT` goes through core's
   `velesql::distinct_evaluator::apply_distinct` in the plain SELECT pipeline,
   so `ORDER BY` and the default `LIMIT` apply (`projection_cases` P001–P004).
+- ~~D014~~ — **fixed 2026-11-16**: both engines run one JOIN algorithm,
+  `velesql::hash_join`, on any column, indexed or not, for INNER, LEFT, RIGHT
+  and FULL joins. Core refused a non-primary-key column no index covered,
+  and RIGHT/FULL on anything but the primary key; WASM refused RIGHT and
+  FULL. Locked by `join_cases` J011–J015.
 
 ### Large production files vs the NLOC/complexity gate (audit F-5.13)
 

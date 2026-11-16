@@ -99,6 +99,7 @@ impl Database {
                 r
             })
             .collect();
+        let mut prior_aliases = vec![from_alias];
         for join in plan.joins {
             // Each join side is filtered by the pushed predicates on ITS
             // columns only: another side's predicate would empty its store.
@@ -112,7 +113,12 @@ impl Database {
                 .filter(|c| crate::collection::search::query::pushdown::reads_only(c, &sides))
                 .cloned()
                 .collect();
-            results = self.execute_single_join(results, join, &pushed, plan.row_budget)?;
+            results =
+                self.execute_single_join(results, join, &pushed, plan.row_budget, &prior_aliases)?;
+            prior_aliases.push(crate::velesql::side_alias(
+                join.alias.as_deref(),
+                &join.table,
+            ));
         }
         // Every predicate that reads a join side, on the joined rows.
         let joined_row_filters = plan.analysis.joined_row_filters();

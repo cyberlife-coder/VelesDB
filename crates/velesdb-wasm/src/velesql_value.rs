@@ -96,21 +96,6 @@ pub(crate) fn json_to_f32_vec(value: &serde_json::Value, name: &str) -> Result<V
     Ok(out)
 }
 
-/// Compares two JSON values as "equal" according to VelesQL semantics.
-///
-/// Numbers compare by exact value — core's order
-/// (`velesql::compare_json_values`): `1.0` is `1`, `-0.0` is `0`, an integer
-/// past 2^53 is not the float it rounds to, and no tolerance applies.
-/// Strings, booleans, and null are compared by structural equality.
-pub(crate) fn json_values_equal(left: &serde_json::Value, right: &serde_json::Value) -> bool {
-    match (left, right) {
-        (serde_json::Value::Number(_), serde_json::Value::Number(_)) => {
-            velesdb_core::velesql::compare_json_values(Some(left), Some(right)).is_eq()
-        }
-        _ => left == right,
-    }
-}
-
 #[cfg(test)]
 #[path = "velesql_value_tests.rs"]
 mod tests;

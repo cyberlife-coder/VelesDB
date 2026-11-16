@@ -1,5 +1,5 @@
 #[cfg(feature = "persistence")]
-use super::{ColumnStore, Database, Error, Result};
+use super::{Database, Error, Result};
 
 impl Database {
     pub(super) fn resolve_dml_value(
@@ -111,31 +111,23 @@ impl Database {
         }
     }
 
-    /// Builds a `ColumnStore` from a collection, filtering points by pushed-down conditions.
-    ///
-    /// When `filters` is empty, behaves identically to `build_join_column_store`.
-    /// Each condition's field names are stripped of table prefixes (e.g., `inventory.price` → `price`)
-    /// before evaluation against point payloads.
-    pub(super) fn build_filtered_join_column_store(
+    /// The joined collection's points the pushed-down `filters` keep. Each
+    /// condition's field names are stripped of table prefixes (e.g.,
+    /// `inventory.price` → `price`) before evaluation against point payloads.
+    pub(super) fn filtered_join_points(
         collection: &crate::collection::Collection,
         filters: &[crate::velesql::Condition],
-    ) -> Result<ColumnStore> {
-        if filters.is_empty() {
-            return Self::build_join_column_store(collection);
-        }
-
+    ) -> Vec<crate::Point> {
         let combined = Self::combine_filter_conditions(filters);
         let stripped = Self::strip_table_prefix_from_condition(combined);
         let filter = crate::Filter::new(crate::Condition::from(stripped));
-
         let ids = Self::join_candidate_ids(collection, &filter);
-        let points: Vec<_> = collection.get(&ids).into_iter().flatten().collect();
-        let matching: Vec<_> = points
-            .iter()
+        collection
+            .get(&ids)
+            .into_iter()
+            .flatten()
             .filter(|p| Self::point_matches_filter(p, &filter))
-            .collect();
-
-        Self::build_column_store_from_points(&matching)
+            .collect()
     }
 
     /// Enumerates the join-side candidate IDs to feed into the post-filter.
@@ -265,33 +257,6 @@ impl Database {
             .map_or_else(|| column.to_string(), |(_, col)| col.to_string())
     }
 
-    /// Builds a `ColumnStore` from a slice of point references.
-    pub(super) fn build_column_store_from_points(points: &[&crate::Point]) -> Result<ColumnStore> {
-        let owned: Vec<crate::Point> = points.iter().copied().cloned().collect();
-        let schema = Self::infer_column_schema(&owned);
-        let schema_refs: Vec<(&str, crate::column_store::ColumnType)> = schema
-            .iter()
-            .map(|(name, ty)| (name.as_str(), ty.clone()))
-            .collect();
-
-        let mut store = ColumnStore::with_primary_key(&schema_refs, "id")
-            .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
-
-        for point in &owned {
-            Self::insert_point_row(point, &schema_refs, &mut store)?;
-        }
-
-        Ok(store)
-    }
-
-    pub(super) fn build_join_column_store(
-        collection: &crate::collection::Collection,
-    ) -> Result<ColumnStore> {
-        let points = Self::fetch_join_points(collection);
-        let refs: Vec<&crate::Point> = points.iter().collect();
-        Self::build_column_store_from_points(&refs)
-    }
-
     /// Fetches every live point of `collection` for JOIN-side materialization.
     ///
     /// Goes through `Collection::get`, so lazily-expired TTL points are
@@ -301,115 +266,5 @@ impl Database {
     ) -> Vec<crate::Point> {
         let ids = collection.all_point_ids();
         collection.get(&ids).into_iter().flatten().collect()
-    }
-
-    /// Infers a consistent column schema from point payloads.
-    ///
-    /// Removes columns whose types are inconsistent across points.
-    fn infer_column_schema(
-        points: &[crate::Point],
-    ) -> Vec<(String, crate::column_store::ColumnType)> {
-        use crate::column_store::ColumnType;
-
-        let mut inferred: std::collections::BTreeMap<String, ColumnType> =
-            std::collections::BTreeMap::new();
-        inferred.insert("id".to_string(), ColumnType::Int);
-
-        for point in points {
-            let Some(obj) = point.payload.as_ref().and_then(|p| p.as_object()) else {
-                continue;
-            };
-            for (key, value) in obj {
-                if key == "id" {
-                    continue;
-                }
-                let Some(col_type) = Self::json_to_column_type(value) else {
-                    continue;
-                };
-                if let Some(existing) = inferred.get(key) {
-                    if *existing != col_type {
-                        inferred.remove(key);
-                    }
-                } else {
-                    inferred.insert(key.clone(), col_type);
-                }
-            }
-        }
-
-        inferred.into_iter().collect()
-    }
-
-    /// Inserts a single point as a row into the column store.
-    fn insert_point_row(
-        point: &crate::Point,
-        schema_refs: &[(&str, crate::column_store::ColumnType)],
-        store: &mut ColumnStore,
-    ) -> Result<()> {
-        use crate::column_store::ColumnValue;
-
-        let Ok(pk) = i64::try_from(point.id) else {
-            return Ok(());
-        };
-
-        let mut values: Vec<(String, ColumnValue)> = Vec::with_capacity(schema_refs.len());
-        values.push(("id".to_string(), ColumnValue::Int(pk)));
-
-        if let Some(obj) = point
-            .payload
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-        {
-            for (key, value) in obj {
-                if key == "id" || !schema_refs.iter().any(|(name, _)| *name == key.as_str()) {
-                    continue;
-                }
-                if let Some(column_value) = Self::json_to_column_value(value, store) {
-                    values.push((key.clone(), column_value));
-                }
-            }
-        }
-
-        let row: Vec<(&str, ColumnValue)> = values
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.clone()))
-            .collect();
-        store
-            .insert_row(&row)
-            .map_err(|e| Error::ColumnStoreError(e.to_string()))?;
-        Ok(())
-    }
-
-    fn json_to_column_type(value: &serde_json::Value) -> Option<crate::column_store::ColumnType> {
-        use crate::column_store::ColumnType;
-        match value {
-            serde_json::Value::Number(n) if n.is_i64() => Some(ColumnType::Int),
-            serde_json::Value::Number(_) => Some(ColumnType::Float),
-            serde_json::Value::String(_) => Some(ColumnType::String),
-            serde_json::Value::Bool(_) => Some(ColumnType::Bool),
-            _ => None,
-        }
-    }
-
-    fn json_to_column_value(
-        value: &serde_json::Value,
-        store: &mut ColumnStore,
-    ) -> Option<crate::column_store::ColumnValue> {
-        use crate::column_store::ColumnValue;
-        match value {
-            serde_json::Value::Number(n) => {
-                if let Some(v) = n.as_i64() {
-                    Some(ColumnValue::Int(v))
-                } else {
-                    n.as_f64().map(ColumnValue::Float)
-                }
-            }
-            serde_json::Value::String(s) => {
-                let sid = store.string_table_mut().intern(s);
-                Some(ColumnValue::String(sid))
-            }
-            serde_json::Value::Bool(b) => Some(ColumnValue::Bool(*b)),
-            serde_json::Value::Null => Some(ColumnValue::Null),
-            _ => None,
-        }
     }
 }

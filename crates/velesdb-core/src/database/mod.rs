@@ -17,7 +17,7 @@
 use crate::collection::{GraphCollection, MetadataCollection, VectorCollection};
 use crate::observer::DatabaseObserver;
 use crate::simd_dispatch;
-use crate::{ColumnStore, Error, Result};
+use crate::{Error, Result};
 
 /// Shared out-cell for the executed filter strategy, threaded from the
 /// EXPLAIN ANALYZE counted path down to the base collection's query pipeline.
@@ -132,7 +132,7 @@ pub struct Database {
     /// Stores recently compiled `QueryPlan` instances keyed by `PlanKey`.
     /// Default sizing: L1 = 1K hot entries, L2 = 10K LRU entries.
     compiled_plan_cache: crate::cache::CompiledPlanCache,
-    /// JOIN-side `ColumnStore` cache keyed by collection name (CACHE-03).
+    /// JOIN-side points cache keyed by collection name (CACHE-03).
     ///
     /// An entry is valid only while its `(schema_version, write_generation)`
     /// stamp matches the live counters, so any mutation — or a drop/recreate

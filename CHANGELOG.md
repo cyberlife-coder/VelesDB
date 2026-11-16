@@ -282,6 +282,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A JOIN matches on any column, for every join type, in every engine**
+  (core, WASM, 2026-11-16). Core joined only on the joined collection's
+  primary key, or on a column a secondary index covers for INNER and LEFT
+  joins; any other column was refused, and RIGHT and FULL joins took the
+  primary key alone. Its id-lookup shortcut also answered a
+  `RIGHT JOIN ... ON a.id = b.id` as an INNER join, dropping the unmatched
+  joined rows. The browser joined any column by its own nested loop but
+  refused RIGHT and FULL. Both engines now run one algorithm,
+  `velesql::hash_join`: one equality over any column, matched as a WHERE `=`
+  matches; a row without a match carries the joined collection's columns
+  as `null`; a RIGHT or FULL row for an unmatched joined point is that
+  point's own row, every earlier side's alias with a `null` id. Core keeps
+  its id-lookup and index shortcuts for INNER and LEFT joins, and reads the
+  joined collection's points, cached while it is unchanged, for every other
+  join; the column-store copy it built per joined collection, which also
+  dropped any field whose type varied across points, is gone. Locked by
+  `join_cases` J011–J015 (D014).
+
 - **One reading of a dotted field path** (core, WASM, 2026-11-16). Ten
   copies of the `meta.lang` walk (WHERE, MATCH WHERE and RETURN, GROUP BY
   and DISTINCT, projection, window functions, set operations, scalar

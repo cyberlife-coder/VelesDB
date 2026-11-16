@@ -1,6 +1,6 @@
-//! Tests for the JOIN-side `ColumnStore` cache (CACHE-03).
+//! Tests for the JOIN-side points cache (CACHE-03).
 //!
-//! The cache contract: a cached store is reused only while the collection's
+//! The cache contract: cached points are reused only while the collection's
 //! `(schema_version, write_generation)` stamp is unchanged; any mutation, a
 //! drop/recreate under the same name, or the presence of TTL points must
 //! force a rebuild (TTL points are never cached at all, because lazy expiry
@@ -29,9 +29,13 @@ fn upsert_order(db: &Database, id: u64, sku: &str) {
     .unwrap();
 }
 
-fn cached_store(db: &Database) -> std::sync::Arc<crate::column_store::ColumnStore> {
+fn cached_store(db: &Database) -> std::sync::Arc<Vec<Point>> {
     let coll = db.resolve_collection("orders").unwrap();
-    db.cached_join_column_store("orders", &coll).unwrap()
+    db.cached_join_points("orders", &coll)
+}
+
+fn ids(points: &[Point]) -> Vec<u64> {
+    points.iter().map(|p| p.id).collect()
 }
 
 #[test]
@@ -59,7 +63,7 @@ fn upsert_invalidates_the_cached_store() {
         !std::sync::Arc::ptr_eq(&first, &second),
         "an upsert bumps write_generation and must force a rebuild"
     );
-    assert!(second.primary_index.contains_key(&2));
+    assert_eq!(ids(&second), [1, 2]);
 }
 
 #[test]
@@ -82,8 +86,7 @@ fn delete_and_recreate_never_serves_the_old_store() {
         !std::sync::Arc::ptr_eq(&first, &second),
         "a recreated collection must never reuse the deleted collection's store"
     );
-    assert!(second.primary_index.contains_key(&9));
-    assert!(!second.primary_index.contains_key(&1));
+    assert_eq!(ids(&second), [9]);
 }
 
 #[test]
@@ -218,21 +221,27 @@ fn indexed_left_join_keeps_unmatched_left_rows() {
     }));
 }
 
-/// The reject contract is untouched: a non-PK join column WITHOUT a
-/// secondary index still fails with the actionable primary-key error.
+/// A non-PK join column WITHOUT a secondary index runs the generic hash
+/// join (D014): `products.sku` carries no index, and each inventory row
+/// pairs with the product of its sku.
 #[test]
-fn unindexed_non_pk_join_column_still_rejected() {
+fn unindexed_non_pk_join_column_runs_the_hash_join() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
     seed_indexed_join_fixtures(&db);
 
-    let err = run_sql(
+    let rows = run_sql(
         &db,
-        "SELECT * FROM products JOIN inventory ON inventory.wh = products.sku LIMIT 10",
+        "SELECT * FROM inventory JOIN products ON inventory.sku = products.sku \
+         ORDER BY inventory.id ASC LIMIT 10",
     )
-    .unwrap_err();
-    assert!(
-        err.to_string().contains("requires primary key"),
-        "got: {err}"
-    );
+    .unwrap();
+    let pairs: Vec<(u64, Option<u64>)> = rows
+        .iter()
+        .map(|r| {
+            let payload = r.point.payload.as_ref().unwrap();
+            (r.point.id, payload["products"]["id"].as_u64())
+        })
+        .collect();
+    assert_eq!(pairs, [(10, Some(1)), (11, Some(1))]);
 }
