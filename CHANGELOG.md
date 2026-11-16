@@ -331,8 +331,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positive one on `aarch64`, so a NaN distance could rank first on one and
   last on the other. The browser called NaN equal to every score, so it
   landed anywhere. One public comparator, `distance::rank_scores` (best
-  first, NaN last), now serves all of them and replaces two private copies.
-  Fusion keeps its documented order.
+  first, NaN last, `-0.0` ties `0.0`), now serves all of them and replaces
+  two private copies. Fusion keeps its documented order.
 
 - **A `similarity()` threshold reads the same in every engine** (core, WASM,
   2026-11-15). The WASM executor compared `similarity() > t` as "score above

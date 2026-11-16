@@ -278,6 +278,18 @@ fn test_rank_scores_is_total_on_nan_pairs() {
     }
 }
 
+/// `-0.0` and `0.0` are one score: they tie in both directions, as they did
+/// under the `partial_cmp` comparators this one replaced.
+#[test]
+fn test_rank_scores_ties_signed_zeros() {
+    use crate::distance::rank_scores;
+    use std::cmp::Ordering;
+    for higher_is_better in [true, false] {
+        assert_eq!(rank_scores(-0.0, 0.0, higher_is_better), Ordering::Equal);
+        assert_eq!(rank_scores(0.0, -0.0, higher_is_better), Ordering::Equal);
+    }
+}
+
 #[test]
 fn test_sort_results_empty_input_does_not_panic() {
     let mut results: Vec<(u64, f32)> = vec![];

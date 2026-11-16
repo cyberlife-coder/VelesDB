@@ -318,16 +318,21 @@ impl DistanceMetric {
 /// would place it by its sign bit instead, and that sign is whatever the
 /// hardware produced: a runtime `0.0 / 0.0` is a negative NaN on `x86_64`, a
 /// positive one on `aarch64`, so the same query ranked a NaN first on one
-/// architecture and last on the other.
+/// architecture and last on the other. `-0.0` and `0.0` tie, as in
+/// [`crate::fusion::sort_fused_results`].
 ///
 /// Public so `velesdb-wasm` ranks with the same comparator as core instead of
 /// a copy. Fusion orders NaN differently on purpose, see
 /// [`crate::fusion::sort_fused_results`].
 #[must_use]
 pub fn rank_scores(a: f32, b: f32, higher_is_better: bool) -> std::cmp::Ordering {
+    let (first, second) = if higher_is_better { (b, a) } else { (a, b) };
     match (a.is_nan(), b.is_nan()) {
-        (false, false) if higher_is_better => b.total_cmp(&a),
-        (false, false) => a.total_cmp(&b),
+        // Neither is NaN, so `partial_cmp` is total here; it is used rather
+        // than `total_cmp` so that `-0.0` and `0.0`, one score, tie.
+        (false, false) => first
+            .partial_cmp(&second)
+            .unwrap_or(std::cmp::Ordering::Equal),
         // `false < true`: the NaN side compares greater, i.e. later.
         (a_nan, b_nan) => a_nan.cmp(&b_nan),
     }
