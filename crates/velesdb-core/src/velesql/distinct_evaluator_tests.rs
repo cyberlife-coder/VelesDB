@@ -184,3 +184,26 @@ mod tests {
         assert_eq!(distinct[0].point.id, 1);
     }
 }
+
+/// A dotted column keys by path, as the projection reads it: a JOIN's
+/// `c.name` or a nested `meta.lang` does not collapse every row into one.
+#[test]
+fn a_dotted_column_keys_by_path() {
+    use crate::point::{Point, SearchResult};
+    let row = |id, name: &str| {
+        SearchResult::new(
+            Point::metadata_only(id, serde_json::json!({"c": {"name": name}})),
+            1.0,
+        )
+    };
+    let columns = crate::velesql::SelectColumns::Columns(vec![crate::velesql::Column {
+        name: "c.name".to_string(),
+        alias: None,
+    }]);
+    let kept = crate::velesql::distinct_evaluator::apply_distinct(
+        vec![row(1, "Ann"), row(2, "Bo"), row(3, "Ann")],
+        &columns,
+    );
+    let ids: Vec<u64> = kept.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, vec![1, 2]);
+}

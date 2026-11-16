@@ -388,7 +388,7 @@ fn test_let_with_with_clause() {
 /// Evaluate a single literal binding.
 #[test]
 fn test_evaluate_let_bindings_single_literal() {
-    use crate::collection::search::query::ordering::evaluate_let_bindings;
+    use crate::velesql::evaluate_let_bindings;
     use crate::velesql::{ArithmeticExpr, LetBinding};
 
     let bindings = vec![LetBinding {
@@ -405,7 +405,7 @@ fn test_evaluate_let_bindings_single_literal() {
 /// Chained: second binding references first.
 #[test]
 fn test_evaluate_let_bindings_chained() {
-    use crate::collection::search::query::ordering::evaluate_let_bindings;
+    use crate::velesql::evaluate_let_bindings;
     use crate::velesql::{ArithmeticExpr, ArithmeticOp, LetBinding};
 
     let bindings = vec![
@@ -436,7 +436,7 @@ fn test_evaluate_let_bindings_chained() {
 /// LET binding referencing similarity() uses search_score.
 #[test]
 fn test_evaluate_let_bindings_similarity() {
-    use crate::collection::search::query::ordering::evaluate_let_bindings;
+    use crate::velesql::evaluate_let_bindings;
     use crate::velesql::{ArithmeticExpr, LetBinding, OrderByExpr};
 
     let bindings = vec![LetBinding {
@@ -501,7 +501,7 @@ fn test_match_without_let_still_works() {
 /// Empty bindings produce empty result.
 #[test]
 fn test_evaluate_let_bindings_empty() {
-    use crate::collection::search::query::ordering::evaluate_let_bindings;
+    use crate::velesql::evaluate_let_bindings;
 
     let result = evaluate_let_bindings(&[], 0.5, None, None, None);
     assert!(result.is_empty());

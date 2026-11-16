@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior): a JOIN windows, orders and aggregates its joined
+  rows** (core, WASM, 2026-11-15). Core merged the two payloads flat, so a
+  qualified column (`o.amount`, `c.name`) read nothing — projected `null`,
+  ignored by ORDER BY and DISTINCT — and a self-join could not tell its two
+  `name`s apart; it applied ORDER BY / LIMIT / OFFSET / DISTINCT to the base
+  collection *before* joining, so an INNER join under-returned and an ORDER BY
+  on the join side was dropped; an aggregate over a JOIN aggregated the base
+  collection alone; a WHERE predicate on the outer side of a LEFT JOIN was
+  pushed below the join, so `WHERE c.price > 10` kept every row null-filled
+  and `WHERE c.id IS NULL` could not find the unmatched ones; and every
+  pushed predicate filtered every join side. WASM projected, ordered and
+  windowed nothing (rows were the raw joined object, id 0, unlimited). Now,
+  in both engines (`velesql::scope_base` / `merge_side`):
+  - each side reads flat and under its alias, with its `id`;
+  - WHERE filters the joined rows, then DISTINCT, ORDER BY, OFFSET and LIMIT
+    (10 by default) apply to them, and GROUP BY / aggregates group them; the
+    base rows are filtered before the join only by the predicates on the base
+    collection, so `LEFT JOIN … WHERE c.name = 'x'` keeps the matching rows
+    and an OR across two join sides holds or fails on the joined row;
+  - a predicate on one INNER join side is also pushed below the join, to that
+    side only, as an optimization.
+  A LEFT JOIN with a WHERE on its outer side now follows SQL: the unmatched
+  rows fail the predicate. Put a filter meant for the join side alone on the
+  base query's own columns, or test `IS NULL`.
+
+- **BREAKING (behavior): `UNION` / `INTERSECT` / `EXCEPT` follow SQL**
+  (core, WASM, 2026-11-15). The three executors disagreed: core windowed the
+  compound by the *first* operand's `LIMIT` and ignored the one written last,
+  keyed rows by point id (two collections' point 3 were one row, and
+  `SELECT item_id … INTERSECT SELECT item_id …` compared ids, not item ids),
+  kept the higher score even under a distance, and re-sorted by score with an
+  unstable tie-break (D003); WASM capped each operand at 10 and windowed
+  nothing. One definition (`velesql::execute_compound`) now serves core's
+  `Collection` and `Database` paths and WASM:
+  - the `ORDER BY` / `LIMIT` / `OFFSET` after the last operand window the
+    combined rows (no implicit `LIMIT`, as documented); an earlier operand
+    keeps its own;
+  - columns are positional, named by the first operand: `SELECT year FROM a
+    UNION ALL SELECT age FROM b` returns `b`'s ages under `year`;
+  - rows are compared by projected values (`*` is the id and the payload),
+    window outputs included;
+  - a duplicate keeps its first position and its better score, with that
+    score's breakdown (`vector_score`);
+  - a written `LIMIT` is held to the 100 000-row ceiling, as a SELECT's is;
+  - without `ORDER BY`, rows rank by score in the metric's direction, ties in
+    the order met.
+  A query that relied on a first operand's `LIMIT` capping the union now caps
+  that operand only: move the `LIMIT` after the last operand. WASM refuses a
+  JOIN or an aggregation inside an operand rather than combining their rows;
+  its window `ORDER BY similarity(vector, $v)` reads each row's own vector,
+  from its own collection.
+
 - **BREAKING (behavior): inline pattern properties filter as WHERE `=` does**
   (core, WASM, 2026-11-15). `(n {k: v})` and `-[r {k: v}]->` had their own
   equality: a `$name` was compared as the text `$name` and never matched,
@@ -223,6 +275,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file. Anything else is now a usage error (exit 2).
 
 ### Fixed
+
+- **`DELETE` takes any metadata `WHERE`** (core, 2026-11-16). Core refused
+  every `DELETE` whose `WHERE` was not `id = N` or `id IN (...)`, though the
+  VelesQL spec shows `DELETE FROM logs WHERE level = 'debug'` and the WASM
+  executor ran it. It now removes the rows the `WHERE` selects, as `UPDATE`
+  selects them (`Database::matching_points`); `id` predicates still name
+  their points outright, and a vector or graph predicate is refused with the
+  same words as `UPDATE`'s (D007).
+
+- **ORDER BY reads `score`, `vector_score` and `id` the same in every
+  engine** (core, WASM, 2026-11-15). Core read `ORDER BY score` and `score`
+  inside arithmetic as a payload field, though `score` is a reserved word for
+  the row's search score; WASM read `vector_score` as a payload field and `id`
+  in arithmetic as 0. Both now resolve every score variable and arithmetic key
+  through one `velesql::ScoreContext` (moved from core's SELECT ordering): a
+  LET binding, then `score` / `fused_score` / `similarity`, then the result's
+  component scores (a NEAR row carries `vector_score` in both engines), then
+  `id`, then the payload. WASM also refuses a vector in an INSERT on a
+  metadata-only collection, with core's words, instead of dropping it, caps
+  a LIMIT at `velesql::MAX_SELECT_LIMIT` (100 000) as core does, and orders
+  by `similarity(field, $v)` — the row's own vector or the payload's named
+  one, a row without one last — instead of refusing it. A browser MATCH
+  orders by `similarity(alias.vector, $v)` and by arithmetic over its
+  target, as core's MATCH does, instead of refusing them; and a browser
+  `UPDATE ... SET vector = $v` replaces the embedding, as core's does, instead
+  of refusing it (D008).
 
 - **A `similarity()` threshold filters the whole collection** (core,
   2026-11-15). It filtered a window of `LIMIT × 10` points nearest the query

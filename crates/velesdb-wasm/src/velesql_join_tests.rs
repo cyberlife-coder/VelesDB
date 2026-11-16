@@ -31,7 +31,7 @@ fn test_inner_join_equality() {
     let mut db = DatabaseInner::new();
     seed(&mut db);
     let stmt = parse("SELECT * FROM users JOIN orders ON users.id = orders.user_id LIMIT 10");
-    let rows = execute(&db, &stmt, &Params::new()).expect("test: join");
+    let rows = joined_rows(&db, &stmt, &Params::new()).expect("test: join");
     assert_eq!(rows.len(), 3); // alice:2 orders + bob:1
 }
 
@@ -50,7 +50,7 @@ fn test_left_join_preserves_unmatched_left() {
     drop(ub);
 
     let stmt = parse("SELECT * FROM users LEFT JOIN orders ON users.id = orders.user_id LIMIT 10");
-    let rows = execute(&db, &stmt, &Params::new()).expect("test: left join");
+    let rows = joined_rows(&db, &stmt, &Params::new()).expect("test: left join");
     // 2 for Alice + 1 for Bob + 1 null-padded for Carol = 4
     assert_eq!(rows.len(), 4);
 }
@@ -62,7 +62,7 @@ fn test_join_with_where_filter() {
     let stmt = parse(
         "SELECT * FROM users JOIN orders ON users.id = orders.user_id WHERE name = 'Alice' LIMIT 10",
     );
-    let rows = execute(&db, &stmt, &Params::new()).expect("test: join where");
+    let rows = joined_rows(&db, &stmt, &Params::new()).expect("test: join where");
     assert_eq!(rows.len(), 2);
 }
 
@@ -71,7 +71,7 @@ fn test_join_missing_right_collection_errors() {
     let mut db = DatabaseInner::new();
     db.create_metadata_collection("users").expect("test: users");
     let stmt = parse("SELECT * FROM users JOIN ghost ON users.id = ghost.user_id LIMIT 10");
-    let err = execute(&db, &stmt, &Params::new());
+    let err = joined_rows(&db, &stmt, &Params::new());
     assert!(err.is_err());
 }
 
@@ -80,7 +80,31 @@ fn test_right_join_is_rejected() {
     let mut db = DatabaseInner::new();
     seed(&mut db);
     let stmt = parse("SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id LIMIT 10");
-    let err = execute(&db, &stmt, &Params::new());
+    let err = joined_rows(&db, &stmt, &Params::new());
     assert!(err.is_err());
     assert!(err.expect_err("test: err").contains("RIGHT JOIN"));
+}
+
+/// Each side reads under its alias, so a self-join keeps both names.
+#[test]
+fn a_self_join_keeps_each_sides_fields_under_its_alias() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("emp").expect("test: emp");
+    let emp = db.get_shared_store("emp").expect("test: emp store");
+    let mut eb = emp.borrow_mut();
+    for (id, name, boss) in [(1u64, "Ann", 2u64), (2, "Bo", 2)] {
+        eb.ids.push(id);
+        eb.payloads
+            .push(Some(serde_json::json!({"name": name, "boss": boss})));
+    }
+    drop(eb);
+    let stmt = parse("SELECT * FROM emp AS e JOIN emp AS m ON e.boss = m.id LIMIT 10");
+    let rows = joined_rows(&db, &stmt, &Params::new()).expect("test: self-join");
+    let ann = rows
+        .iter()
+        .find(|(id, _, _)| *id == 1)
+        .and_then(|(_, _, p)| p.as_ref())
+        .expect("test: Ann's row");
+    assert_eq!(ann["e"]["name"], serde_json::json!("Ann"));
+    assert_eq!(ann["m"]["name"], serde_json::json!("Bo"));
 }

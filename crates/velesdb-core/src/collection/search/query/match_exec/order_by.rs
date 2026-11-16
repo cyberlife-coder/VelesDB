@@ -4,11 +4,11 @@
 //! house the arithmetic / `similarity(field, $v)` evaluators, which reuse the
 //! SELECT-side scoring helpers instead of re-implementing them.
 
-use super::super::ordering::{evaluate_arithmetic, ScoreContext};
 use super::{parse_property_path, MatchResult};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::{PayloadStorage, VectorStorage};
+use crate::velesql::{evaluate_arithmetic, ScoreContext};
 use crate::velesql::{ArithmeticExpr, OrderByExpr, SimilarityOrderBy};
 use std::collections::HashMap;
 

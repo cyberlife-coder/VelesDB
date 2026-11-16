@@ -1,6 +1,6 @@
 {
   "version": "2.6.0",
-  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with. v2.6.0 adds the `nums` extra collection and `number_cases` (plain SELECT, core+WASM, ids in order): numbers compare by exact value, `-0.0` equal to `0`, `0.3` not `0.30000000000000004`, an integer past 2^53 not the float it rounds to, an IN list the same at any length; core also runs them through a secondary index and the payload mirror. It adds G022-G025 (GROUP BY, MIN/MAX and HAVING over those numbers) and P006-P007 (DISTINCT `id`, PARTITION BY a number), and runs `projection_cases` over the extra collections too. v2.5.0 adds the `tickets` extra collection, whose payloads carry an `id` of their own, with O003 and G021 (`id` is the point id in WHERE, ORDER BY and aggregates). v2.4.0 adds G016-G020 (FIRST and tie order independent of scan order, `score` as a SQL GROUP BY alias, HAVING precedence) and R014-R015 (V018). v2.3.0 adds `null_order_cases` (plain SELECT over the extra collections, ids in order) and runs `aggregate_cases` over the extra collections too, pinning where a NULL sort key lands. v2.2.0 adds the Euclidean `docs_l2` extra collection and the `e` query vector for vector GROUP BY cases, which may also pin each group's row (`expect_rows`), id (`expect_ids`) and score (`expect_scores`, within 1e-5).",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, ids in order since D003 was resolved), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with. v2.6.0 adds the `nums` extra collection and `number_cases` (plain SELECT, core+WASM, ids in order): numbers compare by exact value, `-0.0` equal to `0`, `0.3` not `0.30000000000000004`, an integer past 2^53 not the float it rounds to, an IN list the same at any length; core also runs them through a secondary index and the payload mirror. It adds G022-G025 (GROUP BY, MIN/MAX and HAVING over those numbers) and P006-P007 (DISTINCT `id`, PARTITION BY a number), and runs `projection_cases` over the extra collections too. v2.5.0 adds the `tickets` extra collection, whose payloads carry an `id` of their own, with O003 and G021 (`id` is the point id in WHERE, ORDER BY and aggregates). v2.4.0 adds G016-G020 (FIRST and tie order independent of scan order, `score` as a SQL GROUP BY alias, HAVING precedence) and R014-R015 (V018). v2.3.0 adds `null_order_cases` (plain SELECT over the extra collections, ids in order) and runs `aggregate_cases` over the extra collections too, pinning where a NULL sort key lands. v2.2.0 adds the Euclidean `docs_l2` extra collection and the `e` query vector for vector GROUP BY cases, which may also pin each group's row (`expect_rows`), id (`expect_ids`) and score (`expect_scores`, within 1e-5).",
   "dataset": {
     "collection": "docs",
     "dimension": 4,
@@ -276,6 +276,36 @@
       "query": "SELECT * FROM orders_u JOIN customers_u USING (id) ORDER BY orders_u.id ASC",
       "expect_ids": [10, 20],
       "note": "issue #1544: JOIN USING (single column); both engines resolve USING(id) against each row's primary id, order_u id=99 has no matching customer and is dropped"
+    },
+    {
+      "id": "J006",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY orders.amount DESC",
+      "expect_ids": [2, 3, 1],
+      "note": "ORDER BY sorts the JOINED rows, by a qualified column (core ordered the base rows first and could not read `orders.amount`; WASM ignored ORDER BY)"
+    },
+    {
+      "id": "J007",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY orders.id ASC LIMIT 2 OFFSET 1",
+      "expect_ids": [2, 3],
+      "note": "OFFSET and LIMIT window the joined rows"
+    },
+    {
+      "id": "J008",
+      "query": "SELECT * FROM orders LEFT JOIN customers ON orders.customer_id = customers.id WHERE customers.name = 'Alice' ORDER BY orders.id ASC",
+      "expect_ids": [1, 3],
+      "note": "a LEFT JOIN WHERE on the joined side reads the joined row (core filtered the base rows by it before the join and returned nothing)"
+    },
+    {
+      "id": "J009",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id WHERE customers.name = 'Bob' OR orders.amount = 100 ORDER BY orders.id ASC",
+      "expect_ids": [1, 2],
+      "note": "an OR across the base and a join side is evaluated on the joined row"
+    },
+    {
+      "id": "J010",
+      "query": "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id WHERE NOT (customers.name = 'Alice') ORDER BY orders.id ASC",
+      "expect_ids": [2],
+      "note": "a negated joined-side predicate is evaluated on the joined row"
     }
   ],
   "aggregate_cases": [
@@ -500,32 +530,69 @@
       "query": "SELECT x, COUNT(*) AS n FROM nums GROUP BY x HAVING MAX(x) = 0.3",
       "expect_groups": [],
       "note": "no tolerance: `0.30000000000000004` is not `0.3`"
+    },
+    {
+      "id": "G026",
+      "query": "SELECT customers.name, COUNT(*) AS n FROM orders JOIN customers ON orders.customer_id = customers.id GROUP BY customers.name ORDER BY customers.name ASC",
+      "expect_groups": [{"customers.name": "Alice", "n": 2}, {"customers.name": "Bob", "n": 1}],
+      "note": "a GROUP BY over a JOIN groups the joined rows, by a qualified column (core aggregated the base collection alone: one group, n = 4, name null)"
+    },
+    {
+      "id": "G027",
+      "query": "SELECT orders.customer_id, COUNT(*) AS n, SUM(orders.amount) AS total FROM orders LEFT JOIN customers ON orders.customer_id = customers.id WHERE customers.id IS NULL GROUP BY orders.customer_id",
+      "expect_groups": [{"orders.customer_id": 99, "n": 1, "total": 300.0}],
+      "note": "a LEFT JOIN row without a match carries its alias with a null id, so WHERE customers.id IS NULL finds order 4, whose customer 99 does not exist"
     }
   ],
   "setops_cases": [
     {
       "id": "S001",
       "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC UNION SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
-      "expect_ids": [1, 2, 3, 4, 5],
-      "note": "issue #1544: UNION of two disjoint partitions returns every id exactly once. Compared as a SET, not an ordered list — see documented_divergences D003"
+      "expect_ids": [5, 1, 3, 2, 4],
+      "note": "UNION of two disjoint partitions returns every id once; the last operand's ORDER BY windows the compound, so the rows come back by year (velesql::execute_compound)"
     },
     {
       "id": "S002",
       "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC UNION SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC",
       "expect_ids": [1, 2, 4],
-      "note": "issue #1544: UNION of a branch with itself proves de-duplication (3 ids, not 6). Compared as a SET — see documented_divergences D003"
+      "note": "UNION of a branch with itself proves de-duplication (3 rows, not 6)"
     },
     {
       "id": "S003",
       "query": "SELECT * FROM docs WHERE year >= 2020 ORDER BY year ASC INTERSECT SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC",
       "expect_ids": [1, 2, 4],
-      "note": "issue #1544: INTERSECT keeps only ids present in both branches. Compared as a SET — see documented_divergences D003"
+      "note": "INTERSECT keeps the rows present in both branches, ordered by the window"
     },
     {
       "id": "S004",
       "query": "SELECT * FROM docs ORDER BY year ASC EXCEPT SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
       "expect_ids": [1, 2, 4],
-      "note": "issue #1544: EXCEPT removes the right-hand branch's ids from the left-hand branch. Compared as a SET — see documented_divergences D003"
+      "note": "EXCEPT removes the right-hand branch's rows from the left-hand branch"
+    },
+    {
+      "id": "S005",
+      "query": "SELECT * FROM docs WHERE category = 'tech' UNION SELECT * FROM docs WHERE category = 'other' LIMIT 2",
+      "expect_ids": [1, 2],
+      "note": "a LIMIT after the last operand windows the compound (core ignored it: the trailing LIMIT was the last operand's, overridden). Without ORDER BY the metadata rows tie at 1.0 and keep the order met"
+    },
+    {
+      "id": "S006",
+      "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year DESC LIMIT 1 UNION SELECT * FROM docs WHERE category = 'other' ORDER BY year ASC",
+      "expect_ids": [5, 3, 4],
+      "note": "a first operand keeps its own ORDER BY / LIMIT (tech's latest year, 4); the last operand's ORDER BY windows the compound"
+    },
+    {
+      "id": "S007",
+      "query": "SELECT category FROM docs WHERE year >= 2021 INTERSECT SELECT category FROM docs WHERE year <= 2020",
+      "expect_ids": [2, 3],
+      "note": "rows are compared by their projected values: both year ranges hold a tech and an other category, so both survive the INTERSECT (as the first rows met with them, 2 and 3)"
+    },
+    {
+      "id": "S008",
+      "query": "SELECT * FROM docs_l2 WHERE vector NEAR $e LIMIT 2 UNION SELECT * FROM docs_l2 WHERE grp = 'y'",
+      "expect_ids": [24, 21, 22],
+      "expect_scores": [0.5, 1.0, 1.0],
+      "note": "without ORDER BY the rows rank by score in the metric's direction — closest first under euclidean (24 at 0.5, then the ties at 1.0 in the order met)"
     }
   ],
   "match_cases": [
@@ -568,6 +635,14 @@
       "binding": "a",
       "expect_ids": [2],
       "note": "a bare WHERE column reads the walk's target, the last node"
+    },
+    {
+      "id": "M006",
+      "query": "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a ORDER BY id * -1",
+      "params": {"_collection": "people"},
+      "binding": "a",
+      "expect_ids": [3, 2, 1],
+      "note": "an arithmetic MATCH ORDER BY reads the row's target (b = 4, 3, 2 here), through core's ScoreContext in both engines (WASM refused arithmetic)"
     }
   ],
   "query_params": {
@@ -762,6 +837,48 @@
       "expect_ids": [42, 43, 44],
       "expect_scores": [1.0, 0.894427, 1.0],
       "note": "a row the first similarity() cannot score (44 has no `alt`) passes through the OR, ranks after the scored rows and carries velesql::METADATA_MATCH_SCORE"
+    },
+    {
+      "id": "N028",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY vector_score ASC LIMIT 3",
+      "expect_ids": [1, 2, 5],
+      "note": "`vector_score` is the NEAR row's vector component in both engines (WASM read it as a payload field)"
+    },
+    {
+      "id": "N029",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY score ASC LIMIT 3",
+      "expect_ids": [1, 2, 5],
+      "note": "`score` is a reserved word: the row's search score, not a payload field (core read a payload field; VELESQL_SPEC reserved keywords)"
+    },
+    {
+      "id": "N030",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY id * 1 DESC LIMIT 3",
+      "expect_ids": [5, 4, 3],
+      "note": "`id` in an arithmetic ORDER BY is the point id (WASM read 0)"
+    },
+    {
+      "id": "N031",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY score * -1 DESC LIMIT 3",
+      "expect_ids": [1, 2, 5],
+      "note": "`score` inside arithmetic is the search score too"
+    },
+    {
+      "id": "N032",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY bm25_score DESC, id ASC LIMIT 3",
+      "expect_ids": [1, 2, 3],
+      "note": "a component a NEAR row does not carry (`bm25_score`) reads 0.0, so the next key decides"
+    },
+    {
+      "id": "N033",
+      "query": "SELECT * FROM named ORDER BY similarity(alt, $x) DESC LIMIT 5",
+      "expect_ids": [42, 43, 41, 44, 45],
+      "note": "ORDER BY similarity(field, $v) scores the payload's named vector; a row without one (44) or of another dimension (45) takes the worst key, last under DESC (WASM refused the form)"
+    },
+    {
+      "id": "N034",
+      "query": "SELECT * FROM named ORDER BY similarity(vector, $y) DESC, id ASC LIMIT 5",
+      "expect_ids": [42, 45, 43, 41, 44],
+      "note": "similarity(vector, $v) in ORDER BY scores the row's own vector, ties broken by the next key"
     }
   ],
   "fusion_cases": [
@@ -975,7 +1092,7 @@
       "statements": ["DELETE FROM docs WHERE id IN (2, 5)"],
       "query": "SELECT * FROM docs ORDER BY year ASC",
       "expect_ids": [1, 3, 4],
-      "note": "DELETE by id list. Only id predicates are common to both engines — see documented_divergences D007"
+      "note": "DELETE by id list"
     },
     {
       "id": "W008",
@@ -984,6 +1101,21 @@
       "expect_ids": [3, 5, 2, 1],
       "expect_scores": [0.547723, 0.387298, 0.365148, 0.182574],
       "note": "a deleted point no longer ranks in NEAR"
+    },
+    {
+      "id": "W009",
+      "statements": ["UPDATE docs SET vector = $a WHERE id = 1"],
+      "query": "SELECT * FROM docs WHERE vector NEAR $a LIMIT 2",
+      "expect_ids": [1, 4],
+      "expect_scores": [1.0, 0.730297],
+      "note": "UPDATE SET vector replaces the embedding on both engines: point 1 is now $a itself (D008; WASM refused the assignment)"
+    },
+    {
+      "id": "W010",
+      "statements": ["DELETE FROM docs WHERE category = 'other' AND year > 2020"],
+      "query": "SELECT * FROM docs ORDER BY year ASC",
+      "expect_ids": [5, 1, 2, 4],
+      "note": "DELETE removes the rows any metadata WHERE selects, on both engines (D007: core accepted only id predicates, though the spec shows `DELETE FROM logs WHERE level = 'debug'`)"
     }
   ],
   "projection_cases": [
@@ -1028,6 +1160,18 @@
       "query": "SELECT id, ROW_NUMBER() OVER (PARTITION BY x ORDER BY id) AS rn FROM nums WHERE id <= 4 ORDER BY id",
       "expect_rows": [{ "id": 1, "rn": 1 }, { "id": 2, "rn": 2 }, { "id": 3, "rn": 1 }, { "id": 4, "rn": 2 }],
       "note": "PARTITION BY keys numbers as GROUP BY does: `-0.0` with `0`, `1.0` with `1`"
+    },
+    {
+      "id": "P008",
+      "query": "SELECT orders.amount, customers.name FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY orders.id ASC",
+      "expect_rows": [{"orders.amount": 100, "customers.name": "Alice"}, {"orders.amount": 200, "customers.name": "Bob"}, {"orders.amount": 150, "customers.name": "Alice"}],
+      "note": "a joined row carries each side under its alias (velesql::merge_side), so qualified columns project (core returned null for both; WASM returned the whole joined object)"
+    },
+    {
+      "id": "P009",
+      "query": "SELECT DISTINCT customers.name FROM orders JOIN customers ON orders.customer_id = customers.id ORDER BY customers.name ASC",
+      "expect_rows": [{"customers.name": "Alice"}, {"customers.name": "Bob"}],
+      "note": "DISTINCT applies to the joined rows"
     }
   ],
   "vector_group_cases": [
@@ -1283,10 +1427,10 @@
     {
       "id": "D003",
       "area": "UNION/INTERSECT/EXCEPT row ordering for non-ranked branches",
-      "core_behavior": "apply_set_operation (set_operations.rs) always re-sorts the merged result by score descending, regardless of any per-branch ORDER BY; when every row has score 0.0 (no vector NEAR in either branch) the comparator sees only ties and Vec::sort_unstable_by's tie-break is not stable — order was observed to differ between two consecutive runs of the SAME core binary for the identical query",
-      "wasm_behavior": "velesql_setops.rs concatenates branches left-to-right and de-duplicates first-seen, so each branch's own ORDER BY is preserved in the final row sequence — deterministic, but not the same sequence as core's",
-      "status": "accepted — neither behaviour is wrong (SQL does not guarantee an order for UNION/INTERSECT/EXCEPT without an explicit outer ORDER BY, which this query engine does not yet apply to compound results). fixture setops_cases S001-S004 assert result MEMBERSHIP and COUNT only (ids compared as a sorted set), never exact order",
-      "evidence": "crates/velesdb-core/src/collection/search/query/set_operations.rs (score-sort); crates/velesdb-wasm/src/velesql_setops.rs (concat+dedup)"
+      "core_behavior": "RESOLVED: velesql::execute_compound — the window after the last operand (ORDER BY / LIMIT / OFFSET) orders and caps the combined rows; without ORDER BY they rank by score in the metric's direction, ties in the order met",
+      "wasm_behavior": "RESOLVED: the WASM executor runs the same velesql::execute_compound; it used to concatenate and de-duplicate, while core re-sorted by score with an unstable tie-break",
+      "status": "resolved — setops_cases S001-S008 assert ids in order",
+      "evidence": "crates/velesdb-core/src/velesql/set_operation.rs; crates/velesdb-wasm/src/velesql_setops.rs"
     },
     {
       "id": "D004",
@@ -1315,18 +1459,18 @@
     {
       "id": "D007",
       "area": "DELETE WHERE predicate shapes",
-      "core_behavior": "DELETE accepts only `id = N` or `id IN (N1, N2, ...)`; any other WHERE is refused with \"DELETE WHERE must use 'id = N' or 'id IN (N1, N2, ...)'\"",
-      "wasm_behavior": "DELETE evaluates any WHERE predicate row by row and removes every match (e.g. `DELETE FROM docs WHERE category = 'other'`)",
-      "status": "accepted — WASM is a superset: every DELETE core accepts gives the same rows on both engines (dml_cases W007/W008), and the extra WASM shapes are refused by core rather than answered differently. Narrowing the browser engine would break callers for no correctness gain",
-      "evidence": "crates/velesdb-core/src/database/dml_executor.rs: extract_delete_ids(); crates/velesdb-wasm/src/velesql_delete.rs: collect_matching_indices()"
+      "core_behavior": "RESOLVED: DELETE removes the rows any metadata WHERE selects, as UPDATE selects them (`id = N` / `id IN (...)` still name their points outright); a vector or graph predicate is refused. It used to refuse every WHERE but an id predicate",
+      "wasm_behavior": "DELETE evaluates any WHERE predicate row by row and removes every match",
+      "status": "resolved — locked by dml_cases W010",
+      "evidence": "crates/velesdb-core/src/database/dml_executor.rs: execute_delete(); query_engine_dml.rs: matching_points()"
     },
     {
       "id": "D008",
       "area": "UPDATE SET vector",
       "core_behavior": "UPDATE may assign the `vector` column on a vector collection (apply_assignments_to_point re-parses it as the new embedding)",
-      "wasm_behavior": "UPDATE refuses `SET vector = ...` with \"UPDATE cannot modify the 'vector' column (use UPSERT)\"; payload assignments behave as in core",
-      "status": "accepted — WASM is a subset here; the fixture's dml_cases assign payload fields only. UPSERT is the WASM way to replace an embedding",
-      "evidence": "crates/velesdb-core/src/database/query_engine_dml.rs: apply_assignments_to_point(); crates/velesdb-wasm/src/velesql_update.rs: validate_assignments()"
+      "wasm_behavior": "RESOLVED: the WASM UPDATE replaces the embedding too, refusing it on a metadata-only collection or at another dimension; it used to refuse every `SET vector`",
+      "status": "resolved — locked by dml_cases W009",
+      "evidence": "crates/velesdb-wasm/src/velesql_update.rs: new_vector()"
     },
     {
       "id": "D009",

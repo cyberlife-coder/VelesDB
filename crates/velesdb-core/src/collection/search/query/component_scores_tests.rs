@@ -10,8 +10,8 @@
     clippy::float_cmp
 )]
 
-use crate::collection::search::query::ordering::{evaluate_arithmetic, ScoreContext};
 use crate::point::{Point, SearchResult};
+use crate::velesql::{evaluate_arithmetic, ScoreContext};
 use crate::velesql::{ArithmeticExpr, ArithmeticOp};
 
 // ============================================================================

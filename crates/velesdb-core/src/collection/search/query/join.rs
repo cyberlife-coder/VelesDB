@@ -384,27 +384,47 @@ fn build_null_row_data(column_store: &ColumnStore) -> HashMap<String, serde_json
 /// Converts JoinedResults back to SearchResults with merged payload.
 ///
 /// This is useful when the query expects SearchResult format but
-/// we want to include joined column data in the payload.
+/// we want to include joined column data in the payload. Each joined column
+/// is merged flat, at the payload's root; the query engine also scopes it
+/// under the join side's alias (`joined_to_aliased_search_results`).
 #[must_use]
 pub fn joined_to_search_results(joined: Vec<JoinedResult>) -> Vec<SearchResult> {
     joined
         .into_iter()
         .map(|jr| {
             let mut result = jr.search_result;
-
-            // Merge column data into payload
             let mut payload = result
                 .point
                 .payload
                 .take()
                 .and_then(|p| p.as_object().cloned())
                 .unwrap_or_default();
-
-            for (key, value) in jr.column_data {
-                payload.insert(key, value);
-            }
-
+            payload.extend(jr.column_data);
             result.point.payload = Some(serde_json::Value::Object(payload));
+            result
+        })
+        .collect()
+}
+
+/// [`joined_to_search_results`] as a JOIN row (`velesql::merge_side`): the
+/// joined columns flat and under `alias`, so `alias.column` reads that side.
+#[must_use]
+pub(crate) fn joined_to_aliased_search_results(
+    joined: Vec<JoinedResult>,
+    alias: &str,
+) -> Vec<SearchResult> {
+    joined
+        .into_iter()
+        .map(|jr| {
+            let mut result = jr.search_result;
+            let fields: serde_json::Map<String, serde_json::Value> =
+                jr.column_data.into_iter().collect();
+            result.point.payload = Some(crate::velesql::merge_side(
+                result.point.payload.take(),
+                alias,
+                &fields,
+                None,
+            ));
             result
         })
         .collect()

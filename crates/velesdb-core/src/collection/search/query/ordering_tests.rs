@@ -2,9 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::collection::search::query::ordering::{
-        compare_json_values, evaluate_arithmetic, ScoreContext,
-    };
+    use crate::collection::search::query::ordering::compare_json_values;
+    use crate::velesql::{evaluate_arithmetic, ScoreContext};
     use crate::velesql::{ArithmeticExpr, ArithmeticOp, OrderByExpr};
     use serde_json::json;
 

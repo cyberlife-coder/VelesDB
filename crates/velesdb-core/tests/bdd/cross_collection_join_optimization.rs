@@ -185,33 +185,37 @@ fn test_join_filter_eliminates_all_rows_inner_returns_empty() {
 // Edge: Filter eliminates all rows — LEFT JOIN
 // =========================================================================
 
-/// GIVEN products LEFT JOIN inventory with filter that matches no rows
-/// WHEN the join type is LEFT
-/// THEN left-side results are returned with null joined columns.
+/// GIVEN products LEFT JOIN inventory
+/// WHEN a WHERE predicate on the inventory side matches no row
+/// THEN no row comes back: WHERE filters the JOINED rows, and an unmatched
+///      row's `inventory.price` is NULL, so `> 99999` is UNKNOWN (SQL). The
+///      predicate is not pushed below an outer join, where it would empty the
+///      inventory side and keep every product null-filled. Without the WHERE,
+///      the LEFT JOIN keeps all 5 products.
 #[test]
 fn test_join_filter_eliminates_all_rows_left_returns_nulls() {
     let (_dir, db) = create_test_db();
     setup_collections(&db);
 
-    let sql = "SELECT * FROM products \
-               LEFT JOIN inventory ON products.id = inventory.id \
-               WHERE inventory.price > 99999 \
-               LIMIT 10";
-
-    let results = execute_sql(&db, sql).expect("LEFT JOIN filter eliminates all");
-
-    // With filter pushdown, the ColumnStore is empty. LEFT JOIN must still
-    // return all left-side rows with null joined columns. Pinning the exact
-    // cardinality (5 products) catches a silent degradation to INNER JOIN.
-    assert_eq!(
-        results.len(),
-        5,
-        "LEFT JOIN must keep all 5 left-side products even when the filter eliminates every right row"
-    );
+    let filtered = execute_sql(
+        &db,
+        "SELECT * FROM products \
+         LEFT JOIN inventory ON products.id = inventory.id \
+         WHERE inventory.price > 99999 \
+         LIMIT 10",
+    )
+    .expect("LEFT JOIN filtered after the join");
     assert!(
-        results.iter().all(|r| payload_f64(r, "price").is_none()),
-        "unmatched LEFT JOIN rows must carry a null/absent joined price"
+        filtered.is_empty(),
+        "no joined row has price > 99999: {filtered:?}"
     );
+
+    let all = execute_sql(
+        &db,
+        "SELECT * FROM products LEFT JOIN inventory ON products.id = inventory.id LIMIT 10",
+    )
+    .expect("LEFT JOIN");
+    assert_eq!(all.len(), 5, "LEFT JOIN keeps every product");
 }
 
 // =========================================================================

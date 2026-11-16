@@ -81,7 +81,6 @@ mod query_pipeline;
 #[cfg(test)]
 mod scan_cap_observability_tests;
 mod select_dispatch;
-pub(crate) mod set_operations;
 mod similarity_filter;
 mod similarity_scan;
 mod sparse_dispatch;
@@ -114,8 +113,9 @@ pub(crate) struct CountedExecution {
     /// Strategy the filtered vector-search dispatch recorded, if any.
     pub(crate) executed_filter_strategy: Option<crate::velesql::FilterStrategy>,
 }
+pub(crate) use options::MAX_LIMIT;
 pub(in crate::collection::search::query) use options::{
-    ExtractedComponents, QueryFinalizationContext, MAX_LIMIT,
+    ExtractedComponents, QueryFinalizationContext,
 };
 
 use crate::collection::types::Collection;
@@ -149,46 +149,19 @@ impl Collection {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        // EPIC-040 US-006: For compound queries, execute each operand without the
-        // outer LIMIT so the set operation sees the full result sets.  The final
-        // LIMIT is applied once on the merged output (SQL-standard behaviour).
-        // Use MAX_LIMIT (not None) to avoid the default-10 cap in execute_query_with_client.
-        let compound_limit = Some(u64::try_from(MAX_LIMIT).unwrap_or(u64::MAX));
-        let left_results = if query.compound.is_some() {
-            let mut left_query = query.clone();
-            left_query.select.limit = compound_limit;
-            left_query.select.offset = None; // OFFSET applies to combined result, not operands.
-            left_query.compound = None;
-            self.execute_query_with_client(&left_query, params, "default")?
-        } else {
+        if query.compound.is_none() {
             return self.execute_query_with_client(query, params, "default");
-        };
-
-        // compound is guaranteed Some here (non-compound returns above).
-        if let Some(ref compound) = query.compound {
-            let mut accumulated = left_results;
-            for (operator, right_select) in &compound.operations {
-                let mut right_query = crate::velesql::Query::new_select(right_select.clone());
-                right_query.select.limit = compound_limit;
-                let right_results =
-                    self.execute_query_with_client(&right_query, params, "default")?;
-                // Intermediate ops keep the server-side ceiling: truncating to the
-                // user LIMIT here would drop rows a later chained set op still needs.
-                accumulated = set_operations::apply_set_operation(
-                    accumulated,
-                    right_results,
-                    *operator,
-                    MAX_LIMIT,
-                );
-            }
-            return Ok(set_operations::apply_offset_limit(
-                accumulated,
-                query.select.offset,
-                query.select.limit,
-            ));
         }
-
-        Ok(left_results)
+        // Compound semantics are velesql's (`velesql::execute_compound`),
+        // shared with the `Database` executor and WASM; each operand runs here.
+        let higher_is_better = self.storage.config.read().metric.higher_is_better();
+        crate::velesql::execute_compound(
+            query,
+            higher_is_better,
+            u64::try_from(MAX_LIMIT).unwrap_or(u64::MAX),
+            |operand| self.execute_query_with_client(operand, params, "default"),
+            |rows, order_by| self.apply_order_by(rows, order_by, params),
+        )
     }
 
     /// Executes a `VelesQL` query with a specific client identifier for per-client rate limiting.

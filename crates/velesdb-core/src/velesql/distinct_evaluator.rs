@@ -43,7 +43,22 @@ use rustc_hash::FxHashSet;
 /// - `Aggregations(_)` → no dedup (aggregations collapse rows themselves).
 #[must_use]
 pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Vec<SearchResult> {
-    let (column_names, include_score) = match columns {
+    let (column_names, include_score) = key_columns(columns);
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    results
+        .into_iter()
+        .filter(|r| {
+            let key = compute_distinct_key(r, &column_names, include_score);
+            seen.insert(key)
+        })
+        .collect()
+}
+
+/// The fields a projected row is keyed by under `columns` (see the
+/// [`apply_distinct`] contract): the listed columns, or none for "the full
+/// payload", and whether the similarity score is part of the key.
+pub(crate) fn key_columns(columns: &SelectColumns) -> (Vec<String>, bool) {
+    match columns {
         SelectColumns::Columns(cols) => (cols.iter().map(|c| c.name.clone()).collect(), false),
         SelectColumns::Mixed {
             columns: cols,
@@ -63,22 +78,12 @@ pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Ve
         }
         SelectColumns::SimilarityScore(_) => (Vec::new(), true),
         // All / QualifiedWildcard → full payload; Aggregations → no dedup
-        // (the empty-column path below gives the same "full payload" key,
-        // which is harmless for Aggregations since that path never reaches
-        // this function in practice).
+        // (the empty-column path gives the same "full payload" key, which is
+        // harmless for Aggregations since that path never reaches DISTINCT).
         SelectColumns::All
         | SelectColumns::Aggregations(_)
         | SelectColumns::QualifiedWildcard(_) => (Vec::new(), false),
-    };
-
-    let mut seen: FxHashSet<String> = FxHashSet::default();
-    results
-        .into_iter()
-        .filter(|r| {
-            let key = compute_distinct_key(r, &column_names, include_score);
-            seen.insert(key)
-        })
-        .collect()
+    }
 }
 
 /// Compute a unique key for DISTINCT deduplication.
@@ -98,8 +103,9 @@ pub(crate) fn compute_distinct_key(
         // SELECT * or SELECT DISTINCT *: use full payload as key
         payload.map_or_else(|| "null".to_string(), canonical_json_string)
     } else {
-        // SELECT DISTINCT col1, col2: use specific columns. `id` is the
-        // point id, as in every clause, not a payload field of that name;
+        // SELECT DISTINCT col1, col2: use specific columns, a dotted one
+        // (`c.name`, `meta.lang`) by path as the projection reads it. `id` is
+        // the point id, as in every clause, not a payload field of that name;
         // numbers key as `GROUP BY` keys them (`group_key::normalise`), so
         // `1` and `1.0`, or `0` and `-0.0`, are one value.
         columns
@@ -108,7 +114,9 @@ pub(crate) fn compute_distinct_key(
                 let value = if col == "id" {
                     Some(Cow::Owned(serde_json::Value::from(result.point.id)))
                 } else {
-                    payload.and_then(|p| p.get(col)).map(Cow::Borrowed)
+                    payload
+                        .and_then(|p| super::grouping::payload_path(p, col))
+                        .map(Cow::Borrowed)
                 };
                 value.map_or_else(
                     || "null".to_string(),

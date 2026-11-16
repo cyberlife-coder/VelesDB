@@ -16,7 +16,7 @@ fn by_field(name: &str, desc: bool) -> Vec<SelectOrderBy> {
 fn sort(stmt_order: Vec<SelectOrderBy>, rows: &mut [SearchResult]) {
     let mut stmt = SelectStatement::empty();
     stmt.order_by = Some(stmt_order);
-    sort_rows(&stmt, rows, true).expect("test: sort");
+    sort_rows(&stmt, rows, &OrderContext::without_vectors(true)).expect("test: sort");
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn test_sort_by_arithmetic_formula() {
 }
 
 #[test]
-fn test_sort_named_similarity_is_rejected() {
+fn named_similarity_over_rows_of_no_collection_is_rejected() {
     use velesdb_core::velesql::{SimilarityOrderBy, VectorExpr};
     let mut rows = vec![mk(1, 0.5, serde_json::json!({}))];
     let mut stmt = SelectStatement::empty();
@@ -114,13 +114,35 @@ fn test_sort_named_similarity_is_rejected() {
         }),
         descending: true,
     }]);
-    let err = sort_rows(&stmt, &mut rows, true);
+    let err = sort_rows(&stmt, &mut rows, &OrderContext::without_vectors(true));
     assert!(err.is_err());
 }
 
 #[test]
 fn test_division_by_zero_yields_zero() {
-    assert_eq!(apply_op(ArithmeticOp::Div, 5.0, 0.0), 0.0);
+    let expr = ArithmeticExpr::BinaryOp {
+        left: Box::new(ArithmeticExpr::Literal(5.0)),
+        op: ArithmeticOp::Div,
+        right: Box::new(ArithmeticExpr::Literal(0.0)),
+    };
+    assert!(eval_arithmetic(&expr, &mk(1, 0.5, serde_json::json!({}))).abs() < f32::EPSILON);
+}
+
+/// Score variables and `id` resolve as core's `ScoreContext` resolves them:
+/// `score` is the search score, `id` the point id, a component the row's
+/// breakdown (0.0 when a tagged row lacks it).
+#[test]
+fn score_variables_and_id_resolve_as_in_core() {
+    let mut row = mk(7, 0.25, serde_json::json!({"score": 99}));
+    row.component_scores = Some(std::iter::once(("vector_score", 0.25)).collect());
+    let var = |name: &str| ArithmeticExpr::Variable(name.to_string());
+    assert!(
+        (eval_arithmetic(&var("score"), &row) - 0.25).abs() < f32::EPSILON,
+        "not the payload's 99"
+    );
+    assert!((eval_arithmetic(&var("id"), &row) - 7.0).abs() < f32::EPSILON);
+    assert!((eval_arithmetic(&var("vector_score"), &row) - 0.25).abs() < f32::EPSILON);
+    assert!(eval_arithmetic(&var("bm25_score"), &row).abs() < f32::EPSILON);
 }
 
 #[test]
@@ -136,7 +158,7 @@ fn test_similarity_desc_puts_the_nearest_row_first_under_a_distance_metric() {
         expr: OrderByExpr::SimilarityBare,
         descending: true,
     }]);
-    sort_rows(&stmt, &mut rows, false).expect("test: sort");
+    sort_rows(&stmt, &mut rows, &OrderContext::without_vectors(false)).expect("test: sort");
     let ids: Vec<u64> = rows.iter().map(|r| r.point.id).collect();
     assert_eq!(ids, [2, 3, 1]);
 }

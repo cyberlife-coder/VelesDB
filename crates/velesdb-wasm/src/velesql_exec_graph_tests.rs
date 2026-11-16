@@ -230,22 +230,19 @@ fn test_match_single_node_order_by_property_asc() {
 }
 
 #[test]
-fn test_match_order_by_arithmetic_rejected() {
+fn test_match_order_by_arithmetic_orders_by_the_target() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
-    // Bare-property arithmetic ORDER BY parses (a dotted `a.age - 2000` would be
-    // a parse error instead) but is not evaluable in the WASM MATCH path, so it
-    // must be rejected by the ORDER BY evaluator rather than silently ignored.
-    let err = execute(
-        &mut db,
-        "MATCH (a:Person) RETURN a ORDER BY age - 2000",
-        None,
-    );
-    assert!(
-        err.expect_err("arithmetic MATCH ORDER BY must error")
-            .contains("arithmetic"),
-        "the error must come from the ORDER BY evaluator (mention 'arithmetic'), not an incidental failure"
-    );
+    // An arithmetic ORDER BY reads the row's target, as core's MATCH does:
+    // `id * -1` puts the largest id first.
+    let result = execute(&mut db, "MATCH (a:Person) RETURN a ORDER BY id * -1", None)
+        .expect("arithmetic MATCH ORDER BY");
+    let ids: Vec<u64> = result
+        .rows_ref()
+        .iter()
+        .map(crate::velesql_result::QueryResultRow::id)
+        .collect();
+    assert_eq!(ids, vec![3, 2, 1]);
 }
 
 // =========================================================================
