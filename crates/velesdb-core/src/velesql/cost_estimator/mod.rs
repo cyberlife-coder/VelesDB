@@ -530,7 +530,7 @@ impl<'a> CostEstimator<'a> {
     /// `filter_and_hydrate` in `collection/search/vector_filter.rs`)
     /// evaluates the predicate on an *oversampled* candidate set
     /// (`compute_oversampled_k(k, filter) = clamp(k/selectivity, [k+10,
-    /// 10_000])`) and truncates to `k` **after** the filter. The predicate
+    /// max(k+10, 10_000)])`) and truncates to `k` **after** the filter. The predicate
     /// therefore runs on more than `k` tuples in the common case — a
     /// `k`-only model (naive "top-k post-filter") under-estimates the
     /// cost for high-recall HNSW regimes (Devin review on PR #612).

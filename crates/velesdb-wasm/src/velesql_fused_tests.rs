@@ -101,3 +101,41 @@ fn test_fused_rejects_mixed_with_near() {
     let err = refusal("SELECT * FROM vecs WHERE vector NEAR_FUSED [$a, $b] AND vector NEAR $c");
     assert!(err.contains("NEAR_FUSED"), "{err}");
 }
+
+/// The `count` an aggregate SELECT reports.
+fn count(db: &mut DatabaseInner, sql: &str) -> u64 {
+    let result = crate::velesql_exec::execute(
+        db,
+        sql,
+        Some(r#"{"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: aggregate");
+    let rows: serde_json::Value =
+        serde_json::from_str(&result.rows_json()).expect("test: rows json");
+    rows[0]["count"].as_u64().expect("test: count")
+}
+
+/// An aggregate reads the whole collection, as core's `execute_aggregate`
+/// does: a `NEAR_FUSED` leaf filters no point there, so neither the output
+/// LIMIT nor the default window may bound what COUNT sees.
+#[test]
+fn test_fused_aggregate_counts_every_point_whatever_the_limit() {
+    let mut db = DatabaseInner::new();
+    seed(&mut db);
+    let store = db.get_shared_store("vecs").expect("test: store");
+    for id in 100u64..130 {
+        crate::store_insert::insert_with_payload(
+            &mut store.borrow_mut(),
+            id,
+            &[0.5, 0.5, 0.5, 0.5],
+            Some(serde_json::json!({ "cat": "c" })),
+        );
+    }
+    let fused = "SELECT COUNT(*) FROM vecs WHERE vector NEAR_FUSED [$a, $b]";
+    assert_eq!(count(&mut db, fused), 34);
+    assert_eq!(count(&mut db, &format!("{fused} LIMIT 1")), 34);
+    assert_eq!(
+        count(&mut db, &format!("{fused} AND cat = 'c' LIMIT 1")),
+        30
+    );
+}

@@ -247,6 +247,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   always closest-last under a distance metric, and accepted any number of
   vectors; it now uses core's per-branch depth (`fusion::branch_depth`),
   the metric's direction and the ten-vector cap (`fusion::MAX_FUSED_VECTORS`).
+  An aggregate over `NEAR_FUSED` still reads every passing point, as core's
+  `execute_aggregate` does, whatever its `LIMIT`.
+
+- **A filtered search for more than 10 000 points returns them all** (core,
+  2026-11-16). The filter's oversampling ceiling (10 000 candidates) also
+  capped the points asked for, so `search_with_filter`, and through it a
+  filtered `multi_query_search`, returned 10 000 even when every point
+  passed. The ceiling now bounds only the extra candidates.
 
 - **`LIKE`/`ILIKE` `_` matches one character, not one byte.** The matcher
   compiled patterns and scanned text byte by byte, so on UTF-8 text `'caf_'`

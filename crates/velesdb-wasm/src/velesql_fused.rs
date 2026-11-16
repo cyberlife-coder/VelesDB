@@ -3,7 +3,8 @@
 //! Core's `Collection::multi_query_search` contract, over WASM's brute-force
 //! scoring: at most `velesdb_core::fusion::MAX_FUSED_VECTORS` query vectors;
 //! one branch per vector holding the `branch_depth(LIMIT + OFFSET)` best points
-//! that pass the residual metadata filter; the branches fused, in the
+//! that pass the residual metadata filter (every passing point for an
+//! aggregation, see [`branch_depth`]); the branches fused, in the
 //! metric's score direction, by the strategy core maps from the fusion
 //! config ([`velesdb_core::velesql::FusionConfig::near_fused_strategy`]).
 //!
@@ -56,10 +57,7 @@ pub(crate) fn execute_fused_search(
 
     let vectors = resolve_fused_vectors(fused, &borrowed, params)?;
     let residual = residual_metadata_filter(stmt.where_clause.as_ref());
-    // Core's `multi_query_search` contract: each branch is the
-    // `branch_depth(LIMIT + OFFSET)` best points passing the filter, fused in
-    // the metric's direction.
-    let depth = velesdb_core::fusion::branch_depth(fetch_limit(stmt));
+    let depth = branch_depth(stmt);
     let branches = score_branches(&vectors, &borrowed, residual.as_ref(), params, depth)?;
     let directions = vec![borrowed.metric.score_direction(); branches.len()];
     let fused_scores = fused
@@ -126,6 +124,22 @@ fn score_branches(
         branches.push(scored);
     }
     Ok(branches)
+}
+
+/// How many points each branch holds.
+///
+/// A search (rows, or a vector GROUP BY) follows core's `multi_query_search`:
+/// the `branch_depth(LIMIT + OFFSET)` best points passing the filter. An
+/// aggregation reads the whole collection, as core's `execute_aggregate`
+/// does, where a vector leaf filters no point: every branch then holds every
+/// passing point, so neither LIMIT nor the default window bounds what an
+/// aggregate counts.
+fn branch_depth(stmt: &SelectStatement) -> usize {
+    if stmt.is_aggregation_query() {
+        usize::MAX
+    } else {
+        velesdb_core::fusion::branch_depth(fetch_limit(stmt))
+    }
 }
 
 /// The rows a SELECT window needs: `LIMIT` (core's default when absent) plus
