@@ -546,6 +546,9 @@ class Collection:
         filter: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[int, float]] = None,
         sparse_index_name: Optional[str] = None,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors (dense, sparse, or hybrid).
 
