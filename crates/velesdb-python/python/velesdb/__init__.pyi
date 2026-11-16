@@ -1566,8 +1566,8 @@ class TraversalResult:
 
     Attributes:
         depth: Current depth in the traversal
-        source: Source node ID
-        target: Target node ID
+        source: Node the step leaves from (in every direction)
+        target: Node the step reaches
         label: Edge label
         edge_id: Edge ID
     """

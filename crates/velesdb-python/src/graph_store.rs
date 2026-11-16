@@ -505,10 +505,13 @@ impl GraphStore {
     }
 }
 
-/// Maps a core traversal result to the edge-shaped Python result: the last
-/// edge of its path. A result with an empty path (the source itself) has no
-/// edge and is skipped rather than given a fabricated `edge_id` of 0, which
-/// could collide with a real edge (FLAG-2).
+/// Maps a core traversal result to the step-shaped Python result: the last
+/// edge of its path, `target` the node the step reaches and `source` the
+/// node it leaves from — the edge's other endpoint, so a reverse or
+/// bidirectional step reads the same as a forward one. A result with an
+/// empty path (the source itself) has no edge and is skipped rather than
+/// given a fabricated `edge_id` of 0, which could collide with a real edge
+/// (FLAG-2).
 fn to_py_result(
     store: &EdgeStore,
     start_node: u64,
@@ -518,7 +521,12 @@ fn to_py_result(
     let (source, label) = store
         .get_edge(edge_id)
         .map_or((start_node, String::new()), |e| {
-            (e.source(), e.label().to_string())
+            let from = if e.source() == r.target_id {
+                e.target()
+            } else {
+                e.source()
+            };
+            (from, e.label().to_string())
         });
     // Reason: depth is a u32, which fits in usize on every supported target.
     #[allow(clippy::cast_possible_truncation)]

@@ -328,6 +328,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python: traversal steps, `FusionStrategy.weighted` keywords and
+  `add_edge(..., id=)` read as written** (Python, 2026-11-16). A reverse or
+  bidirectional `GraphStore.traverse_bfs` step reported `source == target`;
+  `source` is now the node the step leaves from.
+  `FusionStrategy.weighted(avg_weight=…, max_weight=…)` was silently read as
+  the legacy `(max_weight, hit_weight)` pair; only two positional weights
+  are that pair now, and an incomplete keyword set is refused.
+  `add_edge(source, target, label, id=n)` stored the edge from node 0; the
+  positional is now the source, and `id=` with `source=` is refused.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with

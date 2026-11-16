@@ -266,6 +266,12 @@ def test_graph_store_direction_and_reads():
     both = store.traverse_bfs(source=20, direction="both")
     assert {r.target for r in both} == {10, 30}
 
+    # A step's ``source`` is the node it leaves from, ``target`` the node it
+    # reaches — in every direction (reverse used to report source == target).
+    assert {(r.source, r.target) for r in fwd} == {(10, 20), (20, 30)}
+    assert {(r.source, r.target) for r in rev} == {(30, 20), (20, 10)}
+    assert {(r.source, r.target) for r in both} == {(20, 10), (20, 30)}
+
     with pytest.raises(Exception, match="unknown direction"):
         store.traverse_bfs(source=10, direction="sideways")
 
