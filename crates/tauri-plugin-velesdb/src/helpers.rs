@@ -183,6 +183,49 @@ pub fn require_collection(
     })
 }
 
+/// The [`CollectionInfo`](crate::types::CollectionInfo) of a collection, read
+/// from its persisted configuration — the one shape every command answers
+/// (`create_*`, `get_collection`, `list_collections`).
+///
+/// `storageMode` names the kind where it is not a vector one: `graph` and
+/// `metadata_only` (metric `none`, dimension 0), as the guest bindings
+/// document.
+#[must_use]
+pub fn collection_info(
+    name: String,
+    collection: &velesdb_core::AnyCollection,
+) -> crate::types::CollectionInfo {
+    let config = collection.config();
+    let (dimension, metric, storage_mode) = match collection {
+        velesdb_core::AnyCollection::Metadata(_) => (0, "none", "metadata_only"),
+        velesdb_core::AnyCollection::Graph(_) => {
+            (config.dimension, metric_to_string(config.metric), "graph")
+        }
+        _ => (
+            config.dimension,
+            metric_to_string(config.metric),
+            storage_mode_to_string(config.storage_mode),
+        ),
+    };
+    crate::types::CollectionInfo {
+        name,
+        dimension,
+        metric: metric.to_string(),
+        count: config.point_count,
+        storage_mode: storage_mode.to_string(),
+    }
+}
+
+/// [`collection_info`] by name: `CollectionNotFound` when it does not exist.
+pub fn collection_info_of(
+    db: &velesdb_core::Database,
+    name: &str,
+) -> Result<crate::types::CollectionInfo> {
+    db.get_any_collection(name)
+        .map(|collection| collection_info(name.to_string(), &collection))
+        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+}
+
 /// Looks up a `VectorCollection` by name, returning a typed error on miss.
 pub fn require_vector_collection(
     db: &velesdb_core::Database,

@@ -40,13 +40,7 @@ pub async fn create_graph_collection<R: Runtime>(
             } else {
                 db.create_graph_collection(&request.name, schema)?;
             }
-            Ok(CollectionInfo {
-                name: request.name.clone(),
-                dimension: request.dimension.unwrap_or(0),
-                metric: request.metric.clone(),
-                count: 0,
-                storage_mode: "graph".to_string(),
-            })
+            crate::helpers::collection_info_of(&db, &request.name)
         })
         .await
         .map_err(CommandError::from)?;

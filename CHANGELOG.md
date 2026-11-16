@@ -319,6 +319,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tauri: a collection has one `CollectionInfo`, whichever command reports
+  it** (Tauri, 2026-11-16). The create commands built their answer by hand
+  and `get_collection` / `list_collections` read the configuration, so the
+  two disagreed: a metadata collection was created as metric `none`, storage
+  `metadata_only`, then read back as `cosine` / `full`; a graph collection
+  echoed the request's metric spelling (`COSINE`) and was then reported as a
+  vector one. Every command now answers the same shape, read from the
+  persisted configuration: `storageMode` is `graph` or `metadata_only` for
+  those kinds (metric `none` and dimension 0 for the latter), as the guest
+  bindings document.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with

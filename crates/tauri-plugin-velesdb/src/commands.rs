@@ -4,8 +4,8 @@
 use crate::error::CommandError;
 use crate::events::emit_collection_updated;
 use crate::helpers::{
-    map_core_results, metric_to_string, parse_filter, parse_fusion_strategy, parse_metric,
-    parse_storage_mode, require_collection, storage_mode_to_string, timed_search_response,
+    map_core_results, parse_filter, parse_fusion_strategy, parse_metric, parse_storage_mode,
+    require_collection, timed_search_response,
 };
 #[cfg(feature = "persistence")]
 use crate::helpers::{parse_search_quality, require_vector_collection};
@@ -85,13 +85,7 @@ pub async fn create_collection<R: Runtime>(
                     storage_mode,
                 )?;
             }
-            Ok(CollectionInfo {
-                name: request.name.clone(),
-                dimension: request.dimension,
-                metric: metric_to_string(metric).to_string(),
-                count: 0,
-                storage_mode: storage_mode_to_string(storage_mode).to_string(),
-            })
+            crate::helpers::collection_info_of(&db, &request.name)
         })
         .await
         .map_err(CommandError::from)?;
@@ -109,13 +103,7 @@ pub async fn create_metadata_collection<R: Runtime>(
     let result = state
         .run_db(move |db| {
             db.create_metadata_collection(&request.name)?;
-            Ok(CollectionInfo {
-                name: request.name,
-                dimension: 0,
-                metric: "none".to_string(),
-                count: 0,
-                storage_mode: "metadata_only".to_string(),
-            })
+            crate::helpers::collection_info_of(&db, &request.name)
         })
         .await
         .map_err(CommandError::from)?;
@@ -162,14 +150,7 @@ pub async fn list_collections<R: Runtime>(
                 );
                 if decided.map(|scope| scope.is_none()).unwrap_or(false) {
                     if let Some(coll) = db.get_any_collection(&name) {
-                        let config = coll.config();
-                        collections.push(CollectionInfo {
-                            name,
-                            dimension: config.dimension,
-                            metric: metric_to_string(config.metric).to_string(),
-                            count: config.point_count,
-                            storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
-                        });
+                        collections.push(crate::helpers::collection_info(name, &coll));
                     }
                 }
             }
@@ -194,15 +175,7 @@ pub async fn get_collection<R: Runtime>(
                 velesdb_core::observer::QueryOperationKind::Select,
                 "collection metadata reads",
             )?;
-            let coll = require_collection(&db, &name)?;
-            let config = coll.config();
-            Ok(CollectionInfo {
-                name,
-                dimension: config.dimension,
-                metric: metric_to_string(config.metric).to_string(),
-                count: coll.len(),
-                storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
-            })
+            crate::helpers::collection_info_of(&db, &name)
         })
         .await
         .map_err(CommandError::from)

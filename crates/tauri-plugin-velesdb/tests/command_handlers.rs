@@ -1145,3 +1145,73 @@ fn semantic_query_quality_reaches_core() {
         err.message
     );
 }
+
+/// What a create command answers is what `get_collection` and
+/// `list_collections` answer afterwards, for every collection kind: one
+/// shape, read from the persisted configuration. The create commands built
+/// theirs by hand — a metadata collection reported metric `none` and storage
+/// `metadata_only` once, then something else forever after; a graph one
+/// echoed the request's metric spelling.
+#[test]
+fn create_answers_what_get_and_list_answer_afterwards() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+
+    let created = vec![
+        run(create_collection(
+            handle(&app),
+            st(&app),
+            vector_collection_request("vectors"),
+        ))
+        .expect("create vector"),
+        run(create_metadata_collection(
+            handle(&app),
+            st(&app),
+            serde_json::from_value::<CreateMetadataCollectionRequest>(
+                serde_json::json!({ "name": "notes" }),
+            )
+            .expect("deserialize"),
+        ))
+        .expect("create metadata"),
+        run(create_graph_collection(
+            handle(&app),
+            st(&app),
+            serde_json::from_value::<CreateGraphCollectionRequest>(
+                serde_json::json!({ "name": "kg", "dimension": DIM, "metric": "COSINE" }),
+            )
+            .expect("deserialize"),
+        ))
+        .expect("create graph"),
+        run(create_graph_collection(
+            handle(&app),
+            st(&app),
+            serde_json::from_value::<CreateGraphCollectionRequest>(
+                serde_json::json!({ "name": "plain_kg" }),
+            )
+            .expect("deserialize"),
+        ))
+        .expect("create plain graph"),
+    ];
+
+    let listed = run(list_collections(handle(&app), st(&app))).expect("list");
+    for info in created {
+        let created_json = serde_json::to_value(&info).expect("serialize");
+        let got = run(get_collection(handle(&app), st(&app), info.name.clone())).expect("get");
+        assert_eq!(
+            serde_json::to_value(&got).expect("serialize"),
+            created_json,
+            "get_collection disagrees with create for {}",
+            info.name
+        );
+        let in_list = listed
+            .iter()
+            .find(|l| l.name == info.name)
+            .map(|l| serde_json::to_value(l).expect("serialize"));
+        assert_eq!(
+            in_list,
+            Some(created_json),
+            "list_collections disagrees with create for {}",
+            info.name
+        );
+    }
+}
