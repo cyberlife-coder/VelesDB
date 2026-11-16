@@ -153,35 +153,16 @@ impl Collection {
         self.finalize_early_results(results, early)
     }
 
-    /// DISTINCT / ORDER BY / OFFSET / LIMIT post-processing for early paths.
+    /// The SELECT post-processing of the scan's rows
+    /// ([`Self::finalize_ranked_results`]), then the guard-rails.
     fn finalize_early_results(
         &self,
-        mut results: Vec<SearchResult>,
+        results: Vec<SearchResult>,
         early: &EarlyReturnCtx<'_>,
     ) -> Result<Vec<SearchResult>> {
-        // Bug #475: Apply DISTINCT before ORDER BY (same as finalize_query_results path).
-        if early.stmt.distinct == crate::velesql::DistinctMode::All {
-            results =
-                crate::velesql::distinct_evaluator::apply_distinct(results, &early.stmt.columns);
-        }
-        if let Some(ref order_by) = early.stmt.order_by {
-            self.apply_order_by(&mut results, order_by, early.params)
-                .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
-        }
-        // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
-        if let Some(offset) = early.stmt.offset {
-            let skip = usize::try_from(offset).unwrap_or(usize::MAX);
-            results = results.into_iter().skip(skip).collect();
-        }
-        let final_limit = usize::try_from(
-            early
-                .stmt
-                .limit
-                .unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT),
-        )
-        .unwrap_or(MAX_LIMIT)
-        .min(MAX_LIMIT);
-        results.truncate(final_limit);
+        let results = self
+            .finalize_ranked_results(early.stmt, early.params, results)
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         self.check_guardrails_and_record(early.ctx, results.len())?;
         self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(results)

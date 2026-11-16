@@ -83,6 +83,23 @@ pub(in crate::collection::search::query) struct WhereFilterMemo {
 }
 
 impl<'a> MatchStorageGuards<'a> {
+    /// The guards bundle over one collection's storage guards, its memos
+    /// fresh: the form a SELECT scan or an aggregate hands its WHERE
+    /// evaluator, which reads no annotated alias.
+    pub(in crate::collection::search::query) fn single(
+        metric: DistanceMetric,
+        vector_guard: &'a MmapStorage,
+        payload_guard: &'a LogPayloadStorage,
+    ) -> Self {
+        Self {
+            metric,
+            vector_guard,
+            payload_guard,
+            payload_memo: PayloadMemo::new(payload_guard),
+            where_filters: WhereFilterMemo::default(),
+        }
+    }
+
     /// The guards bundle over `reads`, its memo reading each annotated
     /// alias's collection too.
     pub(in crate::collection::search::query) fn over(

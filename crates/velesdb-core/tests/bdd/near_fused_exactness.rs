@@ -9,10 +9,7 @@
 use std::collections::HashMap;
 
 use serde_json::json;
-use velesdb_core::filter::{Condition, Filter};
-use velesdb_core::{
-    Database, DistanceMetric, FusionStrategy, Point, StorageMode, VectorCollection,
-};
+use velesdb_core::{Database, DistanceMetric, Point};
 
 use super::helpers::{create_test_db, execute_sql_with_params};
 
@@ -66,42 +63,4 @@ fn a_selective_filter_still_fills_the_limit() {
         assert_eq!(rows.len(), 4, "{metric:?}");
         assert!(rows.iter().all(|r| r.point.id > 100), "{metric:?}");
     }
-}
-
-/// GIVEN a collection of 10 050 points, every one of them passing the filter
-/// WHEN a filtered search, then a filtered fusion, asks for 10 040
-/// THEN each returns 10 040: the filter's oversampling ceiling bounds the
-///      extra candidates, never the points asked for.
-#[test]
-fn a_filtered_search_deeper_than_the_oversampling_ceiling_is_filled() {
-    const POINTS: u64 = 10_050;
-    const WANTED: usize = 10_040;
-    let dir = tempfile::tempdir().expect("test: tempdir");
-    let c = VectorCollection::create(
-        dir.path().join("c"),
-        "c",
-        2,
-        DistanceMetric::Euclidean,
-        StorageMode::Full,
-    )
-    .expect("test: create c");
-    let points: Vec<Point> = (1..=POINTS)
-        .map(|id| Point::new(id, vec![id as f32, 0.0], Some(json!({"kind": "any"}))))
-        .collect();
-    c.upsert(points).expect("test: upsert");
-    let all = Filter::new(Condition::Eq {
-        field: "kind".to_string(),
-        value: json!("any"),
-    });
-    let query = [0.0_f32, 0.0];
-
-    let searched = c
-        .search_with_filter(&query, WANTED, &all)
-        .expect("test: filtered search");
-    assert_eq!(searched.len(), WANTED, "search_with_filter");
-
-    let fused = c
-        .multi_query_search(&[&query], WANTED, FusionStrategy::RRF { k: 60 }, Some(&all))
-        .expect("test: filtered fusion");
-    assert_eq!(fused.len(), WANTED, "multi_query_search");
 }

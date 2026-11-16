@@ -239,6 +239,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the 5 000 000-vector ceiling of the former `NOT` scan; the LET refusal
   names it "exhaustive similarity() scan".
 
+- **Window functions run on every SELECT path** (core, 2026-11-16). The
+  sparse, `NEAR_FUSED` and exact `similarity()` paths finalized their rows
+  with copies of the SELECT post-processing that skipped window functions,
+  so `ROW_NUMBER() OVER (...) AS rn` came back without `rn` and `ORDER BY rn`
+  read nothing. They now finalize through the one SELECT post-processing.
+
 - **A `similarity()` threshold reads the same in every engine** (core, WASM,
   2026-11-15). The WASM executor compared `similarity() > t` as "score above
   t" under a distance metric (where it means *closer*), with an `f32`

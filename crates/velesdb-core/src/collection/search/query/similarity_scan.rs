@@ -50,6 +50,16 @@ struct ScanRows {
 }
 
 impl ScanRows {
+    /// No row yet: the `limit` best scored rows, ranked in the metric's
+    /// direction, then up to `limit` unscored ones.
+    fn new(limit: usize, higher_is_better: bool) -> Self {
+        Self {
+            scored: BoundedTopK::new(limit, higher_is_better),
+            unscored: Vec::new(),
+            limit,
+        }
+    }
+
     fn offer(&mut self, row: SearchResult, scored: bool) {
         if scored {
             self.scored.offer(row);
@@ -122,6 +132,34 @@ impl Collection {
         }
     }
 
+    /// The leaf a scan ranks and scores by: the first `similarity()`.
+    fn ranking_leaf(
+        condition: &Condition,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<Option<RankingLeaf>> {
+        Ok(Self::extract_all_similarity_conditions(condition, params)?
+            .into_iter()
+            .next()
+            .map(|(field, query, _, _)| RankingLeaf { field, query }))
+    }
+
+    /// The ids a scan visits, in id order: the `candidates` when given, else
+    /// every stored vector, refused above [`Self::SIMILARITY_SCAN_MAX`].
+    fn similarity_scan_ids(
+        &self,
+        candidates: Option<&HashSet<u64>>,
+        limit: usize,
+    ) -> Result<Vec<u64>> {
+        let mut ids: Vec<u64> = match candidates {
+            Some(ids) => ids.iter().copied().collect(),
+            None => self.storage.vector_storage.read().ids(),
+        };
+        ids.sort_unstable();
+        Self::guard_similarity_scan(ids.len())?;
+        Self::warn_large_scan(ids.len(), limit);
+        Ok(ids)
+    }
+
     /// The `limit` best points `condition` holds for, ranked and scored by
     /// its first `similarity()` leaf (see the module docs).
     ///
@@ -144,19 +182,8 @@ impl Collection {
         limit: usize,
         candidates: Option<&HashSet<u64>>,
     ) -> Result<Vec<SearchResult>> {
-        let ranking = Self::extract_all_similarity_conditions(condition, params)?
-            .into_iter()
-            .next()
-            .map(|(field, query, _, _)| RankingLeaf { field, query });
-
-        let mut all_ids = match candidates {
-            Some(ids) => ids.iter().copied().collect(),
-            None => self.storage.vector_storage.read().ids(),
-        };
-        all_ids.sort_unstable();
-        let total_count = all_ids.len();
-        Self::guard_similarity_scan(total_count)?;
-        Self::warn_large_scan(total_count, limit);
+        let ranking = Self::ranking_leaf(condition, params)?;
+        let all_ids = self.similarity_scan_ids(candidates, limit)?;
 
         // LOCK ORDER: metric snapshot (config, rank 1) first, then
         // vector_storage (2) before payload_storage (3) — the order a real
@@ -167,15 +194,11 @@ impl Collection {
         let now_secs = now_unix_secs();
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
-        let match_guards = crate::collection::search::query::match_exec::MatchStorageGuards {
+        let match_guards = super::match_exec::MatchStorageGuards::single(
             metric,
-            vector_guard: &vector_storage,
-            payload_guard: &payload_storage,
-            payload_memo: crate::collection::search::query::match_exec::PayloadMemo::new(
-                &payload_storage,
-            ),
-            where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
-        };
+            &vector_storage,
+            &payload_storage,
+        );
         let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
         let scan = ScanCtx {
             vector_storage: &vector_storage,
@@ -184,11 +207,7 @@ impl Collection {
             now_secs,
             ranking: ranking.as_ref(),
         };
-        let mut rows = ScanRows {
-            scored: BoundedTopK::new(limit, metric.higher_is_better()),
-            unscored: Vec::new(),
-            limit,
-        };
+        let mut rows = ScanRows::new(limit, metric.higher_is_better());
         for id in all_ids {
             if let Some((row, scored)) = self.scan_candidate(
                 id,
@@ -212,7 +231,7 @@ impl Collection {
         condition: &Condition,
         params: &HashMap<String, serde_json::Value>,
         scan: &ScanCtx<'_>,
-        guards: &crate::collection::search::query::match_exec::MatchStorageGuards<'_>,
+        guards: &super::match_exec::MatchStorageGuards<'_>,
         graph_cache: &mut super::where_eval::GraphMatchEvalCache,
     ) -> Result<Option<(SearchResult, bool)>> {
         // The SELECT universe of a vector collection: points with a vector.

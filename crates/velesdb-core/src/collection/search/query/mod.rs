@@ -389,7 +389,7 @@ impl Collection {
     // moved to early_return.rs (NLOC/CC resolution batch 3)
 
     // NOTE: dispatch_sparse_query, execute_sparse_or_hybrid, filter_by_graph_predicates,
-    // finalize_sparse_results, resolve_fusion_strategy moved to sparse_dispatch.rs (T3-3)
+    // finalize_ranked_results, resolve_fusion_strategy moved to sparse_dispatch.rs (T3-3)
 
     // NOTE: compute_cbo_strategy, dispatch_main_select, dispatch_match_query,
     // analyze_join_pushdown, apply_select_postprocessing moved to select_dispatch.rs
