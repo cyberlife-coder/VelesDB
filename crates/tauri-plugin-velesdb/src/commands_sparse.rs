@@ -31,17 +31,20 @@ pub async fn sparse_search<R: Runtime>(
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let idx_name = request.index_name.unwrap_or_default();
 
-            let scope = crate::helpers::authorize_collection_read(
+            crate::helpers::run_gated_search(
                 &db,
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
-            )?;
-            let mut search_results = coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
-            if let Some(scope) = scope {
-                search_results
-                    .retain(|r| scope.matches_point(r.point.id, r.point.payload.as_ref()));
-            }
-            Ok(map_core_results(search_results))
+                |scope| {
+                    let mut search_results =
+                        coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
+                    if let Some(scope) = scope {
+                        search_results
+                            .retain(|r| scope.matches_point(r.point.id, r.point.payload.as_ref()));
+                    }
+                    Ok(map_core_results(search_results))
+                },
+            )
         })
         .await
         .map_err(CommandError::from)?;
@@ -65,18 +68,25 @@ pub async fn hybrid_sparse_search<R: Runtime>(
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let strategy = velesdb_core::fusion::FusionStrategy::rrf_default();
 
-            let scope = crate::helpers::authorize_collection_read(
+            crate::helpers::run_gated_search(
                 &db,
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
-            )?;
-            let mut search_results =
-                coll.hybrid_sparse_search(&request.vector, &core_sv, request.top_k, "", &strategy)?;
-            if let Some(scope) = scope {
-                search_results
-                    .retain(|r| scope.matches_point(r.point.id, r.point.payload.as_ref()));
-            }
-            Ok(map_core_results(search_results))
+                |scope| {
+                    let mut search_results = coll.hybrid_sparse_search(
+                        &request.vector,
+                        &core_sv,
+                        request.top_k,
+                        "",
+                        &strategy,
+                    )?;
+                    if let Some(scope) = scope {
+                        search_results
+                            .retain(|r| scope.matches_point(r.point.id, r.point.payload.as_ref()));
+                    }
+                    Ok(map_core_results(search_results))
+                },
+            )
         })
         .await
         .map_err(CommandError::from)?;

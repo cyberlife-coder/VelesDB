@@ -33,21 +33,26 @@ impl VelesCollection {
         // Sparse search has no `GatedRead` leaf and no metadata-filtered twin,
         // so it consults the read gate directly and fails closed if the
         // observer asks for a scope filter it cannot apply (audit F-5.4, #1392).
-        let scope =
-            self.db
-                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
-        deny_if_scoped(scope, "sparse_search")?;
+        self.db.run_gated_read(
+            &self.name,
+            QueryOperationKind::VectorSearch,
+            None,
+            None,
+            |scope| {
+                deny_if_scoped(scope, "sparse_search")?;
 
-        let results = self
-            .inner
-            .sparse_search(
-                &core_sv,
-                usize::try_from(limit).unwrap_or(usize::MAX),
-                &idx_name,
-            )
-            .map_err(|e| VelesError::from_core("Sparse search failed", e))?;
+                let results = self
+                    .inner
+                    .sparse_search(
+                        &core_sv,
+                        usize::try_from(limit).unwrap_or(usize::MAX),
+                        &idx_name,
+                    )
+                    .map_err(|e| VelesError::from_core("Sparse search failed", e))?;
 
-        Ok(to_mobile_results(results))
+                Ok(to_mobile_results(results))
+            },
+        )?
     }
 
     /// Performs hybrid dense+sparse search with RRF fusion.
@@ -78,23 +83,28 @@ impl VelesCollection {
 
         // Fused dense+sparse leaf takes no metadata filter, so consult the gate
         // and fail closed on an unappliable observer scope (audit F-5.4, #1392).
-        let scope =
-            self.db
-                .authorize_read(&self.name, QueryOperationKind::HybridSearch, None, None)?;
-        deny_if_scoped(scope, "hybrid_sparse_search")?;
+        self.db.run_gated_read(
+            &self.name,
+            QueryOperationKind::HybridSearch,
+            None,
+            None,
+            |scope| {
+                deny_if_scoped(scope, "hybrid_sparse_search")?;
 
-        let results = self
-            .inner
-            .hybrid_sparse_search(
-                &vector,
-                &core_sv,
-                usize::try_from(limit).unwrap_or(usize::MAX),
-                &idx_name,
-                &strategy,
-            )
-            .map_err(|e| VelesError::from_core("Hybrid sparse search failed", e))?;
+                let results = self
+                    .inner
+                    .hybrid_sparse_search(
+                        &vector,
+                        &core_sv,
+                        usize::try_from(limit).unwrap_or(usize::MAX),
+                        &idx_name,
+                        &strategy,
+                    )
+                    .map_err(|e| VelesError::from_core("Hybrid sparse search failed", e))?;
 
-        Ok(to_mobile_results(results))
+                Ok(to_mobile_results(results))
+            },
+        )?
     }
 
     /// Performs multi-query search with result fusion.
@@ -116,22 +126,27 @@ impl VelesCollection {
         // Consult the read gate, then AND any observer scope filter into the
         // fusion leaf (which accepts a metadata filter) so narrowing is
         // enforced (Deny propagates as an error) (audit F-5.4, #1392).
-        let scope =
-            self.db
-                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
-        let effective: Option<Filter> = and_scope(None, scope);
+        self.db.run_gated_read(
+            &self.name,
+            QueryOperationKind::VectorSearch,
+            None,
+            None,
+            |scope| {
+                let effective: Option<Filter> = and_scope(None, scope);
 
-        let results = self
-            .inner
-            .multi_query_search(
-                &query_refs,
-                usize::try_from(limit).unwrap_or(usize::MAX),
-                core_strategy,
-                effective.as_ref(),
-            )
-            .map_err(|e| VelesError::from_core("Multi-query search failed", e))?;
+                let results = self
+                    .inner
+                    .multi_query_search(
+                        &query_refs,
+                        usize::try_from(limit).unwrap_or(usize::MAX),
+                        core_strategy,
+                        effective.as_ref(),
+                    )
+                    .map_err(|e| VelesError::from_core("Multi-query search failed", e))?;
 
-        Ok(to_mobile_results(results))
+                Ok(to_mobile_results(results))
+            },
+        )?
     }
 
     /// Performs multi-query search returning IDs and scores only.
@@ -156,28 +171,33 @@ impl VelesCollection {
         // Ids/scores-only results carry no payload, so an observer scope filter
         // cannot be enforced on them: consult the gate and fail closed rather
         // than return unscoped ids (audit F-5.4, #1392).
-        let scope =
-            self.db
-                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
-        deny_if_scoped(scope, "multi_query_search_ids")?;
+        self.db.run_gated_read(
+            &self.name,
+            QueryOperationKind::VectorSearch,
+            None,
+            None,
+            |scope| {
+                deny_if_scoped(scope, "multi_query_search_ids")?;
 
-        let results = self
-            .inner
-            .multi_query_search_ids(
-                &query_refs,
-                usize::try_from(limit).unwrap_or(usize::MAX),
-                core_strategy,
-            )
-            .map_err(|e| VelesError::from_core("Multi-query search failed", e))?;
+                let results = self
+                    .inner
+                    .multi_query_search_ids(
+                        &query_refs,
+                        usize::try_from(limit).unwrap_or(usize::MAX),
+                        core_strategy,
+                    )
+                    .map_err(|e| VelesError::from_core("Multi-query search failed", e))?;
 
-        Ok(results
-            .into_iter()
-            .map(|(id, score)| SearchResult {
-                id,
-                score,
-                payload: None,
-            })
-            .collect())
+                Ok(results
+                    .into_iter()
+                    .map(|(id, score)| SearchResult {
+                        id,
+                        score,
+                        payload: None,
+                    })
+                    .collect())
+            },
+        )?
     }
 
     /// Performs multi-query search with metadata filtering.
@@ -202,22 +222,27 @@ impl VelesCollection {
 
         // Consult the read gate and AND any observer scope filter into the
         // caller filter (narrow-only) before running (audit F-5.4, #1392).
-        let scope =
-            self.db
-                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
-        let effective = and_scope(Some(filter), scope);
+        self.db.run_gated_read(
+            &self.name,
+            QueryOperationKind::VectorSearch,
+            None,
+            None,
+            |scope| {
+                let effective = and_scope(Some(filter), scope);
 
-        let results = self
-            .inner
-            .multi_query_search(
-                &query_refs,
-                usize::try_from(limit).unwrap_or(usize::MAX),
-                core_strategy,
-                effective.as_ref(),
-            )
-            .map_err(|e| VelesError::from_core("Multi-query search failed", e))?;
+                let results = self
+                    .inner
+                    .multi_query_search(
+                        &query_refs,
+                        usize::try_from(limit).unwrap_or(usize::MAX),
+                        core_strategy,
+                        effective.as_ref(),
+                    )
+                    .map_err(|e| VelesError::from_core("Multi-query search failed", e))?;
 
-        Ok(to_mobile_results(results))
+                Ok(to_mobile_results(results))
+            },
+        )?
     }
 
     /// Inserts or updates a point with an associated sparse vector.

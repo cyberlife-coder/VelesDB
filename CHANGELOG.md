@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Core reports every search to the observer, in every binding**
+  (core, server, Python, mobile, Tauri, 2026-11-16). `on_query` fired inside
+  core only for `execute_query`; the REST server measured its search
+  endpoints and `/aggregate` itself and called the deprecated
+  `Database::notify_query` shim, and the bindings reported direct searches
+  not at all. Now `gated_search`, `execute_aggregate` and the new
+  `Database::run_gated_read` — the read gate for searches with no
+  `GatedRead` leaf (sparse, batch, multi-query, ids), which runs the read
+  and reports it — fire `on_query` once per completed read. The server,
+  Python, mobile and Tauri searches run through them, so every one of them
+  now reaches the observer once; nothing calls `notify_query` any more. A
+  `VelesQL` statement with scalar subqueries reported each subquery as a
+  query of its own; it is now reported once, at the statement's entry
+  point, and `explain_analyze_query` reports the read it executes, MATCH
+  included. Tauri text and hybrid searches now carry their own operation
+  kind to the gate instead of `Select`. Point lookups, scrolls and graph reads stay
+  gated and unreported, as before. **Embedder action:** a Rust caller that
+  still invokes `notify_query` after one of these reads now reports it
+  twice; drop the call.
+
 - **Core reports every write to the observer, whatever surface makes it**
   (core, server, Python, 2026-11-16). `DatabaseObserver::on_upsert` fired
   inside core only for VelesQL `INSERT`/`UPDATE`; a write through the

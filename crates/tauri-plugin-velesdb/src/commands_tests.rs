@@ -943,3 +943,109 @@ fn test_guardrail_limits_deserialize_camel_case() {
     assert_eq!(g.timeout_ms, 5);
     assert_eq!(g.circuit_recovery_seconds, 9);
 }
+
+/// Text and hybrid searches reach the observer once per completed search,
+/// under their own operation kind, and never for a refusal or a failure.
+mod filtered_search_telemetry {
+    use std::sync::{Arc, Mutex};
+
+    use velesdb_core::observer::QueryOperationKind;
+    use velesdb_core::{
+        AccessDecision, Database, DatabaseObserver, DistanceMetric, Error, Point,
+        QueryAccessContext,
+    };
+
+    use super::super::batch::filtered_search;
+
+    #[derive(Default)]
+    struct Spy {
+        requests: Mutex<Vec<QueryOperationKind>>,
+        queries: Mutex<Vec<String>>,
+    }
+
+    impl DatabaseObserver for Spy {
+        fn on_query_request(
+            &self,
+            ctx: &QueryAccessContext,
+        ) -> velesdb_core::Result<AccessDecision> {
+            self.requests.lock().unwrap().push(ctx.operation);
+            if ctx.collection == "secret" {
+                return Ok(AccessDecision::Deny(Error::Config("denied".into())));
+            }
+            Ok(AccessDecision::Allow)
+        }
+
+        fn on_query(&self, collection: &str, _duration_us: u64) {
+            self.queries.lock().unwrap().push(collection.to_string());
+        }
+    }
+
+    fn seeded() -> (tempfile::TempDir, Database, Arc<Spy>) {
+        let spy = Arc::new(Spy::default());
+        let dir = tempfile::TempDir::new().expect("test: tempdir");
+        let db = Database::open_with_observer(dir.path(), spy.clone() as Arc<dyn DatabaseObserver>)
+            .expect("test: open");
+        for name in ["docs", "secret"] {
+            db.create_vector_collection(name, 2, DistanceMetric::Cosine)
+                .expect("test: create");
+            db.get_vector_collection(name)
+                .expect("test: collection")
+                .upsert([Point::new(
+                    1,
+                    vec![1.0, 0.0],
+                    Some(serde_json::json!({"body": "rust database"})),
+                )])
+                .expect("test: seed");
+        }
+        (dir, db, spy)
+    }
+
+    #[test]
+    fn a_completed_text_or_hybrid_search_is_reported_once() {
+        let (_dir, db, spy) = seeded();
+        let text = filtered_search(&db, "docs", QueryOperationKind::TextSearch, None, |c, _| {
+            c.text_search("rust", 5)
+                .map_err(crate::error::Error::Database)
+        })
+        .expect("test: text search");
+        assert_eq!(text.len(), 1);
+        filtered_search(
+            &db,
+            "docs",
+            QueryOperationKind::HybridSearch,
+            None,
+            |c, _| {
+                c.hybrid_search(&[1.0, 0.0], "rust", 5, Some(0.5))
+                    .map_err(crate::error::Error::Database)
+            },
+        )
+        .expect("test: hybrid search");
+
+        assert_eq!(*spy.queries.lock().unwrap(), vec!["docs", "docs"]);
+        assert_eq!(
+            *spy.requests.lock().unwrap(),
+            vec![
+                QueryOperationKind::TextSearch,
+                QueryOperationKind::HybridSearch
+            ]
+        );
+    }
+
+    #[test]
+    fn a_refused_or_failed_search_is_not_reported() {
+        let (_dir, db, spy) = seeded();
+        let refused = filtered_search(
+            &db,
+            "secret",
+            QueryOperationKind::TextSearch,
+            None,
+            |_, _| panic!("a refused search never runs"),
+        );
+        assert!(refused.is_err());
+        let failed = filtered_search(&db, "docs", QueryOperationKind::TextSearch, None, |_, _| {
+            Err(crate::error::Error::InvalidConfig("boom".into()))
+        });
+        assert!(failed.is_err());
+        assert!(spy.queries.lock().unwrap().is_empty());
+    }
+}

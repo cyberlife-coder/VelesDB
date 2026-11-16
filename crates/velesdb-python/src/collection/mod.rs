@@ -249,15 +249,6 @@ impl Collection {
             // authorize the read (deny ⇒ Err, fail closed) then AND the observer
             // scope filter into a post-filter so a scoped read only narrows.
             (dense_opt, Some(s)) => {
-                let scope = self
-                    .db
-                    .authorize_read(
-                        &self.name,
-                        QueryOperationKind::VectorSearch,
-                        identity.principal,
-                        identity.tenant,
-                    )
-                    .map_err(core_err)?;
                 let query = SparseQuery {
                     dense: dense_opt.as_deref(),
                     sparse: &s,
@@ -265,7 +256,9 @@ impl Collection {
                     index_name,
                     fusion,
                 };
-                self.run_sparse_gated(&query, plan.filter, scope.as_ref())
+                self.run_gated_search(QueryOperationKind::VectorSearch, identity, |scope| {
+                    self.run_sparse_gated(&query, plan.filter, scope.as_ref())
+                })
             }
             (None, None) => Err(PyValueError::new_err(
                 "At least one of 'vector' or 'sparse_vector' must be provided",
@@ -330,10 +323,32 @@ impl Collection {
         }
     }
 
-    /// Consults the read gate for a non-`GatedRead` search path (sparse, text on
-    /// a non-vector collection, batch, multi-query). Returns the observer scope
-    /// filter to AND into the query, `Ok(None)` to allow unmodified, or an
-    /// `Err` when the read is denied (fail closed).
+    /// Runs a search with no `GatedRead` leaf (sparse, text, batch,
+    /// multi-query) through the database's read gate, which reports it to the
+    /// observer once it completes. `read` gets the scope filter to AND into
+    /// its search (`None` to run unmodified); a denial never runs it.
+    fn run_gated_search<T>(
+        &self,
+        operation: QueryOperationKind,
+        identity: ReadIdentity<'_>,
+        read: impl FnOnce(Option<Filter>) -> PyResult<T>,
+    ) -> PyResult<T> {
+        self.db
+            .run_gated_read(
+                &self.name,
+                operation,
+                identity.principal,
+                identity.tenant,
+                read,
+            )
+            .map_err(crate::collection_helpers::core_err)?
+    }
+
+    /// Consults the read gate for a read that is not a search (point lookups,
+    /// scrolls, graph reads), which the observer's `on_query` does not
+    /// report. Returns the observer scope filter to AND into the read,
+    /// `Ok(None)` to allow unmodified, or an `Err` when the read is denied
+    /// (fail closed).
     ///
     /// `principal`/`tenant` are caller-supplied and only meaningful when a
     /// trusted embedder forwards a verified identity (local-SDK trust boundary):

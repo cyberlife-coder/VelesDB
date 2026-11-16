@@ -127,7 +127,7 @@ async fn observer_receives_full_lifecycle() {
     assert_eq!(status, StatusCode::OK, "upsert");
     assert_eq!(observer.upsert.load(Ordering::SeqCst), 1, "on_upsert");
 
-    // search → on_query (search/pipeline.rs notify_query)
+    // search → on_query, reported by core's gated read: exactly once.
     let status = post(
         &app,
         &format!("/collections/{COLLECTION}/search"),
@@ -135,7 +135,7 @@ async fn observer_receives_full_lifecycle() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "search");
-    assert!(observer.query.load(Ordering::SeqCst) >= 1, "on_query");
+    assert_eq!(observer.query.load(Ordering::SeqCst), 1, "on_query");
 
     // delete → on_collection_deleted
     let status = delete(&app, &format!("/collections/{COLLECTION}")).await;
@@ -151,11 +151,9 @@ async fn observer_receives_full_lifecycle() {
 /// `on_query` once internally (core-invoked telemetry). The `/query` REST
 /// handler must not *also* invoke the deprecated `notify_query` shim after
 /// calling `execute_query`, or every `VelesQL` request would tally twice for
-/// any registered `DatabaseObserver` (RBAC/audit/usage billing). Unlike
-/// `observer_receives_full_lifecycle` above (which asserts `>= 1` for the
-/// `/search` REST pipeline, a path that never routes through
-/// `execute_query`), this test asserts an exact count for both `/query`
-/// dispatch branches so a reintroduced double-fire fails the test.
+/// any registered `DatabaseObserver` (RBAC/audit/usage billing). This test
+/// asserts an exact count for both `/query` dispatch branches so a
+/// reintroduced double-fire fails the test.
 #[tokio::test]
 async fn query_endpoint_fires_on_query_exactly_once_per_dispatch_branch() {
     let dir = TempDir::new().expect("test: dir");
@@ -641,4 +639,89 @@ async fn graph_search_dimension_mismatch_is_a_400_with_its_code() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
     assert_eq!(json["code"], "VELES-004", "{json}");
+}
+
+/// Every search endpoint, and `/aggregate`, is reported to the observer
+/// exactly once — by core, which ran the gated read. The handlers used to
+/// measure and report it themselves through the deprecated `notify_query`;
+/// one that still did would count twice here.
+#[tokio::test]
+async fn every_read_endpoint_fires_on_query_exactly_once() {
+    let dir = TempDir::new().expect("test: dir");
+    let observer = Arc::new(CountingObserver::default());
+    let app = create_test_app_with_observer(&dir, observer.clone());
+    let status = post(
+        &app,
+        "/collections",
+        json!({"name": COLLECTION, "dimension": DIM, "metric": "cosine"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let status = post(
+        &app,
+        &format!("/collections/{COLLECTION}/points"),
+        json!({"points": [{
+            "id": 1,
+            "vector": QUERY,
+            "payload": {"k": "hello"},
+            "sparse_vectors": {"": {"indices": [0, 1], "values": [1.0, 0.5]}}
+        }]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let sparse = json!({"indices": [0, 1], "values": [1.0, 0.5]});
+    let reads = [
+        ("search", json!({"vector": QUERY, "top_k": 1})),
+        (
+            "search",
+            json!({"sparse_vector": sparse.clone(), "top_k": 1}),
+        ),
+        (
+            "search",
+            json!({"vector": QUERY, "sparse_vector": sparse, "top_k": 1}),
+        ),
+        ("search/ids", json!({"vector": QUERY, "top_k": 1})),
+        ("search/text", json!({"query": "hello", "top_k": 1})),
+        (
+            "search/hybrid",
+            json!({"vector": QUERY, "query": "hello", "top_k": 1, "vector_weight": 0.5}),
+        ),
+        (
+            "search/batch",
+            json!({"searches": [{"vector": QUERY, "top_k": 1}, {"vector": QUERY, "top_k": 1}]}),
+        ),
+        (
+            "search/multi",
+            json!({"vectors": [QUERY, QUERY], "top_k": 1}),
+        ),
+        (
+            "search/multi/ids",
+            json!({"vectors": [QUERY, QUERY], "top_k": 1}),
+        ),
+    ];
+    for (path, body) in reads {
+        let before = observer.query.load(Ordering::SeqCst);
+        let status = post(&app, &format!("/collections/{COLLECTION}/{path}"), body).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(
+            observer.query.load(Ordering::SeqCst) - before,
+            1,
+            "{path} must fire on_query exactly once"
+        );
+    }
+
+    let before = observer.query.load(Ordering::SeqCst);
+    let status = post(
+        &app,
+        "/aggregate",
+        json!({"query": format!("SELECT COUNT(*) FROM {COLLECTION}"), "params": {}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "aggregate");
+    assert_eq!(
+        observer.query.load(Ordering::SeqCst) - before,
+        1,
+        "/aggregate must fire on_query exactly once"
+    );
 }

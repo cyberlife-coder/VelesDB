@@ -38,13 +38,19 @@ impl Database {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
-        self.execute_aggregate_gated(query, params, &GateDecisions::default())
+        // Reported like any `execute_query` statement: once, at its boundary,
+        // its scalar subqueries included.
+        self.report_statement(query, params, || {
+            self.execute_aggregate_gated(query, params, &GateDecisions::default())
+        })
     }
 
     /// [`execute_aggregate`](Self::execute_aggregate) sharing the caller's
     /// statement gate memo (issue #2588): a scalar subquery resolving to this
     /// aggregate replays the outer statement's decisions rather than
     /// consulting the observer a second time for the same collection.
+    /// Unreported, like `execute_query_gated`: the statement's entry point
+    /// reports it.
     pub(super) fn execute_aggregate_gated(
         &self,
         query: &crate::velesql::Query,

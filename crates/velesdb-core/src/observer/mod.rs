@@ -66,10 +66,20 @@ pub trait DatabaseObserver: Send + Sync {
     /// Called after a collection is successfully deleted.
     fn on_collection_deleted(&self, _name: &str) {}
 
-    /// Called after points are upserted into a collection.
+    /// Called once after each completed write to a collection the database
+    /// registered, whatever surface made it, with the number of points the
+    /// write carried — a batch repeating an id counts each entry, though the
+    /// last one wins in storage. A failed or empty write is not reported.
     fn on_upsert(&self, _collection: &str, _point_count: usize) {}
 
-    /// Called after a query is executed, with the duration in microseconds.
+    /// Called once after each completed search or `VelesQL` read, with the
+    /// collection the read gate decided on and the read's duration in
+    /// microseconds: `execute_query`, `execute_aggregate`, `gated_search` and
+    /// `run_gated_read`. A `VelesQL` statement is one read, reported once with
+    /// its scalar subqueries folded in, and `explain_analyze_query` reports
+    /// the read it executes. A refused or failed read is not reported, and
+    /// neither are the reads gated without a search (point lookups, scrolls,
+    /// graph reads).
     fn on_query(&self, _collection: &str, _duration_us: u64) {}
 
     /// Called before a DDL statement is executed.

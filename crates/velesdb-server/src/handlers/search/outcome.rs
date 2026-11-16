@@ -11,7 +11,7 @@
 use axum::{response::IntoResponse, Json};
 use velesdb_core::collection::VectorCollection;
 
-use crate::handlers::helpers::http_status_for_error;
+use crate::handlers::helpers::{http_status_for_error, record_query_timing};
 use crate::types::{
     ErrorResponse, IdScoreResult, SearchIdsResponse, SearchResponse, SearchResultResponse,
 };
@@ -71,25 +71,13 @@ pub(crate) fn read_refused(refusal: &velesdb_core::Error) -> axum::response::Res
     search_error_response(refusal)
 }
 
-/// Record empty-results diagnostic and notify the query timing subsystem.
+/// Records the empty-results diagnostic and the request's timing. The
+/// observer's `on_query` comes from core, which ran the gated read.
 fn record_search_metrics(state: &AppState, name: &str, start: std::time::Instant, is_empty: bool) {
     if is_empty {
         state.onboarding_metrics.record_empty_search_results();
     }
-    let elapsed = start.elapsed();
-    let duration_us = elapsed.as_micros();
-    #[allow(clippy::cast_possible_truncation, deprecated)]
-    // Reason: value is clamped to u64::MAX above, so the truncation is lossless.
-    // `notify_query` is deprecated for callers that route through the VelesQL DML
-    // path; the REST search pipeline does not, so core never fires `on_query` for
-    // it and this shim is the sole, non-double-counting telemetry source.
-    state
-        .db
-        .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
-    // Record into Prometheus histogram (seconds).
-    state
-        .query_duration_histogram
-        .observe(elapsed.as_secs_f64());
+    record_query_timing(state, name, start.elapsed());
 }
 
 /// Core search result handler: records metrics, delegates success to `on_ok`,

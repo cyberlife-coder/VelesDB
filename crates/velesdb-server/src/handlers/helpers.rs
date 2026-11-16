@@ -76,10 +76,14 @@ pub(crate) fn authorize_unscoped_read(
 ) -> velesdb_core::Result<()> {
     match state.db.authorize_read(name, operation, None, None)? {
         None => Ok(()),
-        Some(_) => Err(velesdb_core::Error::Config(format!(
-            "scope narrowing is not supported for {what}"
-        ))),
+        Some(_) => Err(scope_unsupported(what)),
     }
+}
+
+/// The `VELES-009` refusal of a read scope that `what` has no channel to
+/// apply: it fails closed rather than running unscoped.
+pub(crate) fn scope_unsupported(what: &str) -> velesdb_core::Error {
+    velesdb_core::Error::Config(format!("scope narrowing is not supported for {what}"))
 }
 
 /// Build an error response from a [`velesdb_core::Error`], including the
@@ -219,29 +223,22 @@ pub(crate) fn extract_client_id(headers: &axum::http::HeaderMap) -> String {
         .to_string()
 }
 
-/// Record query timing via a `tracing` event and notify the `DatabaseObserver`.
+/// Logs a completed request's wall-clock time at `DEBUG` level and records
+/// it in the Prometheus query-duration histogram.
 ///
-/// Emits a structured log at `DEBUG` level and forwards the query duration
-/// to `state.db.notify_query()` so that `DatabaseObserver` implementations
-/// (audit, RBAC, usage tracking) receive the event.
-pub(crate) fn notify_query_timing(
+/// The `DatabaseObserver` hears of the read from core itself
+/// (`Database::run_gated_read`, `execute_aggregate`), timed over the read;
+/// this measures the whole request.
+pub(crate) fn record_query_timing(
     state: &AppState,
     collection_name: &str,
-    start: std::time::Instant,
+    elapsed: std::time::Duration,
 ) {
-    let duration_us = start.elapsed().as_micros();
-    let elapsed_ms = duration_us as f64 / 1000.0;
+    let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
     tracing::debug!(collection = collection_name, elapsed_ms, "query completed");
-    // Reason: clamped to u64::MAX above — truncation is impossible.
-    // `notify_query` is deprecated in favour of core-invoked telemetry, but the
-    // REST search pipeline does not route through `Database::execute_query`, so
-    // core never fires `on_query` for it — this shim is the sole telemetry source
-    // and does not double-count.
-    #[allow(clippy::cast_possible_truncation, deprecated)]
-    state.db.notify_query(
-        collection_name,
-        duration_us.min(u128::from(u64::MAX)) as u64,
-    );
+    state
+        .query_duration_histogram
+        .observe(elapsed.as_secs_f64());
 }
 
 /// Apply guardrails pre-check (rate limiting + circuit breaker).

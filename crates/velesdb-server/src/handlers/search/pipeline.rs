@@ -7,6 +7,7 @@ use velesdb_core::collection::VectorCollection;
 use velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME;
 
 use super::outcome::read_refused;
+use crate::handlers::helpers::scope_unsupported;
 use crate::types::{parse_search_mode, validate_ef_search, ErrorResponse, SearchRequest};
 use crate::AppState;
 
@@ -335,23 +336,24 @@ pub(crate) fn execute_dense_search_ids(
     if let Err(error) = validate_query_dimension(state, name, expected_dimension, &req.vector) {
         return Err((StatusCode::BAD_REQUEST, Json(error)).into_response());
     }
-    // Gate the read (CORE-2). The ids fast path is only taken for filter-free
-    // dense requests, so a scope decision fails closed rather than silently
-    // running unscoped.
-    match state.db.authorize_read(
-        name,
-        velesdb_core::observer::QueryOperationKind::VectorSearch,
-        None,
-        None,
-    ) {
-        Ok(None) => Ok(collection
-            .search_ids(&req.vector, req.top_k)
-            .map(|scored| id_score_results(scored.into_iter().map(|s| (s.id, s.score))))),
-        Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
-            "scope narrowing is not supported on the ids fast path".to_string(),
-        ))),
-        Err(refusal) => Err(read_refused(&refusal)),
-    }
+    // Gate and report the read (CORE-2). The ids fast path is only taken for
+    // filter-free dense requests, so a scope decision fails closed rather than
+    // silently running unscoped.
+    state
+        .db
+        .run_gated_read(
+            name,
+            velesdb_core::observer::QueryOperationKind::VectorSearch,
+            None,
+            None,
+            |scope| match scope {
+                None => collection
+                    .search_ids(&req.vector, req.top_k)
+                    .map(|scored| id_score_results(scored.into_iter().map(|s| (s.id, s.score)))),
+                Some(_) => Err(scope_unsupported("the ids fast path")),
+            },
+        )
+        .map_err(|refusal| read_refused(&refusal))
 }
 
 /// Search mode classification used by [`execute_search_request`] to
@@ -442,18 +444,19 @@ pub(crate) fn execute_search_request(
             execute_hybrid_sparse(state, name, collection, req, sparse, index_name)
         }
         SearchMode::DenseOnly => execute_dense_search(state, name, collection, req, quality_mode),
-        SearchMode::SparseOnly { sparse } => match state.db.authorize_read(
-            name,
-            velesdb_core::observer::QueryOperationKind::VectorSearch,
-            None,
-            None,
-        ) {
-            Ok(None) => Ok(collection.sparse_search(sparse, req.top_k, index_name)),
-            Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
-                "scope narrowing is not supported for sparse-only search".to_string(),
-            ))),
-            Err(refusal) => Err(read_refused(&refusal)),
-        },
+        SearchMode::SparseOnly { sparse } => state
+            .db
+            .run_gated_read(
+                name,
+                velesdb_core::observer::QueryOperationKind::VectorSearch,
+                None,
+                None,
+                |scope| match scope {
+                    None => collection.sparse_search(sparse, req.top_k, index_name),
+                    Some(_) => Err(scope_unsupported("sparse-only search")),
+                },
+            )
+            .map_err(|refusal| read_refused(&refusal)),
     }
 }
 
@@ -479,27 +482,29 @@ fn execute_hybrid_sparse(
         Some(ref filter_json) => Some(parse_filter_or_400(filter_json, &state.onboarding_metrics)?),
         None => None,
     };
-    // Gate the read (CORE-2): the gate is consulted without a filter leaf, so
-    // a scope decision still fails closed rather than running under-scoped.
-    match state.db.authorize_read(
-        name,
-        velesdb_core::observer::QueryOperationKind::HybridSearch,
-        None,
-        None,
-    ) {
-        Ok(None) => Ok(collection.hybrid_sparse_search_filtered(
-            &req.vector,
-            sparse_query,
-            req.top_k,
-            index_name,
-            &strategy,
-            filter.as_ref(),
-        )),
-        Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
-            "scope narrowing is not supported for hybrid dense+sparse search".to_string(),
-        ))),
-        Err(refusal) => Err(read_refused(&refusal)),
-    }
+    // Gate and report the read (CORE-2): the gate is consulted without a
+    // filter leaf, so a scope decision still fails closed rather than running
+    // under-scoped.
+    state
+        .db
+        .run_gated_read(
+            name,
+            velesdb_core::observer::QueryOperationKind::HybridSearch,
+            None,
+            None,
+            |scope| match scope {
+                None => collection.hybrid_sparse_search_filtered(
+                    &req.vector,
+                    sparse_query,
+                    req.top_k,
+                    index_name,
+                    &strategy,
+                    filter.as_ref(),
+                ),
+                Some(_) => Err(scope_unsupported("hybrid dense+sparse search")),
+            },
+        )
+        .map_err(|refusal| read_refused(&refusal))
 }
 
 // Async worker wrappers (TimeoutElapsed, run_search_with_optional_timeout,

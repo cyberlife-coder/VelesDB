@@ -355,6 +355,16 @@ writes from the collection's storage entry points
 fire nothing of their own. `crates/velesdb-core/tests/telemetry_direct_writes.rs`
 pins exactly one report per write on every entry point.
 
+The read side had the same shape: `on_query` fired only inside
+`execute_query`, so the REST search endpoints and `/aggregate` called the
+deprecated `notify_query`, and the bindings' direct searches went
+unreported. `gated_search`, `execute_aggregate` and `run_gated_read` (the
+gate-run-report primitive for searches with no `GatedRead` leaf) now report
+each completed read; the server, Python, mobile and Tauri searches run
+through them and nothing calls `notify_query`.
+`crates/velesdb-core/tests/telemetry_gated_reads.rs` and the server's
+`every_read_endpoint_fires_on_query_exactly_once` pin it.
+
 **Streaming ingestion (`stream_insert_batch` / `enable_streaming` /
 `StreamIngester::*`) — DONE across the first-party bindings (2026-06-14).** The
 async-runtime + channel-handle-lifetime concern was solved by giving each

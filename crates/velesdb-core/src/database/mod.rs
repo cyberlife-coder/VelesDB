@@ -382,12 +382,12 @@ impl Database {
         }
     }
 
-    /// Notifies the observer that a query was executed, with its duration.
+    /// Invokes the observer's `on_query` directly.
     ///
-    /// **Caller contract**: this method is NOT called automatically by
-    /// [`Database::execute_query`]. Callers must measure the wall-clock
-    /// duration themselves (e.g. `std::time::Instant::now()` before the call)
-    /// and invoke this method afterwards with the elapsed microseconds.
+    /// Core already reports every completed read it runs or gates —
+    /// `execute_query`, `execute_aggregate`, `gated_search` and
+    /// `run_gated_read` — once per statement or search. Calling this after
+    /// one reports it a second time.
     ///
     /// No-op when no observer is registered.
     #[deprecated(

@@ -409,23 +409,28 @@ impl VelesCollection {
             })
             .collect();
 
-        // Authorize the batch as a whole through the read gate, then AND any
-        // observer scope filter into every per-query filter so the filtered
-        // leaf enforces the narrowing (Deny propagates as an error).
-        let scope =
-            self.db
-                .authorize_read(&self.name, QueryOperationKind::VectorSearch, None, None)?;
-        let filters: Vec<Option<Filter>> = filters?
-            .into_iter()
-            .map(|f| and_scope(f, scope.clone()))
-            .collect();
+        // The batch goes through the read gate as a whole, which reports it:
+        // any observer scope filter is ANDed into every per-query filter so
+        // the filtered leaf enforces the narrowing (a denial never runs it).
         let max_top_k = searches.iter().map(|s| s.top_k).max().unwrap_or(10);
-
-        let all_results = self.inner.search_batch_with_filters(
-            &query_refs,
-            usize::try_from(max_top_k).unwrap_or(usize::MAX),
-            &filters,
-        )?;
+        let all_results = self.db.run_gated_read(
+            &self.name,
+            QueryOperationKind::VectorSearch,
+            None,
+            None,
+            |scope| -> Result<_, VelesError> {
+                let filters: Vec<Option<Filter>> = filters?
+                    .into_iter()
+                    .map(|f| and_scope(f, scope.clone()))
+                    .collect();
+                Ok(self.inner.search_batch_with_filters(
+                    &query_refs,
+                    usize::try_from(max_top_k).unwrap_or(usize::MAX),
+                    &filters,
+                )?)
+            },
+        )??;
+        drop(query_refs);
 
         Ok(all_results
             .into_iter()

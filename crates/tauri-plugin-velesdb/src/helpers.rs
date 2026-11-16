@@ -275,6 +275,20 @@ pub(crate) fn authorize_collection_read(
         .map_err(Error::Database)
 }
 
+/// Runs a search with no `GatedRead` leaf (sparse, batch, multi-query, ids)
+/// through the database's read gate, which reports it to the observer once
+/// it completes. `read` gets the scope filter to AND into its search (`None`
+/// to run unmodified); a denial never runs it.
+pub(crate) fn run_gated_search<T>(
+    db: &velesdb_core::Database,
+    name: &str,
+    operation: velesdb_core::observer::QueryOperationKind,
+    read: impl FnOnce(Option<velesdb_core::Filter>) -> Result<T>,
+) -> Result<T> {
+    db.run_gated_read(name, operation, None, None, read)
+        .map_err(Error::Database)?
+}
+
 /// Fails a read whose shape cannot carry an observer scope filter (fail
 /// closed), the same refusal every other uncomposable read gives.
 pub(crate) fn deny_if_scoped(scope: Option<&velesdb_core::Filter>, context: &str) -> Result<()> {

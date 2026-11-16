@@ -19,8 +19,8 @@ use super::outcome::{
 };
 use super::pipeline::validate_query_dimension;
 use crate::handlers::helpers::{
-    apply_pre_check, authorize_unscoped_read, extract_client_id, get_vector_collection_or_404,
-    notify_query_timing, worker_failure,
+    apply_pre_check, extract_client_id, get_vector_collection_or_404, record_query_timing,
+    scope_unsupported, worker_failure,
 };
 
 /// Batch search for multiple vectors.
@@ -84,36 +84,43 @@ pub async fn batch_search(
         }
     };
 
-    // Gate the read (CORE-2) before dispatching the off-thread batch. A denied
-    // decision — or a scope narrowing, which batch has no per-query channel to
-    // apply — refuses the batch (fail closed).
-    if let Err(refusal) = authorize_unscoped_read(
-        &state,
-        &name,
-        velesdb_core::observer::QueryOperationKind::VectorSearch,
-        "batch search",
-    ) {
-        state.operational_metrics.inc_errors();
-        return read_refused(&refusal);
-    }
-
     // F-01 sweep: batch search is CPU-bound (one HNSW pass per query) and must
     // not run on the async runtime thread — a large batch would otherwise block
     // a Tokio worker and starve concurrent requests. Move it to a blocking
     // worker like the other search endpoints. `spawn_blocking` needs a 'static
     // closure, so owned query vectors + filters are moved in and the `&[f32]`
     // views are rebuilt inside.
+    //
+    // The read goes through the control-plane gate (CORE-2) inside the worker,
+    // which also reports it to the observer. A denial — or a scope narrowing,
+    // which batch has no per-query channel to apply — refuses the batch (fail
+    // closed).
     let collection_for_work = collection.clone();
+    let state_for_work = Arc::clone(&state);
+    let name_for_work = name.clone();
     let query_vectors: Vec<Vec<f32>> = req.searches.iter().map(|s| s.vector.clone()).collect();
     let max_top_k = req.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
 
-    let batch_result = match tokio::task::spawn_blocking(move || {
+    let gated = tokio::task::spawn_blocking(move || {
         let queries: Vec<&[f32]> = query_vectors.iter().map(Vec::as_slice).collect();
-        run_batch_search(&collection_for_work, &queries, max_top_k, &filters)
+        state_for_work.db.run_gated_read(
+            &name_for_work,
+            velesdb_core::observer::QueryOperationKind::VectorSearch,
+            None,
+            None,
+            |scope| match scope {
+                None => run_batch_search(&collection_for_work, &queries, max_top_k, &filters),
+                Some(_) => Err(scope_unsupported("batch search")),
+            },
+        )
     })
-    .await
-    {
-        Ok(inner) => inner,
+    .await;
+    let batch_result = match gated {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(refusal)) => {
+            state.operational_metrics.inc_errors();
+            return read_refused(&refusal);
+        }
         // A panicked worker is the engine's fault: recorded below like any.
         Err(join_err) => Err(worker_failure("batch search", &join_err)),
     };
@@ -156,10 +163,7 @@ fn finish_batch_search(
 ) -> axum::response::Response {
     let elapsed = start.elapsed();
     let timing_ms = elapsed.as_secs_f64() * 1000.0;
-    notify_query_timing(state, name, start);
-    state
-        .query_duration_histogram
-        .observe(elapsed.as_secs_f64());
+    record_query_timing(state, name, elapsed);
 
     Json(BatchSearchResponse { results, timing_ms }).into_response()
 }

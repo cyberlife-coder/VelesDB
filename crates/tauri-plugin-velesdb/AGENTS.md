@@ -5,5 +5,6 @@ Embeds the VelesDB engine in a Tauri desktop app (vector, text, graph, agent mem
 - **The guest-js surface mirrors the Rust commands 1:1** — add a command on the Rust side and its TS binding in the same commit, or the plugin is half-shipped.
 - **System deps are the build's real cost:** `glib-2.0-dev`, `gtk-3-dev`, `libwebkit2gdk-4.1` must be present (CI installs them via `cache-apt-pkgs-action`); a missing dep fails at link time, not in Rust — read the `ld` error, not the cargo error.
 - **Persistence lives in the app data dir**, never in the bundle: paths come from Tauri's `path` API, cfg-gated per OS.
+- **Observer events come from core.** A search with no `GatedRead` leaf (sparse, batch, multi-query, ids) runs through `helpers::run_gated_search` (core's `run_gated_read`), which gates it and reports it (`on_query`); `authorize_read` alone is for reads that are not searches. Never time and report a read here.
 - **Tests:** `cargo test -p tauri-plugin-velesdb -- --test-threads=1` (CI leg `rest`); JS side in `guest-js/` is covered by node-binding-tests when it changes.
 - Docs: crate [README.md](README.md); examples in `examples/`.
