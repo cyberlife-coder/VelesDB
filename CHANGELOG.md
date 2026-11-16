@@ -224,6 +224,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `similarity()` threshold reads the same in every engine** (core, WASM,
+  2026-11-15). The WASM executor compared `similarity() > t` as "score above
+  t" under a distance metric (where it means *closer*), with an `f32`
+  equality tolerance of its own; it refused two thresholds over different
+  query vectors and ignored the field, so `similarity(embedding, $v)` scored
+  the point's own vector. One definition (`velesql::similarity_holds`,
+  `payload_vector`) now serves both: a named vector is read from the payload,
+  a point that cannot be scored makes the predicate UNKNOWN, each threshold
+  under `AND` filters with its own vector, and the refusals come from one
+  check (`velesql::validate_vector_predicates`). In core, a row now carries the
+  score of the *first* `similarity()` (it carried the last one's), a `NEAR`
+  keeps its own score instead of the threshold's, and a union of
+  `(similarity AND similarity) OR metadata` applies every threshold, not just
+  the first. A WASM metadata match scores `1.0`, as in core.
+
+- **`NEAR_FUSED` with a metadata filter returns `LIMIT` rows** (core, WASM,
+  2026-11-15). Core fetched each vector's candidates, then filtered them, so a
+  selective filter returned fewer rows than `LIMIT` — none at all when the
+  matching points were not among the nearest. Each branch now holds its
+  best points *passing* the filter. WASM fused every point at full depth,
+  always closest-last under a distance metric, and accepted any number of
+  vectors; it now uses core's per-branch depth (`fusion::branch_depth`),
+  the metric's direction and the ten-vector cap (`fusion::MAX_FUSED_VECTORS`).
+  An aggregate over `NEAR_FUSED` still reads every passing point, as core's
+  `execute_aggregate` does, whatever its `LIMIT`.
+
+- **A filtered search for more than 10 000 points returns them all** (core,
+  2026-11-16). The filter's oversampling ceiling (10 000 candidates) also
+  capped the points asked for, so `search_with_filter`, and through it a
+  filtered `multi_query_search`, returned 10 000 even when every point
+  passed. The ceiling now bounds only the extra candidates.
+
 - **`LIKE`/`ILIKE` `_` matches one character, not one byte.** The matcher
   compiled patterns and scanned text byte by byte, so on UTF-8 text `'caf_'`
   did not match `"café"`, and `'__'` matched the single character `"é"` (two

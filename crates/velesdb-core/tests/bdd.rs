@@ -101,6 +101,8 @@ mod match_where_similarity_score;
 mod metrics_ranking_conformance;
 #[path = "bdd/near_exact_ranking.rs"]
 mod near_exact_ranking;
+#[path = "bdd/near_fused_exactness.rs"]
+mod near_fused_exactness;
 #[path = "bdd/near_fused_parse_only.rs"]
 mod near_fused_parse_only;
 #[path = "bdd/not_filters_exact.rs"]

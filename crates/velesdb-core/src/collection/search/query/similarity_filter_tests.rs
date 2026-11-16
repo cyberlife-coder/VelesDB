@@ -176,14 +176,13 @@ mod scan_score_semantics {
         // 3-dim query against a 2-dim collection. `similarity() > 0.9` on a
         // distance metric inverts to "distance < 0.9", so the fabricated 0.0
         // used to sail through as the most similar point there is.
-        let results = col.filter_by_similarity(
-            candidates,
-            "vector",
-            &[0.0, 0.0, 0.0],
+        let leaf = (
+            "vector".to_string(),
+            vec![0.0, 0.0, 0.0],
             crate::velesql::CompareOp::Gt,
             0.9,
-            10,
         );
+        let results = col.filter_by_similarity(candidates, &[leaf], 10);
 
         assert!(
             results.is_empty(),

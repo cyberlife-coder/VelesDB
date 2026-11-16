@@ -7,16 +7,8 @@ use super::match_exec::MatchStorageGuards;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
-use crate::velesql::{CompareOp, Condition, GraphMatchPredicate};
+use crate::velesql::{Condition, GraphMatchPredicate};
 use std::collections::HashSet;
-
-/// Tolerance for `=` / `!=` against a similarity-score threshold.
-///
-/// Scores are floating-point, so exact equality is never the intent. The value
-/// was written out four times, once per branch of the ascending/descending
-/// split; four copies of a threshold are four places to change it and three to
-/// forget.
-const SCORE_EQ_EPSILON: f32 = 0.001;
 
 /// Per-query evaluation cache shared across all result rows.
 ///
@@ -385,43 +377,12 @@ impl Collection {
             return Ok(None);
         }
         let score = metric.calculate(record_vector, query_vec);
-        #[allow(clippy::cast_possible_truncation)]
-        // Reason: similarity thresholds are approximate floating bounds.
-        let threshold = sim.threshold as f32;
-        Ok(Some(Self::compare_score(
-            score,
-            threshold,
+        Ok(Some(crate::velesql::similarity_holds(
             sim.operator,
+            score,
+            sim.threshold,
             metric.higher_is_better(),
         )))
-    }
-
-    /// Compares a score against a threshold using the given operator and metric direction.
-    pub(crate) fn compare_score(
-        score: f32,
-        threshold: f32,
-        op: CompareOp,
-        higher_is_better: bool,
-    ) -> bool {
-        if higher_is_better {
-            match op {
-                CompareOp::Gt => score > threshold,
-                CompareOp::Gte => score >= threshold,
-                CompareOp::Lt => score < threshold,
-                CompareOp::Lte => score <= threshold,
-                CompareOp::Eq => (score - threshold).abs() < SCORE_EQ_EPSILON,
-                CompareOp::NotEq => (score - threshold).abs() >= SCORE_EQ_EPSILON,
-            }
-        } else {
-            match op {
-                CompareOp::Gt => score < threshold,
-                CompareOp::Gte => score <= threshold,
-                CompareOp::Lt => score > threshold,
-                CompareOp::Lte => score >= threshold,
-                CompareOp::Eq => (score - threshold).abs() < SCORE_EQ_EPSILON,
-                CompareOp::NotEq => (score - threshold).abs() >= SCORE_EQ_EPSILON,
-            }
-        }
     }
 }
 

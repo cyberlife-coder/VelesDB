@@ -88,16 +88,16 @@ impl Collection {
         results_map: &mut std::collections::HashMap<u64, SearchResult>,
     ) -> Result<()> {
         let similarity_conditions = Self::extract_all_similarity_conditions(sim_cond, params)?;
-        if let Some((field, vec, op, threshold)) = similarity_conditions.first() {
+        if let Some((_, vec, _, _)) = similarity_conditions.first() {
             let overfetch_factor = 10;
             let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);
             let candidates = self.search(vec, candidates_k)?;
 
             let filter_k = limit.saturating_mul(2);
-            let filtered =
-                self.filter_by_similarity(candidates, field, vec, *op, *threshold, filter_k);
+            let filtered = self.filter_by_similarity(candidates, &similarity_conditions, filter_k);
 
-            for result in filtered {
+            for (mut result, similarity) in filtered {
+                result.score = similarity;
                 if let Some(outer) = outer_filter {
                     if !Self::matches_metadata_filter(&result.point, outer) {
                         continue;
