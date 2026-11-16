@@ -41,12 +41,7 @@ impl Database {
         let joins = query.select.joins.clone();
         let analysis = Self::prepare_join_pushdown(&mut query, params)?;
         let row_budget = Self::join_row_budget(budget_select, &analysis);
-        let ceiling = crate::collection::search::query::JOIN_ROW_CEILING;
-        let bounded = row_budget < ceiling;
-        // A bounded window keeps the base order, so the first `row_budget`
-        // joined rows are the answer: fetch that many base rows, more while
-        // an INNER join or a filter drops some.
-        let mut fetch = if bounded { row_budget.max(1) } else { ceiling };
+        let mut fetch = BaseFetch::new(row_budget);
         let plan = JoinPlan {
             select: budget_select,
             joins: &joins,
@@ -56,13 +51,13 @@ impl Database {
             params,
         };
         loop {
-            let base = Self::base_rows(&base_collection, &mut query, fetch, params, probe)?;
-            let exhausted = base.len() < fetch || fetch >= ceiling;
+            let base = Self::base_rows(&base_collection, &mut query, fetch.rows, params, probe)?;
+            let base_len = base.len();
             let joined = self.join_base_rows(base, &plan)?;
-            if !bounded || joined.len() >= row_budget || exhausted {
+            if fetch.is_enough(base_len, joined.len()) {
                 return Ok(joined);
             }
-            fetch = fetch.saturating_mul(2).min(ceiling);
+            fetch.grow();
         }
     }
 
@@ -252,5 +247,45 @@ impl JoinWindow {
         let limit = usize::try_from(self.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
             .unwrap_or(usize::MAX);
         Ok(rows.into_iter().skip(offset).take(limit).collect())
+    }
+}
+
+/// How many base rows the JOIN path fetches. A bounded window keeps the base
+/// order, so the first `row_budget` joined rows are the answer: fetch that
+/// many base rows, twice as many again while an INNER join or a filter drops
+/// some, up to [`JOIN_ROW_CEILING`]. An unbounded window fetches the ceiling
+/// at once.
+///
+/// [`JOIN_ROW_CEILING`]: crate::collection::search::query::JOIN_ROW_CEILING
+struct BaseFetch {
+    /// Base rows the next fetch asks for.
+    rows: usize,
+    /// Joined rows needed (the ceiling when unbounded).
+    row_budget: usize,
+}
+
+impl BaseFetch {
+    const CEILING: usize = crate::collection::search::query::JOIN_ROW_CEILING;
+
+    fn new(row_budget: usize) -> Self {
+        let rows = if row_budget < Self::CEILING {
+            row_budget.max(1)
+        } else {
+            Self::CEILING
+        };
+        Self { rows, row_budget }
+    }
+
+    /// Whether the joined rows a fetch of `base_len` base rows gave are the
+    /// answer: the window is unbounded, it is filled, or no base row is left.
+    fn is_enough(&self, base_len: usize, joined_len: usize) -> bool {
+        let unbounded = self.row_budget >= Self::CEILING;
+        let exhausted = base_len < self.rows || self.rows >= Self::CEILING;
+        unbounded || joined_len >= self.row_budget || exhausted
+    }
+
+    /// The next fetch: twice as many base rows, up to the ceiling.
+    fn grow(&mut self) {
+        self.rows = self.rows.saturating_mul(2).min(Self::CEILING);
     }
 }
