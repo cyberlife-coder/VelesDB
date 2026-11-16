@@ -783,6 +783,14 @@ class Collection:
         """Get all point IDs in the collection."""
         ...
 
+    def all_point_ids(self) -> List[int]:
+        """All point IDs (vector and payload indexes union), ascending.
+
+        Gated like ``all_ids``: raises if the observer denies the read or
+        narrows it with a scope.
+        """
+        ...
+
     def has_secondary_index(self, field: str) -> bool:
         """Check if a secondary index exists on a payload field."""
         ...

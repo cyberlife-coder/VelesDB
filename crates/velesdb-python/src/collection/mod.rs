@@ -363,6 +363,16 @@ impl Collection {
             .authorize_read(&self.name, operation, principal, tenant)
             .map_err(crate::collection_helpers::core_err)
     }
+
+    /// An ids-only read (`what` names it in a refusal) through the read gate.
+    /// Ids carry no payload a governance scope filter could narrow, so a
+    /// scoped read fails closed (mirrors `search_ids`); a deny is an `Err`
+    /// from [`Self::authorize`]. No observer ⇒ a single `Option` check.
+    fn read_ids(&self, what: &str, read: impl FnOnce() -> Vec<u64>) -> PyResult<Vec<u64>> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, what)?;
+        Ok(read())
+    }
 }
 
 /// AND-composes a caller filter with an observer scope filter. The result
@@ -557,14 +567,7 @@ impl Collection {
     ///     PermissionError: If the read gate denies the read, or returns a
     ///         scope filter (ids carry no payload to filter — fail closed).
     fn all_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
-        py.detach(|| {
-            // Ids-only shape: a governance scope filter cannot be applied, so
-            // a scoped read fails closed (mirrors search_ids); deny is an Err
-            // from authorize(). No observer ⇒ single Option check, unchanged.
-            let scope = self.authorize(QueryOperationKind::Select, None, None)?;
-            deny_if_scoped(scope, "all_ids")?;
-            Ok(self.inner.all_ids())
-        })
+        py.detach(|| self.read_ids("all_ids", || self.inner.all_ids()))
     }
 
     /// Full durability flush including vectors.idx serialization.
@@ -598,8 +601,12 @@ impl Collection {
 
     /// All point IDs in the collection (vector and payload indexes union),
     /// ascending. Used by training paths that need every stored vector.
-    fn all_point_ids(&self) -> Vec<u64> {
-        self.inner.all_point_ids()
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read, or returns a
+    ///         scope filter (ids carry no payload to filter — fail closed).
+    fn all_point_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
+        py.detach(|| self.read_ids("all_point_ids", || self.inner.all_point_ids()))
     }
 
     /// Reorder the HNSW adjacency lists and vector storage for cache
