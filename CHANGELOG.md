@@ -304,6 +304,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Tauri: the `read-only` permission set no longer admits writes**
+  (core, Tauri, 2026-11-16). `velesdb:read-only` granted `query`, which runs
+  every VelesQL statement — a window holding only that set could
+  `DROP COLLECTION`, `DELETE` or `INSERT`. It now grants `read_query`
+  (`readQuery` in guest-js), which runs a statement only when
+  `Query::is_read_only` admits it (SELECT, MATCH, `SELECT EDGES`, `SHOW`,
+  `DESCRIBE`, `EXPLAIN`) and refuses the rest with VELES-010 before anything
+  runs. A test now fails if `read-only` or `search-only` ever grants a
+  command that writes. **Embedder action:** a read-only window that ran
+  SELECTs through `query` must call `readQuery`; `query` itself is unchanged
+  and stays in the `default` set.
+
 - **The install wizard never runs a downloaded installer under `--yes`**
   (`scripts/wizard_embedder.py`). On Linux, Ollama is installed with
   Ollama's own script, which nothing verifies once downloaded; `--apply --yes`
