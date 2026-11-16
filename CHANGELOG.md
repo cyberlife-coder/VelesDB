@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior): inline pattern properties filter as WHERE `=` does**
+  (core, WASM, 2026-11-15). `(n {k: v})` and `-[r {k: v}]->` had their own
+  equality: a `$name` was compared as the text `$name` and never matched,
+  `{k: NULL}` matched a `null` property, and `{id: 3}` read a payload field
+  named `id`. They now mean `n.k = v`: a `$name` takes the caller's value (an
+  unbound one refuses the query), `NULL` matches nothing, numbers compare by
+  exact value and `id` is the element id. One definition
+  (`velesql::inline_properties_hold`, `has_every_label`) serves core and WASM.
+
+- **BREAKING (behavior): a browser MATCH answers what core's MATCH answers**
+  (WASM, 2026-11-15). An audit of the WASM walk against core found it
+  deciding its own way:
+  - it ignored inline pattern properties;
+  - it checked only a node's first label and a relationship's first type;
+  - it ignored relationship properties inline and in WHERE (`r.since`);
+  - it overwrote a repeated alias instead of requiring a cycle;
+  - it named unnamed nodes `a`, `b`, … by position;
+  - a bare WHERE column read the first node instead of the walk's target;
+  - it returned one row per path where core returns one per distinct binding
+    of the named elements;
+  - its `executeQuery` rows carried id 0 and score 0;
+  - the first node's `@collection` picked the graph, and an annotation only
+    merged properties into returned rows (skipping a missing collection).
+
+  It now follows core on each point: the target comes from `_collection`
+  only, `@collection` properties are seen by WHERE, the pattern, ORDER BY and
+  RETURN (the node's own win), an annotation naming no collection refuses
+  the MATCH, and a row carries the walk's target and core's score. The MATCH
+  conformance cases now run one query text on both engines.
+
 - **A `VectorFirst` MATCH returns the rows a full walk returns** (core,
   2026-11-15). The strategy the planner picks for a `similarity()` on the
   start node replaced the MATCH walk with a shortcut: one row per start node

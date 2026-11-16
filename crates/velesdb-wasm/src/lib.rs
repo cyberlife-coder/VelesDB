@@ -105,6 +105,7 @@ mod velesql_match_core;
 mod velesql_match_nodes;
 mod velesql_match_orderby;
 mod velesql_match_score;
+mod velesql_match_sources;
 mod velesql_orderby;
 mod velesql_project;
 mod velesql_result;

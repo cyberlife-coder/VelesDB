@@ -230,3 +230,23 @@ fn execute_query_rows_carry_the_where_similarity_score() {
     assert!((scores[0] - 1.0).abs() < 1e-5, "{scores:?}");
     assert!((scores[1] - 0.8).abs() < 1e-5, "{scores:?}");
 }
+
+/// A row the query vector rejects never stands for its binding: with an
+/// unnamed target, author 100's first path (doc 1, 0.6) fails the 0.7
+/// threshold and must not hide its later passing paths (docs 2 and 3).
+#[test]
+fn a_rejected_path_does_not_hide_a_passing_one_of_the_same_binding() {
+    let mut db = kg("cosine");
+
+    let rows = execute_match_rows(
+        &mut db,
+        "MATCH (a:Person)-[:WROTE]->(:Doc) RETURN a.name",
+        Some(r#"{"_collection": "kg"}"#),
+        Some(MatchScoring {
+            vector: vec![1.0, 0.0],
+            threshold: Some(0.7),
+        }),
+    )
+    .expect("MATCH");
+    assert_eq!(rows.len(), 1, "author 100, once: {rows:?}");
+}

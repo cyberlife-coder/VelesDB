@@ -151,14 +151,17 @@ struct AggregateCase {
     expect_groups: Vec<Value>,
 }
 
-/// A MATCH golden case (issue #1544). Core and WASM have genuinely different
-/// graph data models (see `documented_divergences` D004 in the fixture), so
-/// each engine gets its own query text over an equivalent graph topology; only
-/// `expect_ids` is shared.
+/// A MATCH conformance case (issue #1544): one query text, run on both
+/// engines with `params`, compared on the `binding` alias of each row. Only
+/// where each engine stores the shared topology differs (`documented_divergences`
+/// D004).
 #[derive(Deserialize)]
 struct MatchCase {
     id: String,
-    core_query: String,
+    query: String,
+    #[serde(default)]
+    params: HashMap<String, serde_json::Value>,
+    binding: String,
     expect_ids: Vec<u64>,
 }
 
@@ -582,9 +585,8 @@ fn match_chain_edges() -> Vec<FixtureEdge> {
 ///
 /// Core treats vector-collection points as graph nodes: builds a `people`
 /// collection with a `_labels` payload field, wires up the chain topology via
-/// `Collection::add_edge`, and runs each case's `core_query`
-/// (`SELECT ... FROM people WHERE MATCH (...)`) through the same
-/// `Database::execute_query` path as every other SELECT case.
+/// `Collection::add_edge`, and runs each case's shared `query` with its
+/// `params` through `Database::execute_query`, as the WASM harness runs it.
 #[test]
 fn test_velesql_executor_conformance_match_cases() {
     let fixture = load_fixture();
@@ -617,18 +619,28 @@ fn test_velesql_executor_conformance_match_cases() {
             .unwrap_or_else(|e| panic!("add edge {}: {e}", edge.id));
     }
 
-    let params = HashMap::new();
     for case in &fixture.match_cases {
-        let query = Parser::parse(&case.core_query)
+        let query = Parser::parse(&case.query)
             .unwrap_or_else(|e| panic!("match case {} failed to parse: {e}", case.id));
         let results = db
-            .execute_query(&query, &params)
+            .execute_query(&query, &case.params)
             .unwrap_or_else(|e| panic!("match case {} failed to execute: {e}", case.id));
-        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        let ids: Vec<u64> = results
+            .iter()
+            .map(|r| {
+                r.point
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p["_bindings"][&case.binding].as_u64())
+                    .unwrap_or_else(|| {
+                        panic!("match case {}: row missing {}", case.id, case.binding)
+                    })
+            })
+            .collect();
         assert_eq!(
             ids, case.expect_ids,
-            "match conformance mismatch for case {}: core_query={:?}",
-            case.id, case.core_query
+            "match conformance mismatch for case {}: query={:?}",
+            case.id, case.query
         );
     }
 }

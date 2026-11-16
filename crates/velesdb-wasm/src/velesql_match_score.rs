@@ -64,9 +64,11 @@ impl MatchScoring {
     }
 }
 
-/// One bound node, as WHERE sees it.
+/// One bound node, as WHERE sees it, in pattern order: its alias (`None`
+/// for an unnamed node, which no column can address) and its id. The last
+/// is the walk's target, which a bare column scores.
 pub(crate) struct BoundNode<'b> {
-    pub alias: &'b str,
+    pub alias: Option<&'b str>,
     pub id: u64,
 }
 
@@ -153,7 +155,7 @@ fn leaf_score(
     let target = sim
         .field
         .split_once('.')
-        .and_then(|(alias, _)| bound.iter().find(|b| b.alias == alias))
+        .and_then(|(alias, _)| bound.iter().find(|b| b.alias == Some(alias)))
         .or_else(|| bound.last());
     let Some(target) = target else {
         return Ok(None);

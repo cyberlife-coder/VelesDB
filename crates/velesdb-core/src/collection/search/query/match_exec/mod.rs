@@ -505,6 +505,10 @@ impl Collection {
         guards: &MatchStorageGuards<'_>,
         starts: StartNodes<'_>,
     ) -> Result<Vec<MatchResult>> {
+        // Inline pattern properties take the caller's `$name` values, as the
+        // WHERE does (`velesql::inline_properties_hold`).
+        let bound = crate::velesql::bind_match_clause(match_clause, params)?;
+        let match_clause = &bound;
         if match_clause.patterns.is_empty() {
             return Err(Error::Query(
                 "MATCH query must have at least one pattern".to_string(),

@@ -145,3 +145,19 @@ fn a_single_node_match_needs_no_edge() {
     let result = execute(&mut db, "MATCH (n:Doc) RETURN n", ON_DOCS).expect("test: MATCH");
     assert_eq!(result.row_count(), 2);
 }
+
+/// GIVEN the same points
+/// WHEN the pattern carries inline properties
+/// THEN they filter the nodes, as in core.
+#[test]
+fn inline_pattern_properties_filter_the_nodes() {
+    let mut db = DatabaseInner::new();
+    docs_with_citations(&mut db);
+    let got = rows(
+        &mut db,
+        "MATCH (a:Doc)-[:CITES]->(b:Doc {title: 'doc 3'}) RETURN b",
+    );
+    assert_eq!(got.len(), 1, "{got:?}");
+    let start = rows(&mut db, "MATCH (a:Doc {title: 'doc 2'}) RETURN a");
+    assert_eq!(start.len(), 1, "{start:?}");
+}
