@@ -224,6 +224,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `similarity()` threshold filters the whole collection** (core,
+  2026-11-15). It filtered a window of `LIMIT × 10` points nearest the query
+  vector, so a selective metadata filter returned fewer rows than `LIMIT`
+  (often none), and a threshold on a named vector filtered points chosen by
+  their own vector. Negated and OR-ed thresholds had paths of their own: the
+  `NOT` scan stopped at the first `LIMIT` ids it met, unranked, and read every
+  leaf against the negated leaf's vector; the union scored its metadata side
+  `1.0` and sorted descending under every metric. Now a `> t` / `>= t`
+  threshold on the point's own vector (or any threshold beside a `NEAR`) is
+  searched until `LIMIT` rows pass or no closer point remains, and every
+  other shape is one exact scan through the shared WHERE evaluator, ranked by
+  the first `similarity()`, each leaf read on its own vector. The scan keeps
+  the 5 000 000-vector ceiling of the former `NOT` scan; the LET refusal
+  names it "exhaustive similarity() scan".
+
+- **Window functions run on every SELECT path** (core, 2026-11-16). The
+  sparse, `NEAR_FUSED` and exact `similarity()` paths finalized their rows
+  with copies of the SELECT post-processing that skipped window functions,
+  so `ROW_NUMBER() OVER (...) AS rn` came back without `rn` and `ORDER BY rn`
+  read nothing. They now finalize through the one SELECT post-processing.
+
 - **A `similarity()` threshold reads the same in every engine** (core, WASM,
   2026-11-15). The WASM executor compared `similarity() > t` as "score above
   t" under a distance metric (where it means *closer*), with an `f32`

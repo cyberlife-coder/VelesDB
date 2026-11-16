@@ -734,6 +734,34 @@
       "expect_ids": [5, 3],
       "expect_scores": [1.0, 1.0],
       "note": "a row no vector predicate scored carries velesql::METADATA_MATCH_SCORE on both engines (D009; WASM reported 0.0)"
+    },
+    {
+      "id": "N024",
+      "query": "SELECT * FROM docs_l2 WHERE similarity(vector, $e) > 0.8 OR grp = 'y'",
+      "expect_ids": [24, 22],
+      "expect_scores": [0.5, 3.0],
+      "note": "a threshold OR-ed with metadata: every row is scored by its real distance and ranked closest first (24 passes the threshold, 22 the predicate). Core scored the metadata side 1.0 and sorted descending whatever the metric"
+    },
+    {
+      "id": "N025",
+      "query": "SELECT * FROM docs WHERE NOT similarity(vector, $a) > 0.5 LIMIT 3",
+      "expect_ids": [5, 2, 1],
+      "expect_scores": [0.387298, 0.365148, 0.182574],
+      "note": "a negated threshold ranks by the similarity, best first, and LIMIT keeps the best (core returned the lowest ids)"
+    },
+    {
+      "id": "N026",
+      "query": "SELECT * FROM named WHERE similarity(alt, $x) > 0.5",
+      "expect_ids": [42, 43],
+      "expect_scores": [1.0, 0.894427],
+      "note": "without NEAR the rows are ranked by the named vector the threshold reads (core ranked a window of points near $x by their own vectors)"
+    },
+    {
+      "id": "N027",
+      "query": "SELECT * FROM named WHERE similarity(alt, $x) > 0.5 OR id = 44",
+      "expect_ids": [42, 43, 44],
+      "expect_scores": [1.0, 0.894427, 1.0],
+      "note": "a row the first similarity() cannot score (44 has no `alt`) passes through the OR, ranks after the scored rows and carries velesql::METADATA_MATCH_SCORE"
     }
   ],
   "fusion_cases": [

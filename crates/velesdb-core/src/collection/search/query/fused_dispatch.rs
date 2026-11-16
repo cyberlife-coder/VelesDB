@@ -3,7 +3,7 @@
 //! Routes a SELECT whose WHERE is a top-level `NEAR_FUSED` through the engine's
 //! [`Collection::multi_query_search`](Collection::multi_query_search) — the same
 //! fusion the multi-query engine API performs — then applies the standard
-//! DISTINCT / ORDER BY / OFFSET / LIMIT finalize.
+//! SELECT post-processing (`finalize_ranked_results`).
 
 use super::{Collection, ExtractedComponents, Result, SearchResult};
 
@@ -41,7 +41,9 @@ impl Collection {
             .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
         let results = self.multi_query_search(&slices, limit, strategy, filter.as_ref())?;
         self.check_guardrails_and_record(ctx, results.len())?;
-        self.finalize_sparse_results(stmt, params, results)
+        let results = self.finalize_ranked_results(stmt, params, results)?;
+        self.runtime.guard_rails.circuit_breaker.record_success();
+        Ok(results)
     }
 }
 

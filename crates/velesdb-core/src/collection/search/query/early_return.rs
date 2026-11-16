@@ -1,4 +1,5 @@
-//! Early-return query paths: NOT-similarity, union, and sparse dispatch.
+//! Early-return query paths: the exact similarity() scan (negated or
+//! OR-ed thresholds), sparse and fused dispatch.
 //!
 //! Extracted from `query/mod.rs` to reduce NLOC below the 500 threshold.
 
@@ -7,7 +8,7 @@ use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
 
-/// Context for early-return query paths (NOT-similarity, union).
+/// Context for the early-return similarity() scan.
 pub(super) struct EarlyReturnCtx<'a> {
     pub(super) stmt: &'a crate::velesql::SelectStatement,
     pub(super) params: &'a std::collections::HashMap<String, serde_json::Value>,
@@ -17,7 +18,8 @@ pub(super) struct EarlyReturnCtx<'a> {
 }
 
 impl Collection {
-    /// Attempts early-return paths: NOT-similarity, union, and sparse queries.
+    /// Attempts early-return paths: the similarity() scan, sparse and fused
+    /// queries.
     ///
     /// Returns `Ok(Some(results))` if an early path was taken, `Ok(None)` otherwise.
     pub(super) fn try_early_return_path(
@@ -49,7 +51,8 @@ impl Collection {
         Ok(None)
     }
 
-    /// Handles NOT-similarity and union early-return paths.
+    /// Handles the shapes no index can bound — a negated `similarity()`, or
+    /// one under `OR` — by the exact scan.
     fn try_not_similarity_or_union(
         &self,
         stmt: &crate::velesql::SelectStatement,
@@ -59,7 +62,7 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Option<Vec<SearchResult>>> {
         let cond = match stmt.where_clause.as_ref() {
-            Some(c) if extracted.is_not_similarity_query || extracted.is_union_query => c,
+            Some(c) if extracted.similarity_scan => c,
             _ => return Ok(None),
         };
 
@@ -82,40 +85,14 @@ impl Collection {
             limit
         };
 
-        // EPIC-044 US-003: NOT similarity() requires full scan
-        if extracted.is_not_similarity_query {
-            return self.run_not_similarity_early(&early_ctx, limit).map(Some);
-        }
-        self.run_union_early(&early_ctx, limit).map(Some)
+        self.run_similarity_scan_early(&early_ctx, limit).map(Some)
     }
 
-    /// Runs the union early-return path (EPIC-044 US-002: similarity() OR metadata).
-    ///
-    /// The union path keeps the `MAX_LIMIT` window when graph predicates are
-    /// present: its similarity/metadata legs rank independently and would each
-    /// need anchor-aware fetching to drop it.
-    fn run_union_early(
-        &self,
-        early: &EarlyReturnCtx<'_>,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
-        let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
-        let execution_limit = if early.has_graph_predicates {
-            MAX_LIMIT
-        } else {
-            limit
-        };
-        self.execute_early_return_query(
-            |s| s.execute_union_query(early.cond, early.params, execution_limit),
-            early,
-            &mut graph_cache,
-        )
-    }
-
-    /// Runs the NOT-similarity early path with GraphFirst anchoring:
-    /// AND-required MATCH predicates restrict the scan to their anchor set,
-    /// making the fetch exact at `limit` instead of a MAX_LIMIT window.
-    fn run_not_similarity_early(
+    /// Runs the exact `similarity()` scan (`similarity_scan.rs`) with
+    /// GraphFirst anchoring: AND-required MATCH predicates restrict the scan
+    /// to their anchor set, making the fetch exact at `limit` instead of a
+    /// MAX_LIMIT window.
+    fn run_similarity_scan_early(
         &self,
         early: &EarlyReturnCtx<'_>,
         limit: usize,
@@ -138,7 +115,7 @@ impl Collection {
         };
         self.execute_early_return_query(
             |s| {
-                s.execute_not_similarity_query_over(
+                s.execute_similarity_scan(
                     early.cond,
                     early.params,
                     execution_limit,
@@ -176,35 +153,16 @@ impl Collection {
         self.finalize_early_results(results, early)
     }
 
-    /// DISTINCT / ORDER BY / OFFSET / LIMIT post-processing for early paths.
+    /// The SELECT post-processing of the scan's rows
+    /// ([`Self::finalize_ranked_results`]), then the guard-rails.
     fn finalize_early_results(
         &self,
-        mut results: Vec<SearchResult>,
+        results: Vec<SearchResult>,
         early: &EarlyReturnCtx<'_>,
     ) -> Result<Vec<SearchResult>> {
-        // Bug #475: Apply DISTINCT before ORDER BY (same as finalize_query_results path).
-        if early.stmt.distinct == crate::velesql::DistinctMode::All {
-            results =
-                crate::velesql::distinct_evaluator::apply_distinct(results, &early.stmt.columns);
-        }
-        if let Some(ref order_by) = early.stmt.order_by {
-            self.apply_order_by(&mut results, order_by, early.params)
-                .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
-        }
-        // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
-        if let Some(offset) = early.stmt.offset {
-            let skip = usize::try_from(offset).unwrap_or(usize::MAX);
-            results = results.into_iter().skip(skip).collect();
-        }
-        let final_limit = usize::try_from(
-            early
-                .stmt
-                .limit
-                .unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT),
-        )
-        .unwrap_or(MAX_LIMIT)
-        .min(MAX_LIMIT);
-        results.truncate(final_limit);
+        let results = self
+            .finalize_ranked_results(early.stmt, early.params, results)
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         self.check_guardrails_and_record(early.ctx, results.len())?;
         self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(results)
