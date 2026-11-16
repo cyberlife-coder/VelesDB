@@ -12,14 +12,20 @@
 //! resolution order (LET, search score, component scores, `id`, payload) as
 //! core's ORDER BY, so no name reads differently in the browser.
 //!
-//! Genuinely unevaluable forms — `similarity(field, $v)` against a named
-//! vector, which WASM does not store, and aggregate ORDER BY outside an
-//! aggregation pipeline — are **rejected loudly** rather than silently
-//! degrading to scan order, matching the MATCH path (#8a).
+//! `similarity(field, $v)` scores each row as core's ordering does: `vector`
+//! the row's own vector, another field the payload's named vector
+//! ([`velesdb_core::velesql::payload_vector`]), a row without one taking the
+//! worst key so it sorts last under `DESC`. It needs the rows' collection
+//! ([`OrderVectors`]); where the rows are no collection's points (groups) it
+//! is refused, as is an aggregate ORDER BY outside an aggregation.
 
 use std::cmp::Ordering;
 
 use velesdb_core::point::SearchResult;
+use velesdb_core::DistanceMetric;
+
+use crate::store_state::StoreState;
+use crate::velesql_value::Params;
 use velesdb_core::velesql::{
     evaluate_arithmetic, is_builtin_score_variable, ArithmeticExpr, OrderByExpr, ScoreContext,
     SelectOrderBy, SelectStatement,
@@ -33,10 +39,34 @@ use velesdb_core::velesql::{
 /// `higher_is_better` is the collection metric's direction: `similarity()`
 /// sorts most similar first under `DESC` whatever the metric, as in core
 /// (`SelectOrderBy::directed`).
+/// What `ORDER BY similarity(field, $v)` scores rows against: the query's
+/// parameters and the collection the rows are points of.
+pub(crate) struct OrderVectors<'a> {
+    pub(crate) params: &'a Params,
+    pub(crate) store: &'a StoreState,
+}
+
+/// What an ORDER BY reads besides the rows: the metric's direction, and the
+/// rows' collection where they are its points (`None`: groups).
+pub(crate) struct OrderContext<'a> {
+    pub(crate) higher_is_better: bool,
+    pub(crate) vectors: Option<OrderVectors<'a>>,
+}
+
+impl OrderContext<'_> {
+    /// An ordering over rows that are no collection's points.
+    pub(crate) const fn without_vectors(higher_is_better: bool) -> Self {
+        Self {
+            higher_is_better,
+            vectors: None,
+        }
+    }
+}
+
 pub(crate) fn sort_rows(
     stmt: &SelectStatement,
     rows: &mut [SearchResult],
-    higher_is_better: bool,
+    ctx: &OrderContext<'_>,
 ) -> Result<(), String> {
     let Some(specs) = stmt.order_by.as_ref() else {
         return Ok(());
@@ -44,23 +74,112 @@ pub(crate) fn sort_rows(
     if specs.is_empty() {
         return Ok(());
     }
-    validate_order_by(specs)?;
-    rows.sort_by(|a, b| compare_rows(a, b, specs, higher_is_better));
+    validate_order_by(specs, ctx.vectors.is_some())?;
+    let keys = similarity_keys(specs, rows, ctx)?;
+    if keys.iter().all(Option::is_none) {
+        rows.sort_by(|a, b| compare_rows(a, b, specs, ctx.higher_is_better, &[], 0, 0));
+        return Ok(());
+    }
+    // Decorate-sort-undecorate: the precomputed keys follow their row.
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by(|&i, &j| {
+        compare_rows(&rows[i], &rows[j], specs, ctx.higher_is_better, &keys, i, j)
+    });
+    let sorted: Vec<SearchResult> = order.iter().map(|&i| rows[i].clone()).collect();
+    rows.clone_from_slice(&sorted);
     Ok(())
 }
 
+/// The `similarity(field, $v)` key of every row, per ORDER BY item (`None`
+/// for the other items).
+fn similarity_keys(
+    specs: &[SelectOrderBy],
+    rows: &[SearchResult],
+    ctx: &OrderContext<'_>,
+) -> Result<Vec<Option<Vec<f32>>>, String> {
+    specs
+        .iter()
+        .map(|spec| match (&spec.expr, &ctx.vectors) {
+            (OrderByExpr::Similarity(sim), Some(vectors)) => {
+                let query = crate::velesql_value::resolve_vector(&sim.vector, vectors.params)?;
+                let worst = if ctx.higher_is_better {
+                    f32::NEG_INFINITY
+                } else {
+                    f32::INFINITY
+                };
+                let own = OwnVectors::new(vectors.store);
+                Ok(Some(
+                    rows.iter()
+                        .map(|row| {
+                            field_similarity(row, &sim.field, &query, &own, vectors.store.metric)
+                                .unwrap_or(worst)
+                        })
+                        .collect(),
+                ))
+            }
+            _ => Ok(None),
+        })
+        .collect()
+}
+
+/// Row ids to their row in a store, for reading a row's own vector.
+struct OwnVectors<'a> {
+    store: &'a StoreState,
+    rows: std::collections::HashMap<u64, usize>,
+}
+
+impl<'a> OwnVectors<'a> {
+    fn new(store: &'a StoreState) -> Self {
+        let rows = store
+            .ids
+            .iter()
+            .enumerate()
+            .map(|(row, &id)| (id, row))
+            .collect();
+        Self { store, rows }
+    }
+
+    fn get(&self, id: u64) -> Option<&'a [f32]> {
+        let row = *self.rows.get(&id)?;
+        let dim = self.store.dimension;
+        (dim > 0).then(|| &self.store.data[row * dim..(row + 1) * dim])
+    }
+}
+
+/// A row's similarity to `query` by the vector `field` names: its own for
+/// `vector`, else the payload's named vector; `None` without one of the
+/// query's dimension.
+fn field_similarity(
+    row: &SearchResult,
+    field: &str,
+    query: &[f32],
+    own: &OwnVectors<'_>,
+    metric: DistanceMetric,
+) -> Option<f32> {
+    let named;
+    let vector: &[f32] = if field == velesdb_core::velesql::PRIMARY_VECTOR_FIELD {
+        own.get(row.point.id)?
+    } else {
+        named =
+            velesdb_core::velesql::payload_vector(row.point.payload.as_ref()?, field).ok()??;
+        &named
+    };
+    (vector.len() == query.len() && !vector.is_empty()).then(|| metric.calculate(vector, query))
+}
+
 /// Rejects ORDER BY expressions WASM cannot evaluate before sorting begins.
-fn validate_order_by(specs: &[SelectOrderBy]) -> Result<(), String> {
+fn validate_order_by(specs: &[SelectOrderBy], has_vectors: bool) -> Result<(), String> {
     for spec in specs {
         match &spec.expr {
-            OrderByExpr::Similarity(_) => {
+            OrderByExpr::Similarity(_) if !has_vectors => {
                 return Err(
-                    "ORDER BY similarity(field, $vec) is not supported in WASM: named/secondary \
-                     vectors are not stored. Use ORDER BY similarity() (the search score) or a \
-                     payload column."
+                    "ORDER BY similarity(field, $vec) needs the rows of a collection: it is not \
+                     supported over grouped rows. Use ORDER BY similarity() (the search score) \
+                     or a column."
                         .to_string(),
                 );
             }
+            OrderByExpr::Similarity(_) => {}
             OrderByExpr::Aggregate(_) => {
                 return Err(
                     "ORDER BY aggregate is only valid in an aggregation (GROUP BY) query"
@@ -76,15 +195,24 @@ fn validate_order_by(specs: &[SelectOrderBy]) -> Result<(), String> {
     Ok(())
 }
 
-/// Strict total order used by `sort_by` over a multi-key ORDER BY.
+/// Strict total order used by `sort_by` over a multi-key ORDER BY. `keys`
+/// holds the precomputed `similarity(field, $v)` keys, indexed by row
+/// (`ia`, `ib` for `a`, `b`).
 fn compare_rows(
     a: &SearchResult,
     b: &SearchResult,
     specs: &[SelectOrderBy],
     higher_is_better: bool,
+    keys: &[Option<Vec<f32>>],
+    ia: usize,
+    ib: usize,
 ) -> Ordering {
-    for spec in specs {
-        let ord = spec.directed(compare_with_spec(a, b, spec), higher_is_better);
+    for (idx, spec) in specs.iter().enumerate() {
+        let ascending = match keys.get(idx).and_then(Option::as_ref) {
+            Some(scores) => scores[ia].total_cmp(&scores[ib]),
+            None => compare_with_spec(a, b, spec),
+        };
+        let ord = spec.directed(ascending, higher_is_better);
         if ord != Ordering::Equal {
             return ord;
         }

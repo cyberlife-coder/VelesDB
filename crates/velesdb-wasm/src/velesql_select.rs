@@ -51,13 +51,11 @@ pub(crate) fn execute(
     }
     if !query.select.joins.is_empty() {
         let rows = crate::velesql_join::joined_rows(db, &query.select, params)?;
-        let higher_is_better = metric_direction(db, &query.select)?;
-        return finalize(&query.select, rows, params, higher_is_better);
+        return finalize(db, &query.select, rows, params);
     }
 
     let rows = scan(db, &query.select, params)?;
-    let higher_is_better = metric_direction(db, &query.select)?;
-    finalize(&query.select, rows, params, higher_is_better)
+    finalize(db, &query.select, rows, params)
 }
 
 /// Runs a compound operand: the rows its SELECT keeps, windowed by its own
@@ -87,8 +85,21 @@ pub(crate) fn execute_operand(
         );
     }
     let rows = scan(db, &query.select, params)?;
-    let higher_is_better = metric_direction(db, &query.select)?;
-    window_plain(&query.select, rows, higher_is_better)
+    let store = db.get_shared_store(&query.select.from)?;
+    let borrowed = store.borrow();
+    window_plain(&query.select, rows, &order_context(&borrowed, params))
+}
+
+/// What the ORDER BY of rows from `store` reads: its metric's direction, and
+/// its vectors for `similarity(field, $v)`.
+fn order_context<'a>(
+    store: &'a crate::store_state::StoreState,
+    params: &'a Params,
+) -> velesql_orderby::OrderContext<'a> {
+    velesql_orderby::OrderContext {
+        higher_is_better: store.metric.higher_is_better(),
+        vectors: Some(velesql_orderby::OrderVectors { params, store }),
+    }
 }
 
 /// Whether the metric of `stmt`'s collection ranks higher scores first.
@@ -493,15 +504,18 @@ fn fusion_branch_from_residual(
 /// raw row set has been materialised by either the plain or vector path.
 /// `higher_is_better` is the collection metric's direction.
 fn finalize(
+    db: &DatabaseInner,
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
     params: &Params,
-    higher_is_better: bool,
 ) -> Result<Vec<QueryResultRow>, String> {
+    let store = db.get_shared_store(&stmt.from)?;
+    let borrowed = store.borrow();
     if velesql_aggregate::needs_aggregation_pipeline(stmt) {
-        return finalize_aggregated(stmt, rows, params, higher_is_better);
+        return finalize_aggregated(stmt, rows, params, borrowed.metric.higher_is_better());
     }
-    finalize_plain(stmt, rows, higher_is_better)
+    let results = window_plain(stmt, rows, &order_context(&borrowed, params))?;
+    velesql_project::project(stmt, &results)
 }
 
 fn finalize_aggregated(
@@ -526,32 +540,17 @@ fn finalize_aggregated(
     Ok(apply_limit_offset(stmt, out, default_limit))
 }
 
-/// Finalizes a non-aggregated SELECT: DISTINCT, window functions, ORDER BY,
-/// column projection (including `AS` aliases), then OFFSET/LIMIT — core's
-/// order (`apply_select_postprocessing`).
-///
-/// Routed through velesdb-core's single source of truth — `apply_distinct`
-/// keys DISTINCT exactly as core does, `window_evaluator`
-/// injects window aliases into the payload, `velesql_orderby::sort_rows`
-/// evaluates arithmetic / rejects unevaluable ORDER BY forms, and
-/// `projection::project_results` materializes exactly the SELECT columns. This
-/// replaced the old path that always emitted `id + score + full payload`,
-/// dropping projection, aliases, and window functions (#3b).
-fn finalize_plain(
-    stmt: &SelectStatement,
-    rows: Vec<OwnedScanRow>,
-    higher_is_better: bool,
-) -> Result<Vec<QueryResultRow>, String> {
-    let results = window_plain(stmt, rows, higher_is_better)?;
-    velesql_project::project(stmt, &results)
-}
-
 /// The non-aggregated rows of a SELECT in their final order and window,
 /// before projection: DISTINCT, window functions, ORDER BY, OFFSET / LIMIT.
+///
+/// Routed through velesdb-core's single source of truth: `apply_distinct`
+/// keys DISTINCT as core does, `window_evaluator` injects window aliases,
+/// `velesql_orderby::sort_rows` orders as core's ORDER BY does, and the caller
+/// projects with core's projection (`velesql_project::project`).
 fn window_plain(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
-    higher_is_better: bool,
+    order: &velesql_orderby::OrderContext<'_>,
 ) -> Result<Vec<SearchResult>, String> {
     let mut results = velesql_project::to_search_results(rows);
     if find_vector_search(stmt.where_clause.as_ref()).is_some()
@@ -569,7 +568,7 @@ fn window_plain(
         results = apply_distinct(results, &stmt.columns);
     }
     velesql_project::inject_window_functions(stmt, &mut results)?;
-    velesql_orderby::sort_rows(stmt, &mut results, higher_is_better)?;
+    velesql_orderby::sort_rows(stmt, &mut results, order)?;
     Ok(apply_limit_offset(
         stmt,
         results,

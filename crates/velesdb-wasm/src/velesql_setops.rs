@@ -24,6 +24,8 @@ pub(crate) fn execute(
     params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
     let higher_is_better = crate::velesql_select::metric_direction(db, &query.select)?;
+    // The window's ORDER BY reads the first operand's collection, as core's.
+    let first = db.get_shared_store(&query.select.from)?;
     let ceiling =
         u64::try_from(crate::guardrails::MAX_INTERMEDIATE_CARDINALITY).unwrap_or(u64::MAX);
     let rows = velesdb_core::velesql::execute_compound(
@@ -33,7 +35,15 @@ pub(crate) fn execute(
         |operand| crate::velesql_select::execute_operand(db, operand, params),
         |rows, order_by| {
             let window = ordered_by(&query.select, order_by);
-            crate::velesql_orderby::sort_rows(&window, rows, higher_is_better)
+            let store = first.borrow();
+            let ctx = crate::velesql_orderby::OrderContext {
+                higher_is_better,
+                vectors: Some(crate::velesql_orderby::OrderVectors {
+                    params,
+                    store: &store,
+                }),
+            };
+            crate::velesql_orderby::sort_rows(&window, rows, &ctx)
         },
     )?;
     crate::velesql_project::project(&query.select, &rows)
