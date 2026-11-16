@@ -319,6 +319,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tauri commands honour every argument and keep core's error codes**
+  (core, Tauri, 2026-11-16). `search_ids` and `batch_search` dropped
+  `quality` whenever a filter was present; they now run core's new
+  `VectorCollection::search_dense`, the one dispatch that honours a filter,
+  an `ef` and a quality together (`gated_search` runs it too). `get_edges`
+  applied only the first of `label` / `source` / `target`; it now keeps the
+  edges matching all of them. `add_edge` and `create_index` reported core
+  errors as VELES-009 (a caller configuration error); they keep core's code
+  (an invalid edge label is VELES-021).
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
