@@ -357,4 +357,4 @@ version you run.
 
 ---
 
-Last updated: 2026-11-16 · Applies to: velesdb-core 8.2.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.2.0
