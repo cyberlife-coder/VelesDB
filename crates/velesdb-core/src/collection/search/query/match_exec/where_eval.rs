@@ -632,20 +632,7 @@ pub(super) fn edge_property_path<'a>(
     Collection::json_get_path(edge.property(first)?, rest)
 }
 
-/// The value a MATCH reads for `property` of a bound element, node or
-/// relationship: its id for `id` — as `id` reads in every clause, whatever
-/// property of that name the element carries — else the property path,
-/// read by `lookup`. WHERE, RETURN and ORDER BY all read through it.
-pub(super) fn element_property<'a>(
-    id: u64,
-    property: &str,
-    lookup: impl FnOnce(&str) -> Option<&'a serde_json::Value>,
-) -> Option<std::borrow::Cow<'a, serde_json::Value>> {
-    if property == "id" {
-        return Some(std::borrow::Cow::Owned(serde_json::Value::from(id)));
-    }
-    lookup(property).map(std::borrow::Cow::Borrowed)
-}
+pub(super) use crate::velesql::element_property;
 
 /// Strips the alias prefix from a column path when `is_alias` accepts it.
 fn strip_alias<'a>(column: &'a str, is_alias: &dyn Fn(&str) -> bool) -> &'a str {

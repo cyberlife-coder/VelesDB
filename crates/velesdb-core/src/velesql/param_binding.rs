@@ -12,7 +12,7 @@ use std::hash::BuildHasher;
 
 use crate::error::{Error, Result};
 use crate::velesql::{
-    BetweenCondition, Comparison, Condition, ContainsCondition, InCondition, Value,
+    BetweenCondition, Comparison, Condition, ContainsCondition, InCondition, MatchClause, Value,
 };
 
 /// Binds `value` when it is a `$name` parameter; returns any other value
@@ -161,6 +161,39 @@ fn bind_contains<S: BuildHasher>(
         mode: contains.mode,
         values: bind_values(&contains.values, params)?,
     })
+}
+
+/// Binds the `$name` values of every inline pattern property of `clause`,
+/// nodes and relationships alike, so a pattern element is tested against
+/// the caller's value ([`super::inline_properties_hold`]); the WHERE is
+/// bound leaf by leaf where it is evaluated.
+///
+/// # Errors
+///
+/// Returns the [`bind_value`] error of the first property that fails.
+pub fn bind_match_clause<S: BuildHasher>(
+    clause: &MatchClause,
+    params: &HashMap<String, serde_json::Value, S>,
+) -> Result<MatchClause> {
+    let mut bound = clause.clone();
+    for pattern in &mut bound.patterns {
+        for properties in pattern
+            .nodes
+            .iter_mut()
+            .map(|node| &mut node.properties)
+            .chain(
+                pattern
+                    .relationships
+                    .iter_mut()
+                    .map(|rel| &mut rel.properties),
+            )
+        {
+            for value in properties.values_mut() {
+                *value = bind_value(value, params)?;
+            }
+        }
+    }
+    Ok(bound)
 }
 
 /// Binds every value of a list through [`bind_value`].

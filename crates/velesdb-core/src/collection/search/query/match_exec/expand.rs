@@ -311,9 +311,8 @@ impl Collection {
         if !rel.types.is_empty() && !rel.types.iter().any(|t| t == edge.label()) {
             return false;
         }
-        rel.properties.iter().all(|(key, expected)| {
-            edge.property(key)
-                .is_some_and(|v| Self::values_match(expected, v))
+        crate::velesql::inline_properties_hold(&rel.properties, |key| {
+            crate::velesql::element_property(edge.id(), key, |k| edge.property(k))
         })
     }
 

@@ -700,26 +700,26 @@ fn test_match_where_two_hop_filters_middle_node() {
     );
 }
 
+/// GIVEN Alice KNOWS Bob KNOWS Carol
+/// WHEN WHERE reads a bare column (no alias prefix)
+/// THEN it reads the walk's target, the last node, as core does: `name =
+///      'Bob'` keeps the Alice -> Bob row, `name = 'Alice'` keeps none.
 #[test]
-fn test_match_where_bare_field_applies_to_first_node() {
-    // Backward compat: `WHERE name = 'Alice'` (no alias prefix) must
-    // resolve against the starting node `a`.
+fn test_match_where_bare_field_reads_the_walk_target() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
-    let r = execute(
-        &mut db,
-        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE name = 'Alice' RETURN a, b LIMIT 10",
-        None,
-    )
-    .expect("test: bare field on first node");
-    assert_eq!(
-        r.row_count(),
-        1,
-        "bare `name` must bind to node a, got: {}",
-        r.rows_json()
-    );
-    assert!(r.rows_json().contains("\"name\":\"Alice\""));
-    assert!(r.rows_json().contains("\"name\":\"Bob\""));
+    let run = |db: &mut DatabaseInner, name: &str| {
+        execute(
+            db,
+            &format!("MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE name = '{name}' RETURN a, b"),
+            None,
+        )
+        .expect("test: bare field")
+    };
+    let bob = run(&mut db, "Bob");
+    assert_eq!(bob.row_count(), 1, "{}", bob.rows_json());
+    assert!(bob.rows_json().contains("\"name\":\"Alice\""));
+    assert_eq!(run(&mut db, "Alice").row_count(), 0);
 }
 
 #[test]
@@ -1020,27 +1020,26 @@ fn test_match_where_by_node_id_with_param() {
     assert!(rows.contains("\"name\":\"Carol\""));
 }
 
+/// GIVEN Alice (1) KNOWS Bob (2) KNOWS Carol (3)
+/// WHEN WHERE reads a bare `id`
+/// THEN it is the walk target's id, as in core, and the row's id too.
 #[test]
-fn test_match_where_bare_id_targets_starting_node() {
-    // Backward-compat: `WHERE id = 1` (no alias prefix) must resolve
-    // against the starting node's id — same convention as bare
-    // `WHERE name = 'Alice'` in `test_match_where_bare_field_applies_to_first_node`.
+fn test_match_where_bare_id_reads_the_walk_target() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
     let r = execute(
         &mut db,
-        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE id = 1 RETURN a, b LIMIT 10",
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE id = 3 RETURN a, b",
         None,
     )
-    .expect("test: bare id on starting node");
+    .expect("test: bare id");
+    assert_eq!(r.row_count(), 1, "{}", r.rows_json());
+    assert!(r.rows_json().contains("\"name\":\"Carol\""));
     assert_eq!(
-        r.row_count(),
-        1,
-        "bare `id = 1` must target node a, got: {}",
-        r.rows_json()
+        r.row(0).expect("test: row").id(),
+        3,
+        "the row is the walk target"
     );
-    assert!(r.rows_json().contains("\"name\":\"Alice\""));
-    assert!(r.rows_json().contains("\"name\":\"Bob\""));
 }
 
 #[test]
@@ -1469,21 +1468,30 @@ fn test_match_targets_the_collection_named_by_the_collection_param() {
     assert_eq!(r.row_count(), 1);
 }
 
-/// GIVEN graphs `kg` and `graph`
-/// WHEN the first node carries an `@graph` annotation and the param names `kg`
-/// THEN the annotation wins, as it names the node's collection explicitly.
+/// GIVEN graph `kg` and a metadata collection `extra`
+/// WHEN the first node carries an `@extra` annotation and the param names `kg`
+/// THEN the walk reads `kg`, as in core: an annotation adds a collection's
+///      properties to its node, it never selects the graph.
 #[test]
-fn test_match_node_annotation_wins_over_the_collection_param() {
+fn test_match_node_annotation_never_selects_the_graph() {
     let mut db = DatabaseInner::new();
     seed_kg(&mut db);
-    seed_graph(&mut db);
-    let r = execute(
+    db.create_metadata_collection("extra")
+        .expect("test: create extra");
+    let plain = execute(
         &mut db,
-        "MATCH (a:Person@graph)-[:KNOWS]->(b:Person) RETURN a, b",
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b",
+        Some(r#"{"_collection": "kg"}"#),
+    )
+    .expect("test: plain match")
+    .row_count();
+    let annotated = execute(
+        &mut db,
+        "MATCH (a:Person@extra)-[:KNOWS]->(b:Person) RETURN a, b",
         Some(r#"{"_collection": "kg"}"#),
     )
     .expect("test: annotated match");
-    assert_eq!(r.row_count(), 2, "the default graph holds two KNOWS edges");
+    assert_eq!(annotated.row_count(), plain, "{}", annotated.rows_json());
 }
 
 /// WHEN `_collection` is not a string
