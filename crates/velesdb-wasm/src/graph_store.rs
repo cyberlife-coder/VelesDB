@@ -98,6 +98,10 @@ impl WasmGraphStore {
     /// over (source, target, label) so the same logical edge matches the id
     /// produced by every other VelesDB engine. Returns the final edge id.
     ///
+    /// Re-inserting a derived-id edge is idempotent, as in core: the edge
+    /// already stored under that id takes the new payload instead of being
+    /// duplicated.
+    ///
     /// # Errors
     ///
     /// Returns `Err` when `explicit_id` collides with an edge already in the
@@ -124,6 +128,12 @@ impl WasmGraphStore {
             // logical edge gets the same id across every VelesDB engine.
             velesdb_core::hash_edge_id(source, target, &label)
         });
+        if let Some(existing) = self.edges.iter_mut().find(|e| e.id == id) {
+            // Only a derived id reaches here (an explicit one was refused
+            // above): same id, same logical edge — overwrite it.
+            existing.payload = payload;
+            return Ok(id);
+        }
         self.edges.push(WasmEdge {
             id,
             source,

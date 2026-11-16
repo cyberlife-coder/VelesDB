@@ -136,3 +136,35 @@ fn test_insert_edge_after_delete_can_reuse_same_explicit_id() {
     assert_eq!(g.edges().len(), 1);
     assert_eq!(g.edges()[0].source, 5);
 }
+
+/// Re-inserting an edge whose id is derived from (source, target, label) is
+/// idempotent — it overwrites the edge, as core documents for its derived
+/// ids — rather than storing a second copy that `delete_edge_by_id` would
+/// then remove together with the first.
+#[test]
+fn test_reinserting_a_derived_id_edge_overwrites_it() {
+    let mut g = WasmGraphStore::new();
+    let first = g
+        .insert_edge(
+            None,
+            1,
+            2,
+            "CITES".to_string(),
+            Some(serde_json::json!({"w": 1})),
+        )
+        .expect("test: insert");
+    let second = g
+        .insert_edge(
+            None,
+            1,
+            2,
+            "CITES".to_string(),
+            Some(serde_json::json!({"w": 2})),
+        )
+        .expect("test: re-insert");
+    assert_eq!(first, second);
+    assert_eq!(g.edges().len(), 1, "one logical edge, one stored edge");
+    assert_eq!(g.edges()[0].payload, Some(serde_json::json!({"w": 2})));
+    assert!(g.delete_edge_by_id(first));
+    assert!(g.edges().is_empty());
+}

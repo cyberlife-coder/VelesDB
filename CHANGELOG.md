@@ -351,6 +351,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped and the farthest vector ranked first; the distance is now negated
   before the blend, as core's fusion orients a lower-is-better branch.
 
+- **WASM: re-inserting a derived-id edge overwrites it** (WASM,
+  2026-11-16). An edge whose id is derived from (source, target, label) was
+  stored again on every insert — `WasmDatabase.addEdge` or `INSERT EDGE`
+  run twice, `MemoryService.relate` called twice — so `getEdges` listed it
+  twice, `why()` / `entity()` showed the relation twice, and `removeEdge` /
+  `unrelate` deleted every copy at once. It is now idempotent, as core
+  documents for derived ids; a colliding explicit id is still refused.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
