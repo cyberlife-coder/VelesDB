@@ -4,7 +4,6 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::CommandError;
-use crate::events::emit_collection_updated;
 use crate::helpers::{
     map_core_results, parse_sparse_vector, require_collection, require_vector_collection,
     timed_search_response,
@@ -97,12 +96,11 @@ pub async fn hybrid_sparse_search<R: Runtime>(
 /// Upserts points with optional sparse vectors.
 #[command]
 pub async fn sparse_upsert<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: SparseUpsertRequest,
 ) -> std::result::Result<usize, CommandError> {
-    let collection_name = request.collection.clone();
-    let count = state
+    state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
 
@@ -126,8 +124,5 @@ pub async fn sparse_upsert<R: Runtime>(
             Ok(count)
         })
         .await
-        .map_err(CommandError::from)?;
-
-    emit_collection_updated(&app, &collection_name, "sparse_upsert", count);
-    Ok(count)
+        .map_err(CommandError::from)
 }

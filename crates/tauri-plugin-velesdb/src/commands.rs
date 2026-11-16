@@ -181,21 +181,19 @@ pub async fn get_collection<R: Runtime>(
         .map_err(CommandError::from)
 }
 
-/// Looks up the collection, builds points via `build`, inserts them via
-/// `insert`, then emits a collection-updated event tagged with `event`.
+/// Looks up the collection, builds points via `build` and inserts them via
+/// `insert`. The `collection-updated` event comes from core, through the
+/// plugin's observer, like every other write's.
 ///
 /// Shared skeleton of [`upsert`] and [`upsert_metadata`]: only the per-point
 /// construction and the core insert method differ between callers.
-async fn upsert_points<R, B, I>(
-    app: &AppHandle<R>,
+async fn upsert_points<B, I>(
     state: &State<'_, VelesDbState>,
     collection: String,
-    event: &str,
     build: B,
     insert: I,
 ) -> std::result::Result<usize, CommandError>
 where
-    R: Runtime,
     B: FnOnce() -> Vec<velesdb_core::Point> + Send + 'static,
     I: FnOnce(
             &velesdb_core::VectorCollection,
@@ -204,10 +202,9 @@ where
         + Send
         + 'static,
 {
-    let coll_name = collection.clone();
-    let count = state
+    state
         .run_db(move |db| {
-            let coll = require_collection(&db, &coll_name)?;
+            let coll = require_collection(&db, &collection)?;
 
             let points = build();
             let count = points.len();
@@ -215,25 +212,20 @@ where
             Ok(count)
         })
         .await
-        .map_err(CommandError::from)?;
-
-    emit_collection_updated(app, &collection, event, count);
-    Ok(count)
+        .map_err(CommandError::from)
 }
 
 /// Upserts points into a collection.
 #[command]
 pub async fn upsert<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: UpsertRequest,
 ) -> std::result::Result<usize, CommandError> {
     let collection_name = request.collection.clone();
     upsert_points(
-        &app,
         &state,
         collection_name,
-        "upsert",
         move || {
             request
                 .points
@@ -249,16 +241,14 @@ pub async fn upsert<R: Runtime>(
 /// Upserts metadata-only points into a collection.
 #[command]
 pub async fn upsert_metadata<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: UpsertMetadataRequest,
 ) -> std::result::Result<usize, CommandError> {
     let collection_name = request.collection.clone();
     upsert_points(
-        &app,
         &state,
         collection_name,
-        "upsert_metadata",
         move || {
             request
                 .points
@@ -800,12 +790,11 @@ pub async fn train_pq<R: Runtime>(
 #[cfg(feature = "persistence")]
 #[command]
 pub async fn stream_insert<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: StreamInsertRequest,
 ) -> std::result::Result<usize, CommandError> {
-    let collection_name = request.collection.clone();
-    let count = state
+    state
         .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
 
@@ -820,10 +809,7 @@ pub async fn stream_insert<R: Runtime>(
             Ok(inserted)
         })
         .await
-        .map_err(CommandError::from)?;
-
-    emit_collection_updated(&app, &collection_name, "stream_insert", count);
-    Ok(count)
+        .map_err(CommandError::from)
 }
 
 /// Builds a core [`StreamingConfig`](velesdb_core::StreamingConfig) from the

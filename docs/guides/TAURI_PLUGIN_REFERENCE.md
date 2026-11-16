@@ -1,6 +1,6 @@
 # Tauri plugin — command, event and permission reference
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 8.2.0*
+*Last updated: 2026-11-16 · Applies to: velesdb-core 8.2.0*
 
 Complete surface of [`tauri-plugin-velesdb`](../../crates/tauri-plugin-velesdb/README.md):
 every IPC command, every event, the permission model, and the storage/metric
@@ -111,13 +111,15 @@ VelesQL DDL routed through `query`.
 |-------|---------|------------|
 | `velesdb://collection-created` | `{ collection, operation: "created" }` | any collection creation, via the observer |
 | `velesdb://collection-deleted` | `{ collection, operation: "deleted" }` | any collection deletion, via the observer |
-| `velesdb://collection-updated` | `{ collection, operation, count }` | `upsert`, `upsert_metadata`, `sparse_upsert`, `delete_points`, `stream_insert`, `enable_streaming` |
+| `velesdb://collection-updated` | `{ collection, operation, count }` | every write and delete, via the observer (commands, `VelesQL` DML through `query`, the streaming drain, agent memory); `enable_streaming` |
 | `velesdb://operation-progress` | `{ operationId, progress, total, processed, message? }` | **nothing yet** — see below |
 | `velesdb://operation-complete` | `{ operationId, success, error?, durationMs? }` | **nothing yet** — see below |
 
-`operation` on `collection-updated` is the name of the command that produced
-the change (`"upsert"`, `"upsert_metadata"`, `"sparse_upsert"`,
-`"delete_points"`, `"stream_insert"`, `"enable_streaming"`).
+`operation` on `collection-updated` is `"upsert"` for any completed write and
+`"delete"` for any completed delete — core reports both, whatever surface made
+them, so `count` is the number of points the write or delete carried —, or
+`"enable_streaming"` (count 0) when streaming is switched on. A streamed point
+is reported when the drain stores it, not when `stream_insert` queues it.
 
 > The progress and complete payload types and their emit helpers exist in
 > `src/events.rs`, but no command calls `emit_progress` / `emit_complete`

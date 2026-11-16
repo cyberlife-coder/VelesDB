@@ -114,6 +114,7 @@ impl Collection {
         self.cascade_delete_node_edges(ids)?;
 
         self.bump_generation_with_mirror_deletes(ids);
+        self.report_delete(ids.len());
         Ok(())
     }
 

@@ -1215,3 +1215,87 @@ fn create_answers_what_get_and_list_answer_afterwards() {
         );
     }
 }
+
+/// Every write and delete reaches the frontend as one `collection-updated`
+/// event, from core through the observer, whatever made it. The commands
+/// emitted by hand: `delete_points` never did, `VelesQL` `DELETE` / `INSERT`
+/// through `query` never did, and the streaming drain was announced at
+/// enqueue time rather than when the points landed.
+#[test]
+fn every_write_and_delete_emits_one_collection_updated() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_builder()
+        .build(mock_context(noop_assets()))
+        .expect("build app");
+    let updates: Arc<parking_lot::Mutex<Vec<serde_json::Value>>> = Arc::default();
+    let sink = Arc::clone(&updates);
+    app.handle().listen(
+        tauri_plugin_velesdb::events::event_names::COLLECTION_UPDATED,
+        move |event| {
+            sink.lock()
+                .push(serde_json::from_str(event.payload()).expect("payload"));
+        },
+    );
+    let observer = Arc::new(TauriObserver::new(app.handle().clone()));
+    app.manage(VelesDbState::new_with_observer(
+        dir.path().to_path_buf(),
+        observer,
+    ));
+    run(create_collection(
+        handle(&app),
+        st(&app),
+        vector_collection_request("docs"),
+    ))
+    .expect("create");
+
+    let points = vec![
+        point(1, vec![1.0, 0.0, 0.0, 0.0], serde_json::json!({})),
+        point(2, vec![0.0, 1.0, 0.0, 0.0], serde_json::json!({})),
+    ];
+    run(upsert(
+        handle(&app),
+        st(&app),
+        UpsertRequest {
+            collection: "docs".to_string(),
+            points,
+        },
+    ))
+    .expect("upsert");
+    run(delete_points(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<DeletePointsRequest>(
+            serde_json::json!({ "collection": "docs", "ids": [1] }),
+        )
+        .expect("deserialize"),
+    ))
+    .expect("delete_points");
+    run(query(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<QueryRequest>(
+            serde_json::json!({ "query": "DELETE FROM docs WHERE id = 2" }),
+        )
+        .expect("deserialize"),
+    ))
+    .expect("VelesQL delete");
+
+    let seen: Vec<(String, u64)> = updates
+        .lock()
+        .iter()
+        .map(|p| {
+            (
+                p["operation"].as_str().unwrap_or_default().to_owned(),
+                p["count"].as_u64().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("upsert".to_owned(), 2),
+            ("delete".to_owned(), 1),
+            ("delete".to_owned(), 1)
+        ]
+    );
+}

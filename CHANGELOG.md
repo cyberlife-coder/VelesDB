@@ -319,6 +319,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tauri: every write and delete emits `collection-updated`** (core, Tauri,
+  2026-11-16). The plugin emitted the event by hand from a few commands:
+  `delete_points` never did although documented, `VelesQL` `INSERT` /
+  `DELETE` through `query` and agent-memory writes never did, and a streamed
+  point was announced when queued, not when stored. Core's observer port
+  gains `on_delete`, reported once per completed delete from every surface
+  like `on_upsert`, and the plugin's observer emits the event from both:
+  `operation` is now `"upsert"` or `"delete"` (`"enable_streaming"` stays).
+
 - **Tauri: a collection has one `CollectionInfo`, whichever command reports
   it** (Tauri, 2026-11-16). The create commands built their answer by hand
   and `get_collection` / `list_collections` read the configuration, so the

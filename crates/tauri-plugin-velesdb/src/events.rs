@@ -6,7 +6,8 @@
 //!
 //! - `velesdb://collection-created` - New collection created
 //! - `velesdb://collection-deleted` - Collection deleted
-//! - `velesdb://collection-updated` - Collection modified (upsert/delete)
+//! - `velesdb://collection-updated` - Points written or deleted (emitted by the
+//!   observer for every write and delete core reports)
 //! - `velesdb://operation-progress` - Long operation progress
 //! - `velesdb://operation-complete` - Operation completed
 //!
