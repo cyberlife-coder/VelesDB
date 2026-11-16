@@ -3,7 +3,6 @@
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::collection_helpers::core_err;
@@ -11,7 +10,6 @@ use crate::utils;
 
 use super::{validate_guardrail_keys, Database};
 use velesdb_core::velesql::{Query, TrainStatement, WithValue};
-use velesdb_core::Database as CoreDatabase;
 
 #[pymethods]
 impl Database {
@@ -228,25 +226,6 @@ impl Database {
 }
 
 impl Database {
-    /// Get a reference to the inner CoreDatabase.
-    pub fn inner(&self) -> &CoreDatabase {
-        &self.inner
-    }
-
-    /// Get the database path.
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
-    /// Return a shared `Arc<CoreDatabase>` handle to the already-opened database.
-    ///
-    /// Used by subsystems (e.g., AgentMemory) that need `Arc` ownership.
-    /// The handle shares the same in-memory registries and file lock as the
-    /// parent `Database`, avoiding VELES-031 re-entrant lock errors.
-    pub fn open_shared(&self) -> std::result::Result<Arc<CoreDatabase>, String> {
-        Ok(Arc::clone(&self.inner))
-    }
-
     /// Shared TRAIN QUANTIZER implementation: validates the quantizer name,
     /// builds the statement as an AST (never via string interpolation, so no
     /// identifier sanitizer can drift from `velesdb_core::validation`), runs

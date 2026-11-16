@@ -6,3 +6,8 @@
 crates/velesdb-core/src/collection/search/query/match_exec/mod.rs enum ProjectionItem
 crates/velesdb-core/src/collection/search/query/match_exec/mod.rs fn parse_projection_item
 crates/velesdb-core/src/collection/search/query/match_exec/mod.rs fn parse_property_path
+# Dead converters removed by the python SDK parity audit: `graph` is a private
+# module and lib.rs's re-export was dangling, so they were unreachable from the
+# published cdylib; nothing in the crate or tests called them.
+crates/velesdb-python/src/graph.rs fn dict_to_node
+crates/velesdb-python/src/graph.rs fn node_to_dict

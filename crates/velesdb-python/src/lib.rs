@@ -56,8 +56,7 @@ pub use fusion::FusionStrategy;
 // here but never registered as Python functions, so they were unreachable from
 // Python and dangling in the rlib's public API. Modules import them via
 // `crate::graph::...` directly.
-pub use graph_collection::PyGraphCollection;
-pub use graph_schema::PyGraphSchema;
+pub use graph_collection::{PyGraphCollection, PyGraphSchema};
 pub use graph_store::{GraphStore, StreamingConfig, TraversalResult};
 pub use options::{
     AutoReindexOptions, HnswConfigOptions, HnswOptions, LimitsOptions, QuantizationOptions,

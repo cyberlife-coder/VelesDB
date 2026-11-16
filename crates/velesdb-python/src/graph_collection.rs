@@ -14,10 +14,39 @@ use std::time::{Duration, Instant};
 use crate::collection::{deny_if_scoped, retain_by_filters};
 use crate::collection_helpers::{core_err, point_to_dict, search_result_to_dict};
 use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
-use crate::graph_schema::PyGraphSchema;
 use crate::utils::{extract_vector, json_to_python, python_to_json};
 use velesdb_core::collection::graph::TraversalConfig;
-use velesdb_core::{Database as CoreDatabase, GraphCollection, QueryOperationKind};
+use velesdb_core::{Database as CoreDatabase, GraphCollection, GraphSchema, QueryOperationKind};
+
+// ---------------------------------------------------------------------------
+// PyGraphSchema
+// ---------------------------------------------------------------------------
+
+/// Schema configuration for a graph collection.
+///
+/// Controls whether the graph enforces strict node/edge types or accepts
+/// any type (schemaless).
+///
+/// Example:
+///     >>> schema = PyGraphSchema.schemaless()
+///     >>> schema = PyGraphSchema.strict()
+#[pyclass(name = "GraphSchema", frozen, from_py_object)]
+#[derive(Clone)]
+pub struct PyGraphSchema {
+    pub(crate) inner: GraphSchema,
+}
+
+impl PyGraphSchema {
+    /// Wraps a core `GraphSchema`.
+    pub(crate) fn from_inner(inner: GraphSchema) -> Self {
+        Self { inner }
+    }
+
+    /// Returns a reference to the inner `GraphSchema`.
+    pub fn inner(&self) -> &GraphSchema {
+        &self.inner
+    }
+}
 
 // ---------------------------------------------------------------------------
 // PyGraphCollection

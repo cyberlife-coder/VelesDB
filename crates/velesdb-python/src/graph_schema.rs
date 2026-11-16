@@ -1,6 +1,6 @@
-//! `PyGraphSchema` — the `GraphSchema` pyclass (strict/schemaless schemas).
-//!
-//! Split out of `graph_collection.rs` to stay under the file budget.
+//! `#[pymethods]` for `PyGraphSchema` — split out of `graph_collection.rs`
+//! to stay under the file budget. The pyclass itself and its inherent
+//! impl stay in `graph_collection.rs` (the release-snapshot API path).
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -9,23 +9,7 @@ use std::collections::HashMap;
 
 use velesdb_core::{EdgeType, GraphSchema, NodeType, ValueType};
 
-// ---------------------------------------------------------------------------
-// PyGraphSchema
-// ---------------------------------------------------------------------------
-
-/// Schema configuration for a graph collection.
-///
-/// Controls whether the graph enforces strict node/edge types or accepts
-/// any type (schemaless).
-///
-/// Example:
-///     >>> schema = PyGraphSchema.schemaless()
-///     >>> schema = PyGraphSchema.strict()
-#[pyclass(name = "GraphSchema", frozen, from_py_object)]
-#[derive(Clone)]
-pub struct PyGraphSchema {
-    inner: GraphSchema,
-}
+use crate::graph_collection::PyGraphSchema;
 
 #[pymethods]
 impl PyGraphSchema {
@@ -219,18 +203,6 @@ fn property_types_to_dict(py: Python<'_>, properties: &HashMap<String, ValueType
         let _ = d.set_item(key, value_type_to_str(value_type));
     }
     d.into_any().unbind()
-}
-
-impl PyGraphSchema {
-    /// Wraps a core `GraphSchema`.
-    pub(crate) fn from_inner(inner: GraphSchema) -> Self {
-        Self { inner }
-    }
-
-    /// Returns a reference to the inner `GraphSchema`.
-    pub fn inner(&self) -> &GraphSchema {
-        &self.inner
-    }
 }
 
 #[cfg(test)]

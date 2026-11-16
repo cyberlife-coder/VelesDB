@@ -8,8 +8,7 @@ use std::sync::Arc;
 use crate::agent;
 use crate::collection::{Collection, CollectionKind};
 use crate::collection_helpers::core_err;
-use crate::graph_collection::PyGraphCollection;
-use crate::graph_schema::PyGraphSchema;
+use crate::graph_collection::{PyGraphCollection, PyGraphSchema};
 use crate::observer::PyObserver;
 use crate::options::{AutoReindexOptions, HnswOptions, VelesConfigOptions};
 use crate::utils::{self, parse_metric, parse_storage_mode};
@@ -827,5 +826,26 @@ impl Database {
                 Ok(utils::json_to_python(py, &json))
             })
             .transpose()
+    }
+}
+
+impl Database {
+    /// Get a reference to the inner CoreDatabase.
+    pub fn inner(&self) -> &CoreDatabase {
+        &self.inner
+    }
+
+    /// Get the database path.
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
+    /// Return a shared `Arc<CoreDatabase>` handle to the already-opened database.
+    ///
+    /// Used by subsystems (e.g., AgentMemory) that need `Arc` ownership.
+    /// The handle shares the same in-memory registries and file lock as the
+    /// parent `Database`, avoiding VELES-031 re-entrant lock errors.
+    pub fn open_shared(&self) -> std::result::Result<Arc<CoreDatabase>, String> {
+        Ok(Arc::clone(&self.inner))
     }
 }
