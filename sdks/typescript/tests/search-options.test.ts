@@ -130,6 +130,43 @@ describe('client refuses REST-only options on a non-REST backend', () => {
     ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
     await expect(db.search('c', [0.1], { timeoutMs: 5 })).rejects.toBeInstanceOf(VelesDBError);
   });
+
+  it('refuses batch entry fields the server batch kernel ignores, on REST too', async () => {
+    // run_batch_search applies only vector/top_k/filter per entry; the other
+    // fields are validated then ignored, so the client must refuse them.
+    const db = new VelesDB({ backend: 'rest', url: 'http://localhost:9999' });
+    (db as unknown as { initialized: boolean }).initialized = true;
+    for (const entry of [
+      { vector: [0.1], sparseVector: { 1: 1 } },
+      { vector: [0.1], sparseVectors: { k: { 1: 1 } } },
+      { vector: [0.1], sparseIndexName: 'k' },
+      { vector: [0.1], fusion: { strategy: 'rrf' as const } },
+      { vector: [0.1], efSearch: 64 },
+      { vector: [0.1], timeoutMs: 100 },
+      { vector: [0.1], quality: 'fast' as const },
+    ]) {
+      await expect(db.searchBatch('c', [entry])).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
+    }
+  });
+
+  it('refuses named sparse vectors on ingest paths that cannot represent them (wasm)', async () => {
+    const db = new VelesDB({ backend: 'wasm' });
+    (db as unknown as { initialized: boolean }).initialized = true;
+    // WASM has a single default sparse index: a named map would be dropped.
+    await expect(
+      db.upsert('c', { id: 1, vector: [0.1], sparseVectors: { keywords: { 1: 1 } } })
+    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
+    await expect(
+      db.upsertBatch('c', [{ id: 1, vector: [0.1], sparseVectors: { keywords: { 1: 1 } } }])
+    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
+    // The single-point /stream/insert DTO has no sparse field at all.
+    await expect(
+      db.streamInsert('c', [{ id: 1, vector: [0.1], sparseVector: { 1: 1 } }])
+    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
+    await expect(
+      db.streamUpsertPoints('c', [{ id: 1, vector: [0.1], sparseVectors: { k: { 1: 1 } } }])
+    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
+  });
 });
 
 describe('query response mapping (took_ms, meta)', () => {
@@ -152,8 +189,10 @@ describe('query response mapping (took_ms, meta)', () => {
   it('falls back to /query when /aggregate refuses a misrouted SELECT', async () => {
     const requestJson = vi
       .fn()
+      // Real server wire: HTTP 422 with nested error.code = VELESQL_AGGREGATION_ERROR
+      // (handlers/query/aggregation.rs), which extractErrorPayload surfaces as-is.
       .mockResolvedValueOnce({
-        error: { code: 'BAD_REQUEST', message: 'Only aggregation queries are accepted on /aggregate' },
+        error: { code: 'VELESQL_AGGREGATION_ERROR', message: 'Only aggregation queries are accepted on /aggregate' },
       })
       .mockResolvedValueOnce({
         data: { results: [{ id: 1 }], timing_ms: 0.5, took_ms: 1, rows_returned: 1, meta: { velesql_contract_version: '2.0', count: 1 } },

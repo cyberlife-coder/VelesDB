@@ -244,6 +244,16 @@ export async function streamUpsertPoints(
     if (doc.sparseVector) {
       point.sparse_vector = transport.sparseVectorToRestFormat(doc.sparseVector);
     }
+    if (doc.sparseVectors) {
+      // The server-side `Point` deserialiser accepts `sparse_vectors`, so the
+      // named map goes through here too (unlike the single-point
+      // `/stream/insert`, whose DTO has no sparse field at all).
+      const named: Record<string, Record<string, number>> = {};
+      for (const [indexName, sv] of Object.entries(doc.sparseVectors)) {
+        named[indexName] = transport.sparseVectorToRestFormat(sv);
+      }
+      point.sparse_vectors = named;
+    }
 
     return JSON.stringify(point);
   });

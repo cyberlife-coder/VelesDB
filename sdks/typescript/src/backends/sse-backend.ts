@@ -168,26 +168,46 @@ async function throwUnlessStreamOk(response: Response): Promise<void> {
   );
 }
 
+/**
+ * Translate a midstream failure the same way as an initial fetch failure:
+ * typed SDK errors (e.g. the HTTP-status VelesDBError) pass through, aborts
+ * become a timeout, anything else a ConnectionError.
+ */
+function toStreamError(error: unknown): Error {
+  if (error instanceof VelesDBError) return error;
+  if (error instanceof Error && error.name === 'AbortError') {
+    return new ConnectionError('Request timeout');
+  }
+  return new ConnectionError(
+    `Stream traverse failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    error instanceof Error ? error : undefined
+  );
+}
+
 /** Read the response body as SSE frames (events separated by a blank line) and yield them. */
 async function* readStreamEvents(response: Response): AsyncIterable<TraverseStreamEvent> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   const parser = new SseEventParser();
   let buffer = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let sep: number;
-    while ((sep = buffer.indexOf('\n\n')) !== -1) {
-      const block = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      yield* eventsInBlock(parser, block);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        yield* eventsInBlock(parser, block);
+      }
     }
-  }
-  buffer += decoder.decode();
-  if (buffer.trim()) {
-    yield* eventsInBlock(parser, buffer);
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      yield* eventsInBlock(parser, buffer);
+    }
+  } catch (error) {
+    throw toStreamError(error);
   }
 }
 
@@ -215,5 +235,9 @@ export async function* streamTraverse(
     yield* readStreamEvents(response);
   } finally {
     clearTimeout(timeoutId);
+    // Cancel the in-flight body when the consumer stops early (a `break` out
+    // of `for await` runs this finally): without it the reader and the HTTP
+    // connection stay open. Aborting an already-completed stream is a no-op.
+    controller.abort();
   }
 }

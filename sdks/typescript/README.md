@@ -359,7 +359,8 @@ await db.upsert('docs', {
   vector: [0.1, 0.2, 0.3],    // number[] or Float32Array
   payload: { key: 'value' },   // optional metadata
   sparseVector: { 42: 0.8, 99: 0.3 },  // optional sparse vector (default index)
-  // named sparse vectors, one per sparse index (REST only):
+  // named sparse vectors, one per sparse index (REST only; refused with
+  // NOT_SUPPORTED on WASM, which has a single default sparse index):
   sparseVectors: { keywords: { 7: 0.9, 42: 0.4 } }
 });
 ```
@@ -394,7 +395,7 @@ await db.streamInsert('docs', largeDocumentArray);
 
 #### `db.streamInsert(collection, documents)`
 
-Insert documents with server backpressure support. Sends documents sequentially, respecting 429 rate limits. Throws `BackpressureError` if the server pushes back.
+Insert documents with server backpressure support. Sends documents sequentially, respecting 429 rate limits. Throws `BackpressureError` if the server pushes back. The single-point `/stream/insert` DTO has no sparse field, so documents carrying `sparseVector`/`sparseVectors` are refused with `NOT_SUPPORTED` — use `upsert()`/`upsertBatch()` or `streamUpsertPoints()` for sparse data.
 
 ```typescript
 await db.streamInsert('docs', largeDocumentArray);
@@ -461,10 +462,13 @@ as "no filter".
 
 #### `db.searchBatch(collection, searches)`
 
-Execute multiple search queries in parallel. Each entry is a full `BatchSearchItem` —
-a `SearchRequest` server-side — so every `search()` option applies per entry
-(`k`, `filter`, `quality`, `efSearch`, `timeoutMs`, `sparseVector`,
-`sparseIndexName`, `sparseVectors`, `fusion`).
+Execute multiple dense search queries in parallel. The wire accepts a full
+`SearchRequest` per entry, but the server's batch kernel applies only each
+entry's `vector`, `k` and `filter` — the other fields (`quality`, `efSearch`,
+`timeoutMs`, `sparseVector`, `sparseVectors`, `sparseIndexName`, `fusion`) are
+validated then ignored, so the client refuses them with `NOT_SUPPORTED` rather
+than return dense-only rankings that imply otherwise. Use `search()` for
+entries that need them.
 
 ```typescript
 const batchResults = await db.searchBatch('docs', [

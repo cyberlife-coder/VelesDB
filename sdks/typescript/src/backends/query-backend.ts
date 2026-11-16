@@ -152,7 +152,13 @@ function selectResponse(rawData: Record<string, unknown> | undefined): QueryApiR
   };
 }
 
-/** POST the query, falling back from `/aggregate` to `/query` on a BAD_REQUEST refusal. */
+/**
+ * POST the query, falling back from `/aggregate` to `/query` when the
+ * aggregation endpoint refuses the query as non-aggregating. That refusal is
+ * HTTP 422 with `error.code = "VELESQL_AGGREGATION_ERROR"` on the wire
+ * (`handlers/query/aggregation.rs`) — not `BAD_REQUEST` — so the predicate
+ * matches the real code.
+ */
 async function postQuery(
   transport: QueryTransport,
   collection: string,
@@ -170,7 +176,7 @@ async function postQuery(
     useAggregate ? '/aggregate' : '/query',
     body
   );
-  if (useAggregate && response.error?.code === 'BAD_REQUEST') {
+  if (useAggregate && response.error?.code === 'VELESQL_AGGREGATION_ERROR') {
     response = await transport.requestJson<Record<string, unknown>>(
       'POST',
       '/query',

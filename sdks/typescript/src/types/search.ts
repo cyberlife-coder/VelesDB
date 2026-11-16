@@ -40,10 +40,27 @@ export interface SparseSearchNamedOptions {
 /**
  * Fusion options for a single `/search` request
  * (`SearchRequest.fusion` → `FusionRequest` on the wire).
+ *
+ * Deliberately NOT {@link FusionParams}: `branchWeights` is a multi-query
+ * concept (one weight per query vector, used by `multiQuerySearch`) that the
+ * single-search wire never reads — weighted RRF here takes `denseWeight` /
+ * `sparseWeight` (`dense_w` / `sparse_w` on the wire).
  */
-export interface SearchFusionOptions extends FusionParams {
+export interface SearchFusionOptions {
   /** Fusion strategy. */
   strategy: FusionStrategy;
+  /** RRF k parameter (default: 60). */
+  k?: number;
+  /** Weighted fusion: average weight (default: 0.6). */
+  avgWeight?: number;
+  /** Weighted fusion: max weight (default: 0.3). */
+  maxWeight?: number;
+  /** Weighted fusion: hit weight (default: 0.1). */
+  hitWeight?: number;
+  /** Relative score fusion: dense vector weight (default: 0.5). */
+  denseWeight?: number;
+  /** Relative score fusion: sparse vector weight (default: 0.5). */
+  sparseWeight?: number;
 }
 
 /** Search options */
@@ -103,10 +120,12 @@ export interface SearchOptions {
 }
 
 /**
- * One entry of `searchBatch`: a full per-entry `SearchRequest` on the server
- * (`BatchSearchRequest.searches: Vec<SearchRequest>`), so every field of
- * {@link SearchOptions} applies per entry (the server validates but does not
- * apply `mode`/`ef_search` for batch entries).
+ * One entry of `searchBatch`. The wire accepts a full per-entry
+ * `SearchRequest` (`BatchSearchRequest.searches: Vec<SearchRequest>`), but the
+ * server's batch kernel applies only `vector`, `top_k` and `filter` per entry
+ * — the other fields are validated and then ignored, so the client refuses
+ * them with `NOT_SUPPORTED` rather than return dense-only rankings that imply
+ * otherwise. Use `search()` for entries that need them.
  */
 export interface BatchSearchItem {
   /** Query vector for this entry. */
@@ -115,19 +134,19 @@ export interface BatchSearchItem {
   k?: number;
   /** Filter expression (optional). */
   filter?: FilterInput;
-  /** Search quality preset. */
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
   quality?: SearchQuality;
-  /** HNSW `ef_search` (REST only). */
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
   efSearch?: number;
-  /** Per-request timeout budget in ms (REST only). */
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
   timeoutMs?: number;
-  /** Sparse vector for hybrid search. */
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
   sparseVector?: SparseVector;
-  /** Named sparse index (REST only). */
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
   sparseIndexName?: string;
-  /** Named sparse vectors map (REST only). */
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
   sparseVectors?: Record<string, SparseVector>;
-  /** Fusion configuration (REST only). */
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
   fusion?: SearchFusionOptions;
 }
 

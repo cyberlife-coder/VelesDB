@@ -111,6 +111,54 @@ describe('streamTraverse (SSE)', () => {
     mockFetch.mockRejectedValueOnce(new Error('socket hangup'));
     await expect(collect(transport, 'kg', { startNode: 1 })).rejects.toThrow(/Stream traverse failed/);
   });
+
+  it('wraps midstream body failures in ConnectionError (not a raw AbortError/TypeError)', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: node\ndata: {"id":"7","depth":0,"path":[]}\n\n'));
+        controller.error(new Error('connection reset mid-stream'));
+      },
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'text/event-stream' },
+      body,
+    });
+    await expect(collect(transport, 'kg', { startNode: 1 })).rejects.toMatchObject({
+      code: 'CONNECTION_ERROR',
+      message: expect.stringMatching(/Stream traverse failed/),
+    });
+  });
+
+  it('aborts the request when the consumer breaks out of the loop early', async () => {
+    const encoder = new TextEncoder();
+    let pull = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pull += 1;
+        if (pull === 1) {
+          controller.enqueue(encoder.encode('event: node\ndata: {"id":"7","depth":0,"path":[]}\n\n'));
+        }
+        // never close: the stream stays open, like a live traversal
+      },
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'text/event-stream' },
+      body,
+    });
+    const seen: TraverseStreamEvent[] = [];
+    for await (const ev of streamTraverse(transport, 'kg', { startNode: 1 })) {
+      seen.push(ev);
+      break; // consumer stops after the first event
+    }
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit & { signal: AbortSignal }];
+    expect(seen).toEqual([{ type: 'node', id: '7', depth: 0, path: [] }]);
+    expect(init.signal.aborted).toBe(true);
+  });
 });
 
 describe('client streamTraverse delegation', () => {

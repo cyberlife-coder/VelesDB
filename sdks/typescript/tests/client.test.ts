@@ -138,6 +138,7 @@ describe('VelesDB Client', () => {
         upsertBatch: vi.fn(),
         get: vi.fn(),
         delete: vi.fn(),
+        capabilities: vi.fn(() => ({ namedSparseIndexes: true })),
       };
       (db as any).backend = mockBackend;
       (db as any).initialized = true;
@@ -193,6 +194,7 @@ describe('VelesDB Client', () => {
         delete: vi.fn(),
         get: vi.fn(),
         close: vi.fn(),
+        capabilities: vi.fn(() => ({ namedSparseIndexes: true })),
       };
       (db as any).backend = mockBackend;
       (db as any).initialized = true;
