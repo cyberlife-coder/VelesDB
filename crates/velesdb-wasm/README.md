@@ -185,10 +185,6 @@ before 8.0.0, records carrying a payload were ES2015 `Map`s (#2332).
 - **No quantizer training.** `TRAIN QUANTIZER` needs
   `rayon`/`ndarray`/`persistence`, which are compiled out for
   `wasm32-unknown-unknown`.
-- **`SemanticMemory.query()` has been broken since 4.0.0 (still present)** — it throws
-  `Invalid search results` on every call (`src/agent.rs` calls `as_string()` on
-  an array-valued `JsValue`). Use `MemoryService`, or a `VectorStore` with
-  `insert_with_payload` + `search_with_filter`.
 - **Errors are not uniformly structured.** Some paths throw a real `Error` with
   a machine-readable `code` (`VELES-004` on a dimension mismatch); others still
   throw a bare string. Always coerce with `String(e)` before displaying.
@@ -224,7 +220,6 @@ to instantiate the module.
 | `Error: [VELES-004] Vector dimension mismatch: expected N, got M` | The query length differs from `store.dimension`. | Embed the query with the same model and dimension used at index time. |
 | `Unknown metric. Use: cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard` | Unsupported metric string in the constructor. | Use one of the listed names; they are case-insensitive. |
 | `Invalid data: wrong magic number` on `import_from_bytes` | The buffer is not a `VELS` export (truncated, or another format). | Re-export from a `VectorStore`; see the [binary format](../../docs/guides/WASM_PERSISTENCE.md#binary-format-vels-v3). |
-| `Invalid search results` | `SemanticMemory.query()` — a known defect since 4.0.0, still present. | Use `MemoryService` instead. |
 | Console warning about `application/wasm` MIME type | The static server does not label `.wasm`. | Harmless: the loader falls back to `WebAssembly.instantiate`. Configure the MIME type to keep `WebAssembly.instantiateStreaming` on the fast path. |
 
 ## License

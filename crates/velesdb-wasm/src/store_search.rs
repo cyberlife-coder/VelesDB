@@ -11,7 +11,7 @@ use wasm_bindgen::JsValue;
 /// Serializes a search result through [`to_js_value`], rendering a failure
 /// (an id above `Number.MAX_SAFE_INTEGER`) as a JS string error.
 #[inline]
-fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+pub(crate) fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     to_js_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
@@ -98,18 +98,6 @@ pub fn top_k(
     vector_ops::sort_results(&mut results, metric.higher_is_better());
     results.truncate(k);
     results
-}
-
-/// Basic vector search.
-pub fn search(
-    query: &[f32],
-    ids: &[u64],
-    data: &[f32],
-    dimension: usize,
-    metric: DistanceMetric,
-    k: usize,
-) -> Result<JsValue, JsValue> {
-    to_js(&top_k(query, ids, data, dimension, metric, k))
 }
 
 /// Text search in payloads.

@@ -43,7 +43,7 @@ reachable.
 | Example | What it shows | API surface |
 |---|---|---|
 | [`01-quickstart`](./01-quickstart) | The README's "first success in 60 seconds": three vectors in, two nearest out, with the exact expected numbers. | `new VectorStore(dim, metric)`, `insert`, `search`, `len` / `dimension` / `storage_mode` getters |
-| [`02-payload-filter`](./02-payload-filter) | Attaching JSON payloads and narrowing a search with a metadata filter — the supported replacement for the broken `SemanticMemory.query()`. | `insert_with_payload`, `search_with_filter`, `get` |
+| [`02-payload-filter`](./02-payload-filter) | Attaching JSON payloads and narrowing a search with a metadata filter. | `insert_with_payload`, `search_with_filter`, `get` |
 | [`03-indexeddb-persistence`](./03-indexeddb-persistence) | Surviving a reload: save the index to IndexedDB, load it back, export/import the same bytes by hand. | `save`, `VectorStore.load`, `export_to_bytes`, `VectorStore.import_from_bytes`, `VectorStore.delete_database` |
 | [`04-agent-memory`](./04-agent-memory) | Durable, explainable agent memory in the tab: store facts, recall them by meaning, link them, then ask why. | `MemoryService` — `remember`, `recall`, `relate`, `why`, `forget` |
 | [`05-velesql`](./05-velesql) | VelesQL in the browser: DDL, insert, projected select — and what the WASM build rejects. | `WasmDatabase`, `executeQuery`, `QueryResult` (`kind`, `rowCount`, `rowsJson`) |
@@ -82,9 +82,6 @@ coerce with `String(e)` before displaying — every example does.
 - **~100 K vectors** is the practical ceiling, set by browser RAM.
 - **`MemoryService` is in-memory only.** There is no filesystem; nothing
   persists unless you persist it yourself.
-- **`SemanticMemory.query()` has been broken since 4.0.0 (still present)** — it throws
-  `Invalid search results` on every call. Example 02 shows the supported
-  alternative; example 04 uses `MemoryService`.
 
 ## Going further
 

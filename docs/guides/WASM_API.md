@@ -338,26 +338,24 @@ Most applications should prefer the higher-level `MemoryService` re-exported
 from [`@wiscale/velesdb-sdk`](../../sdks/typescript), which wraps this class
 with Promise-returning methods and the SDK's typed error hierarchy.
 
-## SemanticMemory — legacy, and its `query()` is broken
+## SemanticMemory — legacy
 
 `SemanticMemory` predates `MemoryService` and stores `(id, content, embedding)`
-triples. `store`, `len`, `dimension`, `delete`, `remove` and `clear` work, but
-**`query()` threw `Invalid search results` on every call** in the historical
-4.0.0 release: the
-implementation calls `JsValue::as_string()` on a value that
-`serde-wasm-bindgen` produced as an array, so the conversion always fails
-(`crates/velesdb-wasm/src/agent.rs`, `query`).
-
-Historical reference reproduced against `@wiscale/velesdb-wasm@4.0.0`:
+triples: `store`, `query`, `len`, `dimension`, `delete`, `remove` and `clear`.
+`query(embedding, topK)` returns the `topK` nearest facts, best first, as
+plain objects `{ id, score, content }` under cosine similarity.
 
 ```javascript
 const sm = new SemanticMemory(4);
 sm.store(1n, 'Paris is the capital of France', new Float32Array([1, 0, 0, 0]));
-sm.query(new Float32Array([1, 0, 0, 0]), 2);   // throws: Invalid search results
+sm.query(new Float32Array([1, 0, 0, 0]), 2);
+// [{ id: 1, score: 1, content: 'Paris is the capital of France' }]
 ```
 
-Use `MemoryService` (above), or a plain `VectorStore` with
-`insert_with_payload` + `search_with_filter`, until this is fixed.
+Releases from 4.0.0 until this fix threw `Invalid search results` on every
+`query()` call (it re-read the JavaScript search result as a JSON string).
+New code should prefer `MemoryService` (above): it links facts, explains its
+answers and expires them.
 
 ## SparseIndex and RRF fusion
 
