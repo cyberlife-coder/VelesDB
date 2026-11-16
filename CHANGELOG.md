@@ -319,6 +319,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Node: a whole number past 2^32 is stored as an integer** (Node,
+  2026-11-16). napi reads a JS number as an integer only within `u32` /
+  `i32` range, so metadata such as `{ ts: 5000000000 }` was stored as the
+  float `5000000000.0`: it read back as a float from Python and Rust and
+  missed a JSON equality against the integer every other surface stores.
+  Metadata, metadata filters and column-filter values now restore every
+  whole number a JS number holds exactly (up to `2^53 - 1`) to an integer.
 - **Node: a count argument is checked, never wrapped** (Node, 2026-11-16).
   `recall`'s `k`, `remember`'s `ttlSeconds`, `why`'s `maxHops`,
   `listMemories`' `limit`, `suggestBudget`'s `reserveTokens`,

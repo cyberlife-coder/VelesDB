@@ -22,12 +22,44 @@ pub fn parse_id(s: &str) -> napi::Result<u64> {
 }
 
 /// JS object → engine [`Metadata`]. `null`/absent → `None`; a non-object is an
-/// error (callers must pass a plain object for metadata and filters).
+/// error (callers must pass a plain object for metadata and filters). Whole
+/// numbers come back as integers ([`integral_numbers`]).
 pub fn to_metadata(value: Option<Value>) -> napi::Result<Option<Metadata>> {
-    match value {
+    match value.map(integral_numbers) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Object(map)) => Ok(Some(map)),
         Some(_) => Err(invalid_input("metadata/filter must be an object")),
+    }
+}
+
+/// The largest whole number a JS `number` holds exactly (`2^53 - 1`).
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// Restores the integers napi's JSON conversion turned into floats.
+///
+/// napi reads a JS number as an integer only within `u32` / `i32` range: a
+/// whole number past it — a millisecond timestamp, a large id — arrives as
+/// `5000000000.0`. Stored so, it reads back as a float from Python or Rust,
+/// and misses a JSON equality against the integer every other surface stores
+/// (`[5000000000] != [5000000000.0]`). Every whole number a JS number holds
+/// exactly becomes an integer again, at any depth.
+pub fn integral_numbers(value: Value) -> Value {
+    match value {
+        Value::Number(n) => Value::Number(match n.as_f64() {
+            Some(f) if n.is_f64() && f.fract() == 0.0 && f.abs() <= MAX_SAFE_INTEGER => {
+                // Reason: a whole number within ±(2^53 - 1), checked just above.
+                #[allow(clippy::cast_possible_truncation)]
+                serde_json::Number::from(f as i64)
+            }
+            _ => n,
+        }),
+        Value::Array(items) => Value::Array(items.into_iter().map(integral_numbers).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, item)| (key, integral_numbers(item)))
+                .collect(),
+        ),
+        other => other,
     }
 }
 
@@ -62,7 +94,7 @@ pub fn to_filters(filters: Vec<ColumnFilterJs>) -> napi::Result<Vec<ColumnFilter
             Ok(ColumnFilter {
                 field: f.field,
                 op: parse_op(&f.op)?,
-                value: f.value,
+                value: integral_numbers(f.value),
             })
         })
         .collect()
@@ -280,3 +312,7 @@ fn compiled_envelope(
     );
     Ok(envelope)
 }
+
+#[cfg(test)]
+#[path = "convert_tests.rs"]
+mod convert_tests;
