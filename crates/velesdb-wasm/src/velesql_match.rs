@@ -8,13 +8,15 @@
 //! message.
 
 use velesdb_core::velesql::{
-    Condition, Direction, GraphPattern, MatchClause, NodePattern, Query, RelationshipPattern,
+    Condition, Direction, GraphPattern, NodePattern, Query, RelationshipPattern,
 };
 
 use crate::database::DatabaseInner;
 use crate::graph_store::{WasmEdge, WasmGraphNode, WasmGraphStore};
 use crate::velesql_match_nodes::MatchNodes;
-use crate::velesql_match_orderby::{order_and_limit, BoundElement, MatchBinding, MatchCandidate};
+use crate::velesql_match_orderby::{
+    order_and_limit, BoundElement, MatchBinding, MatchCandidate, MatchOrder,
+};
 use crate::velesql_match_score::{where_holds, where_score, BoundNode, MatchScoring};
 use crate::velesql_match_sources::Annotations;
 use crate::velesql_result::QueryResultRow;
@@ -86,7 +88,18 @@ pub(crate) fn match_candidates(
         // REST `/match` with a query vector: rows by score, before ORDER BY.
         sort_by_score(&mut out, higher_is_better);
     }
-    finalize_candidates(out, clause, higher_is_better)
+    let order = MatchOrder {
+        higher_is_better,
+        nodes: Some(&nodes),
+        params,
+    };
+    order_and_limit(
+        &mut out,
+        clause.return_clause.order_by.as_deref(),
+        clause.return_clause.limit,
+        &order,
+    )?;
+    Ok(out)
 }
 
 /// Most similar first: descending score, ascending distance.
@@ -359,22 +372,6 @@ impl PathWalk<'_> {
             crate::velesql_where::truth(leaf, *target, Some(&payload), self.params)
         })
     }
-}
-
-/// Sorts the collected candidates per the RETURN `ORDER BY` (Finding 8: sort
-/// BEFORE LIMIT), then truncates to LIMIT.
-fn finalize_candidates(
-    mut candidates: Vec<MatchCandidate>,
-    clause: &MatchClause,
-    higher_is_better: bool,
-) -> Result<Vec<MatchCandidate>, String> {
-    order_and_limit(
-        &mut candidates,
-        clause.return_clause.order_by.as_deref(),
-        clause.return_clause.limit,
-        higher_is_better,
-    )?;
-    Ok(candidates)
 }
 
 /// Returns edges incident to `anchor` in the relationship's direction; its
