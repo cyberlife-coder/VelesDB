@@ -195,3 +195,25 @@ fn a_rejected_write_reports_nothing() {
         "a failed write must not be reported"
     );
 }
+
+/// A streamed batch is reported by the drain that writes it, not when queued.
+///
+/// `batch_size` 2 with an hour-long flush timer: the drain flushes exactly
+/// when both points are buffered, as one write.
+#[tokio::test]
+async fn a_streamed_batch_reports_once_when_the_drain_writes_it() {
+    use velesdb_core::collection::streaming::StreamingConfig;
+
+    let (_dir, db, spy) = vector_db();
+    let docs = db.get_vector_collection("docs").expect("test: docs");
+    docs.enable_streaming(StreamingConfig::new(16, 2, 3_600_000))
+        .expect("test: enable streaming");
+    docs.stream_insert_batch(vec![vector_point(1), vector_point(2)])
+        .expect("test: queue the batch");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while spy.calls().is_empty() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_single_upsert(&spy, "docs", 2);
+}
