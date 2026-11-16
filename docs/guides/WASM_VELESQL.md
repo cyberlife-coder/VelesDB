@@ -174,6 +174,45 @@ filter, the one the server runs: its parameters bind as in core and it
 answers the same rows — `x != 'a'` and `x NOT IN (…)` hold on a payload
 without `x`, `LIKE` honours `\` escapes, numbers compare by exact value.
 
+## Parity with core, family by family
+
+The executor is WASM's own (core's needs the `persistence` feature), so its
+answers are checked rather than assumed: every family below runs the same
+query text on both engines from `conformance/velesql_executor_cases.json`,
+which asserts ids, order, scores and refusals
+(`crates/velesdb-wasm/src/velesql_executor_conformance_tests.rs` beside
+`crates/velesdb-core/tests/velesql_executor_conformance.rs`). Both engines run
+core's `QueryValidator` first, so a refusal carries the same `[Vnnn]` code.
+
+| Family | WASM vs core | Pinned by |
+|---|---|---|
+| `WHERE`: comparisons, `IN`, `BETWEEN`, `LIKE` / `ILIKE`, `IS NULL`, `AND` / `OR` / `NOT` | Same rows — core's payload filter runs in both | `cases` X001–X020, `number_cases`, `join_cases` J015 (`IS NULL`) |
+| `NEAR`, `similarity()` thresholds, `NEAR` under `OR` | Same ids and scores | `near_cases` N001–N034, `cases` X021–X022 |
+| `NEAR_FUSED` + `USING FUSION` `rrf` / `average` / `maximum` | Same ids and scores; `weighted` / `rsf` refused by both (V012) | `fusion_cases`, `rejected_cases` |
+| `ORDER BY`, `DISTINCT`, `LIMIT` / `OFFSET`, nulls ordering | Same order; a NaN score ranks last, as in core | `cases`, `null_order_cases`, `near_cases`; NaN: `vector_ops_tests.rs`, `velesql_match_rank_tests.rs` |
+| Projection, aliases, window functions | Same rows | `projection_cases` P001–P009 |
+| `GROUP BY` / `HAVING` / aggregates, vector `GROUP BY` | Same groups and values | `aggregate_cases` G001–G027, `vector_group_cases` V001–V010 |
+| `UNION` / `INTERSECT` / `EXCEPT` | Same ids, in order | `setops_cases` S001–S008 |
+| `JOIN` (`INNER` / `LEFT` / `RIGHT` / `FULL`, any column) | Same joined rows | `join_cases` J001–J018 |
+| `INSERT` / `UPSERT` / `UPDATE` / `DELETE` | Same effect | `dml_cases` W001–W010 |
+| Fixed-length `MATCH`: hops, anonymous nodes, inline properties, `WHERE`, `ORDER BY` | Same rows; edges are stored beside the collection rather than on it (D004, storage only) | `match_cases` M001–M006; labels, relationship properties, repeated aliases and `@collection` against core's semantics in `velesql_match_parity_tests.rs` |
+| Shapes core's validator refuses | Same `[Vnnn]` code | `rejected_cases` R001–R017 |
+| `NOW()` / `INTERVAL` | Same — `NOW()` reads the page's clock | `crates/velesdb-wasm/tests/velesql_temporal_web.rs` |
+
+What WASM does **not** run, refused by name (the next section lists the
+messages): multi-pattern and variable-length `MATCH`, scalar subqueries, `LET`,
+BM25 `MATCH` / `CONTAINS` / geospatial predicates in `WHERE`,
+`ALTER COLLECTION`, graph collections in DDL and `TRAIN QUANTIZER`. A
+weight-sensitive `USING FUSION` beside a single `NEAR` is refused too (D013):
+its only second branch in WASM would be synthetic. One divergence is silent:
+`WITH (mode = …, ef_search = …)` is not read, since WASM searches exactly by
+brute force and has no HNSW recall to tune.
+
+Outside VelesQL, two JavaScript entry points differ from core by design:
+`VectorStore.textSearch` is a case-insensitive substring match with no score,
+not BM25, and `hybrid_search` blends that match linearly with the dense score
+(expected divergence F003 in `conformance/search_fidelity_cases.json`).
+
 ## What is rejected, and how
 
 Every query first goes through `velesdb-core`'s own `QueryValidator`, the one
@@ -318,4 +357,4 @@ version you run.
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 8.2.0
+Last updated: 2026-11-16 · Applies to: velesdb-core 8.2.0
