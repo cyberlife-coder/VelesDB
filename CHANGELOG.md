@@ -282,6 +282,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Relative-score fusion fuses every branch, in every engine** (core,
+  WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
+  branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
+  three query vectors or more silently dropped every one past the second,
+  logging a warning nobody read. The browser fused them all, but by its own
+  rule — each document's scores averaged over the branches it appeared in —
+  so it ranked differently from core at every branch count. Both engines now
+  run core's: each branch min-max normalized, a document absent from a
+  branch getting 0 from it, weighted by the dense and sparse weights for two
+  branches and `1/N` each beyond. Unequal weights over three branches or
+  more are refused (`WeightCountMismatch`), since they name a dense and a
+  sparse branch. Two-branch dense + sparse fusion is unchanged (D005).
+
 - **`DELETE` takes any metadata `WHERE`** (core, 2026-11-16). Core refused
   every `DELETE` whose `WHERE` was not `id = N` or `id IN (...)`, though the
   VelesQL spec shows `DELETE FROM logs WHERE level = 'debug'` and the WASM

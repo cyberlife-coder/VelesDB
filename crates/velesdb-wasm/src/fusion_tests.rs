@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 #[test]
 fn test_fuse_rrf_basic() {
@@ -138,7 +139,7 @@ fn test_fuse_relative_score() {
 
     // Query 0: range=0.8, ID 1 norm=(0.9-0.1)/0.8=1.0, ID 2 norm=0.0
     // Query 1: range=0, both get 0.5 (default when range==0, matches core)
-    // ID 1: avg(1.0, 0.5)=0.75;  ID 2: avg(0.0, 0.5)=0.25
+    // Core's RSF, weights 0.5 / 0.5: ID 1 = 0.75; ID 2 = 0.25
     assert_eq!(fused.len(), 2);
     assert_eq!(fused[0].0, 1);
     assert!((fused[0].1 - 0.75).abs() < 0.01);
@@ -154,61 +155,30 @@ fn test_fuse_rsf_alias() {
     assert_eq!(fused.len(), 2);
 }
 
-/// Pins the *intentional* divergence between this WASM N-branch
-/// `relative_score` and core's two-branch
-/// [`velesdb_core::FusionStrategy::RelativeScore`] for the production
-/// arity (`multi_query_search` fuses one branch per query vector, so N is
-/// the user-supplied query count — genuinely N, not a fixed dense+sparse 2).
-///
-/// Core's `RelativeScore` only consumes branches 0 and 1 (dense + sparse)
-/// and discards the rest; this WASM path averages all N normalized branches.
-/// They MUST keep producing a different ranking — if a future change tries
-/// to "also delegate rsf to core", this test fails loudly instead of
-/// silently corrupting multi-query WASM search results.
+/// `multi_query_search` fuses one branch per query vector, so N is the
+/// user-supplied query count. WASM's `relative_score` is core's
+/// [`velesdb_core::FusionStrategy::RelativeScore`] for every N (D005): the
+/// same ids, in the same order, with the same scores.
 #[test]
-fn test_rsf_n_branch_diverges_from_core_relative_score() {
-    // 3 homogeneous dense-query branches (N > 2).
-    let input: Vec<Vec<(u64, f32)>> = vec![
+fn test_rsf_is_cores_relative_score_for_every_branch_count() {
+    let branches: Vec<Vec<(u64, f32)>> = vec![
         vec![(1, 0.9), (2, 0.1), (3, 0.5)],
         vec![(1, 0.2), (2, 0.8)],
         vec![(3, 1.0), (1, 0.0)],
     ];
-
-    let wasm_order: Vec<u64> = fuse_results(&input, "relative_score", 60, None, None)
-        .unwrap()
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect();
-
-    // WASM averages every branch: id3 wins (0.75), id2 (0.5), id1 (0.333).
-    assert_eq!(
-        wasm_order,
-        vec![3, 2, 1],
-        "WASM rsf must average all N branches"
-    );
-
-    // Core discards branch index >= 2, so id3 (only present in branch 2)
-    // collapses to its dense contribution alone and sinks to the bottom.
-    let core_strategy = FusionStrategy::relative_score(0.5, 0.5).unwrap();
-    let core_order: Vec<u64> = core_strategy
-        .fuse(input.clone())
-        .unwrap()
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect();
-    assert_eq!(
-        core_order.last().copied(),
-        Some(3),
-        "core RelativeScore ranks the discarded-branch id last"
-    );
-
-    // WASM ranks id3 first, core ranks it last: the orderings genuinely
-    // diverge, so forcing convergence onto core would be a silent
-    // multi-query ranking regression. The split is deliberate.
-    assert_ne!(
-        wasm_order, core_order,
-        "N-branch rsf must diverge from core's 2-branch RelativeScore"
-    );
+    for n in 1..=branches.len() {
+        let input = branches[..n].to_vec();
+        let wasm = fuse_results(&input, "relative_score", 60, None, None).unwrap();
+        let core = FusionStrategy::from_name("rsf", FusionParams::default())
+            .unwrap()
+            .fuse(input.clone())
+            .unwrap();
+        assert_eq!(wasm.len(), core.len(), "{n} branches");
+        for ((wasm_id, wasm_score), (core_id, core_score)) in wasm.iter().zip(&core) {
+            assert_eq!(wasm_id, core_id, "{n} branches");
+            assert!((wasm_score - core_score).abs() < 1e-6, "{n} branches");
+        }
+    }
 }
 
 /// BUG regression (PR #556): when all scores in a branch are equal
@@ -241,12 +211,10 @@ fn test_fuse_unknown_strategy_returns_error() {
     );
 }
 
-/// Equivalence guard: for representative multi-query inputs the four
-/// delegated strategies (`average`, `maximum`, `weighted`, `rrf`) must
-/// return the SAME ordering as the corresponding
-/// [`velesdb_core::FusionStrategy::fuse`] call. `relative_score` is
-/// intentionally excluded: its N-branch averaging semantics differ from
-/// core's two-branch `RelativeScore` (documented on `fuse_relative_score`).
+/// Equivalence guard: for representative multi-query inputs every
+/// delegated strategy (`average`, `maximum`, `weighted`, `rrf`,
+/// `relative_score`) must return the SAME ordering as the corresponding
+/// [`velesdb_core::FusionStrategy::fuse`] call, for one to three branches.
 #[test]
 fn test_fuse_results_matches_core_ordering() {
     let inputs: Vec<Vec<Vec<(u64, f32)>>> = vec![
@@ -264,11 +232,15 @@ fn test_fuse_results_matches_core_ordering() {
         ],
     ];
 
-    let cases: [(&str, FusionStrategy); 4] = [
+    let cases: [(&str, FusionStrategy); 5] = [
         ("average", FusionStrategy::Average),
         ("maximum", FusionStrategy::Maximum),
         ("weighted", FusionStrategy::weighted_default()),
         ("rrf", FusionStrategy::RRF { k: 60 }),
+        (
+            "relative_score",
+            FusionStrategy::relative_score(0.5, 0.5).expect("test: weights"),
+        ),
     ];
 
     // Tie-break deterministically (score desc, then id asc) so that ties —
@@ -297,12 +269,10 @@ fn test_fuse_results_matches_core_ordering() {
 }
 
 /// Single-sourcing guard (issue #1545): a *single-branch* `relative_score`
-/// fusion has no other branch to average against, so its output must be
-/// exactly the per-id normalization core's public
-/// [`velesdb_core::fusion::min_max_normalize`] produces for that branch.
-/// If `fuse_relative_score` ever stops delegating to it — e.g. a future
-/// edit reintroduces a WASM-local copy of the min-max math — this test
-/// fails the moment the two computations diverge, and it fails to even
+/// fusion is core's dense weight times the per-id normalization core's
+/// public [`velesdb_core::fusion::min_max_normalize`] produces for that
+/// branch. If a WASM-local copy of the min-max math ever comes back, this
+/// test fails the moment the two computations diverge, and it fails to even
 /// *compile* if `min_max_normalize` is no longer exported from core.
 #[test]
 fn test_relative_score_normalization_delegates_to_core_min_max_normalize() {
@@ -314,6 +284,7 @@ fn test_relative_score_normalization_delegates_to_core_min_max_normalize() {
 
     for branch in branches {
         let expected = velesdb_core::fusion::min_max_normalize(branch);
+        let dense_weight = velesdb_core::fusion::DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT;
 
         let wasm_single_branch =
             fuse_results(&[branch.to_vec()], "relative_score", 60, None, None).unwrap();
@@ -324,7 +295,7 @@ fn test_relative_score_normalization_delegates_to_core_min_max_normalize() {
             "branch {branch:?}: id count mismatch between WASM rsf and core min_max_normalize"
         );
         for (id, score) in &wasm_single_branch {
-            let core_score = expected[id];
+            let core_score = dense_weight * expected[id];
             assert!(
                 (score - core_score).abs() < 1e-6,
                 "branch {branch:?}, id {id}: WASM normalized {score} but core's \

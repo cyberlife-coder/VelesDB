@@ -1443,10 +1443,10 @@
     {
       "id": "D005",
       "area": "multi-query fusion ranking (relative_score / rsf)",
-      "core_behavior": "documented in docs/reference/ECOSYSTEM_PARITY.md",
-      "wasm_behavior": "WASM-local relative_score/rsf multi-query fusion ranks differently from core",
-      "status": "pre-existing, out of scope for issue #1544 — cross-referenced here only because the issue's own description flagged it as related context",
-      "evidence": "crates/velesdb-wasm/src/fusion.rs:6-18,85-91 (per issue #1544 description); docs/reference/ECOSYSTEM_PARITY.md"
+      "core_behavior": "RESOLVED: FusionStrategy::RelativeScore fuses every branch: its dense and sparse weights for two, 1/N each beyond (unequal weights over 3+ branches refused), a document absent from a branch getting 0 from it. It used to drop every branch past the second",
+      "wasm_behavior": "RESOLVED: multi_query_search's relative_score runs core's FusionStrategy. It used to average each document over the branches it appeared in",
+      "status": "resolved — pinned by crates/velesdb-wasm/src/fusion_tests.rs (test_rsf_is_cores_relative_score_for_every_branch_count) and core's strategy_tests",
+      "evidence": "crates/velesdb-core/src/fusion/strategy.rs: fuse_relative_score(), rsf_branch_weights(); crates/velesdb-wasm/src/fusion.rs: fuse_results()"
     },
     {
       "id": "D006",

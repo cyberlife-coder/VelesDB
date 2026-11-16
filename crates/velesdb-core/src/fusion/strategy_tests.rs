@@ -859,44 +859,46 @@ fn test_rsf_fuse_rejects_negative_weight_from_literal() {
     );
 }
 
+/// Beyond two branches RSF weighs every branch equally (`1/N`): each is
+/// min-max normalized, a document absent from a branch gets `0` from it, and
+/// no branch is dropped (D005: branches beyond index 1 used to be ignored).
 #[test]
-fn test_rsf_ignores_extra_branches_beyond_two() {
-    // M-7: fuse_relative_score silently drops branches beyond index 1.
-    // The result must be identical to passing only the first two branches.
-    let strategy = FusionStrategy::relative_score(0.6, 0.4).unwrap();
-
-    let two_branches = vec![
-        vec![(1_u64, 10.0_f32), (2, 8.0)], // dense
-        vec![(2_u64, 5.0_f32), (3, 3.0)],  // sparse
-    ];
+fn test_rsf_fuses_every_branch_with_equal_weights_beyond_two() {
+    let strategy = FusionStrategy::relative_score(0.5, 0.5).unwrap();
     let three_branches = vec![
-        vec![(1_u64, 10.0_f32), (2, 8.0)], // dense
-        vec![(2_u64, 5.0_f32), (3, 3.0)],  // sparse
-        vec![(4_u64, 99.0_f32)],           // extra (must be ignored)
+        vec![(1_u64, 10.0_f32), (2, 8.0)],
+        vec![(2_u64, 5.0_f32), (3, 3.0)],
+        vec![(4_u64, 99.0_f32), (1, 0.0)],
     ];
 
-    let fused_two = strategy.fuse(two_branches).unwrap();
-    let fused_three = strategy.fuse(three_branches).unwrap();
+    let fused = strategy.fuse(three_branches).unwrap();
+    let score = |id: u64| {
+        fused
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map_or_else(|| panic!("doc {id} must be fused"), |(_, s)| *s)
+    };
+    // Normalized: b0 {1: 1, 2: 0}, b1 {2: 1, 3: 0}, b2 {4: 1, 1: 0}.
+    let third = 1.0 / 3.0;
+    assert!((score(1) - third).abs() < 1e-5, "doc 1: {}", score(1));
+    assert!((score(2) - third).abs() < 1e-5, "doc 2: {}", score(2));
+    assert!(score(3).abs() < 1e-5, "doc 3: {}", score(3));
+    assert!((score(4) - third).abs() < 1e-5, "doc 4: {}", score(4));
+}
 
-    // Extra branch doc 4 must NOT appear in the results.
-    assert!(
-        !fused_three.iter().any(|(id, _)| *id == 4),
-        "doc 4 from the extra branch must be absent from RSF output"
+/// Unequal RSF weights name a dense and a sparse branch: more branches are
+/// refused rather than silently weighed some other way.
+#[test]
+fn test_rsf_refuses_unequal_weights_beyond_two_branches() {
+    let strategy = FusionStrategy::relative_score(0.8, 0.2).unwrap();
+    let three = vec![vec![(1_u64, 1.0_f32)], vec![(2, 1.0)], vec![(3, 1.0)]];
+    assert_eq!(
+        strategy.fuse(three),
+        Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches: 3
+        })
     );
-
-    // Scores for the shared documents must be identical.
-    for (id, score) in &fused_two {
-        let matching = fused_three.iter().find(|(i, _)| i == id);
-        assert!(
-            matching.is_some(),
-            "doc {id} must appear in three-branch result"
-        );
-        let (_, score_three) = matching.unwrap();
-        assert!(
-            (score - score_three).abs() < 1e-5,
-            "score for doc {id} must not change when an extra branch is present"
-        );
-    }
 }
 
 // =============================================================================

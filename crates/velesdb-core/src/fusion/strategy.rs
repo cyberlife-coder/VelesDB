@@ -189,11 +189,15 @@ pub enum FusionStrategy {
         hit_weight: f32,
     },
 
-    /// Relative Score Fusion for dense + sparse hybrid search.
+    /// Relative Score Fusion.
     ///
     /// Each branch is min-max normalized independently, then combined via
-    /// weighted sum: `final = dense_weight * norm_dense + sparse_weight * norm_sparse`.
-    /// Docs appearing in only one branch get 0 for the missing branch.
+    /// weighted sum; a doc absent from a branch gets 0 from it. Two branches
+    /// (dense + sparse) take `dense_weight` and `sparse_weight`:
+    /// `final = dense_weight * norm_dense + sparse_weight * norm_sparse`.
+    /// More branches (one per query vector of a multi-query search) weigh
+    /// equally, `1/N` each, which equal weights mean; unequal weights name
+    /// two branches and are refused there.
     RelativeScore {
         /// Weight for the dense (vector) branch.
         dense_weight: f32,
@@ -575,17 +579,15 @@ impl FusionStrategy {
         Ok(fused)
     }
 
-    /// Relative Score Fusion: per-branch min-max normalization + weighted sum.
-    ///
-    /// Expects exactly two branches in `results`: index 0 = dense, index 1 = sparse.
-    /// If more branches are provided, only the first two are used; the extras
-    /// are silently discarded. A warning is emitted so callers can detect the
-    /// accidental multi-branch case during development.
+    /// Relative Score Fusion: per-branch min-max normalization + weighted sum,
+    /// a document absent from a branch getting `0` from it. Every branch is
+    /// fused ([`rsf_branch_weights`]).
     ///
     /// # Errors
     ///
     /// Returns an error if the weights are negative or do not sum to 1.0
-    /// (within 0.001 tolerance). Validation runs here as well as in the
+    /// (within 0.001 tolerance), or if they differ while more than two
+    /// branches are fused. Validation runs here as well as in the
     /// `relative_score()` constructor so that direct enum-literal construction
     /// (e.g. from server/CLI request fields) cannot bypass it.
     fn fuse_relative_score(
@@ -595,35 +597,16 @@ impl FusionStrategy {
     ) -> Result<Vec<(u64, f32)>, FusionError> {
         validate_non_negative(&[dense_weight, sparse_weight])?;
         validate_weight_sum(dense_weight + sparse_weight)?;
+        let weights = rsf_branch_weights(results.len(), dense_weight, sparse_weight)?;
 
-        if results.len() > 2 {
-            tracing::warn!(
-                branch_count = results.len(),
-                "RelativeScore fusion received {} branches but only supports 2 (dense + sparse). \
-                 Branches beyond index 1 are ignored.",
-                results.len(),
-            );
+        let mut fused: HashMap<u64, f32> = HashMap::new();
+        for (branch, weight) in results.iter().zip(weights) {
+            for (id, normalized) in min_max_normalize(branch) {
+                *fused.entry(id).or_insert(0.0) += weight * normalized;
+            }
         }
 
-        let dense = results.first().map_or(&[][..], |v| v.as_slice());
-        let sparse = results.get(1).map_or(&[][..], |v| v.as_slice());
-
-        let norm_dense = min_max_normalize(dense);
-        let norm_sparse = min_max_normalize(sparse);
-
-        // Collect all doc IDs — capacity upper-bounds total unique docs.
-        let mut all_ids: HashMap<u64, f32> =
-            HashMap::with_capacity(norm_dense.len() + norm_sparse.len());
-        for (&id, &nd) in &norm_dense {
-            let ns = norm_sparse.get(&id).copied().unwrap_or(0.0);
-            all_ids.insert(id, dense_weight * nd + sparse_weight * ns);
-        }
-        // For sparse-only IDs (not in norm_dense), dense contribution is 0.
-        for (&id, &ns) in &norm_sparse {
-            all_ids.entry(id).or_insert(sparse_weight * ns);
-        }
-
-        let mut fused: Vec<(u64, f32)> = all_ids.into_iter().collect();
+        let mut fused: Vec<(u64, f32)> = fused.into_iter().collect();
         sort_fused_results(&mut fused);
         Ok(fused)
     }
@@ -718,9 +701,13 @@ fn validate_smoothing_constant(k: f32) -> Result<(), FusionError> {
     Ok(())
 }
 
+/// How far two weights, or a weight sum and 1.0, may differ and still count
+/// as equal.
+const WEIGHT_SUM_TOLERANCE: f32 = 0.001;
+
 /// Validates that a weight sum is 1.0 (within 0.001 tolerance).
 fn validate_weight_sum(sum: f32) -> Result<(), FusionError> {
-    if (sum - 1.0).abs() > 0.001 {
+    if (sum - 1.0).abs() > WEIGHT_SUM_TOLERANCE {
         return Err(FusionError::InvalidWeightSum { sum });
     }
     Ok(())
@@ -759,6 +746,31 @@ pub(crate) fn fused_score_cmp(a: f32, b: f32) -> std::cmp::Ordering {
     unsigned_zero(a).total_cmp(&unsigned_zero(b))
 }
 
+/// The weight of each of `branches` RSF branches: `dense_weight` and
+/// `sparse_weight` for one or two (dense, then sparse), `1/N` each beyond.
+///
+/// # Errors
+///
+/// [`FusionError::WeightCountMismatch`] when more than two branches meet
+/// unequal weights: they name two branches, and N branches weigh equally.
+#[allow(clippy::cast_precision_loss)] // Reason: a branch count is small.
+fn rsf_branch_weights(
+    branches: usize,
+    dense_weight: f32,
+    sparse_weight: f32,
+) -> Result<Vec<f32>, FusionError> {
+    if branches <= 2 {
+        return Ok(vec![dense_weight, sparse_weight]);
+    }
+    if (dense_weight - sparse_weight).abs() > WEIGHT_SUM_TOLERANCE {
+        return Err(FusionError::WeightCountMismatch {
+            weights: 2,
+            branches,
+        });
+    }
+    Ok(vec![1.0 / branches as f32; branches])
+}
+
 /// Min-max normalize a branch of `(id, score)` pairs to the `[0, 1]` range.
 ///
 /// If the score range is smaller than `f32::EPSILON` (all scores effectively
@@ -766,9 +778,9 @@ pub(crate) fn fused_score_cmp(a: f32, b: f32) -> std::cmp::Ordering {
 ///
 /// This is the single canonical implementation of min-max normalization for
 /// `VelesDB` fusion. It is `pub` specifically so other engines that need the
-/// same per-branch normalization semantics — e.g. `velesdb-wasm`'s N-branch
-/// relative-score fusion — can call it directly instead of maintaining a
-/// second copy of this math that could silently drift (see issue #1545).
+/// same per-branch normalization semantics can call it directly instead of
+/// maintaining a second copy of this math that could silently drift (see
+/// issue #1545).
 #[must_use]
 pub fn min_max_normalize(branch: &[(u64, f32)]) -> HashMap<u64, f32> {
     if branch.is_empty() {

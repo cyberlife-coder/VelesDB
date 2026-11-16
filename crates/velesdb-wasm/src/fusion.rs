@@ -1,25 +1,13 @@
 //! Result fusion strategies for `VelesDB` WASM.
 //!
-//! The four score/rank strategies (`average`, `maximum`, `weighted`, `rrf`)
-//! delegate to the canonical [`velesdb_core::FusionStrategy`] so the browser
-//! engine and the core engine produce identical rankings. The
-//! `relative_score` / `rsf` strategy keeps a WASM-local *aggregation* (it
-//! averages across N branches instead of core's fixed dense+sparse pair) but
-//! its per-branch min-max normalization now delegates to
-//! [`velesdb_core::fusion::min_max_normalize`] — see [`fuse_relative_score`].
-//!
-//! Branch-arity split (why `rsf` aggregation is *not* converged here): the
-//! only production caller of [`fuse_results`] is `multi_query_search`, which
-//! fuses one branch per query vector, so the branch count is the
-//! user-supplied query count — genuinely N, with no dense/sparse distinction.
-//! Core's `RelativeScore` is defined only for the 2-branch dense+sparse
-//! hybrid (it discards branches beyond index 1), so delegating this N-branch
-//! path to it would silently drop results. The 2-branch hybrid that *does*
-//! match core's contract — the VelesQL `USING FUSION (strategy='rsf')` clause
-//! — already routes through core (`crate::velesql_fusion::build_rsf` →
-//! `FusionStrategy::relative_score`), so only the genuinely-N aggregation
-//! stays WASM-local; the normalization math underneath it is single-sourced
-//! from core (issue #1545).
+//! Every strategy — `average`, `maximum`, `weighted`, `rrf`, `weighted_rrf`
+//! and `relative_score` / `rsf` — is core's [`velesdb_core::FusionStrategy`],
+//! so the browser engine and the core engine produce identical rankings.
+//! The only production caller, `multi_query_search`, fuses one branch per
+//! query vector; core's `relative_score` fuses every one of those N branches,
+//! equal weights beyond two (D005: the browser used to average each
+//! document's scores over the branches it appeared in, and core dropped
+//! every branch past the second).
 //!
 //! The strategy *name* — its aliases, its case rule — is core's grammar,
 //! [`velesdb_core::FusionStrategy::from_name`], whichever aggregation runs.
@@ -28,8 +16,6 @@
 //! uses core's canonical `DEFAULT_WEIGHTED_*` constants
 //! (`avg=0.6, max=0.3, hit=0.1`), as `from_name` fills them in. Callers may
 //! override them via the `weights` parameter.
-
-use std::collections::HashMap;
 
 use velesdb_core::{FusionParams, FusionStrategy};
 
@@ -71,13 +57,9 @@ pub fn fuse_results(
         .with_avg_weight(avg_weight)
         .with_max_weight(max_weight)
         .with_hit_weight(hit_weight);
-    match FusionStrategy::from_name_with_weights(strategy, params, branch_weights)
-        .map_err(|e| e.to_string())?
-    {
-        // The N-branch aggregation stays local (D005); see the module doc.
-        FusionStrategy::RelativeScore { .. } => Ok(fuse_relative_score(all_results)),
-        core_strategy => fuse_with_core(all_results, &core_strategy),
-    }
+    let core_strategy = FusionStrategy::from_name_with_weights(strategy, params, branch_weights)
+        .map_err(|e| e.to_string())?;
+    fuse_with_core(all_results, &core_strategy)
 }
 
 /// Delegates to the canonical core fusion and adapts its error to a `String`.
@@ -88,42 +70,6 @@ fn fuse_with_core(
     strategy
         .fuse(all_results.to_vec())
         .map_err(|e| e.to_string())
-}
-
-/// Relative Score Fusion: min-max normalizes each query independently.
-///
-/// Each query's scores are normalized to `[0, 1]` via core's canonical
-/// [`velesdb_core::fusion::min_max_normalize`] — the same single-sourced
-/// helper `FusionStrategy::RelativeScore` uses internally — then averaged per
-/// document across the queries in which the document appears. When all
-/// scores in a branch are equal (range < epsilon), the normalized value
-/// defaults to 0.5, per that helper's contract.
-///
-/// **Note:** the *aggregation* here is intentionally *not* delegated to
-/// [`velesdb_core::FusionStrategy::RelativeScore`]. Core's `RelativeScore` is a
-/// two-branch (dense + sparse) weighted sum that zero-fills documents missing
-/// from a branch and discards branches beyond index 1. This WASM version
-/// averages across N branches with equal weights and skips missing branches,
-/// which yields a different ranking; converging the *aggregation* onto core
-/// would silently change WASM search results. Only the per-branch
-/// normalization math is shared (issue #1545).
-fn fuse_relative_score(all_results: &[Vec<(u64, f32)>]) -> Vec<(u64, f32)> {
-    let mut normalized: HashMap<u64, Vec<f32>> = HashMap::new();
-    for results in all_results {
-        for (id, norm) in velesdb_core::fusion::min_max_normalize(results) {
-            normalized.entry(id).or_default().push(norm);
-        }
-    }
-
-    let mut fused: Vec<(u64, f32)> = normalized
-        .iter()
-        .map(|(id, s)| {
-            let avg = s.iter().sum::<f32>() / s.len() as f32;
-            (*id, avg)
-        })
-        .collect();
-    velesdb_core::fusion::sort_fused_results(&mut fused);
-    fused
 }
 
 #[cfg(test)]
