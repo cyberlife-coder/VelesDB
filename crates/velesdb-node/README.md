@@ -134,9 +134,10 @@ import { MemoryService } from '@wiscale/velesdb-memory-node'
 const store = MemoryService.open(mkdtempSync(join(tmpdir(), 'velesdb-')))
 
 // An earlier session recorded a decision and the human reason behind it.
-const reason = await store.remember(
+// remember() resolves to an envelope; take the id off it for links.
+const reason = (await store.remember(
   'field crews work from remote mining sites over satellite links',
-)
+)).id
 await store.remember('the default HTTP request timeout is 7 seconds', [
   { target: reason, relation: 'because' },
 ])
@@ -196,6 +197,15 @@ over its environment fallback:
 model and credential from the environment exclusively, so no token lands in
 source. `VELESDB_MEMORY_QUIET=1` silences the one-time offline-embedder
 notice.
+
+Set `VELESDB_MEMORY_INGEST_ROOTS` (a platform path-list of directories, read
+once at `open`) to enable the file-backed features: `path` fragments in
+`compileContext`/`compileTranscript`/`explainCompilation`, and the
+`anchors`/`anchorRoot` parameters of `remember`/`recall` — each anchored
+file's digest is recorded at store time, and `recall` with `anchorRoot`
+reports `freshness` (`fresh` | `stale` | `unverified`, with the changed paths)
+per hit. Without it, every `path`/anchor is refused with `[INVALID_INPUT]` —
+fail-closed; the containment check runs at the sink, never in the binding.
 
 ```js
 const store = MemoryService.open('./agent_mem', 'ollama')

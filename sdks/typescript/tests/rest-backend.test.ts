@@ -93,14 +93,26 @@ describe('RestBackend', () => {
     });
 
     it('should get a collection', async () => {
+      // Real wire shape: `CollectionResponse` sends `point_count` and
+      // `storage_mode` (snake_case), which the backend maps to
+      // `count` / `storageMode`.
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ name: 'test', dimension: 128, metric: 'cosine', count: 100 }),
+        json: () =>
+          Promise.resolve({
+            name: 'test',
+            dimension: 128,
+            metric: 'cosine',
+            point_count: 100,
+            storage_mode: 'full',
+          }),
       });
 
       const col = await backend.getCollection('test');
       expect(col?.name).toBe('test');
       expect(col?.dimension).toBe(128);
+      expect(col?.count).toBe(100);
+      expect(col?.storageMode).toBe('full');
     });
 
     it('should bulk delete points via POST points/delete', async () => {
@@ -195,16 +207,32 @@ describe('RestBackend', () => {
     });
 
     it('should list collections', async () => {
+      // Real wire shape: `GET /collections` answers `{ "collections": [...] }`
+      // with collection NAMES (core `list_collections()` -> Vec<String>); the
+      // backend hydrates each name via `GET /collections/{name}`.
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve([
-          { name: 'col1', dimension: 128 },
-          { name: 'col2', dimension: 256 },
-        ]),
+        json: () => Promise.resolve({ collections: ['col1', 'col2'] }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({ name: 'col1', dimension: 128, metric: 'cosine', point_count: 3, storage_mode: 'full' }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({ name: 'col2', dimension: 256, metric: 'dot', point_count: 0, storage_mode: 'sq8' }),
       });
 
       const list = await backend.listCollections();
       expect(list.length).toBe(2);
+      expect(list[0]).toMatchObject({ name: 'col1', dimension: 128, count: 3, storageMode: 'full' });
+      expect(list[1]).toMatchObject({ name: 'col2', dimension: 256, count: 0, storageMode: 'sq8' });
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections',
+        expect.objectContaining({ method: 'GET' })
+      );
     });
   });
 
@@ -265,6 +293,36 @@ describe('RestBackend', () => {
               { id: 1, vector: [1.0, 0.0] },
               { id: 2, vector: [0.0, 1.0] },
             ],
+          }),
+        })
+      );
+    });
+
+    it('should forward sparse_vector and sparse_vectors on upsert', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      await backend.upsert('test', {
+        id: 7,
+        vector: [1.0, 0.0],
+        sparseVector: { 42: 0.5 },
+        sparseVectors: { title_bm25: { 1337: 1.2 } },
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/collections/test/points',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            points: [{
+              id: 7,
+              vector: [1.0, 0.0],
+              payload: undefined,
+              sparse_vector: { '42': 0.5 },
+              sparse_vectors: { title_bm25: { '1337': 1.2 } },
+            }],
           }),
         })
       );
@@ -345,9 +403,8 @@ describe('RestBackend', () => {
         'http://localhost:8080/collections/test/search',
         expect.objectContaining({
           body: JSON.stringify({
-            vector: [1.0, 0.0],
             top_k: 5,
-            filter: undefined,
+            vector: [1.0, 0.0],
           }),
         })
       );

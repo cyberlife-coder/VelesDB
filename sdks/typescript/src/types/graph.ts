@@ -210,3 +210,37 @@ export interface GraphCollectionConfig {
   /** Edge types a `'strict'` graph accepts. Refused on a schemaless graph, which ignores them. */
   edgeTypes?: GraphEdgeType[];
 }
+
+/** Response of `POST /collections/{name}/graph/edges/batch` (`AddEdgesBatchResponse`). */
+export interface AddEdgesBatchResponse {
+  /**
+   * Number of edges actually inserted. May be less than the number submitted:
+   * edges whose ID already exists (in the request or the graph) are skipped.
+   */
+  added: number;
+}
+
+// ============================================================================
+// SSE streaming traversal (GET /collections/{name}/graph/traverse/stream)
+// ============================================================================
+
+/** Query params of the SSE traverse endpoint (`StreamTraverseParams`). */
+export interface StreamTraverseRequest {
+  /** Source node ID to start traversal from. */
+  startNode: number | string;
+  /** Traversal algorithm: 'bfs' (default) or 'dfs'. */
+  algorithm?: 'bfs' | 'dfs';
+  /** Maximum traversal depth. */
+  maxDepth?: number;
+  /** Maximum number of results to stream. */
+  limit?: number;
+  /** Relationship types to follow, in request order. */
+  relationshipTypes?: string[];
+}
+
+/** One SSE event of a streaming traversal. */
+export type TraverseStreamEvent =
+  | { type: 'node'; id: string | number; depth: number; path: Array<string | number> }
+  | { type: 'stats'; nodesVisited: number; elapsedMs: number }
+  | { type: 'done'; totalNodes: number; maxDepthReached: number; elapsedMs: number }
+  | { type: 'error'; message: string };

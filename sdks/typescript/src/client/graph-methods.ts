@@ -9,7 +9,9 @@
 
 import type {
   IVelesDBBackend,
+  IVelesDBMaintenanceBackend,
   AddEdgeRequest,
+  AddEdgesBatchResponse,
   GetEdgesOptions,
   GraphEdge,
   GraphNodeId,
@@ -29,7 +31,7 @@ import type {
   RelateResponse,
   RelationsResponse,
 } from '../types';
-import { ValidationError } from '../types';
+import { ValidationError, VelesDBError } from '../types';
 import { requireNonEmptyString } from './validation';
 
 function isGraphNodeId(value: unknown): value is GraphNodeId {
@@ -51,6 +53,40 @@ export function addEdge(
   }
 
   return backend.addEdge(collection, edge);
+}
+
+/**
+ * Add many edges at once (`POST .../graph/edges/batch`).
+ *
+ * The backend method is optional on `IVelesDBBackend`: a backend that cannot
+ * serve the route leaves it undefined and the call refuses with a typed
+ * `NOT_SUPPORTED`, same code as the WASM stubs.
+ */
+export function addEdgesBatch(
+  backend: IVelesDBBackend,
+  collection: string,
+  edges: AddEdgeRequest[]
+): Promise<AddEdgesBatchResponse> {
+  requireNonEmptyString(collection, 'Collection');
+  const ops = backend as IVelesDBMaintenanceBackend;
+  if (!ops.addEdgesBatch) {
+    throw new VelesDBError(
+      'addEdgesBatch is not supported by this backend. Use REST backend.',
+      'NOT_SUPPORTED'
+    );
+  }
+  if (!Array.isArray(edges)) {
+    throw new ValidationError('Edges must be an array');
+  }
+  for (const edge of edges) {
+    if (!edge.label || typeof edge.label !== 'string') {
+      throw new ValidationError('Edge label is required and must be a string');
+    }
+    if (!isGraphNodeId(edge.source) || !isGraphNodeId(edge.target)) {
+      throw new ValidationError('Edge source and target must be numbers or strings');
+    }
+  }
+  return ops.addEdgesBatch(collection, edges);
 }
 
 /** Get edges from the collection's knowledge graph. */

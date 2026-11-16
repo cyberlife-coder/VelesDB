@@ -20,6 +20,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VelesDB, AgentMemoryClient } from '../src/client';
 import type { IVelesDBBackend } from '../src/types';
 import { ValidationError } from '../src/types';
+import { InvalidDimensionError } from '../src/errors';
 
 function buildBackend(): IVelesDBBackend {
   return {
@@ -147,8 +148,12 @@ describe('VelesDB — config + lifecycle', () => {
   it('createCollection rejects when dimension is missing on vector collections', async () => {
     const { db } = setup();
     await expect(
-      db.createCollection('c', { dimension: 0 } as never)
+      db.createCollection('c', {} as never)
     ).rejects.toThrow(ValidationError);
+    // Out-of-range dimension is VELES-032 (InvalidDimensionError), matching core.
+    await expect(
+      db.createCollection('c', { dimension: 0 } as never)
+    ).rejects.toThrow(InvalidDimensionError);
   });
 
   it('capabilities() delegates to backend.capabilities()', () => {

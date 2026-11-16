@@ -1,9 +1,17 @@
 //! Node.js (napi-rs) binding for the `velesdb-memory` `MemoryService` — the
-//! agent-memory wedge: `remember` / `recall` / `recallWhere` / `relate` /
-//! `unrelate` / `forget` / `why` / `entity` / `feedback` / `rememberExtracted` / `compileContext` /
+//! agent-memory wedge: `remember` / `recall` / `recallWhere` / `recallFused` /
+//! `recallFusedDated` / `relate` / `unrelate` / `forget` / `why` / `entity` /
+//! `feedback` / `rememberExtracted` / `compileContext` /
 //! `compileTranscript` / `contextSavings` / `explainCompilation` /
 //! `retrieveContextSource` / `saveWorkingContext` / `loadWorkingContext` /
 //! `listWorkingContexts` / `suggestBudget` / `memoryStatus` / `listMemories`.
+//!
+//! `remember` accepts optional `anchors` + `anchorRoot` and `recall` an
+//! optional `anchorRoot` (file-anchored freshness, as on the MCP server);
+//! both need `VELESDB_MEMORY_INGEST_ROOTS` set before `open`, and
+//! `compileContext`/`compileTranscript`/`explainCompilation` resolve `path`
+//! fragments under the same allowlist — the security checks run at the sink
+//! in `velesdb_memory::anchor::AnchorRoot` / `context::ingest`.
 //!
 //! It wraps the exact same hardened Rust the MCP server and the `PyO3` binding use
 //! (no logic is reimplemented), mirroring `crates/velesdb-python/src/agent_memory_service.rs`
@@ -44,6 +52,7 @@
 mod convert;
 mod dto;
 mod error;
+mod factory;
 mod guards;
 mod tasks;
 
@@ -52,126 +61,30 @@ use std::sync::Arc;
 use napi::bindgen_prelude::AsyncTask;
 use napi_derive::napi;
 use serde_json::Value;
+use velesdb_memory::anchor::AnchorRoot;
+use velesdb_memory::context::ingest::resolve_fragments;
 use velesdb_memory::context::{
     suggest_token_budget, CompilePolicy, CompileRequest, ContextCompiler, LoadedWorkingContext,
     WorkingContext,
 };
-use velesdb_memory::{
-    embedder_env_endpoint, select_embedder, DynEmbedder, Embedder, EmbedderSelection,
-    MemoryService, OllamaEmbedder, OllamaExtractor, OpenAiEmbedder, OutlineExtractor,
-    DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, HASH_EMBEDDER_NOTICE,
+use velesdb_memory::{Embedder, MemoryError, MemoryService};
+
+use crate::factory::{
+    anchor_allowlist, build_embedder, build_extractor, ingest_roots_from_env,
+    warn_hash_embedder_not_semantic,
 };
+// The struct lives in `factory.rs` (split when lib.rs crossed the file
+// budget); re-exported so the crate's public path `NodeMemoryService` is
+// unchanged, not a removal (same pattern as match_exec's ProjectionItem).
+pub use crate::factory::NodeMemoryService;
 
 use crate::dto::{
-    ColumnFilterJs, CompiledContextJs, DatedRecallJs, EntityProfileJs, ExplanationJs,
-    FusionOptionsJs, LinkJs, RecollectionJs, RememberOutcomeJs, RememberedExtractionJs, UnrelateJs,
+    AnchoredRecollectionJs, ColumnFilterJs, CompileTranscriptJs, CompiledContextJs, DatedRecallJs,
+    EntityProfileJs, ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs, RememberOutcomeJs,
+    RememberedExtractionJs, UnrelateJs,
 };
-use crate::error::{invalid_input, setting_error, to_napi_err, CODE_INTERNAL};
+use crate::error::{internal, invalid_input, setting_error, to_napi_err};
 use crate::tasks::{Job, JsonOut};
-
-/// Resolve and build the requested embedder, returning it alongside the model
-/// name and semantic flag [`MemoryStore::memory_status`] reports.
-///
-/// `kind` is the factory's explicit `embedder` argument; when `None`,
-/// `VELESDB_MEMORY_EMBEDDER` takes over — the explicit argument always wins,
-/// the same precedence and the same [`velesdb_memory::select_embedder`] the
-/// daemon resolves the backend name through (#1886: previously this binding
-/// read no environment variable at all, so a shell that had semantic recall
-/// configured for the MCP daemon silently got the offline default here).
-/// `"hash"` is deterministic and offline; `"ollama"` and `"openai"` reach a
-/// local or remote embedding model for real semantic recall.
-fn build_embedder(
-    kind: Option<&str>,
-    url: Option<String>,
-    model: Option<String>,
-) -> napi::Result<(DynEmbedder, String, bool)> {
-    let backend_env = std::env::var("VELESDB_MEMORY_EMBEDDER").ok();
-    let selection = select_embedder(kind.or(backend_env.as_deref())).map_err(setting_error)?;
-    match selection {
-        EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned(), name != "hash")),
-        EmbedderSelection::NeedsRemoteConfig("ollama") => {
-            build_ollama_embedder(url, model).map(|(embedder, model)| (embedder, model, true))
-        }
-        EmbedderSelection::NeedsRemoteConfig("openai") => {
-            build_openai_embedder().map(|(embedder, model)| (embedder, model, true))
-        }
-        EmbedderSelection::NeedsRemoteConfig(other) => Err(napi::Error::from_reason(format!(
-            "[{CODE_INTERNAL}] the embedding backend '{other}' is accepted by velesdb-memory's \
-             selector but this binding has no builder for it — this is a bug in \
-             velesdb-memory, not a configuration error; please report it quoting this message"
-        ))),
-    }
-}
-
-/// Build the Ollama-backed embedder: an explicit argument wins, then the
-/// environment (honouring the legacy `VELESDB_MEMORY_OLLAMA_*` aliases, C1),
-/// then the built-in local defaults.
-fn build_ollama_embedder(
-    url: Option<String>,
-    model: Option<String>,
-) -> napi::Result<(DynEmbedder, String)> {
-    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(setting_error)?;
-    let url = url
-        .or(env_endpoint.url)
-        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-    let model = model
-        .or(env_endpoint.model)
-        .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned());
-    let embedder = OllamaEmbedder::new(url, model.clone())
-        .map_err(|e| napi::Error::from_reason(format!("[{CODE_INTERNAL}] {e}")))?;
-    Ok((Box::new(embedder), model))
-}
-
-/// Build the OpenAI-compatible embedder. The URL, model and credential come
-/// from the environment only — never from a factory argument, so a caller can
-/// never end up with a token sitting in their own source file — see
-/// [`velesdb_memory::RemoteEndpoint::require`].
-fn build_openai_embedder() -> napi::Result<(DynEmbedder, String)> {
-    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(setting_error)?;
-    let (url, model, auth) = env_endpoint
-        .require("VELESDB_MEMORY_EMBEDDER")
-        .map_err(setting_error)?;
-    let embedder = OpenAiEmbedder::new(url, model.clone(), auth)
-        .map_err(|e| napi::Error::from_reason(format!("[{CODE_INTERNAL}] {e}")))?;
-    Ok((Box::new(embedder), model))
-}
-
-/// Surface the lexical fallback once per successfully opened Node instance.
-fn warn_hash_embedder_not_semantic(semantic: bool) {
-    if semantic || std::env::var_os("VELESDB_MEMORY_QUIET").is_some() {
-        return;
-    }
-    eprintln!(
-        "[velesdb-memory-node] {HASH_EMBEDDER_NOTICE} For real semantic recall \
-         reopen with MemoryService.open(path, \"ollama\") or configure \
-         VELESDB_MEMORY_EMBEDDER=ollama. Set VELESDB_MEMORY_QUIET=1 to silence this notice."
-    );
-}
-
-/// Local-first agent memory with the `why()` graph wedge.
-///
-/// All methods are async (return a Promise) and run off the event-loop thread.
-///
-/// Exposed to JS as `MemoryService` (matching the `PyO3` binding and the core
-/// type); the Rust struct keeps a distinct name only to avoid colliding with the
-/// imported [`velesdb_memory::MemoryService`] it wraps. `NodeMemoryService`
-/// rather than the old `MemoryStore`: that name collided with
-/// `velesdb_memory`'s storage-trait alias on the other side of the binding
-/// seam, exactly where ambiguity costs the most (#2018) — and being
-/// `js_name`-mapped, the Rust identifier is invisible to JS consumers.
-#[napi(js_name = "MemoryService")]
-pub struct NodeMemoryService {
-    inner: Arc<MemoryService<DynEmbedder>>,
-    /// The embedder identity resolved at [`Self::open`] — what
-    /// [`Self::memory_status`] reports as RUNNING. The service itself only
-    /// ever sees `&[f32]`, so the factory is the one place that knows.
-    embedder_model: String,
-    embedder_dimension: usize,
-    embedder_semantic: bool,
-    /// Where the store lives, for the provenance block of
-    /// [`Self::memory_status`] (#1751's on-disk record).
-    store_dir: std::path::PathBuf,
-}
 
 #[napi]
 impl NodeMemoryService {
@@ -196,6 +109,11 @@ impl NodeMemoryService {
     /// `"adaptive:<min_ef>:<max_ef>"`, each ef in 16-4096); an explicit
     /// value wins over `VELESDB_MEMORY_SEARCH_QUALITY`, and omitting both keeps
     /// the collection's own quality. An unknown value rejects the open.
+    ///
+    /// `VELESDB_MEMORY_INGEST_ROOTS` (read once here, as the daemon reads it at
+    /// startup) enables `path` fragments in `compileContext`/`compileTranscript`/
+    /// `explainCompilation` and file anchors on `remember`/`recall`. Unset, both
+    /// are refused fail-closed; a malformed value rejects the open.
     #[napi(factory)]
     pub fn open(
         path: String,
@@ -215,6 +133,7 @@ impl NodeMemoryService {
             Some(quality) => svc.with_search_quality(quality),
             None => svc,
         };
+        let ingest_roots = ingest_roots_from_env()?;
         warn_hash_embedder_not_semantic(embedder_semantic);
         Ok(Self {
             inner: Arc::new(svc),
@@ -222,6 +141,7 @@ impl NodeMemoryService {
             embedder_dimension,
             embedder_semantic,
             store_dir: std::path::PathBuf::from(path),
+            ingest_roots,
         })
     }
 
@@ -241,6 +161,14 @@ impl NodeMemoryService {
     /// permanent memory, including when re-storing a fact that already had an
     /// expiry — only what this call supplies is applied. An explicit `0` is
     /// REFUSED, because a caller writing `0` means "expire now", not "never".
+    ///
+    /// `anchors` (repo-relative paths, at most 8) with `anchorRoot` (an absolute
+    /// checkout inside `VELESDB_MEMORY_INGEST_ROOTS`, read at `open`) tie the
+    /// fact to those files: each file's digest is recorded now, so a later
+    /// [`recall`](Self::recall) with the same `anchorRoot` can report the fact
+    /// `stale` when one changes. The anchors are read BEFORE anything is
+    /// stored — a refused anchor stores nothing. Omit both for the plain
+    /// unanchored store (byte-identical to it).
     #[napi(ts_return_type = "Promise<RememberOutcomeJs>")]
     pub fn remember(
         &self,
@@ -248,35 +176,75 @@ impl NodeMemoryService {
         links: Option<Vec<LinkJs>>,
         metadata: Option<Value>,
         ttl_seconds: Option<u32>,
+        anchors: Option<Vec<String>>,
+        anchor_root: Option<String>,
     ) -> AsyncTask<Job<RememberOutcomeJs>> {
         let svc = Arc::clone(&self.inner);
+        let allowlist = anchor_allowlist(self.ingest_roots.as_ref());
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&fact)?;
             let links = convert::to_links(links)?;
             let metadata = convert::to_metadata(metadata)?;
-            svc.remember_detailed(&fact, &links, metadata.as_ref(), ttl_seconds.map(u64::from))
-                .map(RememberOutcomeJs::from)
-                .map_err(to_napi_err)
+            // Same call the MCP `remember` tool makes: resolve_request reads
+            // each anchored file under the allowlist (containment checked at
+            // the sink in AnchorRoot) and refuses before anything is written.
+            let anchors = AnchorRoot::resolve_request(
+                anchor_root.as_deref(),
+                &anchors.unwrap_or_default(),
+                &allowlist,
+            )
+            .map_err(|e| to_napi_err(MemoryError::from(e)))?;
+            svc.remember_anchored_detailed(
+                &fact,
+                &links,
+                metadata.as_ref(),
+                ttl_seconds.map(u64::from),
+                anchors.as_ref(),
+            )
+            .map(RememberOutcomeJs::from)
+            .map_err(to_napi_err)
         }))
     }
 
     /// Recall up to `k` (default 10, capped) memories similar to `query`,
-    /// optionally narrowed by an exact-match metadata `filter`.
-    #[napi(ts_return_type = "Promise<Array<RecollectionJs>>")]
+    /// optionally narrowed by an exact-match metadata `filter`. With
+    /// `anchorRoot` (an absolute checkout inside `VELESDB_MEMORY_INGEST_ROOTS`),
+    /// each hit additionally carries `freshness` — `fresh` / `stale` (the
+    /// changed paths in `changed`; stale hits are ranked lower, `score` stays
+    /// the raw similarity) / `unverified` — exactly like the MCP `recall` tool.
+    /// Without `anchorRoot`, hits carry no freshness verdict (the field is
+    /// absent) — the plain recollection shape every other recall method returns.
+    #[napi(ts_return_type = "Promise<Array<AnchoredRecollectionJs>>")]
     pub fn recall(
         &self,
         query: String,
         k: Option<u32>,
         filter: Option<Value>,
-    ) -> AsyncTask<Job<Vec<RecollectionJs>>> {
+        anchor_root: Option<String>,
+    ) -> AsyncTask<Job<Vec<AnchoredRecollectionJs>>> {
         let svc = Arc::clone(&self.inner);
+        let allowlist = anchor_allowlist(self.ingest_roots.as_ref());
         AsyncTask::new(Job::new(move || {
             let k = guards::clamp_limit(k.unwrap_or(10));
             let filter = convert::to_metadata(filter)?;
+            let Some(root) = anchor_root else {
+                let hits = svc
+                    .recall(&query, k, filter.as_ref())
+                    .map_err(to_napi_err)?;
+                return Ok(hits
+                    .into_iter()
+                    .map(|hit| AnchoredRecollectionJs {
+                        freshness: None,
+                        ..RecollectionJs::from(hit).into()
+                    })
+                    .collect());
+            };
+            let mut probe = AnchorRoot::open(&root, &allowlist)
+                .map_err(|e| to_napi_err(MemoryError::from(e)))?;
             let hits = svc
-                .recall(&query, k, filter.as_ref())
+                .recall_anchored(&query, k, filter.as_ref(), &mut probe)
                 .map_err(to_napi_err)?;
-            Ok(hits.into_iter().map(RecollectionJs::from).collect())
+            Ok(hits.into_iter().map(AnchoredRecollectionJs::from).collect())
         }))
     }
 
@@ -501,17 +469,26 @@ impl NodeMemoryService {
     /// binding-wide difference remains: every id field (`fragment_id`,
     /// `content_hash`, `memory_id`, `fragment_ids`, and `fragments[].id` on
     /// input) crosses as a decimal string, like every other method here.
+    ///
+    /// A fragment may set `path` (an absolute file) INSTEAD of `content` —
+    /// resolved into `content` under the `VELESDB_MEMORY_INGEST_ROOTS`
+    /// allowlist read at `open`, exactly like the MCP tool's pre-pass; with
+    /// no roots configured a `path` fragment is refused with
+    /// `INVALID_INPUT` (ingest disabled), fail-closed.
     #[napi(
         js_name = "compileContext",
         ts_return_type = "Promise<CompiledContextJs>"
     )]
     pub fn compile_context(&self, request: Value) -> AsyncTask<Job<CompiledContextJs>> {
         let svc = Arc::clone(&self.inner);
+        let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
             let mut request = request;
             convert::parse_fragment_id_strings(&mut request)?;
-            let request: CompileRequest = serde_json::from_value(request)
+            let mut request: CompileRequest = serde_json::from_value(request)
                 .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
+            resolve_fragments(&mut request.fragments, ingest_roots.as_ref())
+                .map_err(to_napi_err)?;
             let compiled = svc
                 .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
                 .map_err(to_napi_err)?;
@@ -527,7 +504,8 @@ impl NodeMemoryService {
     /// delegation to [`velesdb_memory`]'s bridge — zero logic in the binding.
     #[napi(
         js_name = "contextSavings",
-        ts_return_type = "Promise<{ events: number; tokens_in: number; tokens_out: number; tokens_saved: number; cost_saved_micros_by_currency: Record<string, number>; truncated: boolean }>"
+        // u64 counters arrive as BigInt past u32::MAX — `number | bigint`, not `number`.
+        ts_return_type = "Promise<{ events: number | bigint; tokens_in: number | bigint; tokens_out: number | bigint; tokens_saved: number | bigint; cost_saved_micros_by_currency: Record<string, number | bigint>; truncated: boolean }>"
     )]
     pub fn context_savings(&self, project: Option<String>) -> AsyncTask<Job<JsonOut>> {
         let svc = Arc::clone(&self.inner);
@@ -536,7 +514,7 @@ impl NodeMemoryService {
                 .context_savings(project.as_deref())
                 .map_err(to_napi_err)?;
             let value = serde_json::to_value(&savings)
-                .map_err(|err| invalid_input(format!("context savings serialization: {err}")))?;
+                .map_err(|err| internal(format!("context savings serialization: {err}")))?;
             Ok(JsonOut(value))
         }))
     }
@@ -567,18 +545,23 @@ impl NodeMemoryService {
         fragment_index: Option<u32>,
     ) -> AsyncTask<Job<JsonOut>> {
         let svc = Arc::clone(&self.inner);
+        let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
             let mut request = request;
             convert::parse_fragment_id_strings(&mut request)?;
-            let request: CompileRequest = serde_json::from_value(request)
+            let mut request: CompileRequest = serde_json::from_value(request)
                 .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
+            // Same pre-pass as compile_context (the MCP tool shares it):
+            // `path` fragments resolve under the ingest-roots allowlist.
+            resolve_fragments(&mut request.fragments, ingest_roots.as_ref())
+                .map_err(to_napi_err)?;
             let fragment_id = convert::parse_id(&fragment_id)?;
             let fragment_index = fragment_index.map(|i| i as usize);
             let decision = svc
                 .explain_compilation(&request, fragment_id, fragment_index)
                 .map_err(to_napi_err)?;
             let mut value = serde_json::to_value(&decision)
-                .map_err(|err| invalid_input(format!("context decision serialization: {err}")))?;
+                .map_err(|err| internal(format!("context decision serialization: {err}")))?;
             convert::stringify_id_fields(&mut value);
             Ok(JsonOut(value))
         }))
@@ -663,7 +646,7 @@ impl NodeMemoryService {
                 .resume_working_context(&project, &session)
                 .map_err(to_napi_err)?;
             let mut value = serde_json::to_value(loaded)
-                .map_err(|err| invalid_input(format!("working context serialization: {err}")))?;
+                .map_err(|err| internal(format!("working context serialization: {err}")))?;
             // Applied at the ROOT of the envelope, not to `working` alone:
             // the walk descends by KEY NAME, so it still reaches
             // `working.decisions[].fragment_id` and
@@ -683,14 +666,15 @@ impl NodeMemoryService {
     /// — zero logic in the binding.
     #[napi(
         js_name = "listWorkingContexts",
-        ts_return_type = "Promise<{ sessions: Array<{ session: string; saved_at: number }> }>"
+        // saved_at is a u64 epoch second — BigInt past u32::MAX (year 2106+).
+        ts_return_type = "Promise<{ sessions: Array<{ session: string; saved_at: number | bigint }> }>"
     )]
     pub fn list_working_contexts(&self, project: String) -> AsyncTask<Job<JsonOut>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let sessions = svc.list_working_contexts(&project).map_err(to_napi_err)?;
             let sessions_value = serde_json::to_value(&sessions).map_err(|err| {
-                invalid_input(format!("working context sessions serialization: {err}"))
+                internal(format!("working context sessions serialization: {err}"))
             })?;
             let mut map = serde_json::Map::new();
             map.insert("sessions".to_owned(), sessions_value);
@@ -707,22 +691,30 @@ impl NodeMemoryService {
     /// `abstract.log_dedup` would), then compiles the result exactly like
     /// [`Self::compile_context`]. Same JSON request shape as the MCP
     /// `compile_transcript` tool's `transcript` (inline) input — this
-    /// binding does not resolve the tool's `path` field (no
-    /// `VELESDB_MEMORY_INGEST_ROOTS`-style configuration surface here; read
-    /// the file yourself and pass its content as `transcript`). Resolves to
-    /// `{context, segmentation}`: `context` is the same wire shape as
-    /// [`Self::compile_context`]'s own output (id fields as decimal
-    /// strings); `segmentation` is the detected format plus one audit entry
-    /// (turn, role, kind, byte range, `fragment_id` — a decimal string) per
-    /// segment, so a caller can see exactly how the transcript was cut
+    /// Like the MCP `compile_transcript` tool, the request takes `transcript`
+    /// (inline) OR `path` (an absolute file resolved under the
+    /// `VELESDB_MEMORY_INGEST_ROOTS` allowlist read at `open` — with no roots
+    /// configured, `path` is refused with `INVALID_INPUT`, fail-closed; pass
+    /// both and the call is refused). Resolves to `{context, segmentation}`:
+    /// `context` is the SAME typed envelope as [`Self::compile_context`]'s own
+    /// output — one payload, one casing (`retrievalHandles`), id fields as
+    /// decimal strings; `segmentation` is the detected format plus one audit
+    /// entry (turn, role, kind, byte range, `fragment_id` — a decimal string)
+    /// per segment, so a caller can see exactly how the transcript was cut
     /// before trusting the compiled result.
     #[napi(
         js_name = "compileTranscript",
-        ts_return_type = "Promise<{ context: { content: string; sections: object; decisions: object; sources: object; retrieval_handles: object; insights: object; risk: string; warnings: object }; segmentation: { format_detected: string; segments: Array<{ index: number; turn: number; role?: string; kind: string; byte_start: number; byte_end: number; fragment_id: string }>; merged_segments: number } }>"
+        ts_return_type = "Promise<CompileTranscriptJs>"
     )]
-    pub fn compile_transcript(&self, request: Value) -> AsyncTask<Job<JsonOut>> {
+    pub fn compile_transcript(&self, request: Value) -> AsyncTask<Job<CompileTranscriptJs>> {
         let svc = Arc::clone(&self.inner);
+        let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
+            // `path` is a transcript-level field, not part of the bridge's
+            // input struct: resolve it under the allowlist and feed the text
+            // back as `transcript` — exactly the MCP tool's
+            // transcript-or-path resolution.
+            let request = convert::resolve_transcript_input(request, ingest_roots.as_ref())?;
             let input: convert::CompileTranscriptInput =
                 serde_json::from_value(request).map_err(|err| {
                     invalid_input(format!("invalid compile_transcript request: {err}"))
@@ -731,13 +723,10 @@ impl NodeMemoryService {
             let compiled = svc
                 .compile_context(&ContextCompiler::new(CompilePolicy::default()), &request)
                 .map_err(to_napi_err)?;
-            let mut context_value = serde_json::to_value(&compiled)
-                .map_err(|err| invalid_input(format!("compiled context serialization: {err}")))?;
-            convert::stringify_id_fields(&mut context_value);
-            let mut map = serde_json::Map::new();
-            map.insert("context".to_owned(), context_value);
-            map.insert("segmentation".to_owned(), segmentation);
-            Ok(JsonOut(Value::Object(map)))
+            Ok(CompileTranscriptJs {
+                context: convert::to_compiled_js(&compiled)?,
+                segmentation,
+            })
         }))
     }
 
@@ -768,7 +757,7 @@ impl NodeMemoryService {
             let budget =
                 suggest_token_budget(&target_model, u64::from(reserve_tokens.unwrap_or(0)));
             let value = serde_json::to_value(&budget)
-                .map_err(|err| invalid_input(format!("suggested budget serialization: {err}")))?;
+                .map_err(|err| internal(format!("suggested budget serialization: {err}")))?;
             Ok(JsonOut(value))
         }))
     }
@@ -784,7 +773,8 @@ impl NodeMemoryService {
     /// walk" state.
     #[napi(
         js_name = "memoryStatus",
-        ts_return_type = "Promise<{ embedder: { model: string | null; dimension: number | null; semantic: boolean | null }; provenance: { recorded: boolean; model: string | null; dimension: number | null }; extraction: { configured: boolean; autograph_active: boolean; autograph_dropped: number; autograph_failed: number }; memory: { facts: number; edges: number | null } }>"
+        // the counters are u64/usize — they arrive as BigInt past u32::MAX.
+        ts_return_type = "Promise<{ embedder: { model: string | null; dimension: number | bigint | null; semantic: boolean | null }; provenance: { recorded: boolean; model: string | null; dimension: number | bigint | null }; extraction: { configured: boolean; autograph_active: boolean; autograph_dropped: number | bigint; autograph_failed: number | bigint }; memory: { facts: number | bigint; edges: number | bigint | null } }>"
     )]
     pub fn memory_status(&self) -> AsyncTask<Job<JsonOut>> {
         let svc = Arc::clone(&self.inner);
@@ -845,7 +835,9 @@ impl NodeMemoryService {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let cursor = match cursor {
-                Some(raw) => Some(raw.trim().parse::<u64>().map_err(|_| {
+                // Strict decimal parse, same as every other id in this
+                // binding (`convert::parse_id`) — one grammar, not two.
+                Some(raw) => Some(raw.parse::<u64>().map_err(|_| {
                     invalid_input(format!("cursor must be a decimal u64 string, got '{raw}'"))
                 })?),
                 None => None,
@@ -879,10 +871,19 @@ impl NodeMemoryService {
     /// Extract atomic facts from raw `text` and store them, auto-building the
     /// entity graph they state. Resolves to `{ids, skippedOverCap}`.
     ///
-    /// `extractor` names the backend, defaulting to `"ollama"`:
+    /// `extractor` names the backend; an explicit value wins over
+    /// `VELESDB_MEMORY_EXTRACTOR`, and omitting both defaults to `"ollama"`
+    /// (same precedence as the embedder, #1886):
     ///
-    /// - `"ollama"` calls the local generative `model` (required for this
-    ///   backend) at `url`, and reads structure out of prose.
+    /// - `"ollama"` calls the local generative `model` at `url`, reading
+    ///   structure out of prose. `model`/`url` arguments win over
+    ///   `VELESDB_MEMORY_EXTRACTOR_MODEL`/`_URL`, then the canonical local
+    ///   default; the model itself is required for this backend.
+    /// - `"openai"` speaks the OpenAI chat-completions protocol: `url`/`model`
+    ///   come from the arguments or `VELESDB_MEMORY_EXTRACTOR_URL`/`_MODEL`
+    ///   (both required — there is no default for a protocol), and the
+    ///   credential from `VELESDB_MEMORY_EXTRACTOR_API_TOKEN` only, never
+    ///   from an argument, so no token lands in a source file.
     /// - `"outline"` is deterministic and network-free: it reads the
     ///   structure the passage STATES, one directive per line (`edge:`,
     ///   `attr:`, `fact:`), and ignores `model`/`url`. Same relationship as
@@ -911,28 +912,15 @@ impl NodeMemoryService {
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&text)?;
             let metadata = convert::to_metadata(metadata)?;
-            let outcome = match extractor.as_deref().unwrap_or("ollama") {
-                "outline" => svc.remember_extracted(&text, &OutlineExtractor, metadata.as_ref()),
-                "ollama" => {
-                    let model = model.ok_or_else(|| {
-                        invalid_input(
-                            "the 'ollama' extractor needs a `model` (or pass \
-                                       extractor: 'outline' for the offline backend)",
-                        )
-                    })?;
-                    let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-                    svc.remember_extracted(
-                        &text,
-                        &OllamaExtractor::new(url, model),
-                        metadata.as_ref(),
-                    )
-                }
-                other => {
-                    return Err(invalid_input(format!(
-                        "unknown extractor '{other}' (expected 'ollama' or 'outline')"
-                    )))
-                }
-            };
+            // Explicit argument > VELESDB_MEMORY_EXTRACTOR > "ollama" — the
+            // same precedence the embedder factory applies (#1886).
+            let env_backend = std::env::var("VELESDB_MEMORY_EXTRACTOR").ok();
+            let backend = extractor
+                .as_deref()
+                .or(env_backend.as_deref())
+                .unwrap_or("ollama");
+            let extractor = build_extractor(backend, model, url)?;
+            let outcome = svc.remember_extracted(&text, &extractor, metadata.as_ref());
             Ok(RememberedExtractionJs::from(outcome.map_err(to_napi_err)?))
         }))
     }

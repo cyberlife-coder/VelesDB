@@ -12,8 +12,9 @@ import type {
   VelesDBConfig,
   VectorDocument,
   SearchOptions,
-  SearchQuality,
   SearchResult,
+  BatchSearchItem,
+  HybridSearchOptions,
   TextSearchResult,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
@@ -54,16 +55,11 @@ export function search(
   return backend.search(collection, query, options);
 }
 
-/** Search for multiple vectors in parallel. */
+/** Search for multiple vectors in parallel (each entry is a full SearchRequest). */
 export function searchBatch(
   backend: IVelesDBBackend,
   collection: string,
-  searches: Array<{
-    vector: number[] | Float32Array;
-    k?: number;
-    filter?: FilterInput;
-    quality?: SearchQuality;
-  }>
+  searches: BatchSearchItem[]
 ): Promise<SearchResult[][]> {
   if (!Array.isArray(searches)) {
     throw new ValidationError('Searches must be an array');
@@ -93,7 +89,7 @@ export function hybridSearch(
   collection: string,
   vector: number[] | Float32Array,
   textQuery: string,
-  options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
+  options?: HybridSearchOptions
 ): Promise<SearchResult[]> {
   requireVector(vector, 'Vector');
   requireNonEmptyString(textQuery, 'Text query');

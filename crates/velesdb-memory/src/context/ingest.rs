@@ -128,9 +128,17 @@ impl IngestRoots {
     }
 
     /// The canonical roots — the allowlist file anchoring reads under too
-    /// ([`crate::anchor::AnchorRoot`]). Read by the MCP adapter only.
-    #[cfg(feature = "mcp")]
-    pub(crate) fn paths(&self) -> &[PathBuf] {
+    /// ([`crate::anchor::AnchorRoot`]). Read by the MCP adapter and by the
+    /// language bindings (Node/Python), which build the same allowlist from
+    /// `VELESDB_MEMORY_INGEST_ROOTS` at open time; the containment check
+    /// itself always runs at the sink, in `AnchorRoot::open`.
+    ///
+    /// `pub`, not `pub(crate)`: the `mcp` feature is off in the language-binding
+    /// builds (`velesdb-node` compiles this crate with
+    /// `default-features = false`), and gating the accessor on it is exactly
+    /// what kept anchoring and `path` fragments MCP-only.
+    #[must_use]
+    pub fn paths(&self) -> &[PathBuf] {
         &self.roots
     }
 

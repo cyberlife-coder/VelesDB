@@ -11,6 +11,10 @@ crates/velesdb-core/src/collection/search/query/match_exec/mod.rs fn parse_prope
 # published cdylib; nothing in the crate or tests called them.
 crates/velesdb-python/src/graph.rs fn dict_to_node
 crates/velesdb-python/src/graph.rs fn node_to_dict
+# Moved to velesdb-node/src/factory.rs when lib.rs crossed the file budget
+# and re-exported from lib.rs by `pub use`: the public path is unchanged,
+# not a removal.
+crates/velesdb-node/src/lib.rs struct NodeMemoryService
 # Duplicate dotted-path reader removed: `filter` is a private module of the
 # cdylib, so it was unreachable from the published package. Every caller now
 # reads paths through velesdb-core's velesql::json_path::payload_path.
