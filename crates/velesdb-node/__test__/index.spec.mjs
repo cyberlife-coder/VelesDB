@@ -1922,3 +1922,28 @@ test('rememberExtracted: openai without env config is INVALID_INPUT; unknown ext
     cleanup()
   }
 })
+
+test('a count argument outside 0..=2^32-1, fractional or non-finite is refused, never wrapped', async () => {
+  // napi reads a `u32` with JS ToUint32, which wraps: recall(q, Infinity)
+  // became k = 0, remember(..., -1) a 136-year TTL, 2**32 + 60 a 60 s TTL.
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    await store.remember('a fact to recall', [])
+    const invalid = (err) => err instanceof Error && err.message.includes('INVALID_INPUT')
+    for (const bad of [Infinity, NaN, -1, 2 ** 32, 1.5]) {
+      await assert.rejects(store.recall('fact', bad), invalid, `recall k=${bad}`)
+      await assert.rejects(store.remember('f', [], null, bad), invalid, `remember ttl=${bad}`)
+      await assert.rejects(store.why('fact', bad), invalid, `why hops=${bad}`)
+      await assert.rejects(store.listMemories(null, bad), invalid, `listMemories limit=${bad}`)
+      await assert.rejects(
+        store.recallFused('fact', 3, null, { hops: bad }),
+        invalid,
+        `recallFused hops=${bad}`,
+      )
+    }
+    assert.equal((await store.recall('fact', 5)).length, 1, 'a valid count still works')
+  } finally {
+    rmStoreDir(dir)
+  }
+})

@@ -74,15 +74,20 @@ pub fn to_filters(filters: Vec<ColumnFilterJs>) -> napi::Result<Vec<ColumnFilter
 /// (`MAX_WHY_HOPS`, `MAX_RECALL_LIMIT`) live in exactly one place and a knob
 /// added upstream reaches this binding the day it exists. A hand-written
 /// mirror here is how the two would drift.
-pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> FusionOptions {
-    match opts {
-        None => FusionOptions::default(),
-        Some(o) => FusionOptions::from_knobs(
-            o.hops.map(|h| h as usize),
-            o.graph_boost,
-            o.pool.map(|p| p as usize),
-        ),
-    }
+///
+/// # Errors
+///
+/// `INVALID_INPUT` when `hops` or `pool` is not a whole number in
+/// `0..=u32::MAX` ([`crate::guards::count`]).
+pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> napi::Result<FusionOptions> {
+    let Some(o) = opts else {
+        return Ok(FusionOptions::default());
+    };
+    Ok(FusionOptions::from_knobs(
+        crate::guards::count("hops", o.hops)?.map(|h| h as usize),
+        o.graph_boost,
+        crate::guards::count("pool", o.pool)?.map(|p| p as usize),
+    ))
 }
 
 /// Recursively rewrite every `context` id field (see

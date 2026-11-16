@@ -175,7 +175,7 @@ impl NodeMemoryService {
         fact: String,
         links: Option<Vec<LinkJs>>,
         metadata: Option<Value>,
-        ttl_seconds: Option<u32>,
+        ttl_seconds: Option<f64>,
         anchors: Option<Vec<String>>,
         anchor_root: Option<String>,
     ) -> AsyncTask<Job<RememberOutcomeJs>> {
@@ -198,7 +198,7 @@ impl NodeMemoryService {
                 &fact,
                 &links,
                 metadata.as_ref(),
-                ttl_seconds.map(u64::from),
+                guards::count("ttlSeconds", ttl_seconds)?.map(u64::from),
                 anchors.as_ref(),
             )
             .map(RememberOutcomeJs::from)
@@ -218,14 +218,14 @@ impl NodeMemoryService {
     pub fn recall(
         &self,
         query: String,
-        k: Option<u32>,
+        k: Option<f64>,
         filter: Option<Value>,
         anchor_root: Option<String>,
     ) -> AsyncTask<Job<Vec<AnchoredRecollectionJs>>> {
         let svc = Arc::clone(&self.inner);
         let allowlist = anchor_allowlist(self.ingest_roots.as_ref());
         AsyncTask::new(Job::new(move || {
-            let k = guards::clamp_limit(k.unwrap_or(10));
+            let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
             let filter = convert::to_metadata(filter)?;
             let Some(root) = anchor_root else {
                 let hits = svc
@@ -265,11 +265,11 @@ impl NodeMemoryService {
         &self,
         query: String,
         filters: Vec<ColumnFilterJs>,
-        k: Option<u32>,
+        k: Option<f64>,
     ) -> AsyncTask<Job<Vec<RecollectionJs>>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let k = guards::clamp_limit(k.unwrap_or(10));
+            let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
             let filters = convert::to_filters(filters)?;
             let hits = svc.recall_where(&query, k, &filters).map_err(to_napi_err)?;
             Ok(hits.into_iter().map(RecollectionJs::from).collect())
@@ -289,15 +289,15 @@ impl NodeMemoryService {
     pub fn recall_fused(
         &self,
         query: String,
-        k: Option<u32>,
+        k: Option<f64>,
         filter: Option<Value>,
         opts: Option<FusionOptionsJs>,
     ) -> AsyncTask<Job<Vec<RecollectionJs>>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let k = guards::clamp_limit(k.unwrap_or(10));
+            let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
             let filter = convert::to_metadata(filter)?;
-            let opts = convert::to_fusion_options(opts);
+            let opts = convert::to_fusion_options(opts)?;
             let hits = svc
                 .recall_fused(&query, k, filter.as_ref(), opts)
                 .map_err(to_napi_err)?;
@@ -319,15 +319,15 @@ impl NodeMemoryService {
         &self,
         query: String,
         date_field: String,
-        k: Option<u32>,
+        k: Option<f64>,
         filter: Option<Value>,
         opts: Option<FusionOptionsJs>,
     ) -> AsyncTask<Job<DatedRecallJs>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let k = guards::clamp_limit(k.unwrap_or(10));
+            let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
             let filter = convert::to_metadata(filter)?;
-            let opts = convert::to_fusion_options(opts);
+            let opts = convert::to_fusion_options(opts)?;
             let (hits, ctx) = svc
                 .recall_fused_dated(&query, k, filter.as_ref(), opts, &date_field)
                 .map_err(to_napi_err)?;
@@ -414,12 +414,12 @@ impl NodeMemoryService {
     pub fn why(
         &self,
         decision: String,
-        max_hops: Option<u32>,
+        max_hops: Option<f64>,
         filter: Option<Value>,
     ) -> AsyncTask<Job<ExplanationJs>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let max_hops = guards::clamp_hops(max_hops.unwrap_or(2));
+            let max_hops = guards::clamp_hops(guards::count("maxHops", max_hops)?.unwrap_or(2));
             let filter = convert::to_metadata(filter)?;
             svc.why(&decision, max_hops, filter.as_ref())
                 .map(ExplanationJs::from)
@@ -504,7 +504,7 @@ impl NodeMemoryService {
     /// delegation to [`velesdb_memory`]'s bridge — zero logic in the binding.
     #[napi(
         js_name = "contextSavings",
-        // u64 counters arrive as BigInt past u32::MAX — `number | bigint`, not `number`.
+        // u64 counters arrive as BigInt past 2^53 − 1 — `number | bigint`, not `number`.
         ts_return_type = "Promise<{ events: number | bigint; tokens_in: number | bigint; tokens_out: number | bigint; tokens_saved: number | bigint; cost_saved_micros_by_currency: Record<string, number | bigint>; truncated: boolean }>"
     )]
     pub fn context_savings(&self, project: Option<String>) -> AsyncTask<Job<JsonOut>> {
@@ -542,7 +542,7 @@ impl NodeMemoryService {
         &self,
         request: Value,
         fragment_id: String,
-        fragment_index: Option<u32>,
+        fragment_index: Option<f64>,
     ) -> AsyncTask<Job<JsonOut>> {
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
@@ -556,7 +556,8 @@ impl NodeMemoryService {
             resolve_fragments(&mut request.fragments, ingest_roots.as_ref())
                 .map_err(to_napi_err)?;
             let fragment_id = convert::parse_id(&fragment_id)?;
-            let fragment_index = fragment_index.map(|i| i as usize);
+            let fragment_index =
+                guards::count("fragmentIndex", fragment_index)?.map(|i| i as usize);
             let decision = svc
                 .explain_compilation(&request, fragment_id, fragment_index)
                 .map_err(to_napi_err)?;
@@ -666,7 +667,7 @@ impl NodeMemoryService {
     /// — zero logic in the binding.
     #[napi(
         js_name = "listWorkingContexts",
-        // saved_at is a u64 epoch second — BigInt past u32::MAX (year 2106+).
+        // saved_at is a u64 epoch second — BigInt past 2^53 − 1 (never, in practice).
         ts_return_type = "Promise<{ sessions: Array<{ session: string; saved_at: number | bigint }> }>"
     )]
     pub fn list_working_contexts(&self, project: String) -> AsyncTask<Job<JsonOut>> {
@@ -740,10 +741,9 @@ impl NodeMemoryService {
     /// in the table — an honest "unknown", never a guess; the table is
     /// extended in a new release rather than worked around here.
     ///
-    /// `reserveTokens` is a `u32` for the same reason `ttlSeconds` is: napi
-    /// marshals a `u64` as a `BigInt`, and 4 billion reserved tokens is
-    /// already three orders of magnitude past the largest window in the
-    /// table.
+    /// `reserveTokens` is a whole number in `0..=u32::MAX`, checked like every
+    /// count ([`guards::count`]): 4 billion reserved tokens is already three
+    /// orders of magnitude past the largest window in the table.
     #[napi(
         js_name = "suggestBudget",
         ts_return_type = "Promise<{ window: number | null; suggested_budget: number | null; source: string }>"
@@ -751,11 +751,13 @@ impl NodeMemoryService {
     pub fn suggest_budget(
         &self,
         target_model: String,
-        reserve_tokens: Option<u32>,
+        reserve_tokens: Option<f64>,
     ) -> AsyncTask<Job<JsonOut>> {
         AsyncTask::new(Job::new(move || {
-            let budget =
-                suggest_token_budget(&target_model, u64::from(reserve_tokens.unwrap_or(0)));
+            let budget = suggest_token_budget(
+                &target_model,
+                u64::from(guards::count("reserveTokens", reserve_tokens)?.unwrap_or(0)),
+            );
             let value = serde_json::to_value(&budget)
                 .map_err(|err| internal(format!("suggested budget serialization: {err}")))?;
             Ok(JsonOut(value))
@@ -773,7 +775,7 @@ impl NodeMemoryService {
     /// walk" state.
     #[napi(
         js_name = "memoryStatus",
-        // the counters are u64/usize — they arrive as BigInt past u32::MAX.
+        // the counters are u64/usize — they arrive as BigInt past 2^53 − 1.
         ts_return_type = "Promise<{ embedder: { model: string | null; dimension: number | bigint | null; semantic: boolean | null }; provenance: { recorded: boolean; model: string | null; dimension: number | bigint | null }; extraction: { configured: boolean; autograph_active: boolean; autograph_dropped: number | bigint; autograph_failed: number | bigint }; memory: { facts: number | bigint; edges: number | bigint | null } }>"
     )]
     pub fn memory_status(&self) -> AsyncTask<Job<JsonOut>> {
@@ -828,7 +830,7 @@ impl NodeMemoryService {
     pub fn list_memories(
         &self,
         cursor: Option<String>,
-        limit: Option<u32>,
+        limit: Option<f64>,
         filter: Option<Value>,
         include_internal: Option<bool>,
     ) -> AsyncTask<Job<JsonOut>> {
@@ -846,7 +848,7 @@ impl NodeMemoryService {
             let (memories, next) = svc
                 .list(
                     cursor,
-                    limit.unwrap_or(50) as usize,
+                    guards::count("limit", limit)?.unwrap_or(50) as usize,
                     filter.as_ref(),
                     include_internal.unwrap_or(false),
                 )

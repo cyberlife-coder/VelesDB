@@ -41,11 +41,11 @@ pub struct ColumnFilterJs {
 #[napi(object)]
 pub struct FusionOptionsJs {
     /// Hops the graph traversal walks from the top vector seed.
-    pub hops: Option<u32>,
+    pub hops: Option<f64>,
     /// Weight added to a graph-reached fact's normalised vector score.
     pub graph_boost: Option<f64>,
     /// Depth of the oversampled vector pool fusion re-ranks.
-    pub pool: Option<u32>,
+    pub pool: Option<f64>,
 }
 
 /// One recalled memory (output of `recall` / `recallWhere`).
