@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Dependencies** (2026-11-16): non-major updates. In `Cargo.lock`:
+  arc-swap 1.9.5, flate2 1.1.11, napi 3.16.2, pest 2.9.6, rmcp 3.10.0,
+  serde-saphyr 2.1.1, smallvec 1.16.5, toml 1.2.0, uuid 1.29.2 and
+  zlib-rs 0.6.8. In the TypeScript SDK: vitest 5.1.0. Also the pinned
+  GitHub Actions used by CI and release.
+
 - **BREAKING (behavior): a JOIN windows, orders and aggregates its joined
   rows** (core, WASM, 2026-11-15). Core merged the two payloads flat, so a
   qualified column (`o.amount`, `c.name`) read nothing — projected `null`,
