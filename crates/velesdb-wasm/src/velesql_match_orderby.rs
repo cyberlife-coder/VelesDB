@@ -17,6 +17,7 @@
 
 use std::cmp::Ordering;
 
+use velesdb_core::velesql::json_path::payload_path;
 use velesdb_core::velesql::{
     evaluate_arithmetic, ArithmeticExpr, OrderByExpr, OrderByItem, ScoreContext, SimilarityOrderBy,
 };
@@ -42,7 +43,7 @@ pub(crate) struct MatchCandidate {
     /// (anchor `a` repeats across the many `b`/`c` of a star pattern).
     pub baseline: Vec<u64>,
     /// Alias-keyed row JSON (e.g. `{"a": {...}, "b": {...}}`), used to resolve
-    /// `alias.property` ORDER BY keys via `get_nested_field`.
+    /// `alias.property` ORDER BY keys via core's `payload_path`.
     pub value: serde_json::Value,
     /// The serialized row returned to the caller after sorting.
     pub row: QueryResultRow,
@@ -256,8 +257,8 @@ fn sort_by_property(
         ));
     }
     sort_stable(candidates, descending, |a, b| {
-        let va = crate::filter::get_nested_field(&a.value, path);
-        let vb = crate::filter::get_nested_field(&b.value, path);
+        let va = payload_path(&a.value, path);
+        let vb = payload_path(&b.value, path);
         velesdb_core::velesql::compare_json_values(va, vb)
     });
     Ok(())

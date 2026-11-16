@@ -35,6 +35,7 @@
 //!    keys alongside ORDER BY values, up-front.
 
 use super::group_key::normalise;
+use super::json_path::column_value;
 use crate::velesql::{WindowFunction, WindowFunctionType, WindowOrderBy};
 use crate::SearchResult;
 use std::borrow::Cow;
@@ -321,36 +322,7 @@ fn extract_sort_value(result: &SearchResult, column: &str) -> serde_json::Value 
     if column == "similarity" {
         return serde_json::Value::from(f64::from(result.score));
     }
-    extract_nested_value(result, column)
-}
-
-/// Extracts a potentially nested payload value (e.g., `"metadata.source"`);
-/// `id` is the point id, as in every clause, for ORDER BY and PARTITION BY.
-fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Value {
-    if column == "id" {
-        return serde_json::Value::from(result.point.id);
-    }
-    let Some(payload) = result.point.payload.as_ref() else {
-        return serde_json::Value::Null;
-    };
-
-    if column.contains('.') {
-        // Navigate nested path: "metadata.source" → payload["metadata"]["source"]
-        let parts: Vec<&str> = column.split('.').collect();
-        let mut current = payload;
-        for part in &parts {
-            match current.get(*part) {
-                Some(v) => current = v,
-                None => return serde_json::Value::Null,
-            }
-        }
-        current.clone()
-    } else {
-        payload
-            .get(column)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null)
-    }
+    column_value(result, column)
 }
 
 /// Extracts a canonical-JSON string representation of a payload value for
@@ -370,7 +342,7 @@ fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Valu
 /// Consistent with `distinct_evaluator::canonical_json_string` which applies the same
 /// rule for DISTINCT deduplication keys.
 fn extract_payload_value(result: &SearchResult, column: &str) -> String {
-    normalise(Cow::Owned(extract_nested_value(result, column))).to_string()
+    normalise(Cow::Owned(column_value(result, column))).to_string()
 }
 
 /// Compares two window ORDER BY values in the order every ORDER BY uses

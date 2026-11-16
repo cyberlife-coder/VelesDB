@@ -282,6 +282,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One reading of a dotted field path** (core, WASM, 2026-11-16). Ten
+  copies of the `meta.lang` walk (WHERE, MATCH WHERE and RETURN, GROUP BY
+  and DISTINCT, projection, window functions, set operations, scalar
+  subqueries, and two in the browser) are now one, `velesql::json_path::payload_path`,
+  with `velesql::json_path::column_value` for a row's `id`-or-path value.
+  The MATCH copy refused a path deeper than 10 segments, so a `RETURN` or
+  `WHERE` on such a property read nothing where every other clause read
+  the value; it now reads it.
+
 - **`DELETE` takes any metadata `WHERE`** (core, 2026-11-16). Core refused
   every `DELETE` whose `WHERE` was not `id = N` or `id IN (...)`, though the
   VelesQL spec shows `DELETE FROM logs WHERE level = 'debug'` and the WASM

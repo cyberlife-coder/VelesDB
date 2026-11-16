@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use crate::point::SearchResult;
 
 use super::distinct_evaluator::{compute_distinct_key, key_columns};
+use super::json_path::column_value;
 use super::{Query, SelectColumns, SelectOrderBy, SelectStatement, SetOperator};
 
 /// A row with its identity under its operand's projection.
@@ -280,20 +281,6 @@ fn align_columns(rows: &mut [KeyedRow], columns: &SelectColumns, first: &SelectC
         }
         row.point.payload = Some(serde_json::Value::Object(payload));
     }
-}
-
-/// The value a projection reads for `column`: the point id for `id`, else the
-/// payload's field (by path), `null` when absent.
-fn column_value(row: &SearchResult, column: &str) -> serde_json::Value {
-    if column == "id" {
-        return serde_json::Value::from(row.point.id);
-    }
-    row.point
-        .payload
-        .as_ref()
-        .and_then(|p| super::grouping::payload_path(p, column))
-        .cloned()
-        .unwrap_or(serde_json::Value::Null)
 }
 
 /// The columns a SELECT lists by name, if it lists any.

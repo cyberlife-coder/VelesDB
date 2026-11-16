@@ -22,23 +22,6 @@ pub fn parse_filter(filter: Value) -> Result<velesdb_core::Filter, String> {
     velesdb_core::Filter::from_json_value(filter)
 }
 
-/// Gets a nested field from a JSON payload using dot notation.
-///
-/// # Example
-///
-/// ```ignore
-/// let payload = json!({"user": {"name": "John"}});
-/// let name = get_nested_field(&payload, "user.name");
-/// assert_eq!(name, Some(&json!("John")));
-/// ```
-pub fn get_nested_field<'a>(payload: &'a Value, field: &str) -> Option<&'a Value> {
-    let mut current = payload;
-    for part in field.split('.') {
-        current = current.get(part)?;
-    }
-    Some(current)
-}
-
 #[cfg(test)]
 #[path = "filter_tests.rs"]
 mod tests;

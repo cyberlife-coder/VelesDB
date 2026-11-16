@@ -21,6 +21,7 @@
 
 use std::collections::HashMap;
 
+use velesdb_core::velesql::json_path::payload_path;
 use velesdb_core::velesql::{
     parse_projection_item, Parser, ProjectionItem, QueryValidator, ReturnClause, ReturnItem,
 };
@@ -138,7 +139,7 @@ fn element_property(element: &BoundElement, property: &str) -> Option<serde_json
         return Some(serde_json::json!(element.id));
     }
     let payload = element.payload.as_ref()?;
-    crate::filter::get_nested_field(payload, property).cloned()
+    payload_path(payload, property).cloned()
 }
 
 /// Core's `project_all_node_properties`: every payload property but `id`
