@@ -5,14 +5,22 @@
  * TypeScript SDK did not expose. Each function takes a `BaseTransport`
  * and delegates to `requestJson`, keeping the REST backend compositional
  * and extractable per-endpoint. A single file holds all 12 so the diff
- * is auditable; see CHANGELOG for the scoping decision that leaves
- * `streamTraverse` (SSE) out of this commit.
+ * is auditable; see CHANGELOG for the scoping decision that left
+ * `streamTraverse` (SSE) out of that commit — it is now covered by
+ * `sse-backend.ts`.
  *
  * Endpoints covered:
  * - Admin: rebuildIndex, getGuardrails, updateGuardrails
  * - Query: aggregate, matchQuery
  * - Graph: removeEdge, getEdgeCount, listNodes, getNodeEdges,
  *          getNodePayload, upsertNodePayload, graphSearch
+ *
+ * This file traces that sprint, not the current route inventory: the
+ * authoritative list of server routes is
+ * `crates/velesdb-server/src/routes.rs` — cross-check it before declaring
+ * an endpoint "missing" here. Routes added later (vacuum, compact,
+ * locality/reorder, diagnostics, health/ready, edges/batch) live in
+ * `maintenance-backend.ts` / `graph-backend.ts`.
  */
 
 import type {

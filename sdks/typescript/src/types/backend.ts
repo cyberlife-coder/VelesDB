@@ -11,7 +11,6 @@ import type {
   CollectionConfig,
   Collection,
   VectorDocument,
-  SearchQuality,
   SparseVector,
   PqTrainOptions,
 } from './core';
@@ -21,14 +20,19 @@ import type {
   TextSearchResult,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
+  BatchSearchItem,
+  HybridSearchOptions,
 } from './search';
 import type {
   GraphEdge,
   AddEdgeRequest,
+  AddEdgesBatchResponse,
   GetEdgesOptions,
   TraverseRequest,
   TraverseParallelRequest,
   TraverseResponse,
+  TraverseStreamEvent,
+  StreamTraverseRequest,
   DegreeResponse,
   GraphCollectionConfig,
 } from './graph';
@@ -66,6 +70,11 @@ import type {
   AggregateResponse,
   StreamUpsertResponse,
   StreamingConfig,
+  HealthStatus,
+  VacuumResult,
+  CompactResult,
+  ReorderResult,
+  CollectionDiagnostics,
 } from './endpoints';
 
 /** Backend interface that all backends must implement */
@@ -132,20 +141,10 @@ export interface IVelesDBBackend {
   /** Get a vector by ID */
   get(collection: string, id: string | number): Promise<VectorDocument | null>;
 
-  /** Search for multiple vectors in batch */
+  /** Search for multiple vectors in batch (each entry is a full SearchRequest) */
   searchBatch(
     collection: string,
-    searches: Array<{
-      vector: number[] | Float32Array;
-      k?: number;
-      filter?: FilterInput;
-      /**
-       * Per-sub-request search quality preset. On the REST backend the server
-       * answers `400` for a preset it cannot parse, but applies none to a batch
-       * entry (#2267); the WASM backend ignores it.
-       */
-      quality?: SearchQuality;
-    }>
+    searches: BatchSearchItem[]
   ): Promise<SearchResult[][]>;
 
   /** Full-text search: BM25 on REST, unranked substring match on WASM */
@@ -160,7 +159,7 @@ export interface IVelesDBBackend {
     collection: string,
     vector: number[] | Float32Array,
     textQuery: string,
-    options?: { k?: number; vectorWeight?: number; filter?: FilterInput }
+    options?: HybridSearchOptions
   ): Promise<SearchResult[]>;
 
   /** Execute VelesQL multi-model query (EPIC-031 US-011) */
@@ -418,4 +417,37 @@ export interface IVelesDBBackend {
 
   /** Durably set (or refresh) the TTL of a point. */
   setTtlDurable(collection: string, pointId: import('./graph').GraphNodeId, ttlSeconds: number): Promise<void>;
+}
+
+/**
+ * Maintenance / ops routes exposed by the REST backend
+ * (`graph/edges/batch`, `vacuum`, `compact`, `locality/reorder`,
+ * `diagnostics`, `health`, `ready`).
+ *
+ * Kept OUT of {@link IVelesDBBackend} on purpose: every method is optional,
+ * so a backend that cannot serve a route simply omits it and the client
+ * refuses the call with a typed `NOT_SUPPORTED`. Declaring them optional on
+ * the main interface would leak `| undefined` into every mapped type over
+ * `IVelesDBBackend` (e.g. the capability derivation in `capabilities.ts`).
+ */
+export interface IVelesDBMaintenanceBackend {
+  /** `POST /collections/{name}/graph/edges/batch` */
+  addEdgesBatch?(collection: string, edges: AddEdgeRequest[]): Promise<AddEdgesBatchResponse>;
+  /** `POST /collections/{name}/vacuum` */
+  vacuumCollection?(collection: string): Promise<VacuumResult>;
+  /** `POST /collections/{name}/compact` */
+  compactCollection?(collection: string): Promise<CompactResult>;
+  /** `POST /collections/{name}/locality/reorder` */
+  reorderForLocality?(collection: string): Promise<ReorderResult>;
+  /** `GET /collections/{name}/diagnostics` */
+  collectionDiagnostics?(collection: string): Promise<CollectionDiagnostics>;
+  /** `GET /health` */
+  healthCheck?(): Promise<HealthStatus>;
+  /** `GET /ready` */
+  readyCheck?(): Promise<HealthStatus>;
+  /** `GET /collections/{name}/graph/traverse/stream` (SSE) */
+  streamTraverse?(
+    collection: string,
+    request: StreamTraverseRequest
+  ): AsyncIterable<TraverseStreamEvent>;
 }

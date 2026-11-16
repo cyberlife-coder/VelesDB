@@ -8,6 +8,7 @@
 
 import type {
   AddEdgeRequest,
+  AddEdgesBatchResponse,
   GetEdgesOptions,
   GraphEdge,
   GraphNodeId,
@@ -46,6 +47,35 @@ export async function addEdge(
   );
 
   throwOnError(response, `Collection '${collection}'`);
+}
+
+/**
+ * `POST /collections/{name}/graph/edges/batch` — insert many edges at once.
+ *
+ * Edges whose ID already exists (in the request or the graph) are silently
+ * skipped server-side; compare `added` against `edges.length` to detect them.
+ */
+export async function addEdgesBatch(
+  transport: GraphTransport,
+  collection: string,
+  edges: AddEdgeRequest[]
+): Promise<AddEdgesBatchResponse> {
+  const response = await transport.requestJson<{ added: number }>(
+    'POST',
+    `${collectionPath(collection)}/graph/edges/batch`,
+    {
+      edges: edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label,
+        properties: edge.properties ?? {},
+      })),
+    }
+  );
+
+  throwOnError(response, `Collection '${collection}'`);
+  return { added: response.data?.added ?? 0 };
 }
 
 /**
