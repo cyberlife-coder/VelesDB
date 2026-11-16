@@ -163,15 +163,15 @@ before 8.0.0, records carrying a payload were ES2015 `Map`s (#2332).
   parity.
 - **~100 K vectors is the practical ceiling**, set by browser RAM. Beyond that,
   move to the REST server.
-- **One graph per `MATCH`.** A `MATCH` reads one graph store: the first
-  node's `@collection` annotation, else the `_collection` param (as in core and
-  on the server), else the default `graph`. As in core, the points of the
+- **One fixed-length pattern per `MATCH`.** A `MATCH` reads the graph named
+  by the `_collection` param (as in core and on the server), else the default
+  `graph`; a node's `@collection` annotation adds that collection's properties
+  to the node and never selects the graph. As in core, the points of the
   collection with that name are its nodes (payload as properties, `_labels` as
   labels); a node written with `INSERT NODE` overrides the point with the same
-  id. Patterns of any fixed length run;
-  variable-length relationships (`[*1..3]`) and multi-pattern `MATCH` are
-  server-only. The nodes' vectors score `similarity()` as in core; only
-  `ORDER BY similarity(field, $v)` is not supported in a `MATCH`.
+  id. Patterns of any fixed length run with core's semantics, `similarity()`
+  and `ORDER BY` included; variable-length relationships (`[*1..3]`) and
+  multi-pattern `MATCH` are server-only.
 - **No filesystem.** The agent-memory wedge (`MemoryService`) is in-memory
   only; nothing persists unless you persist it yourself.
 - **Storage modes save no memory.** `sq8`, `binary`, `pq` and `rabitq` return
