@@ -1083,6 +1083,14 @@
       "expect_ids": [3, 5, 2, 1],
       "expect_scores": [0.547723, 0.387298, 0.365148, 0.182574],
       "note": "a deleted point no longer ranks in NEAR"
+    },
+    {
+      "id": "W009",
+      "statements": ["UPDATE docs SET vector = $a WHERE id = 1"],
+      "query": "SELECT * FROM docs WHERE vector NEAR $a LIMIT 2",
+      "expect_ids": [1, 4],
+      "expect_scores": [1.0, 0.730297],
+      "note": "UPDATE SET vector replaces the embedding on both engines: point 1 is now $a itself (D008; WASM refused the assignment)"
     }
   ],
   "projection_cases": [
@@ -1435,9 +1443,9 @@
       "id": "D008",
       "area": "UPDATE SET vector",
       "core_behavior": "UPDATE may assign the `vector` column on a vector collection (apply_assignments_to_point re-parses it as the new embedding)",
-      "wasm_behavior": "UPDATE refuses `SET vector = ...` with \"UPDATE cannot modify the 'vector' column (use UPSERT)\"; payload assignments behave as in core",
-      "status": "accepted — WASM is a subset here; the fixture's dml_cases assign payload fields only. UPSERT is the WASM way to replace an embedding",
-      "evidence": "crates/velesdb-core/src/database/query_engine_dml.rs: apply_assignments_to_point(); crates/velesdb-wasm/src/velesql_update.rs: validate_assignments()"
+      "wasm_behavior": "RESOLVED: the WASM UPDATE replaces the embedding too, refusing it on a metadata-only collection or at another dimension; it used to refuse every `SET vector`",
+      "status": "resolved — locked by dml_cases W009",
+      "evidence": "crates/velesdb-wasm/src/velesql_update.rs: new_vector()"
     },
     {
       "id": "D009",

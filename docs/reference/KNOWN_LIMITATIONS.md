@@ -515,8 +515,8 @@ silently relied upon:
 - **D007** — `DELETE` on core accepts only `id = N` / `id IN (...)`; WASM
   evaluates any `WHERE`. WASM is a superset, so the fixture's `dml_cases`
   delete by id.
-- **D008** — `UPDATE ... SET vector = ...` works on core; WASM refuses it and
-  points to `UPSERT`. The fixture's `dml_cases` assign payload fields only.
+- ~~D008~~ — **fixed 2026-11-16**: `UPDATE ... SET vector = ...` replaces the
+  embedding on both engines. Locked by `dml_cases` W009.
 - ~~D009~~ — **fixed 2026-11-15**: a row no vector ranked scores
   `velesql::METADATA_MATCH_SCORE` (1.0) on both engines. Locked by
   `near_cases` N023.
