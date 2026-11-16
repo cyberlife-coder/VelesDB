@@ -3,7 +3,7 @@
 //! Extracted from commands.rs to keep file NLOC under 500.
 #![allow(clippy::missing_errors_doc)]
 
-use crate::error::{CommandError, Error};
+use crate::error::CommandError;
 use crate::helpers::require_vector_collection;
 use crate::state::VelesDbState;
 use tauri::{command, AppHandle, Runtime, State};
@@ -18,8 +18,7 @@ pub async fn create_index<R: Runtime>(
     state
         .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
-            coll.create_index(&request.field_name)
-                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            coll.create_index(&request.field_name)?;
             Ok(())
         })
         .await
