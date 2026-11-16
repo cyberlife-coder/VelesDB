@@ -162,11 +162,6 @@ pub struct NodeMemoryService {
     pub(crate) ingest_roots: Option<IngestRoots>,
 }
 
-/// The allowlist handed to [`velesdb_memory::anchor::AnchorRoot::open`] /
-/// [`velesdb_memory::anchor::AnchorRoot::resolve_request`], empty when ingestion is disabled.
-/// (A free fn, not an inherent method: `binding_parity_bdd` parses the ONE
-/// `impl NodeMemoryService {` surface block, and a second inherent impl would
-/// truncate that scan.)
 /// Build the extraction backend named `backend` for one `rememberExtracted`
 /// call. Explicit `model`/`url` arguments win over the extraction role's
 /// environment (`VELESDB_MEMORY_EXTRACTOR_*`); the OpenAI credential comes
@@ -179,31 +174,8 @@ pub(crate) fn build_extractor(
 ) -> napi::Result<DynExtractor> {
     match backend {
         "outline" => Ok(Arc::new(OutlineExtractor)),
-        "ollama" => {
-            let env_endpoint = extractor_env_endpoint()?;
-            let url = url
-                .or(env_endpoint.url)
-                .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-            let model = model.or(env_endpoint.model).ok_or_else(|| {
-                invalid_input(
-                    "the 'ollama' extractor needs a `model` (argument or \
-                     VELESDB_MEMORY_EXTRACTOR_MODEL; or pass extractor: 'outline' \
-                     for the offline backend)",
-                )
-            })?;
-            Ok(Arc::new(OllamaExtractor::new(url, model)))
-        }
-        "openai" => {
-            let env_endpoint = extractor_env_endpoint()?;
-            let (url, model, auth) = RemoteEndpoint {
-                url: url.or(env_endpoint.url),
-                model: model.or(env_endpoint.model),
-                auth: env_endpoint.auth,
-            }
-            .require("VELESDB_MEMORY_EXTRACTOR")
-            .map_err(setting_error)?;
-            Ok(Arc::new(OpenAiExtractor::new(url, model, auth)))
-        }
+        "ollama" => build_ollama_extractor(model, url),
+        "openai" => build_openai_extractor(model, url),
         "none" | "" => Err(invalid_input(
             "extractor 'none' cannot extract a passage; pass 'outline' for the \
              offline backend, or 'ollama'/'openai' with configuration",
@@ -214,6 +186,48 @@ pub(crate) fn build_extractor(
     }
 }
 
+/// The `ollama` extractor: explicit `url`/`model` win over
+/// `VELESDB_MEMORY_EXTRACTOR_*`, then the default Ollama URL.
+fn build_ollama_extractor(
+    model: Option<String>,
+    url: Option<String>,
+) -> napi::Result<DynExtractor> {
+    let env_endpoint = extractor_env_endpoint()?;
+    let url = url
+        .or(env_endpoint.url)
+        .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+    let model = model.or(env_endpoint.model).ok_or_else(|| {
+        invalid_input(
+            "the 'ollama' extractor needs a `model` (argument or \
+             VELESDB_MEMORY_EXTRACTOR_MODEL; or pass extractor: 'outline' \
+             for the offline backend)",
+        )
+    })?;
+    Ok(Arc::new(OllamaExtractor::new(url, model)))
+}
+
+/// The `openai` extractor: URL/model from the argument or
+/// `VELESDB_MEMORY_EXTRACTOR_*`, credential from the environment only.
+fn build_openai_extractor(
+    model: Option<String>,
+    url: Option<String>,
+) -> napi::Result<DynExtractor> {
+    let env_endpoint = extractor_env_endpoint()?;
+    let (url, model, auth) = RemoteEndpoint {
+        url: url.or(env_endpoint.url),
+        model: model.or(env_endpoint.model),
+        auth: env_endpoint.auth,
+    }
+    .require("VELESDB_MEMORY_EXTRACTOR")
+    .map_err(setting_error)?;
+    Ok(Arc::new(OpenAiExtractor::new(url, model, auth)))
+}
+
+/// The allowlist handed to [`velesdb_memory::anchor::AnchorRoot::open`] /
+/// [`velesdb_memory::anchor::AnchorRoot::resolve_request`], empty when ingestion is disabled.
+/// (A free fn, not an inherent method: `binding_parity_bdd` parses the ONE
+/// `impl NodeMemoryService {` surface block, and a second inherent impl would
+/// truncate that scan.)
 pub(crate) fn anchor_allowlist(ingest_roots: Option<&IngestRoots>) -> Vec<std::path::PathBuf> {
     ingest_roots.map_or_else(Vec::new, |roots| roots.paths().to_vec())
 }
