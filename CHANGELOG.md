@@ -493,6 +493,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delegates storage, replacement, removal and scoring to
   `velesdb_core::sparse_index`.
 
+- **Partial HNSW options are completed by core, the same way everywhere**
+  (core, server, Python, Tauri, 2026-11-16). Each surface merged the fields a
+  caller left unset over a base of its own and none read the `[hnsw]`
+  section that `create_vector_collection_with_hnsw` honours (#2087); Python's
+  base was the 768-dimension profile whatever the collection's dimension, so
+  `HnswOptions(alpha=1.2)` on a 64-dim collection got 768-dim `M` and
+  `ef_construction`. New `HnswOverrides` and
+  `Database::create_vector_collection_with_overrides`: a pinned field wins,
+  then `[hnsw]`, then the auto-tuning for the collection's dimension, and an
+  out-of-range value is refused before anything is created. REST
+  `POST /collections`, Python `create_collection(hnsw=...)` and Tauri
+  `create_collection` all call it.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with

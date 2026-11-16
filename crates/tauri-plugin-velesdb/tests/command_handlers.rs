@@ -185,7 +185,7 @@ fn create_collection_with_advanced_params_validates() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app = mock_app(dir.path());
 
-    // hnswM triggers the advanced-params path (build_hnsw_params + validate).
+    // Pinned HNSW fields go to core, which resolves the rest and validates.
     let req: CreateCollectionRequest = serde_json::from_value(serde_json::json!({
         "name": "tuned",
         "dimension": DIM,
@@ -196,7 +196,7 @@ fn create_collection_with_advanced_params_validates() {
     let info = run(create_collection(handle(&app), st(&app), req)).expect("create tuned");
     assert_eq!(info.name, "tuned");
 
-    // An out-of-range alpha is rejected by hnsw_params.validate().
+    // An out-of-range alpha is rejected by core before anything is created.
     let bad: CreateCollectionRequest = serde_json::from_value(serde_json::json!({
         "name": "bad",
         "dimension": DIM,

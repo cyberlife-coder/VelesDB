@@ -211,7 +211,7 @@ pub use update_check::{
 };
 
 #[cfg(feature = "persistence")]
-pub use index::{HnswIndex, HnswParams, VectorIndex};
+pub use index::{HnswIndex, HnswOverrides, HnswParams, VectorIndex};
 pub use search_quality::SearchQuality;
 
 #[cfg(feature = "persistence")]

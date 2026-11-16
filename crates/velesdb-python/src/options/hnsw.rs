@@ -5,8 +5,9 @@ use velesdb_core::index::hnsw::HnswParams;
 
 /// Typed HNSW parameters for `Database.create_collection`.
 ///
-/// All fields are optional — unspecified fields fall back to the
-/// engine default via [`HnswParams::default`]. Use
+/// All fields are optional — core resolves an unspecified one from the
+/// `[hnsw]` configuration section, then from the auto-tuning for the
+/// collection's dimension, as it does for every other surface. Use
 /// [`HnswOptions.for_dataset_size`][Self::for_dataset_size] to get
 /// auto-tuned values for a target dataset size.
 ///
@@ -149,24 +150,15 @@ impl HnswOptions {
 }
 
 impl HnswOptions {
-    /// Materializes this options dataclass into a concrete
-    /// [`HnswParams`] by filling in defaults for any unset field.
-    ///
-    /// Rejects an out-of-range `alpha` (must be finite and `>= 1.0`) with a
-    /// `ValueError`, mirroring the REST and Tauri boundaries.
-    pub(crate) fn to_hnsw_params(&self) -> PyResult<HnswParams> {
-        let base = HnswParams::default();
-        let params = HnswParams {
-            max_connections: self.m.unwrap_or(base.max_connections),
-            ef_construction: self.ef_construction.unwrap_or(base.ef_construction),
-            max_elements: self.max_elements.unwrap_or(base.max_elements),
-            alpha: self.alpha.unwrap_or(base.alpha),
-            storage_mode: base.storage_mode,
-        };
-        params
-            .validate()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(params)
+    /// The fields the caller pinned, for core to resolve the rest
+    /// (`Database::create_vector_collection_with_overrides`).
+    pub(crate) const fn to_overrides(&self) -> velesdb_core::HnswOverrides {
+        velesdb_core::HnswOverrides {
+            m: self.m,
+            ef_construction: self.ef_construction,
+            max_elements: self.max_elements,
+            alpha: self.alpha,
+        }
     }
 
     /// Shared conversion from a concrete [`HnswParams`] to a fully-

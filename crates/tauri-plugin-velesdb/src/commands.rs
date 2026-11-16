@@ -26,30 +26,17 @@ use crate::types::{EnableStreamingRequest, StreamInsertRequest};
 pub use batch::*;
 use tauri::{command, AppHandle, Runtime, State};
 
-/// Builds [`velesdb_core::HnswParams`] from optional request fields, falling
-/// back to dimension-based auto-tuned defaults for any omitted parameter.
-pub(crate) fn build_hnsw_params(
+/// The HNSW parameters the request pins; core resolves the rest (`[hnsw]`,
+/// then the auto-tuning for the collection's dimension) and validates them.
+pub(crate) const fn hnsw_overrides(
     request: &CreateCollectionRequest,
-    storage_mode: velesdb_core::StorageMode,
-) -> velesdb_core::HnswParams {
-    let base = velesdb_core::HnswParams::auto(request.dimension);
-    velesdb_core::HnswParams {
-        max_connections: request.hnsw_m.unwrap_or(base.max_connections),
-        ef_construction: request.hnsw_ef_construction.unwrap_or(base.ef_construction),
-        max_elements: request.hnsw_max_elements.unwrap_or(base.max_elements),
-        storage_mode,
-        alpha: request.hnsw_alpha.unwrap_or(base.alpha),
+) -> velesdb_core::HnswOverrides {
+    velesdb_core::HnswOverrides {
+        m: request.hnsw_m,
+        ef_construction: request.hnsw_ef_construction,
+        max_elements: request.hnsw_max_elements,
+        alpha: request.hnsw_alpha,
     }
-}
-
-/// Returns `true` when the request carries at least one advanced HNSW or PQ
-/// parameter, indicating that [`build_hnsw_params`] should be used.
-pub(crate) const fn has_advanced_params(request: &CreateCollectionRequest) -> bool {
-    request.hnsw_m.is_some()
-        || request.hnsw_ef_construction.is_some()
-        || request.hnsw_alpha.is_some()
-        || request.hnsw_max_elements.is_some()
-        || request.pq_rescore_oversampling.is_some()
 }
 
 /// Creates a new collection.
@@ -64,27 +51,14 @@ pub async fn create_collection<R: Runtime>(
 
     let result = state
         .run_db(move |db| {
-            if has_advanced_params(&request) {
-                let hnsw_params = build_hnsw_params(&request, storage_mode);
-                // Reject out-of-range tunables (e.g. hnsw_alpha < 1.0 or
-                // non-finite) before creating the collection.
-                hnsw_params.validate()?;
-                db.create_vector_collection_with_params(
-                    &request.name,
-                    request.dimension,
-                    metric,
-                    storage_mode,
-                    hnsw_params,
-                    request.pq_rescore_oversampling,
-                )?;
-            } else {
-                db.create_vector_collection_with_options(
-                    &request.name,
-                    request.dimension,
-                    metric,
-                    storage_mode,
-                )?;
-            }
+            db.create_vector_collection_with_overrides(
+                &request.name,
+                request.dimension,
+                metric,
+                storage_mode,
+                hnsw_overrides(&request),
+                request.pq_rescore_oversampling,
+            )?;
             Ok(CollectionInfo {
                 name: request.name.clone(),
                 dimension: request.dimension,

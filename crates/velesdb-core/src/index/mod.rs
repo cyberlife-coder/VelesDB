@@ -27,7 +27,7 @@ pub mod trigram;
 pub(crate) mod wal_framing;
 
 pub use bm25::{Bm25Index, Bm25Params};
-pub use hnsw::{HnswIndex, HnswParams, SearchQuality};
+pub use hnsw::{HnswIndex, HnswOverrides, HnswParams, SearchQuality};
 pub(crate) use secondary::{JsonValue, SecondaryIndex};
 pub use sparse::{SparseInvertedIndex, SparseVector};
 pub use trigram::{extract_trigrams, TrigramIndex};

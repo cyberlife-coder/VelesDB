@@ -3165,9 +3165,10 @@ class MemoryService:
 class HnswOptions:
     """Typed HNSW parameters for :meth:`Database.create_collection`.
 
-    All fields are optional — unspecified fields fall back to the engine
-    defaults. Replaces the v1.12 flat `m=`, `ef_construction=`,
-    `expected_vectors=` kwargs.
+    All fields are optional — an unspecified one comes from the database's
+    ``[hnsw]`` section (:class:`HnswConfigOptions`), then from the
+    auto-tuning for the collection's dimension. Replaces the v1.12 flat
+    `m=`, `ef_construction=`, `expected_vectors=` kwargs.
 
     Example:
         >>> opts = HnswOptions(m=48, ef_construction=600)

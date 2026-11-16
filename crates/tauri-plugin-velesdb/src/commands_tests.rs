@@ -167,52 +167,30 @@ fn test_create_collection_request_with_partial_hnsw_params() {
 }
 
 #[test]
-fn test_build_hnsw_params_uses_auto_defaults() {
-    use crate::commands::build_hnsw_params;
+fn test_hnsw_overrides_pins_nothing_by_default() {
+    use crate::commands::hnsw_overrides;
 
     let json = r#"{"name": "test", "dimension": 768}"#;
     let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    let params = build_hnsw_params(&request, velesdb_core::StorageMode::Full);
-
-    let auto = velesdb_core::HnswParams::auto(768);
-    assert_eq!(params.max_connections, auto.max_connections);
-    assert_eq!(params.ef_construction, auto.ef_construction);
-    assert_eq!(params.max_elements, auto.max_elements);
-    assert!((params.alpha - auto.alpha).abs() < f32::EPSILON);
+    assert!(hnsw_overrides(&request).is_empty());
 }
 
 #[test]
-fn test_build_hnsw_params_overrides_selectively() {
-    use crate::commands::build_hnsw_params;
+fn test_hnsw_overrides_carries_each_field_it_was_given() {
+    use crate::commands::hnsw_overrides;
 
-    let json = r#"{"name": "test", "dimension": 128, "hnswM": 64, "hnswAlpha": 1.0}"#;
+    let json = r#"{"name": "test", "dimension": 128, "hnswM": 64, "hnswEfConstruction": 300,
+        "hnswMaxElements": 5000, "hnswAlpha": 1.0}"#;
     let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    let params = build_hnsw_params(&request, velesdb_core::StorageMode::SQ8);
-
-    let auto = velesdb_core::HnswParams::auto(128);
-    assert_eq!(params.max_connections, 64);
-    assert_eq!(params.ef_construction, auto.ef_construction);
-    assert_eq!(params.max_elements, auto.max_elements);
-    assert!((params.alpha - 1.0).abs() < f32::EPSILON);
-    assert_eq!(params.storage_mode, velesdb_core::StorageMode::SQ8);
-}
-
-#[test]
-fn test_has_advanced_params_false_when_all_none() {
-    use crate::commands::has_advanced_params;
-
-    let json = r#"{"name": "test", "dimension": 768}"#;
-    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    assert!(!has_advanced_params(&request));
-}
-
-#[test]
-fn test_has_advanced_params_true_when_any_set() {
-    use crate::commands::has_advanced_params;
-
-    let json = r#"{"name": "test", "dimension": 768, "pqRescoreOversampling": 4}"#;
-    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    assert!(has_advanced_params(&request));
+    assert_eq!(
+        hnsw_overrides(&request),
+        velesdb_core::HnswOverrides {
+            m: Some(64),
+            ef_construction: Some(300),
+            max_elements: Some(5000),
+            alpha: Some(1.0),
+        }
+    );
 }
 
 #[test]

@@ -127,28 +127,6 @@ pub struct Database {
     path: PathBuf,
 }
 
-/// Internal dispatch plan computed under the GIL by
-/// [`Database::create_collection`] and consumed inside a
-/// `py.allow_threads` closure.
-///
-/// Wave 3 Commit 10 introduces the typed-options surface: `Full`
-/// carries fully-materialized [`HnswParams`] plus an explicit
-/// `pq_rescore_oversampling` override so the closure can call
-/// [`CoreDatabase::create_vector_collection_with_params`] in one step.
-/// `Default` defers every parameter to the engine.
-#[derive(Clone)]
-enum CreatePlan {
-    /// Use `create_vector_collection_with_params` with the given
-    /// fully-materialized HNSW params and PQ rescore factor.
-    Full {
-        hnsw_params: velesdb_core::index::hnsw::HnswParams,
-        pq_rescore_oversampling: Option<u32>,
-    },
-    /// Use `create_vector_collection_with_options` — engine picks
-    /// every HNSW field.
-    Default,
-}
-
 #[pymethods]
 impl Database {
     /// Create or open a VelesDB database at the specified path.
@@ -321,15 +299,12 @@ impl Database {
         let distance_metric = parse_metric(metric)?;
         let mode = parse_storage_mode(storage_mode)?;
 
-        // Compute the dispatch plan under the GIL — cheap.
-        let plan = if let Some(opts) = hnsw {
-            CreatePlan::Full {
-                hnsw_params: opts.to_hnsw_params()?,
-                pq_rescore_oversampling: opts.pq_rescore_oversampling,
-            }
-        } else {
-            CreatePlan::Default
-        };
+        // Read the options under the GIL — cheap. Core resolves every HNSW
+        // field they leave unset (`[hnsw]`, then the auto-tuning for this
+        // dimension) and refuses an out-of-range one (ValueError).
+        let (overrides, pq_rescore_oversampling) = hnsw
+            .map(|opts| (opts.to_overrides(), opts.pq_rescore_oversampling))
+            .unwrap_or_default();
 
         // Convert AutoReindexOptions to a manager under the GIL so the
         // closure doesn't have to touch Python types. `Arc<AutoReindexManager>`
@@ -343,24 +318,15 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let name_for_closure = name_owned.clone();
-        py.detach(move || match plan {
-            CreatePlan::Full {
-                hnsw_params,
-                pq_rescore_oversampling,
-            } => inner.create_vector_collection_with_params(
+        py.detach(move || {
+            inner.create_vector_collection_with_overrides(
                 &name_for_closure,
                 dimension,
                 distance_metric,
                 mode,
-                hnsw_params,
+                overrides,
                 pq_rescore_oversampling,
-            ),
-            CreatePlan::Default => inner.create_vector_collection_with_options(
-                &name_for_closure,
-                dimension,
-                distance_metric,
-                mode,
-            ),
+            )
         })
         .map_err(core_err)?;
 
