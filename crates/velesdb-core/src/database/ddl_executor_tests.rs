@@ -6,8 +6,8 @@ use crate::velesql::{
     AlterCollectionStatement, CompareOp, Comparison, Condition, CreateCollectionKind,
     CreateCollectionStatement, DdlStatement, DeleteEdgeStatement, DeleteStatement, DmlStatement,
     DropCollectionStatement, GraphCollectionParams, GraphSchemaMode, InCondition,
-    InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, TruncateStatement, Value,
-    VectorCollectionParams,
+    InsertEdgeStatement, InsertStatement, Query, SchemaDefinition, SelectEdgesStatement,
+    TruncateStatement, Value, VectorCollectionParams,
 };
 use crate::wire::hash_edge_id;
 use tempfile::tempdir;
@@ -965,6 +965,65 @@ fn test_rejecting_observer_blocks_delete() {
     let msg = err.to_string();
     assert!(
         msg.contains("RBAC: DELETE on 'some_coll' denied"),
+        "Unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn test_rejecting_observer_blocks_insert_and_upsert() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    // Create without observer so the collection exists.
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "points".to_string(),
+        kind: CreateCollectionKind::Metadata,
+    });
+    execute_ddl(&db, create).expect("create");
+    drop(db);
+
+    // Re-open with rejecting observer.
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(RejectingObserver);
+    let db = Database::open_with_observer(dir.path(), observer).expect("reopen");
+
+    let insert_stmt = || InsertStatement {
+        table: "points".to_string(),
+        columns: vec!["id".to_string()],
+        rows: vec![vec![Value::Integer(1)]],
+    };
+
+    let err = execute_dml(&db, DmlStatement::Insert(insert_stmt()))
+        .expect_err("INSERT should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: INSERT on 'points' denied"),
+        "Unexpected error: {msg}"
+    );
+
+    let err = execute_dml(&db, DmlStatement::Upsert(insert_stmt()))
+        .expect_err("UPSERT should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: UPSERT on 'points' denied"),
+        "Unexpected error: {msg}"
+    );
+
+    let err = execute_dml(
+        &db,
+        DmlStatement::Update(crate::velesql::UpdateStatement {
+            table: "points".to_string(),
+            assignments: vec![crate::velesql::UpdateAssignment {
+                column: "title".to_string(),
+                value: Value::String("x".to_string()),
+            }],
+            where_clause: None,
+        }),
+    )
+    .expect_err("UPDATE should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: UPDATE on 'points' denied"),
         "Unexpected error: {msg}"
     );
 }

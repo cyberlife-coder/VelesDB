@@ -41,6 +41,23 @@ def validate_search_quality(mode: str) -> None:
     core's message for a mode no search would accept."""
     ...
 
+def score_range(metric: str) -> Optional[Tuple[float, float]]:
+    """The ``(min, max)`` score range under ``metric``, or ``None`` when the
+    metric is unbounded (e.g. dot product). Raises ``ValueError`` for an
+    unknown metric."""
+    ...
+
+def hash_edge_id(source: int, target: int, label: str) -> int:
+    """The canonical id an edge gets when none is given: the FNV-1a hash of
+    ``(source, target, label)`` (``velesdb_core::hash_edge_id``)."""
+    ...
+
+# Payload key carrying a point's expiry epoch-seconds
+# (``velesdb_core::collection::EXPIRES_AT_KEY``).
+EXPIRES_AT_KEY: str
+# VelesQL wire/grammar contract version (``velesdb_core::api_types``).
+VELESQL_CONTRACT_VERSION: str
+
 
 # ---------------------------------------------------------------------------
 # Structural return types (TypedDict)
@@ -1096,6 +1113,8 @@ class Database:
         self,
         path: str,
         config: Optional["VelesConfigOptions"] = None,
+        observer: Optional[Any] = None,
+        observer_strict: bool = False,
     ) -> None:
         """Open or create a VelesDB database at the specified path.
 
@@ -1103,6 +1122,17 @@ class Database:
             path: Directory path for database storage
             config: Optional typed configuration (limits, etc.) applied at
                 open time.
+            observer: Optional callable invoked on engine events as
+                ``observer(event, **fields)``. Events: ``collection_created``,
+                ``collection_deleted``, ``upsert`` (also fired by direct SDK
+                writes), ``query``, the read-path veto ``query_request``
+                (``None``/``True`` allow, ``False``/str deny, ``{"filter": ...}``
+                allow-with-scope), and the VelesQL vetoes ``ddl_request`` /
+                ``dml_mutation_request`` (``None``/``True`` allow, ``False``/str
+                deny with a reason).
+            observer_strict: Fail-closed policy for callback errors on veto
+                events (default False = fail-open). Explicit decisions are
+                unaffected.
         """
         ...
 
@@ -1126,8 +1156,9 @@ class Database:
             storage_mode: "full", "sq8", "binary", "pq", or "rabitq"
             hnsw: Optional typed HNSW parameters (replaces the legacy
                 `m` / `ef_construction` / `expected_vectors` kwargs)
-            auto_reindex: Optional auto-reindex policy, attached as a
-                runtime-only hook on the returned collection
+            auto_reindex: Optional auto-reindex policy, attached to the
+                returned collection; persisted in the collection config
+                (schema v2) and restored automatically on open
 
         Returns:
             The created Collection (or a deferred Collection when dimension=None
@@ -1256,7 +1287,7 @@ class Database:
 
         Args:
             sql: VelesQL query string.
-            params: Optional parameter bindings (e.g., {"$v": [0.1, 0.2]}).
+            params: Optional parameter bindings (bare names, e.g., {"v": [0.1, 0.2]} for the ``$v`` placeholder).
 
         Returns:
             List of result dicts for SELECT queries, empty list for DDL/DML.
@@ -1303,14 +1334,53 @@ class Database:
         """
         ...
 
-    def agent_memory(self, dimension: Optional[int] = None) -> "AgentMemory":
+    def agent_memory(
+        self,
+        dimension: Optional[int] = None,
+        snapshot_dir: Optional[str] = None,
+        max_snapshots: int = 10,
+    ) -> "AgentMemory":
         """Create an AgentMemory instance for AI agent workflows.
 
         Args:
             dimension: Embedding dimension (default: 384)
+            snapshot_dir: Optional directory to enable versioned snapshots
+            max_snapshots: Number of snapshots to retain (default: 10)
 
         Returns:
             AgentMemory instance with semantic, episodic, and procedural subsystems
+        """
+        ...
+
+    def collection_diagnostics(self, name: str) -> Dict[str, Any]:
+        """Get diagnostic information for a collection.
+
+        Args:
+            name: Collection name
+
+        Returns:
+            Dict with has_vectors, search_ready, dimension_configured,
+            point_count, index_health ("healthy" | "empty" |
+            "needs_rebuild"), and index_health_detail keys
+
+        Raises:
+            RuntimeError: If the collection does not exist
+        """
+        ...
+
+    def update_guardrails(self, limits: Dict[str, Any]) -> None:
+        """Replace query guardrail limits for every collection in this database.
+
+        This is a full replacement, not a partial patch: the dict must
+        contain all guardrail fields (``max_depth``, ``max_cardinality``,
+        ``memory_limit_bytes``, ``timeout_ms``, ``rate_limit_qps``,
+        ``circuit_failure_threshold``, ``circuit_recovery_seconds``).
+
+        Args:
+            limits: Complete guardrail dict
+
+        Raises:
+            ValueError: If a field is missing, unknown, or invalid
         """
         ...
 
@@ -1420,6 +1490,8 @@ class ParsedStatement:
     """Parsed VelesQL statement with helper inspectors."""
 
     collection_name: Optional[str]
+    table_alias: Optional[str]
+    table_aliases: List[str]
     columns: List[str]
     limit: Optional[int]
     offset: Optional[int]
@@ -1909,13 +1981,15 @@ class PyGraphCollection:
         ...
 
 
-class GraphCollection(PyGraphCollection):
+class GraphCollection:
     """Python compatibility wrapper returned by the graph-collection helpers.
 
     Returned by :meth:`Database.create_graph_collection` and
-    :meth:`Database.get_graph_collection`. Unknown attributes delegate to the
-    underlying :class:`PyGraphCollection`; the members below are the
-    facade-specific overrides and convenience aliases.
+    :meth:`Database.get_graph_collection`. This is a delegating wrapper
+    around :class:`PyGraphCollection` (composition, not inheritance —
+    ``isinstance(g, PyGraphCollection)`` is False at runtime); unknown
+    attributes delegate to the underlying :class:`PyGraphCollection`, and the
+    members below are the facade-specific overrides and convenience aliases.
     """
 
     @overload

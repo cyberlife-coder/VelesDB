@@ -863,6 +863,44 @@ fn test_upsert_bulk_from_raw_empty() {
     assert_eq!(coll.len(), 0);
 }
 
+/// Validates that `upsert_bulk_from_raw` rejects a non-finite component (NaN or
+/// infinity) instead of storing it — a stored NaN makes HNSW ordering arbitrary
+/// for every later query — and that the rejected batch stores nothing.
+#[test]
+fn test_upsert_bulk_from_raw_rejects_non_finite() {
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    let vectors: Vec<f32> = vec![
+        1.0,
+        0.0,
+        0.0,
+        0.0, // id=1: finite
+        0.0,
+        f32::NAN,
+        0.0,
+        0.0, // id=2: NaN
+    ];
+    let ids: Vec<u64> = vec![1, 2];
+    let result = coll.upsert_bulk_from_raw(&vectors, &ids, 4, None);
+    assert!(result.is_err(), "a NaN row must be rejected");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("VELES-005"),
+        "should be InvalidVector error: {err_msg}"
+    );
+    assert!(
+        err_msg.contains("row 1"),
+        "error should name the offending row: {err_msg}"
+    );
+    assert_eq!(coll.len(), 0, "a rejected batch must store nothing");
+
+    let inf_vectors: Vec<f32> = vec![0.0, 0.0, f32::INFINITY, 0.0];
+    let result = coll.upsert_bulk_from_raw(&inf_vectors, &[3], 4, None);
+    assert!(result.is_err(), "an infinity row must be rejected");
+    assert_eq!(coll.len(), 0);
+}
+
 /// Validates that vectors inserted via `upsert_bulk_from_raw` are searchable.
 #[test]
 fn test_upsert_bulk_from_raw_searchable() {

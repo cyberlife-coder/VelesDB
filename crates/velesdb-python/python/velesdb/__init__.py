@@ -51,9 +51,13 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     VelesQLParameterError,
     VelesQLSyntaxError,
     __version__,
+    EXPIRES_AT_KEY,
+    VELESQL_CONTRACT_VERSION,
+    hash_edge_id,
     hash_id,
     metric_higher_is_better,
     metric_normalize,
+    score_range,
     validate_search_quality,
 )
 
@@ -123,13 +127,19 @@ class GraphStore:
         max_depth: int = 3,
         limit: int = 10_000,
         relationship_types: list[str] | None = None,
+        direction: str = "forward",
+        timeout_ms: int | None = None,
     ) -> list[TraversalResult]:
         cfg = StreamingConfig(
             max_depth=max_depth,
             max_visited=limit,
             relationship_types=relationship_types,
+            deadline_ms=timeout_ms,
         )
-        return self._inner.traverse_bfs_streaming(source, cfg)
+        if direction == "forward":
+            return self._inner.traverse_bfs_streaming(source, cfg)
+        # reverse / both run core's eager direction-aware BFS
+        return self._inner.traverse_bfs(source, cfg, direction)
 
     def traverse_dfs(
         self,
@@ -138,11 +148,13 @@ class GraphStore:
         max_depth: int = 3,
         limit: int = 10_000,
         relationship_types: list[str] | None = None,
+        timeout_ms: int | None = None,
     ) -> list[TraversalResult]:
         cfg = StreamingConfig(
             max_depth=max_depth,
             max_visited=limit,
             relationship_types=relationship_types,
+            deadline_ms=timeout_ms,
         )
         return self._inner.traverse_dfs(source, cfg)
 
@@ -596,28 +608,33 @@ class Database:
                 ``kind`` is ``"vector"``/``"metadata"``/``"graph"``/``"unknown"``),
                 ``"collection_deleted"`` (``name``), ``"upsert"``
                 (``collection``, ``point_count``), ``"query"``
-                (``collection``, ``duration_us``), or the read-path veto
+                (``collection``, ``duration_us``), the read-path veto
                 ``"query_request"`` (``collection``, ``operation``,
-                ``principal``, ``tenant``). For ``"query_request"`` the return
-                value decides the read: ``None``/``True`` allow, ``False``/a
-                reason string deny, and a ``{"filter": "<VelesQL predicate>"}``
-                dict allow-with-scope (narrowing the read). The observer is
-                immutable once the database is opened.
-            observer_strict: Read-path failure policy for the
-                ``"query_request"`` veto. Default ``False`` (fail-open): if the
-                policy callback raises or returns an uninterpretable value, the
-                read is **allowed** so a bug in policy code never breaks reads.
-                Set ``True`` (fail-closed) for governance / RBAC deployments:
-                the same error cases then **deny** the read. Explicit decisions
+                ``principal``, ``tenant``), and the VelesQL vetoes
+                ``"ddl_request"`` / ``"dml_mutation_request"``
+                (``operation``, ``collection``). For ``"query_request"`` the
+                return value decides the read: ``None``/``True`` allow,
+                ``False``/a reason string deny, and a
+                ``{"filter": "<VelesQL predicate>"}`` dict allow-with-scope
+                (narrowing the read). For the two VelesQL vetoes,
+                ``None``/``True`` allow and ``False``/a reason string deny.
+                The observer is immutable once the database is opened.
+            observer_strict: Failure policy for callback errors on the veto
+                events (``"query_request"``, ``"ddl_request"``,
+                ``"dml_mutation_request"``). Default ``False`` (fail-open): if
+                the policy callback raises or returns an uninterpretable value,
+                the operation is **allowed** so a bug in policy code never
+                breaks reads or writes. Set ``True`` (fail-closed) for
+                governance / RBAC deployments: the same error cases then
+                **deny**. Explicit decisions
                 (``None``/``True``/``False``/str/dict) are unaffected by this
                 flag.
 
-                Caveat: in the embedded Python SDK the lifecycle
-                ``collection_created`` / ``collection_deleted`` events and the
-                ``query_request`` read gate fire from the core engine.
-                ``upsert`` / ``query`` are emitted only by callers that
-                explicitly call ``notify_upsert`` / ``notify_query`` — in this
-                ecosystem that is the REST server, not embedded usage.
+                In the embedded Python SDK the lifecycle events, the
+                ``query_request`` read gate, the VelesQL vetoes, and
+                ``upsert`` (fired by the core DML path and by direct SDK
+                writes) all fire from the core engine. ``query`` is emitted
+                only by an explicit ``notify_query`` call.
         """
         self._inner = _RawDatabase(path, config, observer, observer_strict)
 
@@ -660,8 +677,9 @@ class Database:
                 see the v1.13 CHANGELOG for the migration guide.
             auto_reindex: Optional :class:`AutoReindexOptions` dataclass.
                 When provided, an ``AutoReindexManager`` is constructed and
-                attached to the freshly-created collection as a runtime-only
-                hook (not persisted — re-attach after every ``Database(path)``).
+                attached to the freshly-created collection; the policy is
+                persisted in the collection config (schema v2) and restored
+                automatically on every ``Database(path)`` open.
 
         Returns:
             :class:`Collection` when ``dimension`` is known, or a
@@ -798,7 +816,7 @@ class Database:
 
         Args:
             sql: VelesQL query string.
-            params: Optional parameter bindings (e.g., {"$v": [0.1, 0.2]}).
+            params: Optional parameter bindings (bare names, e.g., {"v": [0.1, 0.2]} for the ``$v`` placeholder).
 
         Returns:
             List of result dicts for SELECT queries, empty list for DDL/DML.
@@ -920,7 +938,12 @@ __all__ = [
     # string -> u64 point id, a metric's score direction, and the search
     # quality grammar.
     "hash_id",
+    "hash_edge_id",
+    "score_range",
+    "EXPIRES_AT_KEY",
+    "VELESQL_CONTRACT_VERSION",
     "metric_higher_is_better",
+    "metric_normalize",
     "validate_search_quality",
     "embed",
     "__version__",

@@ -9,6 +9,7 @@ use crate::collection_helpers::{
     core_err, core_err_with_collection, dict_to_json_map, extract_point_id, extract_point_vector,
     parse_payload, parse_point_dicts,
 };
+use crate::utils::reject_nan_vector;
 
 use super::Collection;
 
@@ -46,6 +47,7 @@ impl Collection {
                 .upsert(core_points)
                 .map_err(|e| core_err_with_collection(e, &name))
         })?;
+        super::notify_upsert_event(&self.db, &self.name, count);
 
         Ok(count)
     }
@@ -71,6 +73,7 @@ impl Collection {
 
         let count = core_points.len();
         py.detach(|| self.inner.upsert_metadata(core_points).map_err(core_err))?;
+        super::notify_upsert_event(&self.db, &self.name, count);
 
         Ok(count)
     }
@@ -92,11 +95,13 @@ impl Collection {
         }
 
         let name = self.name.clone();
-        py.detach(|| {
+        let inserted = py.detach(|| {
             self.inner
                 .upsert_bulk(&core_points)
                 .map_err(|e| core_err_with_collection(e, &name))
-        })
+        })?;
+        super::notify_upsert_event(&self.db, &self.name, inserted);
+        Ok(inserted)
     }
 
     /// Bulk insert from numpy arrays for maximum throughput.
@@ -158,13 +163,18 @@ impl Collection {
 
         // Copy the flat data so we can release the GIL (numpy buffer is Py<PyAny>-backed).
         let flat_owned: Vec<f32> = flat.to_vec();
+        // Same finiteness gate as the dict-based paths (`extract_vector`): the raw
+        // path must not store a NaN/Inf the other ingest paths reject.
+        reject_nan_vector(&flat_owned)?;
         let payloads_ref = json_payloads.as_deref();
 
-        py.detach(|| {
+        let inserted = py.detach(|| {
             self.inner
                 .upsert_bulk_from_raw(&flat_owned, &ids, dimension, payloads_ref)
                 .map_err(core_err)
-        })
+        })?;
+        super::notify_upsert_event(&self.db, &self.name, inserted);
+        Ok(inserted)
     }
 
     /// Bulk insert with pre-serialized JSON payloads (fastest path for payload-heavy data).
@@ -230,13 +240,18 @@ impl Collection {
             .collect::<PyResult<Vec<_>>>()?;
 
         let flat_owned: Vec<f32> = flat.to_vec();
+        // Same finiteness gate as the dict-based paths (`extract_vector`): the raw
+        // path must not store a NaN/Inf the other ingest paths reject.
+        reject_nan_vector(&flat_owned)?;
         let payload_vec: Vec<Option<serde_json::Value>> = parsed_payloads;
 
-        py.detach(|| {
+        let inserted = py.detach(|| {
             self.inner
                 .upsert_bulk_from_raw(&flat_owned, &ids, dimension, Some(&payload_vec))
                 .map_err(core_err)
-        })
+        })?;
+        super::notify_upsert_event(&self.db, &self.name, inserted);
+        Ok(inserted)
     }
 
     /// Get points by their IDs.
@@ -338,13 +353,15 @@ impl Collection {
         let parsed = parse_point_dicts(py, &points)?;
 
         // Phase 2: Send entire batch in one call (single lock acquisition), GIL released
-        py.detach(|| {
+        let queued = py.detach(|| {
             self.inner.stream_insert_batch(parsed).map_err(|e| {
                 pyo3::exceptions::PyRuntimeError::new_err(format!(
                     "Stream insert failed (buffer full or not configured): {e}"
                 ))
             })
-        })
+        })?;
+        super::notify_upsert_event(&self.db, &self.name, queued);
+        Ok(queued)
     }
 }
 

@@ -185,6 +185,8 @@ impl Collection {
         fusion: Option<&CoreFusionStrategy>,
         principal: Option<&str>,
         tenant: Option<&str>,
+        ef_search: Option<usize>,
+        quality: Option<&velesdb_core::SearchQuality>,
     ) -> PyResult<Vec<SearchResult>> {
         use crate::collection_helpers::core_err;
         use pyo3::exceptions::PyValueError;
@@ -210,8 +212,8 @@ impl Collection {
                     GatedRead::Dense {
                         query: &d,
                         k: top_k,
-                        ef: None,
-                        quality: None,
+                        ef: ef_search,
+                        quality: quality.cloned(),
                         filter,
                     },
                 )
@@ -246,8 +248,9 @@ impl Collection {
     }
 
     /// Runs a sparse-only or hybrid dense+sparse search after the read gate has
-    /// authorized it, applying the caller filter and any observer scope filter
-    /// via post-filtering (neither leaf accepts a metadata filter natively).
+    /// authorized it. Hybrid dense+sparse pre-filters both fusion branches via
+    /// core's `_filtered` leaf (caller filter ANDed with any observer scope);
+    /// sparse-only has no filtered leaf, so a scope filter still post-filters.
     #[allow(clippy::too_many_arguments)] // scope threading is intrinsic to the gate
     fn run_sparse_gated(
         &self,
@@ -263,15 +266,22 @@ impl Collection {
         use pyo3::exceptions::PyValueError;
 
         match dense {
-            // Hybrid dense+sparse: no filtered leaf — run unfiltered then
-            // post-filter by the caller filter AND the observer scope filter.
+            // Hybrid dense+sparse: filter BOTH branches before RRF fusion, like
+            // core's `hybrid_sparse_search_filtered`. Post-filtering after fusion
+            // can return fewer than k rows even when >= k points match, because
+            // the fused top-k was computed over unfiltered candidates.
             Some(d) => {
-                let mut results = self
-                    .inner
-                    .hybrid_sparse_search(d, sparse, top_k, index_name, fusion)
-                    .map_err(core_err)?;
-                retain_by_filters(&mut results, caller_filter, scope_filter);
-                Ok(results)
+                let combined = and_scope(caller_filter.cloned(), scope_filter.cloned());
+                self.inner
+                    .hybrid_sparse_search_filtered(
+                        d,
+                        sparse,
+                        top_k,
+                        index_name,
+                        fusion,
+                        combined.as_ref(),
+                    )
+                    .map_err(core_err)
             }
             // Sparse-only: a caller filter was never supported here (preserved
             // error). A governance scope filter still applies via post-filter,
@@ -310,6 +320,20 @@ impl Collection {
             .authorize_read(&self.name, operation, principal, tenant)
             .map_err(crate::collection_helpers::core_err)
     }
+}
+
+/// Fire the observer's `upsert` event for a direct (non-VelesQL) write.
+///
+/// Core fires `on_upsert` internally on the VelesQL DML path
+/// (`Database::fire_on_upsert`); the deprecated `notify_upsert` shim is the
+/// documented caller contract for direct data-plane writes (the REST handlers
+/// call it the same way), so the binding calls it here — without it,
+/// `Collection.upsert` never reached Python observers. Never called on
+/// `execute_query` paths: those fire internally, and calling it too would
+/// double-count.
+#[allow(deprecated)]
+pub(crate) fn notify_upsert_event(db: &CoreDatabase, collection: &str, point_count: usize) {
+    db.notify_upsert(collection, point_count);
 }
 
 /// AND-composes a caller filter with an observer scope filter. The result
@@ -530,6 +554,23 @@ impl Collection {
     fn compact_storage(&self, py: Python<'_>) -> PyResult<usize> {
         use crate::collection_helpers::core_err;
         py.detach(|| self.inner.compact_storage().map_err(core_err))
+    }
+
+    /// Rebuild (vacuum) the HNSW index, reclaiming space left by deleted or
+    /// updated vectors. Same operation as the REST admin endpoint
+    /// ``POST /collections/{name}/index/rebuild``.
+    ///
+    /// Returns:
+    ///     int: Number of entries reclaimed.
+    fn rebuild_index(&self, py: Python<'_>) -> PyResult<usize> {
+        use crate::collection_helpers::core_err;
+        py.detach(|| self.inner.rebuild_index().map_err(core_err))
+    }
+
+    /// All point IDs in the collection (vector and payload indexes union),
+    /// ascending. Used by training paths that need every stored vector.
+    fn all_point_ids(&self) -> Vec<u64> {
+        self.inner.all_point_ids()
     }
 
     /// Reorder the HNSW adjacency lists and vector storage for cache

@@ -258,6 +258,20 @@ impl GraphCollection {
         self.inner.get_outgoing_edges(node_id)
     }
 
+    /// Bounded outgoing-edge read: at most `cap` edges plus the true total
+    /// degree, in O(cap) even for super-nodes (#1820).
+    #[must_use]
+    pub fn get_outgoing_bounded(&self, node_id: u64, cap: usize) -> (Vec<GraphEdge>, usize) {
+        self.inner.get_outgoing_edges_bounded(node_id, cap)
+    }
+
+    /// Bounded incoming-edge read: at most `cap` edges plus the true total
+    /// degree, in O(cap) even for super-nodes (#1820).
+    #[must_use]
+    pub fn get_incoming_bounded(&self, node_id: u64, cap: usize) -> (Vec<GraphEdge>, usize) {
+        self.inner.get_incoming_edges_bounded(node_id, cap)
+    }
+
     /// Returns all incoming edges to a node.
     #[must_use]
     pub fn get_incoming(&self, node_id: u64) -> Vec<GraphEdge> {

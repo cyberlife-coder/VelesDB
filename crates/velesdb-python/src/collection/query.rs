@@ -14,8 +14,11 @@ use super::{deny_if_scoped, Collection};
 
 /// Convert a `MatchResult` to a Python dict.
 ///
-/// Extracts node_id, depth, path, bindings, score, and projected fields
-/// into a flat Python dict with interned keys.
+/// Extracts node_id, depth, path, bindings, edge_bindings, edge_paths, score,
+/// and projected fields into a flat Python dict with interned keys. The two
+/// edge maps are core's full MATCH result: `edge_bindings` holds fixed-length
+/// relationship aliases, `edge_paths` holds the ordered edge-id list of
+/// variable-length (`-[r*1..3]->`) aliases (openCypher list semantics).
 pub(crate) fn match_result_to_dict(
     py: Python<'_>,
     r: velesdb_core::collection::search::query::match_exec::MatchResult,
@@ -27,6 +30,14 @@ pub(crate) fn match_result_to_dict(
     let _ = dict.set_item(
         PyString::intern(py, "bindings"),
         to_pyobject(py, r.bindings),
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "edge_bindings"),
+        to_pyobject(py, r.edge_bindings),
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "edge_paths"),
+        to_pyobject(py, r.edge_paths),
     );
     let _ = dict.set_item(PyString::intern(py, "score"), r.score);
     let projected = PyDict::new(py);
@@ -123,6 +134,36 @@ pub(crate) fn build_explain_dict(
     let _ = dict.set_item(
         PyString::intern(py, "index_used"),
         plan.index_used.map(|i| i.as_str().to_string()),
+    );
+    dict.into_any().unbind()
+}
+
+/// Convert a core `QueryPlan` (as returned by the database-level
+/// `explain_query_with_params`) to a Python dict, including the compiled-plan
+/// cache fields `cache_hit` / `plan_reuse_count` that the collection-level
+/// leaf path cannot see.
+pub(crate) fn plan_to_dict(py: Python<'_>, plan: &velesdb_core::velesql::QueryPlan) -> Py<PyAny> {
+    let dict = PyDict::new(py);
+    let _ = dict.set_item(
+        PyString::intern(py, "tree"),
+        to_pyobject(py, plan.to_tree()),
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "estimated_cost_ms"),
+        plan.estimated_cost_ms,
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "filter_strategy"),
+        plan.filter_strategy.as_str(),
+    );
+    let _ = dict.set_item(
+        PyString::intern(py, "index_used"),
+        plan.index_used.map(|i| i.as_str().to_string()),
+    );
+    let _ = dict.set_item(PyString::intern(py, "cache_hit"), plan.cache_hit);
+    let _ = dict.set_item(
+        PyString::intern(py, "plan_reuse_count"),
+        plan.plan_reuse_count,
     );
     dict.into_any().unbind()
 }

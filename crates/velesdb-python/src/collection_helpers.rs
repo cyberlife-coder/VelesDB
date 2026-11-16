@@ -204,6 +204,15 @@ pub fn search_result_to_dict(
             result.point.vector.as_slice(),
         );
     }
+    // Per-component score breakdown (vector_score / bm25_score / ...) when the
+    // engine tagged it — hybrid and fused searches carry it, plain dense does not.
+    if let Some(components) = &result.component_scores {
+        let comp = PyDict::new(py);
+        for (name, value) in components.iter() {
+            let _ = comp.set_item(*name, *value);
+        }
+        let _ = dict.set_item(PyString::intern(py, "component_scores"), comp);
+    }
     dict.into_any().unbind()
 }
 

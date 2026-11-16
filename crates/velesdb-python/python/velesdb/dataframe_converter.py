@@ -6,10 +6,11 @@ DataFrames. All pandas/polars imports are deferred to first use.
 .. note:: Reserved column names
 
    The structural columns ``id``, ``score`` (search results) and
-   ``vector`` (scroll batches) are always present in the output DataFrame.
-   If a payload contains a field with one of these names, it is renamed to
-   ``payload_<name>`` (e.g. ``payload_id``, ``payload_score``) so the data
-   is preserved rather than silently overwritten.
+   ``vector`` (scroll batches, and search results produced with
+   ``SearchOptions(include_vectors=True)``) are always present in the output
+   DataFrame. If a payload contains a field with one of these names, it is
+   renamed to ``payload_<name>`` (e.g. ``payload_id``, ``payload_score``) so
+   the data is preserved rather than silently overwritten.
 """
 
 from __future__ import annotations
@@ -78,7 +79,9 @@ def _flatten_payload(payload: dict, reserved: frozenset[str]) -> dict[str, Any]:
 def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
     """Convert search results to a DataFrame.
 
-    Each dict should have 'id', 'score', and optional payload keys.
+    Each dict should have 'id', 'score', and optional payload keys. A
+    top-level 'vector' key (present when the search ran with
+    ``include_vectors=True``) is kept as a 'vector' column.
     Missing payload fields are represented as None/NaN/null.
 
     .. note:: Payload keys named ``id`` or ``score`` are renamed to
@@ -99,7 +102,7 @@ def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
             return lib.DataFrame(columns=["id", "score"])
         return lib.DataFrame(schema={"id": lib.Int64, "score": lib.Float64})
 
-    reserved = frozenset({"id", "score"})
+    reserved = frozenset({"id", "score", "vector"})
     rows = []
     for r in results:
         payload = r.get("payload")
@@ -110,6 +113,8 @@ def to_dataframe(results: list[dict], backend: str = "pandas") -> Any:
         )
         row["id"] = r.get("id")
         row["score"] = r.get("score")
+        if "vector" in r:
+            row["vector"] = r["vector"]
         rows.append(row)
 
     return lib.DataFrame(rows)
@@ -216,6 +221,18 @@ def _nan_to_none(value: Any) -> Any:
     return value
 
 
+def _coerce_point_id(value: Any) -> int:
+    """Coerce a DataFrame id cell to an integer point id.
+
+    Integral floats (e.g. 3.0 from a float column) are accepted; a
+    non-integral float is rejected instead of silently truncated by
+    ``int()``.
+    """
+    if isinstance(value, float) and not math.isnan(value) and not value.is_integer():
+        raise ValueError(f"id must be an integer, got {value!r}")
+    return int(value)
+
+
 def _row_to_point(row: dict) -> dict[str, Any]:
     """Convert a single row dict to a point dict for upsert.
 
@@ -223,7 +240,7 @@ def _row_to_point(row: dict) -> dict[str, Any]:
     validate_upsert_dataframe; subsequent mismatches surface as Rust errors.
     Pandas NaN values are converted to None for JSON compatibility.
     """
-    point: dict[str, Any] = {"id": int(row["id"])}
+    point: dict[str, Any] = {"id": _coerce_point_id(row["id"])}
     vec = row.get("vector")
     if vec is not None and not (isinstance(vec, float) and math.isnan(vec)):
         point["vector"] = list(vec) if not isinstance(vec, list) else vec

@@ -9,11 +9,16 @@ use super::Database;
 
 impl Database {
     /// Executes an INSERT or UPSERT statement (single or multi-row).
+    ///
+    /// `operation` is `"INSERT"` or `"UPSERT"`, reported to the observer's
+    /// `on_dml_mutation_request` veto hook before any write.
     pub(super) fn execute_insert(
         &self,
         stmt: &crate::velesql::InsertStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        operation: &str,
     ) -> Result<Vec<SearchResult>> {
+        self.check_dml_mutation(operation, &stmt.table)?;
         let collection = self.resolve_writable_collection(&stmt.table)?;
 
         let mut points = Vec::with_capacity(stmt.rows.len());
@@ -109,6 +114,7 @@ impl Database {
         stmt: &crate::velesql::UpdateStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
+        self.check_dml_mutation("UPDATE", &stmt.table)?;
         let collection = self.resolve_writable_collection(&stmt.table)?;
 
         let assignments = Self::resolve_update_assignments(stmt, params)?;

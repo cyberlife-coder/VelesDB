@@ -110,7 +110,10 @@ pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
     MAX_VISITED_SIZE,
 };
-pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH};
+pub use traversal::{
+    bfs_traverse, bfs_traverse_reverse, TraversalConfig, TraversalPath, TraversalResult,
+    DEFAULT_MAX_DEPTH,
+};
 pub use traversal_bidir::bfs_traverse_both;
 pub use traversal_csr::{bfs_traverse_csr, bfs_traverse_csr_filtered};
 pub use traversal_dfs::dfs_traverse;

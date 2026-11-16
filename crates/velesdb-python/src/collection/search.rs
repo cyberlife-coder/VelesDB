@@ -67,6 +67,26 @@ impl Collection {
         let fusion = opts.fusion.as_ref().map(FusionStrategy::inner);
         let principal = opts.principal.clone();
         let tenant = opts.tenant.clone();
+        // Dense-only tuning knobs; validated against core's ef range below.
+        let ef_search = match opts.ef_search {
+            Some(ef)
+                if !(velesdb_core::api_types::MIN_EF_SEARCH
+                    ..=velesdb_core::api_types::MAX_EF_SEARCH)
+                    .contains(&ef) =>
+            {
+                return Err(PyValueError::new_err(format!(
+                    "ef_search must be an integer between {} and {}, got {ef}",
+                    velesdb_core::api_types::MIN_EF_SEARCH,
+                    velesdb_core::api_types::MAX_EF_SEARCH
+                )))
+            }
+            other => other,
+        };
+        let quality = opts
+            .quality
+            .as_deref()
+            .map(parse_search_quality)
+            .transpose()?;
 
         // Phase 2: Release GIL during Rust computation
         let results = py.detach(|| {
@@ -79,6 +99,8 @@ impl Collection {
                 fusion.as_ref(),
                 principal.as_deref(),
                 tenant.as_deref(),
+                ef_search,
+                quality.as_ref(),
             )
         })?;
 
@@ -346,8 +368,19 @@ impl Collection {
     }
 
     /// Hybrid search combining vector similarity and text search.
+    ///
+    /// Args:
+    ///     vector: Query embedding.
+    ///     query: Query text for the BM25 branch.
+    ///     top_k: Number of results (default: 10).
+    ///     vector_weight: Dense/text blend `alpha` (default: 0.5).
+    ///     filter: Optional metadata filter dict.
+    ///     principal / tenant: Read-gate identity hints.
+    ///     rrf_k: RRF fusion constant (default: None = core's 60). Threaded
+    ///         through `gated_search_outcome_with_rrf`, which applies it only
+    ///         to hybrid reads.
     #[allow(clippy::too_many_arguments)] // gate identity kwargs on top of the existing signature
-    #[pyo3(signature = (vector, query, top_k = 10, vector_weight = 0.5, filter = None, *, principal = None, tenant = None))]
+    #[pyo3(signature = (vector, query, top_k = 10, vector_weight = 0.5, filter = None, *, principal = None, tenant = None, rrf_k = None))]
     fn hybrid_search(
         &self,
         py: Python<'_>,
@@ -358,6 +391,7 @@ impl Collection {
         filter: Option<Py<PyAny>>,
         principal: Option<String>,
         tenant: Option<String>,
+        rrf_k: Option<u32>,
     ) -> PyResult<Vec<Py<PyAny>>> {
         self.ensure_vector()?;
         let query_vector = extract_vector(py, &vector)?;
@@ -368,7 +402,7 @@ impl Collection {
         // AND-composes any observer scope filter with this caller filter.
         let results = py.detach(|| {
             self.db
-                .gated_search(
+                .gated_search_outcome_with_rrf(
                     &self.name,
                     principal.as_deref(),
                     tenant.as_deref(),
@@ -379,7 +413,9 @@ impl Collection {
                         alpha: Some(vector_weight),
                         filter: filter_obj.as_ref(),
                     },
+                    rrf_k,
                 )
+                .map_err(core_err)?
                 .map_err(core_err)
         })?;
 

@@ -2,11 +2,10 @@
 //! Python callable.
 //!
 //! The Python SDK exposes the four *notify* callbacks (create/delete/upsert/
-//! query) plus the read-path **veto** hook (`query_request`): the callback may
-//! refuse a read by returning `False` or a string reason, so an SDK embedder can
-//! enforce governance on every gated read (VelesQL `SELECT`/`MATCH`). The DDL/DML
-//! veto hooks (`on_ddl_request` / `on_dml_mutation_request`) keep the trait's
-//! default-allow behavior and remain unexposed.
+//! query) plus the **veto** hooks (`query_request` for reads, `ddl_request` /
+//! `dml_mutation_request` for VelesQL DDL/DML): the callback may refuse by
+//! returning `False` or a string reason, so an SDK embedder can enforce
+//! governance on every gated operation (VelesQL `SELECT`/`MATCH`/DDL/DML).
 //!
 //! # GIL safety
 //!
@@ -41,12 +40,15 @@ use velesdb_core::{DatabaseObserver, Error};
 /// of `"collection_created"`, `"collection_deleted"`, `"upsert"`, or `"query"`,
 /// and the keyword fields carry the event payload:
 ///
-/// | event                | keyword fields              |
-/// |----------------------|-----------------------------|
-/// | `collection_created` | `name`, `kind`              |
-/// | `collection_deleted` | `name`                      |
-/// | `upsert`             | `collection`, `point_count` |
-/// | `query`              | `collection`, `duration_us` |
+/// | event                   | keyword fields              | return value        |
+/// |-------------------------|-----------------------------|---------------------|
+/// | `collection_created`    | `name`, `kind`              | ignored (notify)    |
+/// | `collection_deleted`    | `name`                      | ignored (notify)    |
+/// | `upsert`                | `collection`, `point_count` | ignored (notify)    |
+/// | `query`                 | `collection`, `duration_us` | ignored (notify)    |
+/// | `query_request`         | `collection`, `operation`, `principal`, `tenant` | veto/scope |
+/// | `ddl_request`           | `operation`, `collection`   | veto (`False`/str denies) |
+/// | `dml_mutation_request`  | `operation`, `collection`   | veto (`False`/str denies) |
 ///
 /// `kind` is one of `"vector"`, `"metadata"`, `"graph"`, or `"unknown"`
 /// (the last guards against a future [`CollectionType`] variant).
@@ -96,6 +98,60 @@ impl PyObserver {
         if let Err(err) = self.cb.bind(py).call((event,), Some(fields)) {
             eprintln!("[velesdb] observer callback '{event}' raised; ignoring: {err}");
         }
+    }
+
+    /// Shared implementation of the DDL/DML veto hooks: invokes the callback as
+    /// `callback(event, operation=…, collection=…)` and maps the return value to
+    /// the trait's `Result<()>` veto channel — `None`/`True` allow, `False` or a
+    /// `str` veto with that reason, anything else (or a raised callback) follows
+    /// the strict-mode failure policy, exactly like `query_request`.
+    fn veto_request(
+        &self,
+        event: &str,
+        operation: &str,
+        collection_name: &str,
+    ) -> velesdb_core::Result<()> {
+        Python::attach(|py| {
+            let fields = PyDict::new(py);
+            if fields.set_item("operation", operation).is_err()
+                || fields.set_item("collection", collection_name).is_err()
+            {
+                return match self.on_error_decision("could not populate veto fields") {
+                    AccessDecision::Allow => Ok(()),
+                    AccessDecision::Deny(e) => Err(e),
+                    _ => Ok(()), // AllowWithScope is not expressible on a write veto
+                };
+            }
+            match self.cb.bind(py).call((event,), Some(&fields)) {
+                Ok(ret) if ret.is_none() => Ok(()),
+                Ok(ret) => {
+                    // A string is a veto reason — check before bool, like
+                    // `interpret_decision`, so "" still denies.
+                    if let Ok(reason) = ret.extract::<String>() {
+                        return Err(Error::Query(format!(
+                            "{event} vetoed by observer for collection '{collection_name}' ({operation}): {reason}"
+                        )));
+                    }
+                    let allow = ret.extract::<bool>().unwrap_or(true);
+                    if allow {
+                        Ok(())
+                    } else {
+                        Err(Error::Query(format!(
+                            "{event} vetoed by observer policy for collection '{collection_name}' ({operation})"
+                        )))
+                    }
+                }
+                Err(err) => {
+                    let verb = if self.strict { "denying" } else { "allowing" };
+                    eprintln!("[velesdb] observer callback '{event}' raised; {verb}: {err}");
+                    match self.on_error_decision("veto callback raised") {
+                        AccessDecision::Allow => Ok(()),
+                        AccessDecision::Deny(e) => Err(e),
+                        _ => Ok(()),
+                    }
+                }
+            }
+        })
     }
 }
 
@@ -285,6 +341,24 @@ impl DatabaseObserver for PyObserver {
             }
             self.dispatch(py, "query", &fields);
         });
+    }
+
+    /// DDL veto (VelesQL `CREATE`/`DROP`/`ALTER`/`TRUNCATE`/…). The callback is
+    /// invoked as `callback("ddl_request", operation=…, collection=…)`;
+    /// returning `False` or a string vetoes the statement.
+    fn on_ddl_request(&self, operation: &str, collection_name: &str) -> velesdb_core::Result<()> {
+        self.veto_request("ddl_request", operation, collection_name)
+    }
+
+    /// DML veto (VelesQL `INSERT`/`UPDATE`/`DELETE`/edge mutations). Same
+    /// callback contract as [`Self::on_ddl_request`], with event
+    /// `"dml_mutation_request"`.
+    fn on_dml_mutation_request(
+        &self,
+        operation: &str,
+        collection_name: &str,
+    ) -> velesdb_core::Result<()> {
+        self.veto_request("dml_mutation_request", operation, collection_name)
     }
 
     /// Read-path veto. Invokes the callback as

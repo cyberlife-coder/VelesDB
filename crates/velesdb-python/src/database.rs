@@ -14,10 +14,11 @@ use crate::options::{AutoReindexOptions, HnswOptions, VelesConfigOptions};
 use crate::utils::{self, parse_metric, parse_storage_mode};
 
 use velesdb_core::collection::auto_reindex::AutoReindexManager;
-use velesdb_core::velesql::{Query, TrainStatement, WithValue};
 use velesdb_core::{
     AnyCollection, CollectionType, Database as CoreDatabase, DatabaseObserver, GraphSchema,
 };
+
+mod ops;
 
 /// The full set of guardrail fields. `update_guardrails` is an explicit full
 /// replacement (matching the Mobile/Tauri typed structs), so the supplied dict
@@ -264,9 +265,9 @@ impl Database {
     ///     auto_reindex: Optional :class:`AutoReindexOptions` dataclass.
     ///           When provided, an :class:`AutoReindexManager` is
     ///           constructed from the options and attached to the
-    ///           freshly-created collection as a runtime-only hook.
-    ///           The attachment is not persisted — re-attach after
-    ///           every `Database(path)` to restore the behavior.
+    ///           freshly-created collection. The policy is mirrored into
+    ///           the collection's persisted config (schema v2), so it is
+    ///           restored automatically on every `Database(path)` open.
     ///
     /// Returns:
     ///     Collection instance
@@ -531,6 +532,8 @@ impl Database {
     /// Example:
     ///     >>> db.train_pq("documents", m=8, k=256)
     ///     >>> db.train_pq("documents", m=16, k=128, opq=True)
+    #[allow(clippy::too_many_arguments)] // py token + training knobs
+    #[allow(clippy::too_many_arguments)] // py token + training knobs
     #[pyo3(signature = (collection_name, m=8, k=256, opq=false))]
     fn train_pq(
         &self,
@@ -540,57 +543,17 @@ impl Database {
         k: usize,
         opq: bool,
     ) -> PyResult<String> {
-        // Build the statement, rather than printing VelesQL and parsing it
-        // back. The round-trip was what forced this method to invent an
-        // identifier sanitizer ("prevent VelesQL injection via string
-        // interpolation"), and that sanitizer drifted from
-        // `velesdb_core::validation`: it rejected the interior hyphen core
-        // accepts and pins as a doc example (`docs-v2`), while passing a
-        // leading digit the grammar's `regular_identifier` then refused, and
-        // passing the empty string, which produced `TRAIN QUANTIZER ON  WITH
-        // (...)`. Constructing the AST emits no identifier text at all, so
-        // there is no charset rule to keep in step and all three dissolve
-        // together. `velesdb-mobile` and `tauri-plugin-velesdb` already build
-        // this statement the same way.
-        let mut params = std::collections::HashMap::new();
-        params.insert(
-            "m".to_string(),
-            WithValue::Integer(i64::try_from(m).map_err(|_| {
-                PyValueError::new_err(format!(
-                    "m={m} exceeds the maximum supported subspace count"
-                ))
-            })?),
-        );
-        params.insert(
-            "k".to_string(),
-            WithValue::Integer(i64::try_from(k).map_err(|_| {
-                PyValueError::new_err(format!(
-                    "k={k} exceeds the maximum supported centroid count"
-                ))
-            })?),
-        );
-        if opq {
-            params.insert("type".to_string(), WithValue::Identifier("opq".to_string()));
-        }
-
-        let parsed = Query::new_train(TrainStatement {
-            collection: collection_name.to_string(),
-            params,
-        });
-
-        // Drop the GIL for the training run: k-means codebook fitting is
-        // CPU-bound Rust work that scales with the collection size and easily
-        // reaches multi-second latency — holding the GIL for that long would
-        // freeze every other Python thread.
-        let inner = Arc::clone(&self.inner);
-        let results = py
-            .detach(move || {
-                let empty_params = std::collections::HashMap::new();
-                inner.execute_query(&parsed, &empty_params)
-            })
-            .map_err(core_err)?;
-
-        Ok(format!("PQ training complete: {} results", results.len()))
+        // Back-compat shim: pq/opq only, no force/sample. The general path is
+        // `train_quantizer` (pq/opq/rabitq/sq8 + force + sample_limit).
+        //
+        // The statement is built as an AST, not printed and re-parsed: the
+        // round-trip was what forced an identifier sanitizer that drifted from
+        // `velesdb_core::validation`. Constructing the AST emits no identifier
+        // text at all, so there is no charset rule to keep in step.
+        // `velesdb-mobile` and `tauri-plugin-velesdb` build it the same way.
+        let quantizer = if opq { "opq" } else { "pq" };
+        let results = self.run_train(py, collection_name, quantizer, m, k, false, None)?;
+        Ok(format!("PQ training complete: {results} results"))
     }
 
     /// Create a new persistent graph collection.
@@ -675,8 +638,9 @@ impl Database {
     ///
     /// Args:
     ///     sql: VelesQL query string.
-    ///     params: Optional parameter bindings (e.g., ``{"$v": [0.1, 0.2]}``).
-    ///             Pass ``None`` or omit to run with no bindings.
+    ///     params: Optional parameter bindings (bare names, e.g., ``{"v": [0.1, 0.2]}``
+    ///             for the ``$v`` placeholder). Pass ``None`` or omit to run
+    ///             with no bindings.
     ///
     /// Returns:
     ///     List of result dicts for SELECT queries.
@@ -702,7 +666,7 @@ impl Database {
     ///     >>> db.execute_query("CREATE COLLECTION notes (dimension=128, metric=cosine)")
     ///     >>> db.execute_query(
     ///     ...     "SELECT * FROM docs WHERE vector NEAR $q LIMIT 10",
-    ///     ...     params={"$q": [0.1, 0.2]},
+    ///     ...     params={"q": [0.1, 0.2]},
     ///     ... )
     ///     >>> # Cross-collection MATCH: enrich from 'inventory' collection
     ///     >>> db.execute_query(
@@ -862,85 +826,6 @@ impl Database {
                 Ok(utils::json_to_python(py, &json))
             })
             .transpose()
-    }
-
-    /// Get health diagnostics for a collection.
-    ///
-    /// Reports index readiness without relying on the REST server — useful
-    /// for embedded health checks.
-    ///
-    /// Args:
-    ///     name: Collection name
-    ///
-    /// Returns:
-    ///     dict with keys ``has_vectors``, ``search_ready``,
-    ///     ``dimension_configured``, ``point_count``, ``index_health``
-    ///     ("healthy" | "empty" | "needs_rebuild"), and
-    ///     ``index_health_detail`` (only when a rebuild is needed).
-    ///
-    /// Raises:
-    ///     RuntimeError: If the collection does not exist.
-    #[pyo3(signature = (name))]
-    fn collection_diagnostics(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
-        use velesdb_core::collection::IndexHealth;
-        let name_owned = name.to_string();
-        let inner = Arc::clone(&self.inner);
-        let diag = py
-            .detach(move || inner.collection_diagnostics(&name_owned))
-            .map_err(core_err)?;
-
-        let dict = pyo3::types::PyDict::new(py);
-        dict.set_item("has_vectors", diag.has_vectors)?;
-        dict.set_item("search_ready", diag.search_ready)?;
-        dict.set_item("dimension_configured", diag.dimension_configured)?;
-        dict.set_item("point_count", diag.point_count)?;
-        let (health, detail) = match &diag.index_health {
-            IndexHealth::Healthy => ("healthy", None),
-            IndexHealth::Empty => ("empty", None),
-            IndexHealth::NeedsRebuild(reason) => ("needs_rebuild", Some(reason.clone())),
-            _ => ("unknown", None),
-        };
-        dict.set_item("index_health", health)?;
-        if let Some(detail) = detail {
-            dict.set_item("index_health_detail", detail)?;
-        }
-        Ok(dict.into())
-    }
-
-    /// Update query guardrail limits for every collection in this database.
-    ///
-    /// This is a **full replacement**, not a partial patch (matching the
-    /// Mobile/Tauri bindings): the dict must contain *all* guardrail fields.
-    /// A missing or misspelled key raises ``ValueError`` rather than silently
-    /// resetting limits to their defaults. To change one field, read the
-    /// current limits first (``Collection.guard_rails()``), mutate, and submit
-    /// the complete dict.
-    ///
-    /// Args:
-    ///     limits: dict with exactly these keys: ``max_depth``,
-    ///         ``max_cardinality``, ``memory_limit_bytes``, ``timeout_ms``,
-    ///         ``rate_limit_qps``, ``circuit_failure_threshold``,
-    ///         ``circuit_recovery_seconds``.
-    ///
-    /// Raises:
-    ///     ValueError: If a field is missing, unknown, or has an invalid
-    ///         value, or if ``rate_limit_qps`` or ``circuit_failure_threshold``
-    ///         is ``0`` (core's ``QueryLimits::validate``; nothing changes).
-    #[pyo3(signature = (limits))]
-    fn update_guardrails(&self, py: Python<'_>, limits: Py<PyAny>) -> PyResult<()> {
-        let json = utils::python_to_json(py, &limits)?;
-        let obj = json
-            .as_object()
-            .ok_or_else(|| PyValueError::new_err("guardrails must be a dict"))?;
-        validate_guardrail_keys(obj)?;
-        let parsed: velesdb_core::guardrails::QueryLimits = serde_json::from_value(json)
-            .map_err(|e| PyValueError::new_err(format!("invalid guardrails: {e}")))?;
-        py.detach(|| {
-            self.inner
-                .update_guardrails_with(|live| live.clone_from(&parsed))
-        })
-        .map_err(core_err)?;
-        Ok(())
     }
 }
 
