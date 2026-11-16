@@ -946,7 +946,7 @@ fn test_match_where_missing_param_returns_error() {
 //
 // Before the fix, `make_binding` stored only the payload. The merged
 // payload fed to `velesql_where::matches` had no way to surface the
-// node id through `get_nested_field("a.id")`, so predicates like
+// node id through core's `payload_path("a.id")`, so predicates like
 // `WHERE a.id = 1` matched 0 rows. The fix injects the node id as a
 // top-level `"id"` field inside each alias object (and also at the
 // root of the merged payload, for the bare `WHERE id = ...` form that

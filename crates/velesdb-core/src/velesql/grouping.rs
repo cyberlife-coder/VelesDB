@@ -20,6 +20,7 @@ use super::ast::{
 use super::group_key::{hash_key_value, normalise, same_key};
 use super::grouped_order::vector_group_score_is_average;
 use super::json_order::compare_json_values;
+use super::json_path::payload_path;
 
 /// A row offered to a [`Grouper`].
 #[derive(Debug, Clone, Copy)]
@@ -446,18 +447,6 @@ fn compare_keys(a: &[serde_json::Value], b: &[serde_json::Value]) -> std::cmp::O
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn mean(sum: f64, rows: u64) -> f32 {
     (sum / rows as f64) as f32
-}
-
-/// A payload value by dotted path (`meta.lang`), as WHERE reads it.
-pub(crate) fn payload_path<'a>(
-    payload: &'a serde_json::Value,
-    path: &str,
-) -> Option<&'a serde_json::Value> {
-    path.split('.')
-        .try_fold(payload, |current, part| match current {
-            serde_json::Value::Object(map) => map.get(part),
-            _ => None,
-        })
 }
 
 /// A field of an output row: the key itself first — a group row stores a

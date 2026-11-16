@@ -263,37 +263,19 @@ impl Collection {
         Self::project_all_node_properties(alias, node_id, memo, projected);
     }
 
-    /// Gets a nested property from a JSON object (EPIC-058 US-007).
-    ///
-    /// Supports paths like "metadata.category" for nested access.
-    /// Limited to 10 levels of nesting to prevent abuse.
+    /// A node payload's property at dotted `path` (`metadata.category`), read
+    /// as every clause reads it ([`crate::velesql::json_path::payload_path`]).
     pub(crate) fn get_nested_property<'a>(
         payload: &'a serde_json::Map<String, serde_json::Value>,
         path: &str,
     ) -> Option<&'a serde_json::Value> {
-        // Limit nesting depth to prevent potential abuse
-        const MAX_NESTING_DEPTH: usize = 10;
-
-        let parts: Vec<&str> = path.split('.').collect();
-
-        // Bounds check on nesting depth
-        if parts.len() > MAX_NESTING_DEPTH {
-            tracing::warn!(
-                "Property path '{}' exceeds max nesting depth of {}",
-                path,
-                MAX_NESTING_DEPTH
-            );
-            return None;
-        }
-
-        let first_key = *parts.first()?;
-        let mut current: &serde_json::Value = payload.get(first_key)?;
-
-        for part in parts.iter().skip(1) {
-            current = current.as_object()?.get(*part)?;
-        }
-
-        Some(current)
+        let (key, rest) = path
+            .split_once('.')
+            .map_or((path, None), |(k, r)| (k, Some(r)));
+        let value = payload.get(key)?;
+        rest.map_or(Some(value), |rest| {
+            crate::velesql::json_path::payload_path(value, rest)
+        })
     }
 
     /// Executes a MATCH query with similarity scoring (EPIC-045 US-003).

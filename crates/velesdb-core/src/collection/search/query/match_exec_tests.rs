@@ -190,3 +190,21 @@ fn test_parse_projection_edge_trailing_dot() {
         "Trailing dot with no property should fall through to BareAlias, got {item:?}"
     );
 }
+
+/// A RETURN / WHERE property path reads as deep as the query wrote it, as
+/// SELECT's WHERE, ORDER BY and projection read it (no 10-level ceiling).
+#[test]
+fn test_get_nested_property_follows_a_path_of_any_depth() {
+    let mut value = serde_json::json!("leaf");
+    for _ in 0..11 {
+        value = serde_json::json!({ "k": value });
+    }
+    let serde_json::Value::Object(payload) = serde_json::json!({ "k": value }) else {
+        unreachable!("test: an object literal");
+    };
+    let path = ["k"; 12].join(".");
+    assert_eq!(
+        crate::collection::Collection::get_nested_property(&payload, &path),
+        Some(&serde_json::json!("leaf"))
+    );
+}

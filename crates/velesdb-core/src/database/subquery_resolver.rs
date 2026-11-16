@@ -358,7 +358,7 @@ fn scalar_from_rows(results: &[crate::SearchResult], column: &str) -> Result<Val
                 .point
                 .payload
                 .as_ref()
-                .and_then(|p| nested_payload_value(p, column))
+                .and_then(|p| crate::velesql::json_path::payload_path(p, column))
                 .unwrap_or(&serde_json::Value::Null);
             json_to_value(cell)
         }
@@ -367,18 +367,6 @@ fn scalar_from_rows(results: &[crate::SearchResult], column: &str) -> Result<Val
             results.len()
         ))),
     }
-}
-
-/// Resolves a dot-separated payload path (e.g. `meta.amount`) to its JSON cell.
-fn nested_payload_value<'a>(
-    payload: &'a serde_json::Value,
-    path: &str,
-) -> Option<&'a serde_json::Value> {
-    let mut current = payload;
-    for part in path.split('.') {
-        current = current.as_object()?.get(part)?;
-    }
-    Some(current)
 }
 
 /// Converts a resolved JSON scalar into a `VelesQL` [`Value`] literal.

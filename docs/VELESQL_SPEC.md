@@ -152,6 +152,13 @@ SELECT payload.metadata.author FROM articles;
 SELECT payload.stats.views, payload.stats.likes FROM posts;
 ```
 
+Every clause reads a dotted path the same way: WHERE, ORDER BY, GROUP BY,
+DISTINCT, projection, window functions, set operations, subqueries, and
+MATCH `WHERE` / `RETURN`, in the server and in the browser. Each segment
+names an object key. A segment never indexes an array nor reads through a
+scalar, so `tags.0` on `{"tags": ["a"]}` is absent (`NULL`). `id` is the
+point id, even when the payload has its own `id` field.
+
 ### Column Aliases
 
 Rename output columns with `AS`:

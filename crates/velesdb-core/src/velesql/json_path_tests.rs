@@ -188,3 +188,45 @@ fn test_serialization() {
     let parsed: JsonPath = serde_json::from_str(&json).unwrap();
     assert_eq!(path, parsed);
 }
+
+// ── payload_path / column_value: the dotted path every clause reads ──
+
+#[test]
+fn payload_path_walks_nested_objects() {
+    let payload = json!({"meta": {"lang": "fr", "tags": ["a"]}, "n": 1});
+    assert_eq!(payload_path(&payload, "n"), Some(&json!(1)));
+    assert_eq!(payload_path(&payload, "meta.lang"), Some(&json!("fr")));
+    assert_eq!(payload_path(&payload, "meta.missing"), None);
+}
+
+/// A segment names an object key: it never indexes an array nor reads
+/// through a scalar.
+#[test]
+fn payload_path_reads_only_through_objects() {
+    let payload = json!({"tags": ["a", "b"], "n": 1});
+    assert_eq!(payload_path(&payload, "tags.0"), None);
+    assert_eq!(payload_path(&payload, "n.x"), None);
+    assert_eq!(payload_path(&json!(["a"]), "0"), None);
+}
+
+/// No depth ceiling: a path is as long as the query wrote it.
+#[test]
+fn payload_path_follows_a_path_of_any_depth() {
+    let mut payload = json!("leaf");
+    for _ in 0..12 {
+        payload = json!({ "k": payload });
+    }
+    let path = ["k"; 12].join(".");
+    assert_eq!(payload_path(&payload, &path), Some(&json!("leaf")));
+}
+
+#[test]
+fn column_value_reads_the_point_id_before_the_payload() {
+    let row = crate::point::SearchResult::new(
+        crate::point::Point::metadata_only(7, json!({"id": "shadow", "meta": {"x": 2}})),
+        0.5,
+    );
+    assert_eq!(column_value(&row, "id"), json!(7));
+    assert_eq!(column_value(&row, "meta.x"), json!(2));
+    assert_eq!(column_value(&row, "absent"), serde_json::Value::Null);
+}

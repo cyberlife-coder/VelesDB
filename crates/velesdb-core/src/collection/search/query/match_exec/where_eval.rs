@@ -530,11 +530,7 @@ impl Collection {
             return Some(root);
         }
 
-        let mut current = root;
-        for part in path.split('.') {
-            current = current.get(part)?;
-        }
-        Some(current)
+        crate::velesql::json_path::payload_path(root, path)
     }
 }
 

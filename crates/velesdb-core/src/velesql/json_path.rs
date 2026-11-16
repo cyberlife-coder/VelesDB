@@ -1,7 +1,11 @@
-//! JSON Path parser for nested field access (EPIC-052 US-005).
+//! Nested field access in JSON payloads.
 //!
-//! Supports dot notation (`metadata.source`) and array indexing (`items[0].sku`)
-//! for GROUP BY on nested JSON fields.
+//! [`payload_path`] and [`column_value`] are how every query clause reads a
+//! dotted field path (`metadata.source`), in core and in the browser: object
+//! keys only, no array indexing.
+//!
+//! [`JsonPath`] (EPIC-052 US-005) is a separate parser that also accepts
+//! array indexing (`items[0].sku`). No query clause uses it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -239,6 +243,36 @@ impl std::fmt::Display for JsonPath {
         }
         Ok(())
     }
+}
+
+/// The payload value at dotted `path` (`meta.lang`): the one reading of a
+/// field path that WHERE, ORDER BY, GROUP BY, DISTINCT, projection, window
+/// functions, set operations, subqueries and MATCH share, in core and in the
+/// browser. Each segment is an object key: a segment never indexes an array
+/// nor reads through a scalar, so `tags.0` is absent. Unlike [`JsonPath`],
+/// there is no `[i]` syntax.
+#[must_use]
+pub fn payload_path<'a>(payload: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.')
+        .try_fold(payload, |current, key| match current {
+            Value::Object(map) => map.get(key),
+            _ => None,
+        })
+}
+
+/// The value a row gives `column`: the point id for `id` (before any payload
+/// `id`), else the payload's value at that path, `null` when absent.
+#[must_use]
+pub fn column_value(row: &crate::point::SearchResult, column: &str) -> Value {
+    if column == "id" {
+        return Value::from(row.point.id);
+    }
+    row.point
+        .payload
+        .as_ref()
+        .and_then(|payload| payload_path(payload, column))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 // Tests moved to json_path_tests.rs per project rules
