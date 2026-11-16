@@ -21,6 +21,7 @@ use crate::velesql_match_score::{where_holds, where_score, BoundNode, MatchScori
 use crate::velesql_match_sources::Annotations;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
+use velesdb_core::distance::rank_scores;
 
 /// Runs a MATCH and returns its rows as ordered, limited candidates — the
 /// alias-keyed row together with what it binds ([`MatchBinding`]). Callers
@@ -102,14 +103,11 @@ pub(crate) fn match_candidates(
     Ok(out)
 }
 
-/// Most similar first: descending score, ascending distance.
+/// Most similar first: descending score, ascending distance. A NaN or absent
+/// score ranks last, as in core's MATCH.
 fn sort_by_score(candidates: &mut [MatchCandidate], higher_is_better: bool) {
-    let key = |c: &MatchCandidate| match c.score {
-        Some(score) if higher_is_better => score,
-        Some(distance) => -distance,
-        None => f32::NEG_INFINITY,
-    };
-    candidates.sort_by(|a, b| key(b).total_cmp(&key(a)));
+    let key = |c: &MatchCandidate| c.score.unwrap_or(f32::NAN);
+    candidates.sort_by(|a, b| rank_scores(key(a), key(b), higher_is_better));
 }
 
 /// Rejects pattern shapes this executor would otherwise misread.
@@ -647,3 +645,7 @@ mod parity_tests;
 #[cfg(test)]
 #[path = "velesql_match_points_tests.rs"]
 mod points_tests;
+
+#[cfg(test)]
+#[path = "velesql_match_rank_tests.rs"]
+mod rank_tests;

@@ -62,3 +62,26 @@ fn test_bounded_top_k_ties_keep_insertion_order() {
     let got: Vec<u64> = topk.into_sorted_vec().iter().map(|r| r.point.id).collect();
     assert_eq!(got, vec![10, 20]);
 }
+
+/// A NaN score ranks after every number in both directions, whatever its
+/// sign, as `DistanceMetric::sort_results` ranks it: the scan keeps the rows
+/// a full sort keeps.
+#[test]
+fn test_bounded_top_k_ranks_nan_last() {
+    for nan in [f32::NAN, -f32::NAN] {
+        for higher_is_better in [true, false] {
+            let mut topk = BoundedTopK::new(2, higher_is_better);
+            for (id, score) in [(0, nan), (1, 0.5), (2, 0.7)] {
+                topk.offer(result(id, score));
+            }
+            let ids: Vec<u64> = topk.into_sorted_vec().iter().map(|r| r.point.id).collect();
+            let expected = if higher_is_better { [2, 1] } else { [1, 2] };
+            assert_eq!(
+                ids,
+                expected,
+                "nan sign {}, higher_is_better {higher_is_better}",
+                nan.is_sign_negative()
+            );
+        }
+    }
+}

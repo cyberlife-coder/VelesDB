@@ -12,6 +12,7 @@ use super::parse_property_path;
 use super::{parse_projection_item, MatchResult, ProjectionItem};
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
+use crate::distance::rank_scores;
 use crate::error::Result;
 use crate::point::SearchResult;
 use crate::storage::{PayloadStorage, VectorStorage};
@@ -443,17 +444,11 @@ impl Collection {
     }
 
     /// Sorts scored results by similarity — descending for similarity metrics,
-    /// ascending for distance metrics.
+    /// ascending for distance metrics. A NaN or absent score ranks last, as in
+    /// the browser executor.
     pub(super) fn sort_by_score(results: &mut [MatchResult], higher_is_better: bool) {
-        if higher_is_better {
-            results.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
-        } else {
-            results.sort_by(|a, b| {
-                a.score
-                    .unwrap_or(f32::MAX)
-                    .total_cmp(&b.score.unwrap_or(f32::MAX))
-            });
-        }
+        let key = |r: &MatchResult| r.score.unwrap_or(f32::NAN);
+        results.sort_by(|a, b| rank_scores(key(a), key(b), higher_is_better));
     }
 
     /// Applies sort direction to a comparison (reverses when `descending`).
@@ -598,3 +593,7 @@ fn build_match_payload(
     }
     serde_json::Value::Object(object)
 }
+
+#[cfg(test)]
+#[path = "similarity_tests.rs"]
+mod tests;

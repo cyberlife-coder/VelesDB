@@ -10,6 +10,7 @@
 //! candidate only displaces the root when it is strictly better — exactly the
 //! semantics of `sort` + `truncate`, but in bounded memory.
 
+use crate::distance::rank_scores;
 use crate::point::SearchResult;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -29,12 +30,8 @@ impl HeapEntry {
     /// Orders two entries from *best to worst*. The heap inverts this so the
     /// root is the worst kept entry and can be popped when displaced.
     fn cmp_best_to_worst(&self, other: &Self) -> Ordering {
-        let by_score = if self.higher_is_better {
-            // Higher score is better → better entry compares as Less ("front").
-            other.result.score.total_cmp(&self.result.score)
-        } else {
-            self.result.score.total_cmp(&other.result.score)
-        };
+        // The order `DistanceMetric::sort_results` gives: best first, NaN last.
+        let by_score = rank_scores(self.result.score, other.result.score, self.higher_is_better);
         // Tie-break on insertion order so earlier candidates rank ahead.
         by_score.then(self.seq.cmp(&other.seq))
     }

@@ -1976,7 +1976,8 @@ WASM):
   its better score, with that score's breakdown (`vector_score`, ...).
 - **Order.** The window's `ORDER BY` when there is one; otherwise the rows rank
   by score in the first operand's metric direction (most similar first,
-  closest first under a distance), ties in the order they were met.
+  closest first under a distance), ties in the order they were met. A NaN
+  score ranks last, and a duplicate's number always beats its twin's NaN.
 - The combined rows are projected by the first operand's column list.
 
 ```sql
@@ -3522,6 +3523,12 @@ an infinity has no JSON form, so no literal stands for one.
 | `graph_score` | Graph traversal | MATCH graph pattern present |
 | `fused_score` | After fusion | USING FUSION applied |
 | `similarity()` | Primary search score | Any search clause |
+
+Wherever results are ranked by score without an `ORDER BY` (search, the
+exhaustive `similarity()` scan, MATCH, set operations), the best score comes
+first in the metric's direction and a NaN score ranks after every number,
+whatever its sign and on every architecture. `-0.0` and `0.0` are one score.
+Fusion keeps its own documented order.
 
 ---
 

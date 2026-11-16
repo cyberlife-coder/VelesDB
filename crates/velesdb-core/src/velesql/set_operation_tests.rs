@@ -251,3 +251,37 @@ fn a_later_operands_values_take_the_first_operands_column_names() {
         .collect();
     assert_eq!(years, [&json!(2020), &json!(30)]);
 }
+
+/// A NaN score ranks after every number in both directions, whatever its
+/// sign, and never displaces a duplicate's number.
+#[test]
+fn a_nan_score_ranks_last_and_never_wins_a_duplicate() {
+    for nan in [f32::NAN, -f32::NAN] {
+        for higher_is_better in [true, false] {
+            let case = format!(
+                "nan sign {}, higher_is_better {higher_is_better}",
+                nan.is_sign_negative()
+            );
+            let ranked = run(
+                "SELECT * FROM a UNION SELECT * FROM b",
+                vec![
+                    vec![row(1, nan, json!({}))],
+                    vec![row(2, 0.5, json!({})), row(3, 0.7, json!({}))],
+                ],
+                higher_is_better,
+            );
+            assert_eq!(ids(&ranked).last(), Some(&1), "{case}");
+
+            let merged = run(
+                "SELECT * FROM a UNION SELECT * FROM a",
+                vec![vec![row(1, nan, json!({}))], vec![row(1, 0.5, json!({}))]],
+                higher_is_better,
+            );
+            assert!(
+                (merged[0].score - 0.5).abs() < f32::EPSILON,
+                "{case}: {}",
+                merged[0].score
+            );
+        }
+    }
+}
