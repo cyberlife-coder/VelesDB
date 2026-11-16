@@ -75,14 +75,26 @@ fn test_join_missing_right_collection_errors() {
     assert!(err.is_err());
 }
 
+/// RIGHT JOIN runs core's algorithm: the order no user matches is a row of
+/// its own, whose base side reads a `null` id.
 #[test]
-fn test_right_join_is_rejected() {
+fn a_right_join_keeps_the_unmatched_joined_rows() {
     let mut db = DatabaseInner::new();
     seed(&mut db);
-    let stmt = parse("SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id LIMIT 10");
-    let err = joined_rows(&db, &stmt, &Params::new());
-    assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("RIGHT JOIN"));
+    let orders = db.get_shared_store("orders").expect("test: orders store");
+    let mut ob = orders.borrow_mut();
+    ob.ids.push(13);
+    ob.payloads
+        .push(Some(serde_json::json!({"user_id": 9, "total": 5.0})));
+    drop(ob);
+
+    let stmt = parse("SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id");
+    let rows = joined_rows(&db, &stmt, &Params::new()).expect("test: right join");
+    let ids: Vec<u64> = rows.iter().map(|r| r.0).collect();
+    assert_eq!(ids, [1, 1, 2, 13]);
+    let unmatched = rows[3].2.as_ref().expect("test: payload");
+    assert_eq!(unmatched["users"]["id"], serde_json::Value::Null);
+    assert_eq!(unmatched["orders"]["id"], serde_json::json!(13));
 }
 
 /// Each side reads under its alias, so a self-join keeps both names.

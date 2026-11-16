@@ -6,8 +6,9 @@
 //! are verified against source:
 //!   - V010 subquery code: `velesql/validation_types.rs:145` (+ Display embeds
 //!     `[V010]`), gate `velesql/validation.rs:reject_subqueries`.
-//!   - JOIN `USING(single_column)` / `requires primary key`:
-//!     `collection/search/query/join.rs:196,210`.
+//!   - JOIN `USING(single_column)`: `database/query_join.rs`
+//!     (`execute_single_join`, when `velesql::JoinKeys::of` finds no
+//!     single equality).
 //!   - `Graph expansion exceeded: max=32`: `velesql/validation.rs:289`
 //!     enforced inside `Parser::parse` (`parser/mod.rs:128`), cap 32 from
 //!     `validation_types.rs:DEFAULT_MAX_GRAPH_EXPANSION`.
@@ -43,7 +44,7 @@ fn setup_products(db: &Database) {
 }
 
 /// Creates a `products` vector collection JOINed against an `inventory`
-/// metadata collection so the JOIN reaches `validate_join_condition`.
+/// metadata collection.
 fn setup_join_collections(db: &Database) {
     setup_products(db);
     execute_sql(db, "CREATE METADATA COLLECTION inventory;").expect("test: create inventory");
@@ -127,29 +128,7 @@ fn scenario_multi_column_using_join_rejected() {
 }
 
 // =========================================================================
-// 3. Non-primary-key JOIN column -> requires primary key
-// =========================================================================
-
-#[test]
-fn scenario_non_primary_key_join_column_rejected() {
-    let (_dir, db) = create_test_db();
-    setup_join_collections(&db);
-
-    // The join column on the target side resolves to `product_id`, but the
-    // built join ColumnStore is keyed on the primary key `id`.
-    let err = execute_sql(
-        &db,
-        "SELECT * FROM products JOIN inventory ON products.id = inventory.product_id LIMIT 10",
-    )
-    .expect_err("test: non-primary-key JOIN column must be rejected");
-    assert!(
-        err.to_string().contains("requires primary key"),
-        "expected primary-key requirement marker, got: {err}"
-    );
-}
-
-// =========================================================================
-// 4. Over-cap graph hop -> Graph expansion exceeded: max=32
+// 3. Over-cap graph hop -> Graph expansion exceeded: max=32
 // =========================================================================
 
 #[test]
@@ -167,7 +146,7 @@ fn scenario_over_cap_graph_hop_rejected() {
 }
 
 // =========================================================================
-// 5. DELETE: any metadata WHERE, no vector predicate
+// 4. DELETE: any metadata WHERE, no vector predicate
 // =========================================================================
 
 fn product_ids(db: &Database) -> Vec<u64> {
@@ -223,7 +202,7 @@ fn scenario_delete_with_a_vector_predicate_rejected() {
 // =========================================================================
 
 // =========================================================================
-// 7. SELECT EDGES rejects
+// 5. SELECT EDGES rejects
 // =========================================================================
 
 #[test]
@@ -274,7 +253,7 @@ fn scenario_select_edges_nested_and_rejected() {
 }
 
 // =========================================================================
-// 8. Bare-MATCH RETURN ORDER BY of an unsupported expression -> V015
+// 6. Bare-MATCH RETURN ORDER BY of an unsupported expression -> V015
 //
 // `order_match_results` (collection/search/query/match_exec/order_by.rs)
 // supports ORDER BY similarity(), similarity(field, $v), depth, a valid

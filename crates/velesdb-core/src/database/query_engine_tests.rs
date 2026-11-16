@@ -208,7 +208,6 @@ fn test_schema_version_increments_on_create_and_delete() {
 // ORDER BY). SQL LIMIT bounds output groups/rows, not input rows.
 // =========================================================================
 
-use crate::collection::search::query::pushdown::PushdownAnalysis;
 use crate::collection::search::query::JOIN_ROW_CEILING;
 
 fn select_of(sql: &str) -> crate::velesql::SelectStatement {
@@ -219,7 +218,7 @@ fn select_of(sql: &str) -> crate::velesql::SelectStatement {
 fn test_join_row_budget_plain_limit_uses_limit() {
     // No GROUP BY / DISTINCT / HAVING / ORDER BY: LIMIT bounds input rows.
     let select = select_of("SELECT d.id FROM docs AS d JOIN meta AS m ON d.id = m.id LIMIT 5");
-    let budget = Database::join_row_budget(&select, &PushdownAnalysis::default());
+    let budget = Database::join_row_budget(&select, &[]);
     assert_eq!(budget, 5);
 }
 
@@ -229,7 +228,7 @@ fn test_join_row_budget_group_by_uses_ceiling() {
     let select = select_of(
         "SELECT m.tag FROM docs AS d JOIN meta AS m ON d.id = m.id GROUP BY m.tag LIMIT 2",
     );
-    let budget = Database::join_row_budget(&select, &PushdownAnalysis::default());
+    let budget = Database::join_row_budget(&select, &[]);
     assert_eq!(budget, JOIN_ROW_CEILING);
 }
 
@@ -238,7 +237,7 @@ fn test_join_row_budget_distinct_uses_ceiling() {
     // DISTINCT dedups output rows: LIMIT must not truncate the join input.
     let select =
         select_of("SELECT DISTINCT m.tag FROM docs AS d JOIN meta AS m ON d.id = m.id LIMIT 2");
-    let budget = Database::join_row_budget(&select, &PushdownAnalysis::default());
+    let budget = Database::join_row_budget(&select, &[]);
     assert_eq!(budget, JOIN_ROW_CEILING);
 }
 
@@ -247,7 +246,7 @@ fn test_join_row_budget_order_by_uses_ceiling() {
     // ORDER BY can reorder past the window: still falls back to the ceiling.
     let select =
         select_of("SELECT d.id FROM docs AS d JOIN meta AS m ON d.id = m.id ORDER BY d.id LIMIT 3");
-    let budget = Database::join_row_budget(&select, &PushdownAnalysis::default());
+    let budget = Database::join_row_budget(&select, &[]);
     assert_eq!(budget, JOIN_ROW_CEILING);
 }
 

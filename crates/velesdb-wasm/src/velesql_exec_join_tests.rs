@@ -112,31 +112,39 @@ fn test_inner_join_with_limit_caps_result() {
 }
 
 // =========================================================================
-// Negative (≥ 20%)
+// RIGHT / FULL JOIN — core's algorithm
 // =========================================================================
 
+/// Every order has a user, so RIGHT JOIN returns the INNER rows: Carol, who
+/// has no order, is not kept.
 #[test]
-fn test_right_join_is_rejected() {
+fn test_right_join_keeps_every_joined_row() {
     let mut db = db_with_users_orders();
-    let err = execute(
+    let r = execute(
         &mut db,
         "SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id LIMIT 10",
         None,
-    );
-    assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("RIGHT JOIN"));
+    )
+    .expect("test: right join");
+    assert_eq!(r.row_count(), 3);
 }
 
+/// FULL JOIN keeps the user without an order as well.
 #[test]
-fn test_full_join_is_rejected() {
+fn test_full_join_keeps_both_unmatched_sides() {
     let mut db = db_with_users_orders();
-    let err = execute(
+    let r = execute(
         &mut db,
         "SELECT * FROM users FULL JOIN orders ON users.id = orders.user_id LIMIT 10",
         None,
-    );
-    assert!(err.is_err());
+    )
+    .expect("test: full join");
+    assert_eq!(r.row_count(), 4);
 }
+
+// =========================================================================
+// Negative (≥ 20%)
+// =========================================================================
 
 #[test]
 fn test_join_missing_left_collection_errors() {

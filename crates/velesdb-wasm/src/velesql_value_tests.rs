@@ -104,23 +104,3 @@ fn test_resolve_vector_param_non_number_element_errors() {
     let err = resolve_vector(&VectorExpr::Parameter("q".to_string()), &p);
     assert!(err.is_err());
 }
-
-#[test]
-fn test_json_values_equal_mixed_numeric() {
-    assert!(json_values_equal(
-        &serde_json::json!(42),
-        &serde_json::json!(42.0)
-    ));
-}
-
-#[test]
-fn test_json_values_equal_strings() {
-    assert!(json_values_equal(
-        &serde_json::json!("a"),
-        &serde_json::json!("a")
-    ));
-    assert!(!json_values_equal(
-        &serde_json::json!("a"),
-        &serde_json::json!("b")
-    ));
-}
