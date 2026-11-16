@@ -1,7 +1,11 @@
-//! JSON Path parser for nested field access (EPIC-052 US-005).
+//! Nested field access in JSON payloads.
 //!
-//! Supports dot notation (`metadata.source`) and array indexing (`items[0].sku`)
-//! for GROUP BY on nested JSON fields.
+//! [`payload_path`] and [`column_value`] are how every query clause reads a
+//! dotted field path (`metadata.source`), in core and in the browser: object
+//! keys only, no array indexing.
+//!
+//! [`JsonPath`] (EPIC-052 US-005) is a separate parser that also accepts
+//! array indexing (`items[0].sku`). No query clause uses it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
