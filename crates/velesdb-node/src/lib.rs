@@ -71,8 +71,12 @@ use velesdb_memory::{Embedder, MemoryError, MemoryService};
 
 use crate::factory::{
     anchor_allowlist, build_embedder, build_extractor, ingest_roots_from_env,
-    warn_hash_embedder_not_semantic, NodeMemoryService,
+    warn_hash_embedder_not_semantic,
 };
+// The struct lives in `factory.rs` (split when lib.rs crossed the file
+// budget); re-exported so the crate's public path `NodeMemoryService` is
+// unchanged, not a removal (same pattern as match_exec's ProjectionItem).
+pub use crate::factory::NodeMemoryService;
 
 use crate::dto::{
     AnchoredRecollectionJs, ColumnFilterJs, CompileTranscriptJs, CompiledContextJs, DatedRecallJs,
