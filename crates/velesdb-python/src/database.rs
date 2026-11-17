@@ -154,7 +154,7 @@ impl Database {
     ///         return value is ignored and a raised exception is swallowed so
     ///         it never breaks a core operation. For ``"query_request"`` the
     ///         callback governs the read: return ``False`` or a string reason to
-    ///         **deny** it (raising a query error), ``None``/``True`` to allow,
+    ///         **deny** it (raising ``PermissionError``), ``None``/``True`` to allow,
     ///         or a ``dict`` to **allow with a narrowing scope**. The dict MUST
     ///         carry an enforceable ``"filter"`` (a VelesQL WHERE-predicate
     ///         string such as ``"tenant = 'acme'"``, AND-composed into the

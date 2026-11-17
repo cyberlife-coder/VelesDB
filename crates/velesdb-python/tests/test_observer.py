@@ -437,3 +437,17 @@ def test_an_observer_refusal_raises_permission_error_with_cores_code():
             db.execute_query("DROP COLLECTION docs")
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_search_by_embedding_reports_one_query_event(observed_db):
+    """A graph collection's embedding search is a read the observer hears
+    about, once, like every other search of this binding: it was gated but
+    never reported, so metering and audit missed it."""
+    db, recorder = observed_db
+    graph = db.create_graph_collection("kg", dimension=DIM)
+    graph.upsert_node(10, {"name": "Alice"}, vector=[1.0, 0.0, 0.0, 0.0])
+
+    recorder.events.clear()
+    hits = graph.search_by_embedding([1.0, 0.0, 0.0, 0.0], 1)
+    assert [h["id"] for h in hits] == [10]
+    assert [e["collection"] for e in recorder.events_of("query")] == ["kg"]

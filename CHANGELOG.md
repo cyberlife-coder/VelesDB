@@ -340,6 +340,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python binding, second audit pass.**
+  - `MemoryService.list_memories` returns `next_cursor` as an int, like every
+    id of the binding, so it is passed back as `cursor` unchanged (it was a
+    string the `int` parameter refused); `list_memories` and `memory_status`
+    gain their stubs.
+  - `remember_extracted` follows the Node binding's contract: the fact cap
+    applies before any backend runs, `VELESDB_MEMORY_EXTRACTOR` /
+    `_URL` / `_MODEL` / `_API_TOKEN` are honoured, `"openai"` is accepted, and
+    a configuration error is a `ValueError` (a malformed embedder URL too).
+    The extraction role's environment is read once, in `velesdb-memory`.
+  - `GraphCollection.search_by_embedding` reaches the observer's `on_query`
+    like every other search.
+  - `import velesdb` no longer imports `openai` or `sentence_transformers`;
+    an adapter imports its backend when it is built.
+  - A strided numpy vector (`matrix[:, 0]`) is read instead of raising
+    `TypeError`.
+  - The auto-dimension collection measures a vector without consuming a
+    one-shot iterator.
+  - `GraphStore` refuses a bad direction or depth with `ValueError`.
+  - The stubs' `Raises:` sections name the exceptions the code raises.
+
 - **Node: a `Date`, `Map`, `Set` or class instance in metadata, a filter or a
   request is refused, not stored as `{}`.** napi read any object's own
   enumerable properties, so these arrived as empty objects and were stored so

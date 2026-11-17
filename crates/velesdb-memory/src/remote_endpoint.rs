@@ -87,6 +87,21 @@ pub fn role_auth(name: &str) -> Result<Auth, SettingError> {
     }
 }
 
+/// The extraction role's endpoint, from `VELESDB_MEMORY_EXTRACTOR_URL`,
+/// `_MODEL` and `_API_TOKEN` — read once here for the daemon and every
+/// binding, so they agree on the names and on a blank token.
+///
+/// # Errors
+/// An `_API_TOKEN` that is set but empty.
+#[cfg(feature = "extractor-http")]
+pub fn extractor_env_endpoint() -> Result<RemoteEndpoint, SettingError> {
+    Ok(RemoteEndpoint {
+        url: env_opt("VELESDB_MEMORY_EXTRACTOR_URL"),
+        model: env_opt("VELESDB_MEMORY_EXTRACTOR_MODEL"),
+        auth: role_auth("VELESDB_MEMORY_EXTRACTOR_API_TOKEN")?,
+    })
+}
+
 /// The embedding role's endpoint, honouring the legacy `VELESDB_MEMORY_OLLAMA_*`
 /// aliases (C1), plus an alias-conflict notice for the caller to print.
 ///

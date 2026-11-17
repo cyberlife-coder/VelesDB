@@ -64,9 +64,11 @@ pub fn reject_nan_vector(vector: &[f32]) -> PyResult<()> {
 /// Returns an error if the object is neither a list nor a numpy array,
 /// or if the extracted vector contains NaN values.
 pub fn extract_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<Vec<f32>> {
-    // Try numpy array first (most common in ML workflows)
+    // Try numpy array first (most common in ML workflows). Read through the
+    // array view, not `as_slice`: a column or strided slice (`m[:, 0]`) is
+    // not contiguous, and `as_slice` refuses it with a TypeError.
     if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f32>>(py) {
-        let vec = array.as_slice()?.to_vec();
+        let vec = array.as_array().to_vec();
         reject_nan_vector(&vec)?;
         return Ok(vec);
     }
@@ -75,7 +77,7 @@ pub fn extract_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<Vec<f32>> {
     if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f64>>(py) {
         // Reason: intentional f64->f32 narrowing for numpy float64 arrays
         #[allow(clippy::cast_possible_truncation)]
-        let vec: Vec<f32> = array.as_slice()?.iter().map(|&x| x as f32).collect();
+        let vec: Vec<f32> = array.as_array().iter().map(|&x| x as f32).collect();
         reject_nan_vector(&vec)?;
         return Ok(vec);
     }

@@ -4,9 +4,10 @@ use super::errors::{setting_error, to_py_err};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use velesdb_memory::{
-    embedder_env_endpoint, select_embedder, DynEmbedder, EmbedderSelection, MemoryService,
-    Metadata, OllamaEmbedder, OllamaExtractor, OpenAiEmbedder, OutlineExtractor,
-    RememberedExtraction, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, HASH_EMBEDDER_NOTICE,
+    embedder_env_endpoint, extractor_env_endpoint, limits, select_embedder, select_extractor,
+    DynEmbedder, DynExtractor, EmbedderSelection, ExtractorSelection, MemoryService, Metadata,
+    OllamaEmbedder, OllamaExtractor, OpenAiEmbedder, OpenAiExtractor, RememberedExtraction,
+    RemoteEndpoint, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL, HASH_EMBEDDER_NOTICE,
 };
 
 /// Resolve and build the requested embedder, returning it alongside the model
@@ -57,8 +58,10 @@ fn build_ollama_embedder(
     let model = model
         .or(env_endpoint.model)
         .unwrap_or_else(|| DEFAULT_OLLAMA_MODEL.to_owned());
+    // A malformed URL is the caller's setting: ValueError, as Node answers
+    // INVALID_INPUT.
     let embedder = OllamaEmbedder::new(url, model.clone())
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok((Box::new(embedder), model))
 }
 
@@ -72,7 +75,7 @@ fn build_openai_embedder() -> PyResult<(DynEmbedder, String)> {
         .require("VELESDB_MEMORY_EMBEDDER")
         .map_err(setting_error)?;
     let embedder = OpenAiEmbedder::new(url, model.clone(), auth)
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok((Box::new(embedder), model))
 }
 
@@ -90,10 +93,14 @@ pub(super) fn warn_hash_embedder_not_semantic(semantic: bool) {
 
 /// Build the requested extractor and run it, releasing the GIL for the call.
 ///
-/// Same contract as [`build_embedder`], including the `ValueError` on an
-/// unknown name: a caller who asked for a backend that does not exist must be
-/// told so, never handed a different one. `"outline"` is deterministic and
-/// network-free and ignores `model`/`url`; `"ollama"` needs a `model`.
+/// The same contract as the Node binding and the MCP tool: a passage over
+/// [`limits::MAX_FACT_BYTES`] is refused before any backend sees it; the
+/// backend is the explicit `extractor`, else `VELESDB_MEMORY_EXTRACTOR`, else
+/// `"ollama"`, resolved by `velesdb_memory`'s [`select_extractor`] (so an
+/// unknown name is a `ValueError` naming the accepted forms); the remote
+/// backends take `url`/`model` from the arguments, else
+/// `VELESDB_MEMORY_EXTRACTOR_URL` / `_MODEL`, and a credential from the
+/// environment only. A setting the caller got wrong is a `ValueError`.
 ///
 /// A free function rather than a method, so it stays out of the `impl` block
 /// the binding-parity guard reads as this binding's published surface.
@@ -106,27 +113,67 @@ pub(super) fn extract_with(
     extractor: Option<String>,
     metadata: Option<Metadata>,
 ) -> PyResult<RememberedExtraction> {
-    match extractor.as_deref().unwrap_or("ollama") {
-        "outline" => py.detach(|| {
-            svc.remember_extracted(text, &OutlineExtractor, metadata.as_ref())
-                .map_err(to_py_err)
-        }),
+    if text.len() > limits::MAX_FACT_BYTES {
+        return Err(PyValueError::new_err(format!(
+            "text exceeds {} bytes ({} given)",
+            limits::MAX_FACT_BYTES,
+            text.len()
+        )));
+    }
+    let backend = extractor
+        .or_else(|| std::env::var("VELESDB_MEMORY_EXTRACTOR").ok())
+        .unwrap_or_else(|| "ollama".to_owned());
+    let extractor: DynExtractor = match select_extractor(&backend).map_err(setting_error)? {
+        ExtractorSelection::Ready(extractor) => extractor,
+        ExtractorSelection::Disabled => {
+            return Err(PyValueError::new_err(
+                "extractor 'none' cannot extract a passage; pass 'outline' for the offline \
+                 backend, or 'ollama'/'openai' with configuration",
+            ))
+        }
+        ExtractorSelection::NeedsRemoteConfig(name) => build_remote_extractor(name, model, url)?,
+    };
+    py.detach(|| {
+        svc.remember_extracted(text, &extractor, metadata.as_ref())
+            .map_err(to_py_err)
+    })
+}
+
+/// A network-backed extractor: `url`/`model` from the arguments, else the
+/// extraction role's environment endpoint.
+fn build_remote_extractor(
+    name: &str,
+    model: Option<String>,
+    url: Option<String>,
+) -> PyResult<DynExtractor> {
+    let env_endpoint = extractor_env_endpoint().map_err(setting_error)?;
+    match name {
         "ollama" => {
-            let model = model.ok_or_else(|| {
+            let model = model.or(env_endpoint.model).ok_or_else(|| {
                 PyValueError::new_err(
-                    "the 'ollama' extractor needs a model (or pass extractor='outline' for \
-                     the offline backend)",
+                    "the 'ollama' extractor needs a model (argument or \
+                     VELESDB_MEMORY_EXTRACTOR_MODEL; or pass extractor='outline' for the \
+                     offline backend)",
                 )
             })?;
-            let url = url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
-            let backend = OllamaExtractor::new(url, model);
-            py.detach(|| {
-                svc.remember_extracted(text, &backend, metadata.as_ref())
-                    .map_err(to_py_err)
-            })
+            let url = url
+                .or(env_endpoint.url)
+                .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
+            Ok(std::sync::Arc::new(OllamaExtractor::new(url, model)))
         }
-        other => Err(PyValueError::new_err(format!(
-            "unknown extractor '{other}' (expected 'ollama' or 'outline')"
+        "openai" => {
+            let (url, model, auth) = RemoteEndpoint {
+                url: url.or(env_endpoint.url),
+                model: model.or(env_endpoint.model),
+                auth: env_endpoint.auth,
+            }
+            .require("VELESDB_MEMORY_EXTRACTOR")
+            .map_err(setting_error)?;
+            Ok(std::sync::Arc::new(OpenAiExtractor::new(url, model, auth)))
+        }
+        other => Err(PyRuntimeError::new_err(format!(
+            "extractor '{other}' needs remote configuration this binding has no builder \
+             for — a bug in velesdb-memory, not a configuration error; please report it"
         ))),
     }
 }

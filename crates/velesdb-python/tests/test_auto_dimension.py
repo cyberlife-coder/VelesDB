@@ -107,6 +107,16 @@ class TestAutoDimensionDetection:
         assert col._collection is not None
         assert col._collection._inner.dimension == 2
 
+    def test_upsert_with_a_one_shot_iterator_writes_the_whole_vector(self, temp_db):
+        """Measuring the dimension used to consume the iterator: the
+        collection was created with dimension 3, then the empty remainder
+        was written (DimensionMismatch, expected 3, got 0)."""
+        col = temp_db.create_collection("iter_test")
+        col.upsert(1, iter([0.1, 0.2, 0.3]))
+
+        assert col._collection._inner.dimension == 3
+        assert col.count() == 1
+
     def test_upsert_without_vector_raises_helpful_error(self, temp_db):
         col = temp_db.create_collection("no_vec_err")
         with pytest.raises(ValueError, match="auto-detect"):

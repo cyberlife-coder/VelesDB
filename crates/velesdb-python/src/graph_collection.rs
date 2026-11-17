@@ -663,28 +663,30 @@ impl PyGraphCollection {
         let vec = extract_vector(py, &query)?;
         let top_k = k.unwrap_or(10);
 
-        // Route the vector read through the control-plane gate. The graph leaf
-        // takes no metadata filter, so authorize first (Deny ⇒ Err, fail closed)
-        // then apply any observer scope filter as a post-filter (narrow-only),
-        // mirroring the sparse / parallel-batch paths on `Collection`.
+        // Route the vector read through the database's read gate, which
+        // reports it to the observer's `on_query` once it completes, as every
+        // other search of this binding does. The graph leaf takes no metadata
+        // filter, so any observer scope filter applies as a post-filter
+        // (narrow-only); a denial never runs the search (fail closed).
         let results = py.detach(|| {
-            let scope = self
-                .db
-                .authorize_read(
+            self.db
+                .run_gated_read(
                     &self.name,
                     QueryOperationKind::VectorSearch,
                     principal.as_deref(),
                     tenant.as_deref(),
+                    |scope| {
+                        let mut results = self
+                            .inner
+                            .search_by_embedding(&vec, top_k)
+                            .map_err(core_err)?;
+                        if let Some(scope_filter) = scope {
+                            retain_by_filters(&mut results, None, Some(&scope_filter));
+                        }
+                        Ok::<_, PyErr>(results)
+                    },
                 )
-                .map_err(core_err)?;
-            let mut results = self
-                .inner
-                .search_by_embedding(&vec, top_k)
-                .map_err(core_err)?;
-            if let Some(scope_filter) = scope {
-                retain_by_filters(&mut results, None, Some(&scope_filter));
-            }
-            Ok::<_, PyErr>(results)
+                .map_err(core_err)?
         })?;
 
         Ok(results

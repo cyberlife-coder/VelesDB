@@ -491,9 +491,13 @@ class Collection:
 
 
 def _safe_len(vec: Any) -> int | None:
-    """Return the length of ``vec`` if measurable, else None."""
+    """Return the length of ``vec`` if it has one, else None.
+
+    Never iterates: measuring a one-shot iterator would consume the very
+    vector about to be written.
+    """
     try:
-        return len(list(vec))
+        return len(vec)
     except TypeError:
         return None
 
@@ -565,7 +569,10 @@ class _PendingCollection:
         vector: Iterable[float] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> int:
-        # Materialise *before* consuming the iterator so the vector is intact.
+        # A one-shot iterator is read once, here: measured and written from
+        # the same list.
+        if vector is not None and not hasattr(vector, "__len__"):
+            vector = list(vector)
         dim = _extract_dimension(points_or_id, vector)
         if dim is None:
             raise ValueError(
@@ -875,8 +882,10 @@ class Database:
             List of result dicts for SELECT queries, empty list for DDL/DML.
 
         Raises:
-            ValueError: If parsing fails.
-            RuntimeError: If execution fails.
+            ValueError: If the query does not parse or is invalid for this
+                database.
+            PermissionError: If the database's observer refuses it.
+            VelesDBError: If execution fails in the engine.
         """
         if params is None:
             params = {}

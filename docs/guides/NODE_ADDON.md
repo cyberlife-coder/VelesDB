@@ -388,6 +388,9 @@ out of range, a malformed id — rejects the returned `Promise` with an
 parameter (a number where a string is expected) is refused by napi before the
 method runs: that call throws synchronously, with napi's own `code`
 (`StringExpected`, `NumberExpected`, …) and no `[CODE]` prefix.
+The same holds for a JSON argument whose getter or `Proxy` trap throws while
+the binding reads it: napi offers no safe way to take that pending JS
+exception back, so it surfaces synchronously, as the getter's own error.
 
 ---
 

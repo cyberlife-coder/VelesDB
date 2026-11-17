@@ -968,7 +968,10 @@ class Collection:
                   flag to distinguish heuristic values from future measured ones.
 
         Raises:
-            RuntimeError: If the query is invalid or execution fails.
+            ValueError: If the query does not parse or is invalid for this
+                database.
+            PermissionError: If the database's observer refuses it.
+            VelesDBError: If execution fails in the engine.
         """
         ...
 
@@ -1177,7 +1180,9 @@ class Database:
             that materialises on the first upsert).
 
         Raises:
-            RuntimeError: If collection already exists or creation fails
+            CollectionExistsError: If the collection already exists.
+            ValueError: If the name or a parameter is invalid.
+            VelesDBError: If the engine fails to create it.
         """
         ...
 
@@ -1318,7 +1323,8 @@ class Database:
 
         Raises:
             ValueError: If the collection name fails to parse.
-            RuntimeError: If the collection does not exist or the change fails.
+            CollectionNotFoundError: If the collection does not exist.
+            VelesDBError: If the engine fails to apply the change.
         """
         ...
 
@@ -1376,7 +1382,7 @@ class Database:
             "needs_rebuild"), and index_health_detail keys
 
         Raises:
-            RuntimeError: If the collection does not exist
+            CollectionNotFoundError: If the collection does not exist.
         """
         ...
 
@@ -1428,7 +1434,8 @@ class Database:
                   (bool or None) — whether the histogram is stale.
 
         Raises:
-            RuntimeError: If the collection does not exist or analysis fails
+            CollectionNotFoundError: If the collection does not exist.
+            VelesDBError: If the analysis fails in the engine.
         """
         ...
 
@@ -1942,7 +1949,10 @@ class PyGraphCollection:
                   flag to distinguish heuristic values from future measured ones.
 
         Raises:
-            RuntimeError: If the query is invalid or execution fails.
+            ValueError: If the query does not parse or is invalid for this
+                database.
+            PermissionError: If the database's observer refuses it.
+            VelesDBError: If execution fails in the engine.
         """
         ...
 
@@ -2587,10 +2597,11 @@ class MemoryService:
         Set ``VELESDB_MEMORY_QUIET=1`` to suppress it for deliberate offline use.
 
         Raises:
-            ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``, or
+            ValueError: If ``embedder`` is not ``"hash"``, ``"ollama"`` or
+                ``"openai"``, its configuration is invalid (a malformed URL, an
+                ``"openai"`` endpoint missing its URL or model), or
                 ``search_quality`` is not a quality.
-            RuntimeError: If the store cannot be opened or the Ollama embedder
-                cannot be initialised.
+            RuntimeError: If the store cannot be opened.
         """
         ...
 
@@ -2900,8 +2911,13 @@ class MemoryService:
                 ignored by ``"outline"``.
             url: Ollama server URL (default: ``http://localhost:11434``).
             metadata: Optional metadata applied to every extracted fact.
-            extractor: Which backend to use, ``"ollama"`` (default) or
-                ``"outline"``. ``"outline"`` is deterministic and
+            extractor: Which backend to use, ``"ollama"``, ``"openai"`` or
+                ``"outline"``; omitted, ``VELESDB_MEMORY_EXTRACTOR``, else
+                ``"ollama"``. The remote backends read ``url``/``model`` from
+                the arguments, else ``VELESDB_MEMORY_EXTRACTOR_URL`` /
+                ``_MODEL``, and a credential from
+                ``VELESDB_MEMORY_EXTRACTOR_API_TOKEN`` only. A ``text`` over
+                the fact cap raises ``ValueError``. ``"outline"`` is deterministic and
                 network-free — it reads the structure the passage STATES, one
                 directive per line (``edge:``, ``attr:``, ``fact:``) — and
                 stands to ``"ollama"`` exactly as the ``"hash"`` embedder
@@ -3153,6 +3169,31 @@ class MemoryService:
             on another real session is the case a caller can least detect on
             its own. Ids stay native Python ints, unlike the JS bindings'
             decimal strings.
+        """
+        ...
+
+    def memory_status(self) -> Dict[str, Any]:
+        """The server's health, in the envelope the MCP ``memory_status``
+        tool returns: which embedder runs (``embedder["semantic"] is False``
+        means the offline ``hash`` default), what the store was filled by per
+        its on-disk provenance record, the extraction wiring, and the corpus
+        size (``memory["edges"] == 0`` means :meth:`why` has nothing to
+        walk)."""
+        ...
+
+    def list_memories(
+        self,
+        cursor: Optional[int] = None,
+        limit: int = 50,
+        filter: Optional[Dict[str, Any]] = None,
+        include_internal: bool = False,
+    ) -> Dict[str, Any]:
+        """One page of the store, ids ascending, TTL-expired facts skipped.
+
+        Returns ``{"memories": [{"id", "id_str", "content", "metadata"}],
+        "next_cursor": int | None}``. Pass ``next_cursor`` back as
+        ``cursor`` to read the next page; ``None`` ends the walk. A filtered
+        page may come back sparse — keep following the cursor.
         """
         ...
 
