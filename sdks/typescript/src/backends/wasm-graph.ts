@@ -20,11 +20,12 @@ import type {
   AddEdgeRequest,
   GetEdgesOptions,
   GraphEdge,
+  GraphNodeId,
   MatchQueryOptions,
   MatchQueryResponse,
   MatchQueryResultItem,
 } from '../types';
-import { describeWasmThrow, paramsJson, toNumericId } from './wasm-helpers';
+import { describeWasmThrow, exactGraphId, paramsJson } from './wasm-helpers';
 import type { WasmModule, WasmVelesQLDatabase } from './wasm-types';
 
 /** The binding methods a `WasmGraph` drives, all present. */
@@ -76,10 +77,12 @@ export class WasmGraph {
 
   addEdge(collection: string, edge: AddEdgeRequest): void {
     this.requireCollection(collection);
+    // Every id travels as its exact decimal string: a JSON number rounds
+    // past 2^53, which a derived edge id routinely is.
     const json = JSON.stringify({
-      id: toNumericId(edge.id),
-      source: toNumericId(edge.source),
-      target: toNumericId(edge.target),
+      id: exactGraphId(edge.id, 'Edge id'),
+      source: exactGraphId(edge.source, 'Edge source'),
+      target: exactGraphId(edge.target, 'Edge target'),
       label: edge.label,
       properties: edge.properties,
     });
@@ -91,9 +94,10 @@ export class WasmGraph {
     return JSON.parse(call(() => this.db.getEdges(collection, options?.label))) as GraphEdge[];
   }
 
-  removeEdge(collection: string, id: number): boolean {
+  removeEdge(collection: string, id: GraphNodeId): boolean {
     this.requireCollection(collection);
-    return call(() => this.db.removeEdge(collection, BigInt(toNumericId(id))));
+    const edgeId = exactGraphId(id, 'Edge id');
+    return call(() => this.db.removeEdge(collection, edgeId));
   }
 
   edgeCount(collection: string): number {

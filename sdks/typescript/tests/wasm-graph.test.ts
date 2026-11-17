@@ -26,7 +26,7 @@ class MockVectorStore {
   }
 }
 
-interface StoredEdge { id: number; source: number; target: number; label: string; properties?: unknown }
+interface StoredEdge { id: string; source: number; target: number; label: string; properties?: unknown }
 
 class MockWasmDatabase {
   static last: MockWasmDatabase | null = null;
@@ -38,17 +38,20 @@ class MockWasmDatabase {
   executeQuery = vi.fn();
   free = vi.fn();
   addEdge = vi.fn((_name: string, json: string) => {
-    const edge = JSON.parse(json) as StoredEdge;
-    if (edge.target === 99) { throw "Node 99 not found in collection 'docs'"; }
+    // As the binding reads it: ids arrive as strings or numbers, the edge id
+    // leaves as its decimal string and the ends as numbers.
+    const sent = JSON.parse(json) as { id?: string; source: string; target: string; label: string; properties?: unknown };
+    if (sent.target === '99') { throw "Node 99 not found in collection 'docs'"; }
+    const edge: StoredEdge = { ...sent, id: sent.id ?? '7', source: Number(sent.source), target: Number(sent.target) };
     this.edges.push(edge);
-    return BigInt(edge.id ?? 7);
+    return edge.id;
   });
   getEdges = vi.fn((_name: string, label?: string) =>
     JSON.stringify(this.edges.filter((e) => label === undefined || e.label === label))
   );
-  removeEdge = vi.fn((_name: string, id: bigint) => {
+  removeEdge = vi.fn((_name: string, id: string) => {
     const before = this.edges.length;
-    this.edges = this.edges.filter((e) => BigInt(e.id) !== id);
+    this.edges = this.edges.filter((e) => e.id !== id);
     return before !== this.edges.length;
   });
   edgeCount = vi.fn(() => this.edges.length);
@@ -107,10 +110,10 @@ describe('WASM backend graph operations through the WasmDatabase edge API', () =
 
     const db = MockWasmDatabase.last!;
     expect(JSON.parse(db.addEdge.mock.calls[0]![1] as string)).toEqual({
-      id: 10, source: 1, target: 2, label: 'CITES', properties: { weight: 0.5 },
+      id: '10', source: '1', target: '2', label: 'CITES', properties: { weight: 0.5 },
     });
     expect(await backend.getEdges('docs')).toEqual([
-      { id: 10, source: 1, target: 2, label: 'CITES', properties: { weight: 0.5 } },
+      { id: '10', source: 1, target: 2, label: 'CITES', properties: { weight: 0.5 } },
     ]);
     expect(await backend.getEdgeCount('docs')).toBe(1);
   });
@@ -122,7 +125,7 @@ describe('WASM backend graph operations through the WasmDatabase edge API', () =
 
     const links = await backend.getEdges('docs', { label: 'LINKS' });
 
-    expect(links.map((e) => e.id)).toEqual([11]);
+    expect(links.map((e) => e.id)).toEqual(['11']);
   });
 
   it('when an edge is removed, then removeEdge reports it once', async () => {
@@ -131,6 +134,29 @@ describe('WASM backend graph operations through the WasmDatabase edge API', () =
 
     expect(await backend.removeEdge('docs', 10)).toBe(true);
     expect(await backend.removeEdge('docs', 10)).toBe(false);
+  });
+
+  it('when ids are past 2^53, then they reach the binding exactly, as decimal strings', async () => {
+    const backend = await backendWithDocs();
+    const hashed = '9007199254740993';
+
+    await backend.addEdge('docs', { id: hashed, source: '9007199254740995', target: 2, label: 'CITES' });
+
+    const db = MockWasmDatabase.last!;
+    expect(JSON.parse(db.addEdge.mock.calls[0]![1] as string)).toMatchObject({
+      id: hashed, source: '9007199254740995', target: '2',
+    });
+    expect(await backend.removeEdge('docs', hashed)).toBe(true);
+    expect(db.removeEdge).toHaveBeenCalledWith('docs', hashed);
+  });
+
+  it('when an id is not a non-negative integer, then the call is BAD_REQUEST, never a hashed id', async () => {
+    const backend = await backendWithDocs();
+
+    await expectCode(backend.addEdge('docs', { id: 'doc-a', source: 1, target: 2, label: 'R' }), 'BAD_REQUEST');
+    await expectCode(backend.addEdge('docs', { id: 1, source: -1, target: 2, label: 'R' }), 'BAD_REQUEST');
+    await expectCode(backend.removeEdge('docs', 1.5), 'BAD_REQUEST');
+    expect(MockWasmDatabase.last!.addEdge).not.toHaveBeenCalled();
   });
 
   it('when an endpoint is not a node, then addEdge is NOT_FOUND, as on REST', async () => {

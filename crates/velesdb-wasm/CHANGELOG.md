@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`WasmDatabase.addEdge` reads `source` and `target` as REST does: a
+  decimal string or a number.** They took numbers only, so a JavaScript caller
+  could not name a node id past 2^53 exactly.
+
 - **A `USING FUSION` the strategy refuses is an error, not an empty
   result.** `velesql_fusion::apply` turned every fusion error (e.g. two
   `weighted_rrf` weights over three branches) into an empty ranking that

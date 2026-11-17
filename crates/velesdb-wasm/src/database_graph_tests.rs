@@ -148,6 +148,16 @@ fn an_edge_id_is_sent_as_a_string_or_a_number() {
     assert_eq!(absent.id, None);
 }
 
+/// The ends of an edge read as REST's do: a node id past 2^53 arrives as
+/// its decimal string from a JavaScript client.
+#[test]
+fn an_edges_ends_are_sent_as_strings_or_numbers() {
+    let edge: EdgeInput =
+        serde_json::from_value(json!({"source": "9007199254740993", "target": 2, "label": "L"}))
+            .expect("a string source");
+    assert_eq!((edge.source, edge.target), (HASHED, 2));
+}
+
 #[test]
 fn an_edge_id_argument_is_a_decimal_u64() {
     assert_eq!(parse_edge_id("9007199254740993"), Ok(HASHED));

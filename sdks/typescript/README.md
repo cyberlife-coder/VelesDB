@@ -862,7 +862,10 @@ await db.alterCollection('docs', { autoReindex: false });
 > `executeMatch`, `addEdge`, `getEdges`, `removeEdge`, `getEdgeCount` and `matchQuery` run in
 > the browser with REST's shapes. A collection's points are its nodes, labelled by their
 > `_labels` payload key, so an edge's `source` and `target` must be stored points, as on the
-> server. `matchQuery` names the collection for the MATCH and returns REST's `{ bindings,
+> server. Every id crosses to the binding as its exact decimal string: `getEdges` lists an
+> edge's `id` as a string (a derived edge id is routinely past `Number.MAX_SAFE_INTEGER`), which
+> `removeEdge` takes back as is; an id that is not a non-negative integer is refused with
+> `BAD_REQUEST`, never hashed into another id. `matchQuery` names the collection for the MATCH and returns REST's `{ bindings,
 > depth, projected, score? }` rows: the points' vectors score `similarity()` as on the server,
 > and `options.vector` / `threshold` behave as on REST `/match`. Traversal (`traverseGraph`, `traverseParallel`)
 > and `getNodeDegree` stay server-only, so `capabilities().graphTraversal` is `false`. An older

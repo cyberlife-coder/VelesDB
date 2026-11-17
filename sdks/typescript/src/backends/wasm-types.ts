@@ -233,12 +233,18 @@ export interface WasmVelesQLDatabase {
    * the edge methods below: bindings before it do not have it.
    */
   executeMatch?(sql: string, params_json: string | null, vector?: Float32Array, threshold?: number): string;
-  /** Add an edge given as JSON `{ id?, source, target, label, properties? }`; returns its id. */
-  addEdge?(name: string, edge_json: string): bigint;
-  /** The edges of a collection, as a JSON array, optionally only one label. */
+  /**
+   * Add an edge given as JSON `{ id?, source, target, label, properties? }`
+   * (ids as decimal strings or numbers); returns its id as a decimal string.
+   */
+  addEdge?(name: string, edge_json: string): string;
+  /**
+   * The edges of a collection, as a JSON array, optionally only one label.
+   * Each edge's `id` is a decimal string; `source` and `target` are numbers.
+   */
   getEdges?(name: string, label?: string): string;
-  /** Remove an edge; `false` when it was absent. */
-  removeEdge?(name: string, id: bigint): boolean;
+  /** Remove an edge by its decimal-string id; `false` when it was absent. */
+  removeEdge?(name: string, id: string): boolean;
   /** The number of edges in a collection. */
   edgeCount?(name: string): number;
   /** Release the database's WASM memory. */

@@ -142,7 +142,7 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     await db.addEdge('docs', { id: 10, source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } });
 
     expect(await db.getEdges('docs', { label: 'NEXT' })).toEqual([
-      { id: 10, source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } },
+      { id: '10', source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } },
     ]);
     expect(await db.getEdgeCount('docs')).toBe(1);
 
@@ -160,6 +160,15 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
 
     expect(await db.removeEdge('docs', 10)).toBe(true);
     expect(await db.getEdgeCount('docs')).toBe(0);
+  });
+
+  it('graph: a derived edge id past 2^53 is listed and removed exactly', async () => {
+    await db.addEdge('docs', { id: '9007199254740993', source: 1, target: 2, label: 'BIG' });
+
+    const [edge] = await db.getEdges('docs', { label: 'BIG' });
+    expect(edge?.id).toBe('9007199254740993');
+    expect(await db.removeEdge('docs', edge!.id)).toBe(true);
+    expect(await db.getEdges('docs', { label: 'BIG' })).toEqual([]);
   });
 
   it('graph: an edge to a point that does not exist is NOT_FOUND, as on REST', async () => {

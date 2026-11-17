@@ -261,7 +261,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   points as nodes; an unknown collection or endpoint is `NOT_FOUND`, as on
   REST. The points' vectors score `similarity()` as on the server, and
   `matchQuery`'s `vector` and `threshold` behave as on REST `/match`.
-  Traversal stays server-only.
+  Traversal stays server-only. Edge ids, sources and targets reach the
+  binding as their exact decimal strings and `getEdges` lists ids as strings:
+  a graph id never goes through the document-id converter, which hashed a
+  string it could not read as a safe number into another id. velesdb-wasm's
+  `addEdge` accepts `source`/`target` as strings, as REST does.
 
 - **`install-memory-daemon.sh` runs the shared daemon on Linux** as a
   systemd user unit (`~/.config/systemd/user/velesdb-memory.service`, logs in

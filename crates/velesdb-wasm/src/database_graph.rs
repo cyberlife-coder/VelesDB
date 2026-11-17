@@ -25,7 +25,11 @@ pub(crate) struct EdgeInput {
         deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
     )]
     pub id: Option<u64>,
+    /// Source node id, as a decimal string or a number (as on REST).
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub source: u64,
+    /// Target node id, as a decimal string or a number (as on REST).
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub target: u64,
     pub label: String,
     /// Edge properties: any JSON object.

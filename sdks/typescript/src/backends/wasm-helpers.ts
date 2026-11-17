@@ -7,6 +7,7 @@
  */
 
 import type { SparseVector } from '../types';
+import { VelesDBError } from '../types';
 import type { CollectionData, WasmModule, WasmContext } from './wasm-types';
 
 /**
@@ -93,6 +94,23 @@ export function sparseVectorToArrays(sv: SparseVector): { indices: number[]; val
     values.push(v);
   }
   return { indices, values };
+}
+
+/**
+ * A graph id (edge or node) as the binding takes it: its exact decimal
+ * string. Unlike {@link toNumericId}, which hashes a document id that is not
+ * a number, a graph id is a `u64` and nothing else: a derived edge id is
+ * routinely above 2^53, so a lossy or hashed stand-in would address another
+ * edge. Anything but a non-negative integer is refused.
+ */
+export function exactGraphId(id: string | number, what: string): string {
+  if (typeof id === 'number') {
+    if (Number.isSafeInteger(id) && id >= 0) { return String(id); }
+  } else {
+    const normalized = normalizeIdString(id);
+    if (normalized !== null) { return normalized; }
+  }
+  throw new VelesDBError(`${what} must be a non-negative integer id, got ${JSON.stringify(id)}`, 'BAD_REQUEST');
 }
 
 /** Convert a string or number document ID to a numeric ID. */
