@@ -304,6 +304,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **chrono's unmaintained advisory (RUSTSEC-2026-0543) is accepted until
+  rmcp drops it** (deps, 2026-11-17). The advisory reports no vulnerability
+  and offers no safe upgrade. rmcp depends on chrono unconditionally (and
+  schemars through it), so velesdb-memory and every binding embedding it
+  carry chrono whatever this workspace does. The required Security Audit job
+  failed on every pull request; `deny.toml` and `.cargo/audit.toml` now record
+  the exception, why it was taken and when it goes.
+
 - **Python: strict observer mode denies a write veto it cannot read, and
   `all_point_ids` passes the read gate** (Python, 2026-11-16). With
   `observer_strict=True`, a `ddl_request` / `dml_mutation_request` callback
