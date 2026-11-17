@@ -462,6 +462,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors as VELES-009 (a caller configuration error); they keep core's code
   (an invalid edge label is VELES-021).
 
+- **Browser memory keeps real time: TTLs extend, facts are dated**
+  (velesdb-memory, WASM, 2026-11-17). On `wasm32` `velesdb-memory` read the
+  clock as 0 and stamped no `_veles_date`, and the WASM memory store wrote
+  `_veles_expires_at` in milliseconds where the store contract (core's key)
+  is epoch seconds. Re-storing a context source with a longer TTL therefore
+  never extended it in the browser, working-context stamps all tied, and a
+  browser-stored fact carried no date for dated recall. `velesdb-memory`
+  and the WASM store read the wall clock through `web-time` on every target,
+  and the store writes epoch seconds; a bare fact now comes back with its
+  `_veles_date`, as on Node and every native surface.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with
