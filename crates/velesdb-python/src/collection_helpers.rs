@@ -179,10 +179,10 @@ pub fn parse_optional_filter(
 
 /// Convert payload to Python object (shared helper to avoid duplication).
 #[inline]
-fn payload_to_python(py: Python<'_>, payload: &Option<serde_json::Value>) -> Py<PyAny> {
+fn payload_to_python(py: Python<'_>, payload: &Option<serde_json::Value>) -> PyResult<Py<PyAny>> {
     match payload {
         Some(p) => json_to_python(py, p),
-        None => py.None(),
+        None => Ok(py.None()),
     }
 }
 
@@ -194,71 +194,74 @@ pub fn search_result_to_dict(
     py: Python<'_>,
     result: &SearchResult,
     include_vectors: bool,
-) -> Py<PyAny> {
+) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
     // PyString::intern reuses the same Python string object across calls
-    let _ = dict.set_item(PyString::intern(py, "id"), result.point.id);
-    let _ = dict.set_item(PyString::intern(py, "score"), result.score);
-    let _ = dict.set_item(
+    dict.set_item(PyString::intern(py, "id"), result.point.id)?;
+    dict.set_item(PyString::intern(py, "score"), result.score)?;
+    dict.set_item(
         PyString::intern(py, "payload"),
-        payload_to_python(py, &result.point.payload),
-    );
+        payload_to_python(py, &result.point.payload)?,
+    )?;
     if include_vectors {
-        let _ = dict.set_item(
+        dict.set_item(
             PyString::intern(py, "vector"),
             result.point.vector.as_slice(),
-        );
+        )?;
     }
     // Per-component score breakdown (vector_score / bm25_score / ...) when the
     // engine tagged it — hybrid and fused searches carry it, plain dense does not.
     if let Some(components) = &result.component_scores {
         let comp = PyDict::new(py);
         for (name, value) in components.iter() {
-            let _ = comp.set_item(*name, *value);
+            comp.set_item(*name, *value)?;
         }
-        let _ = dict.set_item(PyString::intern(py, "component_scores"), comp);
+        dict.set_item(PyString::intern(py, "component_scores"), comp)?;
     }
-    dict.into_any().unbind()
+    Ok(dict.into_any().unbind())
 }
 
 /// Convert a `SearchResult` to a multi-model Python dict (EPIC-031).
-pub fn search_result_to_multimodel_dict(py: Python<'_>, result: &SearchResult) -> Py<PyAny> {
+pub fn search_result_to_multimodel_dict(
+    py: Python<'_>,
+    result: &SearchResult,
+) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
     let none = py.None();
-    let payload_py = payload_to_python(py, &result.point.payload);
+    let payload_py = payload_to_python(py, &result.point.payload)?;
 
     // Multi-model fields
-    let _ = dict.set_item(PyString::intern(py, "node_id"), result.point.id);
-    let _ = dict.set_item(PyString::intern(py, "vector_score"), result.score);
-    let _ = dict.set_item(PyString::intern(py, "graph_score"), &none);
-    let _ = dict.set_item(PyString::intern(py, "fused_score"), result.score);
-    let _ = dict.set_item(PyString::intern(py, "bindings"), payload_py.clone_ref(py));
-    let _ = dict.set_item(PyString::intern(py, "column_data"), &none);
+    dict.set_item(PyString::intern(py, "node_id"), result.point.id)?;
+    dict.set_item(PyString::intern(py, "vector_score"), result.score)?;
+    dict.set_item(PyString::intern(py, "graph_score"), &none)?;
+    dict.set_item(PyString::intern(py, "fused_score"), result.score)?;
+    dict.set_item(PyString::intern(py, "bindings"), payload_py.clone_ref(py))?;
+    dict.set_item(PyString::intern(py, "column_data"), &none)?;
 
     // Legacy fields for compatibility
-    let _ = dict.set_item(PyString::intern(py, "id"), result.point.id);
-    let _ = dict.set_item(PyString::intern(py, "score"), result.score);
-    let _ = dict.set_item(PyString::intern(py, "payload"), payload_py);
+    dict.set_item(PyString::intern(py, "id"), result.point.id)?;
+    dict.set_item(PyString::intern(py, "score"), result.score)?;
+    dict.set_item(PyString::intern(py, "payload"), payload_py)?;
 
-    dict.into_any().unbind()
+    Ok(dict.into_any().unbind())
 }
 
 /// Convert a `Point` to a Python dict.
 ///
 /// Omits the `vector` field when empty (e.g., graph collections
 /// without embeddings) to avoid misleading empty arrays.
-pub fn point_to_dict(py: Python<'_>, point: &Point) -> Py<PyAny> {
+pub fn point_to_dict(py: Python<'_>, point: &Point) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
-    let _ = dict.set_item(PyString::intern(py, "id"), point.id);
+    dict.set_item(PyString::intern(py, "id"), point.id)?;
     if !point.vector.is_empty() {
         let np_vector = numpy::PyArray1::from_slice(py, &point.vector);
-        let _ = dict.set_item(PyString::intern(py, "vector"), np_vector);
+        dict.set_item(PyString::intern(py, "vector"), np_vector)?;
     }
-    let _ = dict.set_item(
+    dict.set_item(
         PyString::intern(py, "payload"),
-        payload_to_python(py, &point.payload),
-    );
-    dict.into_any().unbind()
+        payload_to_python(py, &point.payload)?,
+    )?;
+    Ok(dict.into_any().unbind())
 }
 
 /// Convert a list of `SearchResult`s to Python dicts.
@@ -266,7 +269,7 @@ pub fn search_results_to_dicts(
     py: Python<'_>,
     results: Vec<SearchResult>,
     include_vectors: bool,
-) -> Vec<Py<PyAny>> {
+) -> PyResult<Vec<Py<PyAny>>> {
     results
         .into_iter()
         .map(|r| search_result_to_dict(py, &r, include_vectors))
@@ -277,7 +280,7 @@ pub fn search_results_to_dicts(
 pub fn search_results_to_multimodel_dicts(
     py: Python<'_>,
     results: Vec<SearchResult>,
-) -> Vec<Py<PyAny>> {
+) -> PyResult<Vec<Py<PyAny>>> {
     results
         .into_iter()
         .map(|r| search_result_to_multimodel_dict(py, &r))
@@ -285,14 +288,17 @@ pub fn search_results_to_multimodel_dicts(
 }
 
 /// Convert a list of (id, score) pairs to Python dicts.
-pub fn id_score_pairs_to_dicts(py: Python<'_>, results: Vec<(u64, f32)>) -> Vec<Py<PyAny>> {
+pub fn id_score_pairs_to_dicts(
+    py: Python<'_>,
+    results: Vec<(u64, f32)>,
+) -> PyResult<Vec<Py<PyAny>>> {
     results
         .into_iter()
         .map(|(id, score)| {
             let dict = PyDict::new(py);
-            let _ = dict.set_item(PyString::intern(py, "id"), id);
-            let _ = dict.set_item(PyString::intern(py, "score"), score);
-            dict.into_any().unbind()
+            dict.set_item(PyString::intern(py, "id"), id)?;
+            dict.set_item(PyString::intern(py, "score"), score)?;
+            Ok(dict.into_any().unbind())
         })
         .collect()
 }

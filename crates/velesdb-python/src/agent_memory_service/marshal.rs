@@ -39,7 +39,7 @@ fn recollection_to_dict(py: Python<'_>, r: Recollection) -> PyResult<Py<PyAny>> 
     dict.set_item(PyString::intern(py, "score"), r.score)?;
     dict.set_item(PyString::intern(py, "content"), &r.content)?;
     let metadata = match r.metadata {
-        Some(map) => json_to_python(py, &serde_json::Value::Object(map)),
+        Some(map) => json_to_python(py, &serde_json::Value::Object(map))?,
         None => py.None(),
     };
     dict.set_item(PyString::intern(py, "metadata"), metadata)?;

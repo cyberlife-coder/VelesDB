@@ -45,3 +45,8 @@ crates/velesdb-node/src/convert.rs fn parse_id_fields
 crates/velesdb-core/src/collection/types.rs fn stream_insert
 crates/velesdb-core/src/collection/types.rs fn stream_insert_batch
 crates/velesdb-core/src/collection/types.rs fn enable_streaming
+# velesdb-python's to_pyobject logged a failed conversion and returned None,
+# leaving a result dict silently wrong; every caller now converts and
+# propagates the error instead. The crate is the Python extension: no Rust
+# crate depends on it, so this helper was never a consumable API.
+crates/velesdb-python/src/utils.rs fn to_pyobject

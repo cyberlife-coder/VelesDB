@@ -50,7 +50,7 @@ macro_rules! serde_to_python {
         let json = serde_json::to_value($value).map_err(|err| {
             PyRuntimeError::new_err(format!(concat!("failed to serialize ", $what, ": {}"), err))
         })?;
-        json_to_python($py, &json)
+        json_to_python($py, &json)?
     }};
 }
 
@@ -178,7 +178,7 @@ impl PyMemoryService {
                 .remember_detailed(fact, &links, metadata.as_ref(), ttl_seconds)
                 .map_err(to_py_err)
         })?;
-        Ok(json_to_python(
+        json_to_python(
             py,
             &serde_json::json!({
                 "id": outcome.fact_id,
@@ -187,7 +187,7 @@ impl PyMemoryService {
                     "score": hit.score,
                 })).collect::<Vec<_>>(),
             }),
-        ))
+        )
     }
 
     /// Recall up to `k` memories similar to `query`, optionally narrowed by an
@@ -395,7 +395,7 @@ impl PyMemoryService {
     ///     never finds Camille.
     fn entity(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         let profile = py.detach(|| self.svc.entity_profile(name).map_err(to_py_err))?;
-        Ok(json_to_python(py, &entity_profile_to_value(name, profile)))
+        json_to_python(py, &entity_profile_to_value(name, profile))
     }
 
     /// Extract atomic facts from raw `text` and store them, auto-building the
@@ -440,13 +440,13 @@ impl PyMemoryService {
     ) -> PyResult<Py<PyAny>> {
         let metadata = to_metadata(py, metadata)?;
         let outcome = extract_with(py, &self.svc, text, model, url, extractor, metadata)?;
-        Ok(json_to_python(
+        json_to_python(
             py,
             &serde_json::json!({
                 "ids": outcome.ids,
                 "skipped_over_cap": outcome.skipped_over_cap,
             }),
-        ))
+        )
     }
 
     /// Compile context fragments into a token-budgeted, provenance-audited
@@ -686,7 +686,7 @@ impl PyMemoryService {
             },
             "memory": { "facts": facts, "edges": edges },
         });
-        Ok(json_to_python(py, &status))
+        json_to_python(py, &status)
     }
 
     /// Audit the store page by page — the SAME walk and envelope as the MCP
@@ -727,7 +727,7 @@ impl PyMemoryService {
             "memories": entries,
             "next_cursor": next,
         });
-        Ok(json_to_python(py, &page))
+        json_to_python(py, &page)
     }
 
     fn load_working_context(

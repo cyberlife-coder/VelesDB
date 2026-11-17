@@ -106,7 +106,7 @@ impl Collection {
         let results = py.detach(|| self.dispatch_search(plan, identity))?;
 
         // Phase 3: Convert results (GIL held — required for Py<PyAny> creation)
-        Ok(search_results_to_dicts(py, results, include_vectors))
+        search_results_to_dicts(py, results, include_vectors)
     }
 
     /// Search for similar vectors with custom HNSW ef_search parameter.
@@ -145,7 +145,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Search with a named quality mode (fast, balanced, accurate, perfect, autotune).
@@ -188,7 +188,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Search returning only IDs and scores.
@@ -221,7 +221,7 @@ impl Collection {
         })?;
 
         let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
-        Ok(id_score_pairs_to_dicts(py, tuples))
+        id_score_pairs_to_dicts(py, tuples)
     }
 
     /// Search with metadata filtering.
@@ -261,7 +261,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Search with metadata filtering and an optional quality tuning.
@@ -324,7 +324,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Full-text search using BM25 ranking.
@@ -369,7 +369,7 @@ impl Collection {
                 })
             })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Hybrid search combining vector similarity and text search.
@@ -424,7 +424,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Batch search for multiple query vectors in parallel.
@@ -463,7 +463,7 @@ impl Collection {
             })
         })?;
 
-        Ok(Self::convert_batch_results(py, results))
+        Self::convert_batch_results(py, results)
     }
 
     /// Multi-query search with result fusion.
@@ -503,7 +503,7 @@ impl Collection {
             })
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Parallel batch search for multiple query vectors.
@@ -555,7 +555,7 @@ impl Collection {
             })
         })?;
 
-        Ok(Self::convert_batch_results(py, results))
+        Self::convert_batch_results(py, results)
     }
 
     /// Multi-query search returning only IDs and fused scores.
@@ -593,7 +593,7 @@ impl Collection {
         })?;
 
         let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
-        Ok(id_score_pairs_to_dicts(py, tuples))
+        id_score_pairs_to_dicts(py, tuples)
     }
 }
 
@@ -713,7 +713,7 @@ impl Collection {
     fn convert_batch_results(
         py: Python<'_>,
         results: Vec<Vec<SearchResult>>,
-    ) -> Vec<Vec<Py<PyAny>>> {
+    ) -> PyResult<Vec<Vec<Py<PyAny>>>> {
         results
             .iter()
             .map(|query_results| {

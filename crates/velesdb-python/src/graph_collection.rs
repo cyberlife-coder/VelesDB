@@ -195,7 +195,7 @@ impl PyGraphCollection {
     fn get_edges(&self, py: Python<'_>, label: Option<String>) -> PyResult<Vec<Py<PyAny>>> {
         self.authorize("get_edges")?;
         let edges = py.detach(|| self.inner.get_edges(label.as_deref()));
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Get outgoing edges from a node.
@@ -209,7 +209,7 @@ impl PyGraphCollection {
     fn get_outgoing(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
         self.authorize("get_outgoing")?;
         let edges = py.detach(|| self.inner.get_outgoing(node_id));
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Returns `true` if an edge with the given ID exists.
@@ -243,7 +243,7 @@ impl PyGraphCollection {
     fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
         self.authorize("get_incoming")?;
         let edges = py.detach(|| self.inner.get_incoming(node_id));
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Alias for `get_incoming`.
@@ -266,7 +266,7 @@ impl PyGraphCollection {
     fn get_edge(&self, py: Python<'_>, edge_id: u64) -> PyResult<Option<Py<PyAny>>> {
         self.authorize("get_edge")?;
         let edge = py.detach(|| self.inner.get_edge(edge_id));
-        Ok(edge.map(|e| edge_to_dict(py, &e)))
+        edge.map(|e| edge_to_dict(py, &e)).transpose()
     }
 
     /// Bounded outgoing-edge read: at most ``cap`` edges plus the true total
@@ -432,7 +432,11 @@ impl PyGraphCollection {
                 .scroll_batch(cursor, batch_size, filter_obj.as_ref())
                 .map_err(core_err)
         })?;
-        let points: Vec<Py<PyAny>> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
+        let points = batch
+            .points
+            .iter()
+            .map(|p| point_to_dict(py, p))
+            .collect::<PyResult<Vec<_>>>()?;
         Ok((points, batch.next_cursor))
     }
 
@@ -454,11 +458,11 @@ impl PyGraphCollection {
             )
         });
         let out = PyDict::new(py);
-        let _ = out.set_item("edges_total", edges_total);
-        let _ = out.set_item("edge_inserts_total", inserts);
-        let _ = out.set_item("edge_deletes_total", deletes);
-        let _ = out.set_item("traversals_total", traversals);
-        let _ = out.set_item("traversal_nodes_visited", visited);
+        out.set_item("edges_total", edges_total)?;
+        out.set_item("edge_inserts_total", inserts)?;
+        out.set_item("edge_deletes_total", deletes)?;
+        out.set_item("traversals_total", traversals)?;
+        out.set_item("traversal_nodes_visited", visited)?;
         Ok(out.into_any().unbind())
     }
 
@@ -500,7 +504,7 @@ impl PyGraphCollection {
     fn get_node_payload(&self, py: Python<'_>, node_id: u64) -> PyResult<Option<Py<PyAny>>> {
         self.authorize("get_node_payload")?;
         let value = py.detach(|| self.inner.get_node_payload(node_id).map_err(core_err))?;
-        Ok(value.map(|v| json_to_python(py, &v)))
+        value.map(|v| json_to_python(py, &v)).transpose()
     }
 
     /// Get all node IDs that have a stored payload.
@@ -554,7 +558,7 @@ impl PyGraphCollection {
         let config =
             build_traversal_config(min_depth, max_depth, limit, effective_rel_types, timeout_ms);
         let results = py.detach(|| self.inner.traverse_bfs(source_id, &config));
-        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
+        results.iter().map(|r| traversal_to_dict(py, r)).collect()
     }
 
     /// Perform DFS traversal from a source node.
@@ -591,7 +595,7 @@ impl PyGraphCollection {
         let config =
             build_traversal_config(min_depth, max_depth, limit, effective_rel_types, timeout_ms);
         let results = py.detach(|| self.inner.traverse_dfs(source_id, &config));
-        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
+        results.iter().map(|r| traversal_to_dict(py, r)).collect()
     }
 
     /// Perform multi-source BFS traversal with deduplication.
@@ -629,7 +633,7 @@ impl PyGraphCollection {
         let config =
             build_traversal_config(min_depth, max_depth, limit, effective_rel_types, timeout_ms);
         let results = py.detach(|| self.inner.traverse_bfs_parallel(&source_ids, &config));
-        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
+        results.iter().map(|r| traversal_to_dict(py, r)).collect()
     }
 
     /// Search for similar nodes by embedding vector.
@@ -689,10 +693,10 @@ impl PyGraphCollection {
                 .map_err(core_err)?
         })?;
 
-        Ok(results
+        results
             .iter()
             .map(|r| search_result_to_dict(py, r, false))
-            .collect())
+            .collect()
     }
 
     /// Flush all graph state to disk.
@@ -774,11 +778,10 @@ impl PyGraphCollection {
     fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<Py<PyAny>>>> {
         self.authorize("get")?;
         let points = py.detach(|| self.inner.get(&ids));
-        let py_points = points
+        points
             .into_iter()
-            .map(|opt_point| opt_point.map(|p| point_to_dict(py, &p)))
-            .collect();
-        Ok(py_points)
+            .map(|opt_point| opt_point.map(|p| point_to_dict(py, &p)).transpose())
+            .collect()
     }
 
     /// Delete points by their IDs.
@@ -898,10 +901,10 @@ fn bounded_edges_to_dict(
     let out = PyDict::new(py);
     let list = PyList::empty(py);
     for edge in &edges {
-        let _ = list.append(edge_to_dict(py, edge));
+        list.append(edge_to_dict(py, edge)?)?;
     }
-    let _ = out.set_item("edges", list);
-    let _ = out.set_item("total", total);
+    out.set_item("edges", list)?;
+    out.set_item("total", total)?;
     Ok(out.into_any().unbind())
 }
 
