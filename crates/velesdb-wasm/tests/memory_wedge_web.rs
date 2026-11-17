@@ -74,11 +74,13 @@ fn recall_metadata_preserves_null_values() {
     );
 }
 
-/// The absent-metadata convention must survive the serializer change:
-/// a fact with no caller metadata marshals `metadata` as `undefined`
-/// (matching the Node binding), not `null` or an empty object.
+/// A fact stored with no caller metadata comes back with exactly the
+/// auto-stamped `_veles_date` (today, `YYYYMMDD`), as on the Node binding and
+/// every native surface. The browser used to have no clock (`today_ymd`
+/// returned `None` on wasm32), so it stamped nothing and this test pinned
+/// that divergence as `metadata === undefined`.
 #[wasm_bindgen_test]
-fn recall_without_metadata_marshals_undefined() {
+fn recall_of_a_bare_fact_carries_only_the_auto_stamped_date() {
     let svc = WasmMemoryService::new(16);
     svc.remember(
         "a bare fact with no metadata",
@@ -93,7 +95,18 @@ fn recall_without_metadata_marshals_undefined() {
         .unwrap();
     let first = js_sys::Reflect::get(&hits, &0.into()).unwrap();
     let metadata = js_sys::Reflect::get(&first, &"metadata".into()).unwrap();
-    assert!(metadata.is_undefined(), "absent metadata must be undefined");
+    let keys = js_sys::Object::keys(&metadata.into());
+    assert_eq!(keys.length(), 1, "only the auto-stamped date");
+    assert_eq!(keys.get(0).as_string().as_deref(), Some("_veles_date"));
+    let date = js_sys::Reflect::get(&first, &"metadata".into())
+        .and_then(|m| js_sys::Reflect::get(&m, &"_veles_date".into()))
+        .unwrap()
+        .as_f64()
+        .expect("a numeric YYYYMMDD date");
+    assert!(
+        (20_260_101.0..=29_991_231.0).contains(&date),
+        "a real date, not the clockless 0: {date}"
+    );
 }
 
 /// `compileContext` marshalling across the wasm boundary: the request goes

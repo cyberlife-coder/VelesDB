@@ -24,6 +24,10 @@ exclude = ["media/"]
 # for every consumer (Cargo unions requested features workspace-wide), even
 # one like velesdb-wasm that explicitly disables it to stay off tokio/mio.
 velesdb-core = { workspace = true, default-features = false }
+# A wall clock on every target: `std::time::SystemTime::now()` aborts on
+# wasm32-unknown-unknown, where web-time reads `Date.now()`; natively it
+# re-exports std.
+web-time = "1.1"
 thiserror = { workspace = true }
 # Guards `WORKING_INDEX_WRITE` (src/context/memory_bridge.rs) and the HTTP
 # session limiter's live-session map (src/http/session_limit.rs) — no

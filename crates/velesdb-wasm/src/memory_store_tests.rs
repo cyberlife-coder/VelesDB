@@ -1,6 +1,6 @@
 //! Unit tests for `WasmStore`'s `MemoryStore` implementation. Runs natively
 //! (`cargo test -p velesdb-wasm`) — no `wasm32` target or JS host required,
-//! since `now_ms()` falls back to `SystemTime` off `wasm32`.
+//! since `now_secs()` reads `web-time`, which is `SystemTime` off `wasm32`.
 
 use super::*;
 use velesdb_memory::ColumnOp;
@@ -425,4 +425,37 @@ fn test_relate_twice_is_idempotent_like_cores_relation() {
     let second = store.relate(1, 2, "decided_in").unwrap();
     assert_eq!(first, second);
     assert_eq!(store.relations(1).unwrap().len(), 1);
+}
+
+/// Epoch seconds now, read independently of the store under test.
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+#[test]
+fn test_a_durable_expiry_is_stored_in_epoch_seconds_as_core_stores_it() {
+    // `velesdb-memory` reads `_veles_expires_at` back through `get_metadata`
+    // and compares it with `now + ttl` in seconds (`should_upgrade_ttl`), as
+    // the native store, core, defines it. This store wrote milliseconds, so a
+    // re-stored source asking for a longer TTL never outlived the old one.
+    let store = WasmStore::new(4);
+    let before = epoch_secs();
+    store
+        .store_with_ttl(1, "a TTL'd fact", &[1.0, 0.0, 0.0, 0.0], 3600)
+        .unwrap();
+    let after = epoch_secs();
+
+    let expires_at = store
+        .get_metadata(1)
+        .unwrap()
+        .and_then(|m| m.get(EXPIRES_AT_KEY).and_then(Value::as_u64))
+        .expect("a TTL'd fact carries its expiry");
+    assert!(
+        (before + 3600..=after + 3600).contains(&expires_at),
+        "expected epoch seconds in {}..={}, got {expires_at}",
+        before + 3600,
+        after + 3600
+    );
 }

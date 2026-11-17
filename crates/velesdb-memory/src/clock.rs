@@ -11,30 +11,22 @@
 //! content-addressed id), so reading the clock here adds no new
 //! nondeterminism to anything that must replay identically.
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 
-/// Today's date (UTC) as a `YYYYMMDD` integer, or `None` when no fact should
-/// be auto-stamped: `wasm32-unknown-unknown` has no `std` clock
-/// (`SystemTime::now()` aborts there — mirrors the guard in
-/// `context/memory_bridge.rs`), and a clock reporting a time before the Unix
-/// epoch is treated the same way, so a fact is never stamped with a
-/// nonsensical date.
+/// Today's date (UTC) as a `YYYYMMDD` integer, or `None` when the clock
+/// reports a time before the Unix epoch, so a fact is never stamped with a
+/// nonsensical date. A real clock on every target: `web-time` reads
+/// `Date.now()` on `wasm32-unknown-unknown`, where `std`'s
+/// `SystemTime::now()` aborts — that target used to stamp nothing at all,
+/// so a browser-stored fact had no date for dated recall to order by.
 #[must_use]
 pub(crate) fn today_ymd() -> Option<i64> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let epoch_days = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() / 86_400;
-        // Days since the epoch is many orders of magnitude below i64::MAX
-        // (u64::MAX / 86_400 alone would take ~2.9e11 years to overflow i64).
-        #[allow(clippy::cast_possible_wrap)]
-        let (year, month, day) = civil_from_days(epoch_days as i64);
-        Some(year * 10_000 + month * 100 + day)
-    }
+    let epoch_days = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() / 86_400;
+    // Days since the epoch is many orders of magnitude below i64::MAX
+    // (u64::MAX / 86_400 alone would take ~2.9e11 years to overflow i64).
+    #[allow(clippy::cast_possible_wrap)]
+    let (year, month, day) = civil_from_days(epoch_days as i64);
+    Some(year * 10_000 + month * 100 + day)
 }
 
 /// Days-since-Unix-epoch → `(year, month, day)`, proleptic Gregorian
@@ -43,7 +35,6 @@ pub(crate) fn today_ymd() -> Option<i64> {
 /// ported here rather than pulled in as a dependency — this crate has no
 /// date/time library; `dated_context.rs` already hand-rolls the inverse
 /// direction (`year/month/day` → validated `YYYYMMDD`) the same way.
-#[cfg(not(target_arch = "wasm32"))]
 fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let z = days_since_epoch + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -63,6 +54,6 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 #[path = "clock_tests.rs"]
 mod tests;

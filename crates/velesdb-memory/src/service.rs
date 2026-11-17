@@ -913,9 +913,10 @@ fn reject_self_links(fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
 /// [`MemoryService::remember_with_ttl`]'s auto-date stamp: `metadata` with
 /// today's date added under [`AUTO_DATE_FIELD`], unless `metadata` already
 /// names that key (an explicit, possibly retroactive, caller value is never
-/// overwritten) or no clock is available ([`clock::today_ymd`] returns `None`
-/// on `wasm32-unknown-unknown`). Returns an owned map either way, `None` only
-/// when there is nothing to store at all (no caller metadata AND no clock).
+/// overwritten) or the clock reads before the Unix epoch
+/// ([`clock::today_ymd`] returns `None`). Returns an owned map either way,
+/// `None` only when there is nothing to store at all (no caller metadata AND
+/// no date).
 fn stamp_with_today(metadata: Option<&Metadata>) -> Option<Metadata> {
     if metadata.is_some_and(|meta| meta.contains_key(AUTO_DATE_FIELD)) {
         return metadata.cloned();

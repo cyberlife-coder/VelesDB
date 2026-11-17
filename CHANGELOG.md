@@ -514,6 +514,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positional is now the source, `id=` with `source=` is refused, and the
   stubs declare every form `GraphStore` and `GraphCollection` accept.
 
+- **WASM: IndexedDB saves replace, address one graph, and are durable when
+  they resolve** (WASM, 2026-11-17). `GraphPersistence.save` added rows and
+  never removed any, so a node or edge deleted since the last save came back
+  on `load`; keys were matched by the `{name}:` prefix alone, so graph `a`
+  loaded graph `a:b`'s rows and `delete_graph("a")` deleted them; and every
+  save resolved when its last request succeeded, before the transaction
+  committed, so an abort went unreported. A save now replaces the graph's
+  rows in one transaction (keeping the first save's `created_at`), a row
+  belongs to a graph only if the rest of its key is a decimal id, and saves
+  and deletes resolve on commit. Databases open at their current version
+  and gain a missing store (an older layout) instead of failing, the vector
+  store closes its connection after each operation, and `GraphPersistence`
+  gains `close()` (also run when it is freed). Checked in headless Chromium.
+
 - **Tauri commands honour every argument and keep core's error codes**
   (core, Tauri, 2026-11-16). `search_ids` and `batch_search` dropped
   `quality` whenever a filter was present; they now run core's new
@@ -576,6 +590,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read never reached the observer. Both now call `Database::match_query`,
   which also reports each completed run to `on_query` once — REST `/match`
   included, which was gated but unreported.
+
+- **Browser memory keeps real time: TTLs extend, facts are dated**
+  (velesdb-memory, WASM, 2026-11-17). On `wasm32` `velesdb-memory` read the
+  clock as 0 and stamped no `_veles_date`, and the WASM memory store wrote
+  `_veles_expires_at` in milliseconds where the store contract (core's key)
+  is epoch seconds. Re-storing a context source with a longer TTL therefore
+  never extended it in the browser, working-context stamps all tied, and a
+  browser-stored fact carried no date for dated recall. `velesdb-memory`
+  and the WASM store read the wall clock through `web-time` on every target,
+  and the store writes epoch seconds; a bare fact now comes back with its
+  `_veles_date`, as on Node and every native surface.
 
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
