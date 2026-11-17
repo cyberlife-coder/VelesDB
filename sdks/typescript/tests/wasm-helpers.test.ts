@@ -3,7 +3,8 @@
  *
  * Covers the pure helpers in `src/backends/wasm-helpers.ts`:
  * normalizeIdString, canonicalPayloadKey, canonicalPayloadKeyFromResultId,
- * toNumericId, sparseVectorToArrays, buildWasmContext, buildCollectionInfo.
+ * toNumericId, exactGraphId, sparseVectorToArrays, buildWasmContext,
+ * buildCollectionInfo.
  * These are all pure/synchronous — no fetch or WASM module instantiation
  * required.
  */
@@ -14,6 +15,7 @@ import {
   canonicalPayloadKey,
   canonicalPayloadKeyFromResultId,
   toNumericId,
+  exactGraphId,
   sparseVectorToArrays,
   buildWasmContext,
   buildCollectionInfo,
@@ -112,6 +114,24 @@ describe('toNumericId', () => {
     const h = toNumericId(big);
     expect(Number.isInteger(h)).toBe(true);
     expect(h).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('exactGraphId', () => {
+  it('keeps a decimal id past 2^53 exactly, where toNumericId would not', () => {
+    expect(exactGraphId('9007199254740993', 'Edge id')).toBe('9007199254740993');
+    expect(String(toNumericId('9007199254740993'))).not.toBe('9007199254740993');
+  });
+
+  it('writes a safe integer as its decimal string and trims a string id', () => {
+    expect(exactGraphId(42, 'Edge id')).toBe('42');
+    expect(exactGraphId(' 42 ', 'Edge id')).toBe('42');
+  });
+
+  it('refuses anything a u64 id cannot be, naming the field', () => {
+    for (const bad of ['doc-a', '', '-1', '1.5', -1, 1.5, 2 ** 53, Number.NaN]) {
+      expect(() => exactGraphId(bad, 'Edge source')).toThrow(/Edge source/);
+    }
   });
 });
 
