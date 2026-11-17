@@ -49,8 +49,8 @@ pub async fn create_graph_collection<R: Runtime>(
 }
 
 /// Builds a core [`GraphEdge`](velesdb_core::GraphEdge) from raw edge fields,
-/// validating the edge and normalizing properties. Shared by [`add_edge`] and
-/// [`add_edges_batch`].
+/// validating the edge and its properties, which must be an object or null
+/// (absent), as REST requires. Shared by [`add_edge`] and [`add_edges_batch`].
 fn build_edge(
     id: u64,
     source: u64,
@@ -60,7 +60,12 @@ fn build_edge(
 ) -> std::result::Result<velesdb_core::GraphEdge, Error> {
     let properties: std::collections::HashMap<String, serde_json::Value> = match properties {
         Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
-        _ => std::collections::HashMap::new(),
+        None | Some(serde_json::Value::Null) => std::collections::HashMap::new(),
+        Some(_) => {
+            return Err(Error::InvalidConfig(
+                "Properties must be an object or null".to_string(),
+            ))
+        }
     };
     velesdb_core::GraphEdge::new(id, source, target, label)
         .map_err(Error::Database)

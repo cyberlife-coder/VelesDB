@@ -11,12 +11,33 @@ fn test_build_edge_with_object_properties() {
 }
 
 #[test]
-fn test_build_edge_null_and_non_object_properties_default_empty() {
-    // Null and non-object property payloads normalize to no properties
-    // rather than erroring.
+fn test_build_edge_null_or_absent_properties_mean_none() {
     assert!(build_edge(2, 1, 2, "L", None).is_ok());
     assert!(build_edge(3, 1, 2, "L", Some(serde_json::Value::Null)).is_ok());
-    assert!(build_edge(4, 1, 2, "L", Some(serde_json::json!("scalar"))).is_ok());
+}
+
+/// Properties that are neither an object nor null are refused, as REST
+/// refuses them — they used to be dropped silently.
+#[test]
+fn test_build_edge_refuses_non_object_properties() {
+    for bad in [
+        serde_json::json!("scalar"),
+        serde_json::json!([1, 2]),
+        serde_json::json!(7),
+        serde_json::json!(true),
+    ] {
+        let err = build_edge(4, 1, 2, "L", Some(bad.clone()))
+            .expect_err("non-object properties are refused");
+        assert!(
+            matches!(err, crate::error::Error::InvalidConfig(_)),
+            "{bad}: {err}"
+        );
+        assert!(
+            err.to_string()
+                .contains("Properties must be an object or null"),
+            "{err}"
+        );
+    }
 }
 
 /// `get_edges` keeps only the edges matching every filter given — it used

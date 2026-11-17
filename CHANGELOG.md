@@ -444,6 +444,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tauri: `add_edge` / `add_edges_batch` refuse properties that are not an
+  object** (Tauri, 2026-11-17). A `properties` of `[1, 2]`, `"x"` or a number
+  was stored as an empty map without a word, while REST refuses it with
+  "Properties must be an object or null". The plugin now refuses it the same
+  way, as an `InvalidConfig` error (VELES-009); an object, `null` or an
+  absent field are accepted as before.
+
 - **Tauri: `traverse_graph` refuses an unknown `algorithm` instead of running
   BFS** (Tauri, 2026-11-17). Any value but `"dfs"` — `"DFS"` and
   `"dijkstra"` included — silently ran a breadth-first traversal. The name is
