@@ -506,6 +506,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /collections`, Python `create_collection(hnsw=...)` and Tauri
   `create_collection` all call it.
 
+- **Python `match_query` runs as REST `/match` does, and MATCH reads are
+  reported** (core, Python, 2026-11-16). `Collection.match_query` and
+  `GraphCollection.match_query` ran on the collection leaf with a gate of
+  their own, on the stale premise that no gated database call returned MATCH
+  rows: `@collection` annotations were not resolved as on `/match`, and the
+  read never reached the observer. Both now call `Database::match_query`,
+  which also reports each completed run to `on_query` once — REST `/match`
+  included, which was gated but unreported.
+
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
   branches: a `multi_query_search` (REST `/search/multi`, Python, CLI) with

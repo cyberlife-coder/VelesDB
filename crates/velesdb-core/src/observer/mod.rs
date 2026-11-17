@@ -74,8 +74,8 @@ pub trait DatabaseObserver: Send + Sync {
 
     /// Called once after each completed search or `VelesQL` read, with the
     /// collection the read gate decided on and the read's duration in
-    /// microseconds: `execute_query`, `execute_aggregate`, `gated_search` and
-    /// `run_gated_read`. A `VelesQL` statement is one read, reported once with
+    /// microseconds: `execute_query`, `execute_aggregate`, `match_query`,
+    /// `gated_search` and `run_gated_read`. A `VelesQL` statement is one read, reported once with
     /// its scalar subqueries folded in, and `explain_analyze_query` reports
     /// the read it executes. A refused or failed read is not reported, and
     /// neither are the reads gated without a search (point lookups, scrolls,

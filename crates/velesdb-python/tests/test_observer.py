@@ -388,3 +388,26 @@ def test_observer_lenient_allows_a_write_veto_it_cannot_read():
         assert "docs" not in db.list_collections()
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_match_query_reports_one_query_event(observed_db):
+    """A MATCH through match_query is a read the observer hears about, once.
+
+    Both match_query methods ran on the collection leaf, past
+    `Database.match_query` (REST `/match`'s path): the read was gated but
+    never reported, and `@collection` sources and `search.max_results` were
+    the leaf's business.
+    """
+    db, recorder = observed_db
+    graph = db.create_graph_collection("kg", dimension=DIM)
+    graph.upsert_node_payload(10, {"_labels": ["Person"]})
+    docs = db.create_collection("docs", dimension=DIM)
+    docs.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"_labels": ["Doc"]}}])
+
+    for collection, run in (
+        ("kg", lambda: graph.match_query("MATCH (n:Person) RETURN n")),
+        ("docs", lambda: docs.match_query("MATCH (n:Doc) RETURN n")),
+    ):
+        recorder.events.clear()
+        assert run(), "the MATCH finds its node"
+        assert [e["collection"] for e in recorder.events_of("query")] == [collection]
