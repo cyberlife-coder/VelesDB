@@ -452,6 +452,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positional is now the source, `id=` with `source=` is refused, and the
   stubs declare every form `GraphStore` and `GraphCollection` accept.
 
+- **WASM: IndexedDB saves replace, address one graph, and are durable when
+  they resolve** (WASM, 2026-11-17). `GraphPersistence.save` added rows and
+  never removed any, so a node or edge deleted since the last save came back
+  on `load`; keys were matched by the `{name}:` prefix alone, so graph `a`
+  loaded graph `a:b`'s rows and `delete_graph("a")` deleted them; and every
+  save resolved when its last request succeeded, before the transaction
+  committed, so an abort went unreported. A save now replaces the graph's
+  rows in one transaction (keeping the first save's `created_at`), a row
+  belongs to a graph only if the rest of its key is a decimal id, and saves
+  and deletes resolve on commit. Databases open at their current version
+  and gain a missing store (an older layout) instead of failing, the vector
+  store closes its connection after each operation, and `GraphPersistence`
+  gains `close()` (also run when it is freed). Checked in headless Chromium.
+
 - **Tauri commands honour every argument and keep core's error codes**
   (core, Tauri, 2026-11-16). `search_ids` and `batch_search` dropped
   `quality` whenever a filter was present; they now run core's new

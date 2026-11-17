@@ -122,6 +122,7 @@ mod wasm_error;
 pub use agent::SemanticMemory;
 pub use database::{WasmCollectionHandle, WasmDatabase};
 pub use graph::{GraphEdge, GraphNode, GraphStore};
+pub use graph_persistence::GraphPersistence;
 pub use memory_service::WasmMemoryService;
 pub use observer::{
     WasmAccessDecision, WasmObserver, WasmQueryAccessContext, WasmQueryOperationKind,

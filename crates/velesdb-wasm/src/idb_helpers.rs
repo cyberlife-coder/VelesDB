@@ -1,7 +1,8 @@
 //! Shared `IndexedDB` helpers used by both vector and graph persistence.
 //!
-//! Centralizes the `wait_for_request` and `contains_store` utilities so that
-//! `persistence.rs` and `graph_persistence.rs` share a single implementation.
+//! Centralizes opening a database with its stores, awaiting a request, and
+//! awaiting a transaction's commit, so that `persistence.rs` and
+//! `graph_persistence.rs` share a single implementation.
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -45,12 +46,37 @@ pub fn contains_store(store_names: &web_sys::DomStringList, name: &str) -> bool 
     false
 }
 
-/// Attaches an upgrade handler to the given request that ensures the listed
-/// stores exist, then awaits the request and returns the opened database.
+/// Opens the database `name` at its current version and makes sure every
+/// store in `stores` exists, upgrading it once if one is missing.
 ///
-/// Consolidates the repeated `onupgradeneeded` + `wait_for_request` pattern
-/// used by both vector and graph persistence.
+/// Opening at the current version (no version argument) never fails on a
+/// database a newer layout already upgraded, and an upgrade fires only when
+/// it is needed: `onupgradeneeded` runs for a database that does not exist
+/// yet, and a database that exists without one of the stores (an older
+/// layout) is reopened at the next version, which creates it. Opening once at
+/// a fixed version, or without one, left such a database without its store.
 pub async fn open_with_stores(
+    name: &str,
+    stores: &'static [&'static str],
+    error_label: &str,
+) -> Result<web_sys::IdbDatabase, JsValue> {
+    let factory = idb_factory()?;
+    let db = await_open(&factory.open(name)?, stores, error_label).await?;
+    let existing = db.object_store_names();
+    if stores.iter().all(|store| contains_store(&existing, store)) {
+        return Ok(db);
+    }
+    let next = db.version() + 1.0;
+    db.close();
+    // Reason: an IndexedDB version is a small positive integer stored as f64.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let request = factory.open_with_u32(name, next as u32)?;
+    await_open(&request, stores, error_label).await
+}
+
+/// Attaches an upgrade handler to `request` that creates every missing store,
+/// then awaits the request and returns the opened database.
+async fn await_open(
     request: &web_sys::IdbOpenDbRequest,
     stores: &'static [&'static str],
     error_label: &str,
@@ -74,6 +100,50 @@ pub async fn open_with_stores(
 
     let result = wait_for_request(request).await?;
     Ok(result.unchecked_into())
+}
+
+/// A future that resolves once `transaction` has committed and rejects if it
+/// errors or aborts.
+///
+/// A request's `success` only means the request ran: the transaction can
+/// still abort (a quota error, a later failing request), and nothing is
+/// durable until it commits. A save awaits this before reporting success.
+/// Create it right after the transaction, before its requests settle, so the
+/// `complete` event cannot fire unobserved.
+pub fn transaction_committed(
+    transaction: &web_sys::IdbTransaction,
+) -> impl std::future::Future<Output = Result<(), JsValue>> {
+    let promise = js_sys::Promise::new(&mut |resolve, reject| {
+        let oncomplete = Closure::once(move |_event: Event| {
+            let _ = resolve.call0(&JsValue::UNDEFINED);
+        });
+        transaction.set_oncomplete(Some(oncomplete.as_ref().unchecked_ref()));
+        // Standard WASM pattern: Closure::forget leaks into JS GC
+        oncomplete.forget();
+
+        let reject_abort = reject.clone();
+        let onerror = Closure::once(move |_event: Event| {
+            let _ = reject.call1(
+                &JsValue::UNDEFINED,
+                &JsValue::from_str("Transaction failed"),
+            );
+        });
+        transaction.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+        onerror.forget();
+
+        let onabort = Closure::once(move |_event: Event| {
+            let _ = reject_abort.call1(
+                &JsValue::UNDEFINED,
+                &JsValue::from_str("Transaction aborted"),
+            );
+        });
+        transaction.set_onabort(Some(onabort.as_ref().unchecked_ref()));
+        onabort.forget();
+    });
+    async move {
+        JsFuture::from(promise).await?;
+        Ok(())
+    }
 }
 
 /// Gets the `IdbFactory` from the current window context.

@@ -4,13 +4,12 @@
 //! Enables offline-first PWA with persistent knowledge graphs.
 
 use crate::graph::{GraphEdge, GraphNode, GraphStore};
-use crate::idb_helpers::{idb_factory, open_with_stores, wait_for_request};
+use crate::idb_helpers::{open_with_stores, transaction_committed, wait_for_request};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-use web_sys::{IdbDatabase, IdbTransactionMode};
+use web_sys::{IdbDatabase, IdbObjectStore, IdbTransactionMode};
 
 const DB_NAME: &str = "velesdb_graphs";
-const DB_VERSION: u32 = 1;
 const NODES_STORE: &str = "nodes";
 const EDGES_STORE: &str = "edges";
 const META_STORE: &str = "metadata";
@@ -61,7 +60,13 @@ impl GraphPersistence {
             .ok_or_else(|| JsValue::from_str("Database not initialized"))
     }
 
-    /// Saves a graph to `IndexedDB` with the given name.
+    /// Saves a graph to `IndexedDB` with the given name, replacing what was
+    /// saved under that name, and resolves once the save has committed.
+    ///
+    /// One transaction drops the graph's previous rows, writes the current
+    /// ones and the metadata (keeping the first save's `created_at`): a node
+    /// or edge removed since the last save does not come back on load, and a
+    /// failed save leaves the previous one intact.
     #[wasm_bindgen]
     pub async fn save(&self, graph_name: &str, store: &GraphStore) -> Result<(), JsValue> {
         let db = self.require_db()?;
@@ -70,49 +75,47 @@ impl GraphPersistence {
             &all_store_names(),
             IdbTransactionMode::Readwrite,
         )?;
+        let committed = transaction_committed(&transaction);
 
         let nodes_store = transaction.object_store(NODES_STORE)?;
         let edges_store = transaction.object_store(EDGES_STORE)?;
         let meta_store = transaction.object_store(META_STORE)?;
 
-        // Save all nodes using internal accessor
-        let nodes = store.get_all_nodes_internal();
-        for node in nodes {
-            let key = format!("{graph_name}:{}", node.id());
+        delete_rows(&nodes_store, graph_name).await?;
+        delete_rows(&edges_store, graph_name).await?;
+
+        for node in store.get_all_nodes_internal() {
             let value = crate::js_value::to_js_value(&node)?;
-            let request = nodes_store.put_with_key(&value, &JsValue::from_str(&key))?;
-            wait_for_request(&request).await?;
+            let key = JsValue::from_str(&row_key(graph_name, node.id()));
+            wait_for_request(&nodes_store.put_with_key(&value, &key)?).await?;
         }
-
-        // Save all edges using internal accessor
-        let edges = store.get_all_edges_internal();
-        for edge in edges {
-            let key = format!("{graph_name}:{}", edge.id());
+        for edge in store.get_all_edges_internal() {
             let value = crate::js_value::to_js_value(&edge)?;
-            let request = edges_store.put_with_key(&value, &JsValue::from_str(&key))?;
-            wait_for_request(&request).await?;
+            let key = JsValue::from_str(&row_key(graph_name, edge.id()));
+            wait_for_request(&edges_store.put_with_key(&value, &key)?).await?;
         }
 
-        // Save metadata
         let now = js_sys::Date::now();
+        let previous = wait_for_request(&meta_store.get(&JsValue::from_str(graph_name))?).await?;
+        let created_at = serde_wasm_bindgen::from_value::<GraphMetadata>(previous)
+            .map_or(now, |meta| meta.created_at);
         let metadata = GraphMetadata {
             name: graph_name.to_string(),
             node_count: store.node_count(),
             edge_count: store.edge_count(),
-            created_at: now,
+            created_at,
             updated_at: now,
             version: 1,
         };
         let meta_value = crate::js_value::to_js_value(&metadata)?;
-        let meta_request = meta_store.put_with_key(&meta_value, &JsValue::from_str(graph_name))?;
-        wait_for_request(&meta_request).await?;
+        wait_for_request(&meta_store.put_with_key(&meta_value, &JsValue::from_str(graph_name))?)
+            .await?;
 
-        Ok(())
+        committed.await
     }
 
-    /// Loads a graph from `IndexedDB` by name.
-    ///
-    /// BUG-6 FIX: Only loads nodes/edges with keys prefixed by `{graph_name}:`
+    /// Loads a graph from `IndexedDB` by name: exactly the rows saved under
+    /// that name — never another graph's whose name merely starts with it.
     #[wasm_bindgen]
     pub async fn load(&self, graph_name: &str) -> Result<GraphStore, JsValue> {
         let db = self.require_db()?;
@@ -126,36 +129,16 @@ impl GraphPersistence {
         let edges_store = transaction.object_store(EDGES_STORE)?;
 
         let mut graph = GraphStore::new();
-
-        // BUG-6 FIX: Use key range to only load keys with our graph prefix
-        let key_range = graph_key_range(graph_name)?;
-
-        // Load nodes with prefix filter
-        let nodes_request = nodes_store.get_all_with_key(&key_range)?;
-        let nodes_result = wait_for_request(&nodes_request).await?;
-        if !nodes_result.is_undefined() {
-            let nodes_array: js_sys::Array = nodes_result.unchecked_into();
-            for i in 0..nodes_array.length() {
-                let node_js = nodes_array.get(i);
-                if let Ok(node) = serde_wasm_bindgen::from_value::<GraphNode>(node_js) {
-                    graph.add_node(node);
-                }
+        for node_js in rows(&nodes_store, graph_name).await? {
+            if let Ok(node) = serde_wasm_bindgen::from_value::<GraphNode>(node_js) {
+                graph.add_node(node);
             }
         }
-
-        // Load edges with prefix filter
-        let edges_request = edges_store.get_all_with_key(&key_range)?;
-        let edges_result = wait_for_request(&edges_request).await?;
-        if !edges_result.is_undefined() {
-            let edges_array: js_sys::Array = edges_result.unchecked_into();
-            for i in 0..edges_array.length() {
-                let edge_js = edges_array.get(i);
-                if let Ok(edge) = serde_wasm_bindgen::from_value::<GraphEdge>(edge_js) {
-                    let _ = graph.add_edge(edge);
-                }
+        for edge_js in rows(&edges_store, graph_name).await? {
+            if let Ok(edge) = serde_wasm_bindgen::from_value::<GraphEdge>(edge_js) {
+                let _ = graph.add_edge(edge);
             }
         }
-
         Ok(graph)
     }
 
@@ -173,9 +156,8 @@ impl GraphPersistence {
         Ok(result.unchecked_into())
     }
 
-    /// Deletes a saved graph by name.
-    ///
-    /// BUG-7 FIX: Also deletes all nodes and edges with the graph prefix.
+    /// Deletes a saved graph by name — its rows and metadata, and no other
+    /// graph's — and resolves once the deletion has committed.
     #[wasm_bindgen]
     pub async fn delete_graph(&self, graph_name: &str) -> Result<(), JsValue> {
         let db = self.require_db()?;
@@ -184,26 +166,23 @@ impl GraphPersistence {
             &all_store_names(),
             IdbTransactionMode::Readwrite,
         )?;
+        let committed = transaction_committed(&transaction);
 
-        // BUG-7 FIX: Delete all nodes and edges with the graph prefix
-        let key_range = graph_key_range(graph_name)?;
-
-        // Delete nodes with prefix
-        let nodes_store = transaction.object_store(NODES_STORE)?;
-        let nodes_request = nodes_store.delete(&key_range)?;
-        wait_for_request(&nodes_request).await?;
-
-        // Delete edges with prefix
-        let edges_store = transaction.object_store(EDGES_STORE)?;
-        let edges_request = edges_store.delete(&key_range)?;
-        wait_for_request(&edges_request).await?;
-
-        // Delete metadata
+        delete_rows(&transaction.object_store(NODES_STORE)?, graph_name).await?;
+        delete_rows(&transaction.object_store(EDGES_STORE)?, graph_name).await?;
         let meta_store = transaction.object_store(META_STORE)?;
-        let meta_request = meta_store.delete(&JsValue::from_str(graph_name))?;
-        wait_for_request(&meta_request).await?;
+        wait_for_request(&meta_store.delete(&JsValue::from_str(graph_name))?).await?;
 
-        Ok(())
+        committed.await
+    }
+
+    /// Closes the database connection; `init()` opens it again. An open
+    /// connection blocks a version upgrade and `deleteDatabase` from any tab.
+    #[wasm_bindgen]
+    pub fn close(&mut self) {
+        if let Some(db) = self.db.take() {
+            db.close();
+        }
     }
 
     /// Gets metadata for a saved graph.
@@ -221,11 +200,15 @@ impl GraphPersistence {
 
 const GRAPH_STORES: &[&str] = &[NODES_STORE, EDGES_STORE, META_STORE];
 
-/// Opens or creates the graph database.
+impl Drop for GraphPersistence {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+/// Opens or creates the graph database with its stores.
 async fn open_graph_db() -> Result<IdbDatabase, JsValue> {
-    let factory = idb_factory()?;
-    let request = factory.open_with_u32(DB_NAME, DB_VERSION)?;
-    open_with_stores(&request, GRAPH_STORES, "Failed to access graph DB result").await
+    open_with_stores(DB_NAME, GRAPH_STORES, "Failed to access graph DB result").await
 }
 
 /// Builds a JS array of all three object store names (nodes, edges, metadata).
@@ -237,11 +220,65 @@ fn all_store_names() -> js_sys::Array {
     arr
 }
 
-/// Builds an `IDBKeyRange` matching all keys with the given graph prefix.
+/// The key of a node or edge row: `{graph_name}:{id}`.
+fn row_key(graph_name: &str, id: u64) -> String {
+    format!("{graph_name}:{id}")
+}
+
+/// Whether `key` is a row of `graph_name`. The id is decimal, so the key is
+/// read from the right: `a:b:2` is row 2 of graph `a:b`, not a row of `a`,
+/// although it sorts inside `a`'s key range — the range alone made graph `a`
+/// load, and delete, graph `a:b`'s rows.
+fn is_row_of(key: &str, graph_name: &str) -> bool {
+    key.strip_prefix(graph_name)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Builds an `IDBKeyRange` holding every key that starts with `{graph_name}:`
+/// — a superset of the graph's rows, narrowed by [`is_row_of`].
 fn graph_key_range(graph_name: &str) -> Result<web_sys::IdbKeyRange, JsValue> {
     let lower = JsValue::from_str(&format!("{graph_name}:"));
     let upper = JsValue::from_str(&format!("{graph_name}:\u{ffff}"));
     web_sys::IdbKeyRange::bound(&lower, &upper)
+}
+
+/// The keys of `graph_name`'s rows in `store`.
+async fn row_keys(store: &IdbObjectStore, graph_name: &str) -> Result<Vec<JsValue>, JsValue> {
+    let range = graph_key_range(graph_name)?;
+    let keys: js_sys::Array = wait_for_request(&store.get_all_keys_with_key(&range)?)
+        .await?
+        .unchecked_into();
+    Ok(keys
+        .iter()
+        .filter(|key| key.as_string().is_some_and(|k| is_row_of(&k, graph_name)))
+        .collect())
+}
+
+/// The values of `graph_name`'s rows in `store`. `getAllKeys` and `getAll`
+/// over one range list records in the same key order, so the two zip.
+async fn rows(store: &IdbObjectStore, graph_name: &str) -> Result<Vec<JsValue>, JsValue> {
+    let range = graph_key_range(graph_name)?;
+    let keys: js_sys::Array = wait_for_request(&store.get_all_keys_with_key(&range)?)
+        .await?
+        .unchecked_into();
+    let values: js_sys::Array = wait_for_request(&store.get_all_with_key(&range)?)
+        .await?
+        .unchecked_into();
+    Ok(keys
+        .iter()
+        .zip(values.iter())
+        .filter(|(key, _)| key.as_string().is_some_and(|k| is_row_of(&k, graph_name)))
+        .map(|(_, value)| value)
+        .collect())
+}
+
+/// Deletes `graph_name`'s rows from `store`, and no other graph's.
+async fn delete_rows(store: &IdbObjectStore, graph_name: &str) -> Result<(), JsValue> {
+    for key in row_keys(store, graph_name).await? {
+        wait_for_request(&store.delete(&key)?).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //!
 //! Provides async save/load operations for offline-first applications.
 
-use crate::idb_helpers::{idb_factory, open_with_stores, wait_for_request};
+use crate::idb_helpers::{idb_factory, open_with_stores, transaction_committed, wait_for_request};
 use wasm_bindgen::prelude::*;
 use web_sys::{IdbDatabase, IdbObjectStore, IdbTransactionMode};
 
@@ -10,33 +10,44 @@ const STORE_NAME: &str = "vectors";
 const STORES: &[&str] = &[STORE_NAME];
 const DATA_KEY: &str = "data";
 
-/// Opens or creates an `IndexedDB` database.
+/// Opens or creates an `IndexedDB` database with its store.
 async fn open_db(db_name: &str) -> Result<IdbDatabase, JsValue> {
-    let factory = idb_factory()?;
-    let request = factory.open(db_name)?;
-    open_with_stores(&request, STORES, "Failed to access IndexedDB result").await
+    open_with_stores(db_name, STORES, "Failed to access IndexedDB result").await
 }
 
-/// Saves bytes to `IndexedDB`.
+/// Saves bytes to `IndexedDB`, resolving once the write has committed.
+///
+/// The connection is closed afterwards either way: an open connection
+/// blocks a later version upgrade and `deleteDatabase`.
 pub async fn save_to_indexeddb(db_name: &str, data: &[u8]) -> Result<(), JsValue> {
     let db = open_db(db_name).await?;
+    let saved = put_bytes(&db, data).await;
+    db.close();
+    saved
+}
 
+async fn put_bytes(db: &IdbDatabase, data: &[u8]) -> Result<(), JsValue> {
     let transaction =
         db.transaction_with_str_and_mode(STORE_NAME, IdbTransactionMode::Readwrite)?;
+    let committed = transaction_committed(&transaction);
     let store: IdbObjectStore = transaction.object_store(STORE_NAME)?;
 
     // Convert bytes to Uint8Array
     let array = js_sys::Uint8Array::from(data);
     let request = store.put_with_key(&array, &JsValue::from_str(DATA_KEY))?;
-
     wait_for_request(&request).await?;
-    Ok(())
+    committed.await
 }
 
 /// Loads bytes from `IndexedDB`.
 pub async fn load_from_indexeddb(db_name: &str) -> Result<Vec<u8>, JsValue> {
     let db = open_db(db_name).await?;
+    let loaded = get_bytes(&db).await;
+    db.close();
+    loaded
+}
 
+async fn get_bytes(db: &IdbDatabase) -> Result<Vec<u8>, JsValue> {
     let transaction = db.transaction_with_str_and_mode(STORE_NAME, IdbTransactionMode::Readonly)?;
     let store: IdbObjectStore = transaction.object_store(STORE_NAME)?;
 
