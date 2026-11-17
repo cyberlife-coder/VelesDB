@@ -6,9 +6,10 @@ fixture opens without an observer, so these tests build their own ``Database``
 with one attached.
 
 Scope note: ``collection_created`` / ``collection_deleted`` fire directly from
-the core engine, and so does ``upsert``: core reports every write to a
-collection the database registered, whether it comes through VelesQL or the
-collection API, so the binding adds nothing of its own. The ``query`` event
+the core engine, and so do ``upsert`` and ``delete``: core reports every write
+and every point delete to a collection the database registered, whether it
+comes through VelesQL or the collection API, so the binding adds nothing of its
+own. The ``query`` event
 comes from core as well, for every completed search or VelesQL read; the REST
 server's end-to-end wiring
 is covered by ``crates/velesdb-server/tests/observer_lifecycle_tests.rs``.
@@ -247,6 +248,33 @@ def test_upsert_event_fires_once_on_bulk_and_graph_writes():
         graph.upsert_node(3, {"name": "c"})
         upserts = [(e["collection"], e["point_count"]) for e in recorder.events_of("upsert")]
         assert upserts == [("kg", 2), ("kg", 1)]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_delete_event_fires_on_direct_and_velesql_deletes():
+    """Core reports every completed delete with ``on_delete``; the observer
+    must receive it as a ``delete`` event, once per delete, whatever surface
+    made it — ``Collection.delete`` and VelesQL ``DELETE`` alike."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+        recorder = Recorder()
+        db = Database(temp_dir, observer=recorder)
+        col = db.create_collection("docs", dimension=DIM)
+        col.upsert(
+            [
+                {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+                {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0]},
+            ]
+        )
+        recorder.events.clear()
+        col.delete([1, 2])
+        assert recorder.events_of("delete") == [{"collection": "docs", "point_count": 2}]
+
+        recorder.events.clear()
+        db.execute_query("DELETE FROM docs WHERE id = 3")
+        assert recorder.events_of("delete") == [{"collection": "docs", "point_count": 1}]
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
