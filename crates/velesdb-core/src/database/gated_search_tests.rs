@@ -1,4 +1,4 @@
-//! `run_dense` tuning tests (#2302): a caller or scope filter must not make
+//! Dense tuning tests (#2302, `VectorCollection::search_dense`): a caller or scope filter must not make
 //! the read gate drop `ef` / `quality`.
 //!
 //! Which quality a filtered search runs at is made observable by capping

@@ -735,3 +735,41 @@ fn hybrid_sparse_search_with_an_empty_sparse_branch_still_returns_fused_scores()
         );
     }
 }
+
+/// `search_dense` honours every knob it is given together: a filter with a
+/// quality profile or an `ef` still filters, and answers what the dedicated
+/// leaf answers — a caller holding both no longer has to drop one.
+#[test]
+fn test_search_dense_runs_the_leaf_for_its_knobs() {
+    let (coll, _dir) = create_test_vc();
+    seed_points(&coll);
+    let query = [1.0, 0.1, 0.0, 0.0];
+    let cat_a = Filter::new(Condition::eq("cat", "a"));
+    let ids = |r: Vec<crate::SearchResult>| r.iter().map(|h| h.point.id).collect::<Vec<_>>();
+
+    let perfect = crate::SearchQuality::Perfect;
+    let filtered = coll
+        .search_dense(&query, 5, None, Some(perfect), Some(&cat_a))
+        .unwrap();
+    assert!(filtered
+        .iter()
+        .all(|h| h.point.payload.as_ref().unwrap()["cat"] == "a"));
+    assert_eq!(
+        ids(filtered),
+        ids(coll
+            .search_with_quality_and_filter(&query, 5, perfect, &cat_a)
+            .unwrap())
+    );
+
+    let ef_filtered = coll
+        .search_dense(&query, 5, Some(64), None, Some(&cat_a))
+        .unwrap();
+    assert!(ef_filtered
+        .iter()
+        .all(|h| h.point.payload.as_ref().unwrap()["cat"] == "a"));
+
+    assert_eq!(
+        ids(coll.search_dense(&query, 3, None, None, None).unwrap()),
+        ids(coll.search(&query, 3).unwrap())
+    );
+}

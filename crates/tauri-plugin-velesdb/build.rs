@@ -41,6 +41,7 @@ const COMMANDS: &[&str] = &[
     "hybrid_search",
     "multi_query_search",
     "query",
+    "read_query",
     // AgentMemory (semantic, episodic, procedural)
     "semantic_store",
     "semantic_store_with_ttl",

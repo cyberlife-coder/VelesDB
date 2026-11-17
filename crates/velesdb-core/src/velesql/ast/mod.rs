@@ -150,6 +150,24 @@ impl Query {
         self.admin.is_some()
     }
 
+    /// Returns true if running this statement changes nothing: a SELECT
+    /// (compound included), a MATCH, `SELECT EDGES`, `SHOW`, `DESCRIBE`, or an
+    /// `EXPLAIN` of one of these. DDL, every other DML, `TRAIN` and `FLUSH`
+    /// write; a read-only surface accepts only what this admits.
+    #[must_use]
+    pub fn is_read_only(&self) -> bool {
+        if self.ddl.is_some() || self.train.is_some() || self.admin.is_some() {
+            return false;
+        }
+        if self.dml.is_some() && !self.is_select_edges_query() {
+            return false;
+        }
+        match &self.introspection {
+            Some(IntrospectionStatement::Explain(inner)) => inner.is_read_only(),
+            _ => true,
+        }
+    }
+
     /// Returns true if this is a SELECT EDGES query.
     #[must_use]
     pub fn is_select_edges_query(&self) -> bool {
