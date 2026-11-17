@@ -216,9 +216,12 @@ pub fn hybrid_search_scored<'a>(
             });
 
             let combined_score = v_weight * vector_score + t_weight * text_score;
-            // The relevance floor is a similarity's: a negated distance is
-            // never above it, so a distance metric keeps every row.
-            if !higher_is_better || combined_score > 0.0 {
+            // A row needs a weighted branch speaking for it: with the vector
+            // weighted 0 the search is text-only, under every metric. Above
+            // that, the relevance floor is a similarity's: a negated distance
+            // is never above it, so a distance metric keeps every row.
+            let ranked = v_weight > 0.0 || text_score > 0.0;
+            if ranked && (!higher_is_better || combined_score > 0.0) {
                 Some((id, combined_score, payload))
             } else {
                 None

@@ -349,22 +349,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distance as if it were a similarity, dropped rows at or below 0 and sorted
   descending, so on a `euclidean` or `hamming` store the exact match was
   dropped and the farthest vector ranked first; the distance is now negated
-  before the blend, as core's fusion orients a lower-is-better branch. The
+  before the blend, as core's fusion orients a lower-is-better branch; with
+  `vector_weight = 0` the search is text-only under every metric. The
   TypeScript SDK checked a `quality` preset by searching a metadata-only
   probe store; it now calls the new `VectorStore.validate_search_quality`
   when the binding has it (and keeps the probe for an older binding).
   `insertBatchRaw` refusals carry core's codes (VELES-004 / VELES-005) like
   every other insert.
 
-- **WASM: re-inserting a derived-id edge overwrites it** (WASM,
-  2026-11-16). An edge whose id is derived from (source, target, label) was
-  stored again on every insert — `WasmDatabase.addEdge` or `INSERT EDGE`
-  run twice, `MemoryService.relate` called twice — so `getEdges` listed it
-  twice, `why()` / `entity()` showed the relation twice, and `removeEdge` /
-  `unrelate` deleted every copy at once. It is now idempotent, as core
-  documents for derived ids, when the stored edge has the same source,
-  target and label; a derived id held by another edge, and a colliding
-  explicit id, are refused without touching the stored edge.
+- **WASM: an edge id is held once, as in core** (WASM, 2026-11-16). An
+  edge whose id is derived from (source, target, label) was stored again on
+  every insert — `WasmDatabase.addEdge` or `INSERT EDGE` run twice,
+  `MemoryService.relate` called twice — so `getEdges` listed it twice,
+  `why()` / `entity()` showed the relation twice, and `removeEdge` /
+  `unrelate` deleted every copy at once. Inserting under an id the store
+  already holds, explicit or derived, is now refused and leaves the stored
+  edge untouched, as core refuses it (`EdgeExists`); `relate` answers an
+  existing relation with its id and writes nothing, as core's agent-memory
+  relation does.
 
 - **WASM: deleting a row drops its sparse postings, and `CREATE COLLECTION
   … WITH (storage = …)` is honoured** (WASM, 2026-11-16).

@@ -67,3 +67,33 @@ fn hybrid_search_ranks_a_distance_metric_nearest_first() {
         );
     }
 }
+
+/// With the vector branch weighted 0 the search is text-only, under every
+/// metric: a row the text does not match has nothing ranking it. A distance
+/// metric kept such rows at score 0, filling `k` with non-matches, while a
+/// similarity metric dropped them (Devin, #2830).
+#[test]
+fn hybrid_search_with_a_zero_vector_weight_returns_only_text_matches() {
+    for metric in ["cosine", "euclidean", "hamming"] {
+        let mut store = StoreState::new(2, metric).expect("test: store");
+        insert_with_payload(
+            &mut store,
+            1,
+            &[1.0, 0.0],
+            Some(serde_json::json!({"t": "rust"})),
+        );
+        insert_with_payload(
+            &mut store,
+            2,
+            &[1.0, 0.0],
+            Some(serde_json::json!({"t": "go"})),
+        );
+        insert_with_payload(&mut store, 3, &[0.0, 1.0], None);
+        let ids: Vec<u64> = store
+            .hybrid_search_scored(&[1.0, 0.0], "rust", 3, Some(0.0))
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(ids, vec![1], "{metric}: only the text match");
+    }
+}

@@ -413,3 +413,16 @@ fn the_wasm_backend_never_returns_internal_scaffolding() {
         );
     }
 }
+
+#[test]
+fn test_relate_twice_is_idempotent_like_cores_relation() {
+    // Core's agent-memory relation answers an existing relation with its id
+    // and writes nothing; the graph store itself refuses a held id.
+    let store = WasmStore::new(4);
+    store.store(1, "a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+    store.store(2, "b", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+    let first = store.relate(1, 2, "decided_in").unwrap();
+    let second = store.relate(1, 2, "decided_in").unwrap();
+    assert_eq!(first, second);
+    assert_eq!(store.relations(1).unwrap().len(), 1);
+}
