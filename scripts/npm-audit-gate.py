@@ -46,7 +46,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 # npm's severity ladder, weakest first. `--audit-level=high` means "high and
@@ -64,6 +64,9 @@ class Unreachable(Exception):
 
 
 DEFAULT_ACCEPTED = Path(__file__).resolve().parent / "npm-audit-accepted.json"
+# How far ahead a `review_by` may be set. Past it a "dated" exception is a
+# permanent one nobody is due to re-examine.
+MAX_ACCEPTANCE_DAYS = 180
 
 
 @dataclass(frozen=True)
@@ -80,7 +83,7 @@ def load_accepted(path: Path) -> list[Acceptance]:
     """The accepted advisories in `path` (a JSON list); none when it is absent.
 
     Raises `ValueError` for an entry without a GHSA id, a package, a reason or
-    an ISO `review_by` date: an acceptance nobody can re-examine is not one.
+    an ISO `review_by` date at most `MAX_ACCEPTANCE_DAYS` ahead: an acceptance nobody can re-examine is not one.
     """
     if not path.exists():
         return []
@@ -96,6 +99,12 @@ def load_accepted(path: Path) -> list[Acceptance]:
             raise ValueError(f"{path}: acceptance {entry!r} needs ghsa, package, reason and an ISO review_by ({exc})") from exc
         if not ghsa.startswith("GHSA-") or not reason.strip():
             raise ValueError(f"{path}: acceptance {entry!r} needs a GHSA id and a non-empty reason")
+        horizon = date.today() + timedelta(days=MAX_ACCEPTANCE_DAYS)
+        if review_by > horizon:
+            raise ValueError(
+                f"{path}: {ghsa} review_by {review_by.isoformat()} is past "
+                f"{horizon.isoformat()}, the {MAX_ACCEPTANCE_DAYS}-day horizon"
+            )
         accepted.append(Acceptance(ghsa, package, reason, review_by))
     return accepted
 

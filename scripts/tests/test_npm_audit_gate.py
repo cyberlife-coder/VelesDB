@@ -16,6 +16,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import date, timedelta
 import tempfile
 import textwrap
 import time
@@ -435,7 +436,8 @@ def _advisory_report(ghsa: str = GHSA, severity: str = "high") -> str:
     })
 
 
-def _accepted(directory: Path, *, ghsa: str = GHSA, review_by: str = "2999-01-01") -> Path:
+def _accepted(directory: Path, *, ghsa: str = GHSA, review_by: str | None = None) -> Path:
+    review_by = review_by or (date.today() + timedelta(days=30)).isoformat()
     path = directory / "accepted.json"
     path.write_text(json.dumps([{"ghsa": ghsa, "package": "picomatch",
                                  "reason": "no fixed version published", "review_by": review_by}]))
@@ -487,6 +489,17 @@ class AcceptedAdvisoryTests(unittest.TestCase):
             npm = _fake_npm(root, stdout=_advisory_report())
             result = _run(npm, root, "--accepted", str(bad))
         self.assertEqual(EXIT_USAGE, result.returncode, result.stderr)
+
+    def test_an_acceptance_reviewed_beyond_the_horizon_is_a_usage_error(self) -> None:
+        """A dated exception that need not be re-examined for years is a
+        permanent one: `review_by` is capped at MAX_ACCEPTANCE_DAYS ahead."""
+        too_far = date.today() + timedelta(days=gate.MAX_ACCEPTANCE_DAYS + 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            npm = _fake_npm(root, stdout=_advisory_report())
+            result = _run(npm, root, "--accepted", str(_accepted(root, review_by=too_far.isoformat())))
+        self.assertEqual(EXIT_USAGE, result.returncode, result.stderr)
+        self.assertIn("review_by", result.stderr)
 
     def test_the_repository_list_is_well_formed(self) -> None:
         entries = gate.load_accepted(ROOT / "scripts" / "npm-audit-accepted.json")

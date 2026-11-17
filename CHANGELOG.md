@@ -373,12 +373,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `demos/tauri-rag-app` lockfiles traced to that one advisory, in build and
   test tooling (vite, vitest, tsup, typescript-eslint). No picomatch release
   fixes it, so the required `npm-audit` job was red on every pull request.
-  `scripts/npm-audit-accepted.json` now lists accepted advisories by GHSA id,
-  each with a package, a reason and a `review_by` date. A lockfile passes only
-  when every blocking advisory is attributed to a GHSA id and accepted. An
-  acceptance past its `review_by` date refuses again. A count that npm's
-  report does not attribute to an advisory is never accepted. Remove the entry
-  once picomatch ships a fix.
+  `scripts/npm-audit-accepted.json` now lists accepted advisories by GHSA
+  id, each with a package, a reason and a `review_by` date at most 180 days
+  ahead. A lockfile passes only when every blocking advisory is attributed
+  to a GHSA id and accepted. An acceptance past its `review_by` date refuses
+  again. A count that npm's report does not attribute to an advisory is
+  never accepted. Remove the entry once picomatch ships a fix.
 
 - **chrono's unmaintained advisory (RUSTSEC-2026-0543) is accepted until
   rmcp drops it** (deps, 2026-11-17). The advisory reports no vulnerability
