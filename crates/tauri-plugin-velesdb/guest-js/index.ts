@@ -825,8 +825,11 @@ export interface AddEdgeRequest {
 
 /** A single edge inside an {@link AddEdgesBatchRequest}. */
 export interface BatchEdgeInput {
-  /** Edge ID. */
-  id: number;
+  /**
+   * Edge ID. Send the decimal string an edge read answers (`EdgeOutput.id`);
+   * a number is accepted up to `Number.MAX_SAFE_INTEGER`.
+   */
+  id: string | number;
   /** Source node ID. */
   source: number;
   /** Target node ID. */
