@@ -37,6 +37,7 @@ permissions = [
     "allow-hybrid-search",
     "allow-multi-query-search",
     "allow-query",
+    "allow-read-query",
     # Sparse vector operations
     "allow-sparse-search",
     "allow-hybrid-sparse-search",
@@ -108,7 +109,7 @@ permissions = [
     "allow-text-search",
     "allow-hybrid-search",
     "allow-multi-query-search",
-    "allow-query",
+    "allow-read-query",
     "allow-semantic-query",
     "allow-episodic-recent",
     "allow-procedural-recall",
