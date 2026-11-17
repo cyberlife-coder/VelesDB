@@ -1,6 +1,7 @@
 //! `VelesQL` query Tauri command extracted from `commands.rs` (EPIC-031 US-012).
 //!
-//! Contains the `query` command and its dispatch/aggregation helpers.
+//! Contains the `query` and `read_query` commands and their
+//! dispatch/aggregation helpers.
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::{CommandError, Error};
@@ -33,6 +34,42 @@ pub async fn query<R: Runtime>(
         results,
         timing_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
+}
+
+/// Executes a `VelesQL` statement that changes nothing — a SELECT, MATCH,
+/// `SELECT EDGES`, `SHOW`, `DESCRIBE` or `EXPLAIN` — and refuses every other
+/// one before it runs.
+///
+/// The command a read-only webview is granted: `query` runs DDL and DML as
+/// well, so a `velesdb:read-only` window holding it could `DROP COLLECTION`.
+#[command]
+pub async fn read_query<R: Runtime>(
+    _app: AppHandle<R>,
+    state: State<'_, VelesDbState>,
+    request: QueryRequest,
+) -> std::result::Result<QueryResponse, CommandError> {
+    let start = std::time::Instant::now();
+    let parsed = velesdb_core::velesql::Parser::parse(&request.query)
+        .map_err(|e| Error::Database(e.into()))?;
+    ensure_read_only(&parsed)?;
+    let results = dispatch_tauri_query(&state, parsed, request).await?;
+    Ok(QueryResponse {
+        results,
+        timing_ms: start.elapsed().as_secs_f64() * 1000.0,
+    })
+}
+
+/// Refuses a statement that would change the database
+/// ([`Query::is_read_only`](velesdb_core::velesql::Query::is_read_only)).
+pub(crate) fn ensure_read_only(query: &velesdb_core::velesql::Query) -> crate::error::Result<()> {
+    if query.is_read_only() {
+        return Ok(());
+    }
+    Err(Error::Database(velesdb_core::Error::Query(
+        "read_query runs only statements that change nothing (SELECT, MATCH, SELECT EDGES, \
+         SHOW, DESCRIBE, EXPLAIN); use query for DDL and DML"
+            .to_string(),
+    )))
 }
 
 /// Dispatches a tauri query to aggregation or standard execution path.

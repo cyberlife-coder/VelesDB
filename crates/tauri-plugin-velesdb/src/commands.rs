@@ -326,59 +326,25 @@ type QualityArg<'a> = Option<&'a velesdb_core::SearchQuality>;
 #[cfg(not(feature = "persistence"))]
 type QualityArg<'a> = Option<&'a ()>;
 
-/// Runs a vector search honoring filter precedence then quality, returning full
-/// results. Shared by [`search`] and [`search_ids`]. Filter takes precedence
-/// (known limitation #457: quality ignored when a filter is present).
-fn search_full(
-    coll: &velesdb_core::VectorCollection,
-    request: &SearchRequest,
-    filter: Option<&velesdb_core::Filter>,
-    quality: QualityArg<'_>,
-) -> crate::error::Result<Vec<velesdb_core::SearchResult>> {
-    if let Some(f) = filter {
-        coll.search_with_filter(&request.vector, request.top_k, f)
-            .map_err(crate::error::Error::Database)
-    } else {
-        dispatch_quality_search(coll, &request.vector, request.top_k, quality)
-    }
-}
-
-/// Dispatches a single search with optional quality mode.
-///
-/// When quality is `Some`, delegates to `search_with_quality`;
-/// otherwise falls back to the default `search`.
+/// Core's search quality for a parsed `quality` field (`None` without the
+/// `persistence` feature, where the field is refused before this runs).
 #[cfg(feature = "persistence")]
-fn dispatch_quality_search(
-    coll: &velesdb_core::VectorCollection,
-    query: &[f32],
-    k: usize,
-    quality: Option<&velesdb_core::SearchQuality>,
-) -> crate::error::Result<Vec<velesdb_core::SearchResult>> {
-    if let Some(q) = quality {
-        coll.search_with_quality(query, k, *q)
-            .map_err(crate::error::Error::Database)
-    } else {
-        coll.search(query, k).map_err(crate::error::Error::Database)
-    }
+fn core_quality(quality: QualityArg<'_>) -> Option<velesdb_core::SearchQuality> {
+    quality.copied()
 }
 
-/// Dispatches a single search (no quality support without `persistence`).
+/// Core's search quality for a parsed `quality` field (`None` without the
+/// `persistence` feature, where the field is refused before this runs).
 #[cfg(not(feature = "persistence"))]
-fn dispatch_quality_search(
-    coll: &velesdb_core::VectorCollection,
-    query: &[f32],
-    k: usize,
-    _quality: Option<&()>,
-) -> crate::error::Result<Vec<velesdb_core::SearchResult>> {
-    coll.search(query, k).map_err(crate::error::Error::Database)
+fn core_quality(_quality: QualityArg<'_>) -> Option<velesdb_core::SearchQuality> {
+    None
 }
 
 /// Searches for similar vectors.
 ///
 /// Supports an optional `quality` mode (e.g. "fast", "balanced", "accurate",
-/// "perfect", "auto", "custom:\<ef\>", "adaptive:\<min\>:\<max\>").
-/// Known limitation (#457): when a filter is present, quality is ignored
-/// because `search_with_filter` does not accept a quality parameter yet.
+/// "perfect", "auto", "custom:\<ef\>", "adaptive:\<min\>:\<max\>"),
+/// honoured with or without a filter.
 #[command]
 pub async fn search<R: Runtime>(
     _app: AppHandle<R>,
@@ -433,10 +399,9 @@ fn project_search_ids(results: Vec<velesdb_core::SearchResult>) -> Vec<IdScoreOu
 /// k-NN search returning only IDs and scores (no payloads).
 ///
 /// Uses the optimized core `search_ids` path when neither a filter nor a
-/// `quality` mode is supplied, which skips payload hydration. When a filter is
-/// present (precedence, known limitation #457: quality ignored), or a `quality`
-/// mode is requested, falls back to the corresponding full search and projects
-/// the results to IDs + scores.
+/// `quality` mode is supplied, which skips payload hydration. Otherwise runs
+/// core's `search_dense`, which honours a filter and a quality together, and
+/// projects the results to IDs + scores.
 #[command]
 pub async fn search_ids<R: Runtime>(
     _app: AppHandle<R>,
@@ -474,11 +439,12 @@ pub async fn search_ids<R: Runtime>(
                                 })
                                 .collect()
                         } else {
-                            project_search_ids(search_full(
-                                &coll,
-                                &request,
+                            project_search_ids(coll.search_dense(
+                                &request.vector,
+                                request.top_k,
+                                None,
+                                core_quality(parsed_quality.as_ref()),
                                 parsed_filter.as_ref(),
-                                parsed_quality.as_ref(),
                             )?)
                         };
                     Ok(scored)

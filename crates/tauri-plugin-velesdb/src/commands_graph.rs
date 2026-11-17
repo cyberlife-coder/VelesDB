@@ -63,8 +63,26 @@ fn build_edge(
         _ => std::collections::HashMap::new(),
     };
     velesdb_core::GraphEdge::new(id, source, target, label)
-        .map_err(|e| Error::InvalidConfig(e.to_string()))
+        .map_err(Error::Database)
         .map(|edge| edge.with_properties(properties))
+}
+
+/// The edges whose label, source and target match every filter given
+/// (`None` matches anything).
+fn keep_matching(
+    edges: Vec<velesdb_core::GraphEdge>,
+    label: Option<&str>,
+    source: Option<u64>,
+    target: Option<u64>,
+) -> Vec<velesdb_core::GraphEdge> {
+    edges
+        .into_iter()
+        .filter(|e| {
+            label.is_none_or(|l| e.label() == l)
+                && source.is_none_or(|s| e.source() == s)
+                && target.is_none_or(|t| e.target() == t)
+        })
+        .collect()
 }
 
 /// Builds a [`TraversalConfig`] from the raw request fields. Shared by
@@ -159,15 +177,15 @@ pub async fn get_edges<R: Runtime>(
             )?;
             let coll = require_graph_collection(&db, &request.collection)?;
 
-            let edges = if let Some(label) = &request.label {
-                coll.get_edges(Some(label.as_str()))
-            } else if let Some(source) = request.source {
-                coll.get_outgoing(source)
-            } else if let Some(target) = request.target {
-                coll.get_incoming(target)
-            } else {
-                coll.get_edges(None)
+            let label = request.label.as_deref();
+            // Start from the narrowest index, then keep what every filter
+            // given matches.
+            let candidates = match (request.source, request.target) {
+                (Some(source), _) => coll.get_outgoing(source),
+                (None, Some(target)) => coll.get_incoming(target),
+                (None, None) => coll.get_edges(label),
             };
+            let edges = keep_matching(candidates, label, request.source, request.target);
 
             Ok(edges
                 .into_iter()

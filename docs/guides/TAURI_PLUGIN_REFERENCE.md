@@ -50,7 +50,8 @@ The authoritative list lives in `crates/tauri-plugin-velesdb/build.rs`
 | `text_search` | BM25 full-text search |
 | `hybrid_search` | Combined vector + text search with RRF fusion |
 | `multi_query_search` | Multi-query fusion search (RRF / weighted / average / maximum / relative score) |
-| `query` | Execute a VelesQL query |
+| `query` | Execute any VelesQL statement, DDL and DML included |
+| `read_query` | Execute a VelesQL statement that changes nothing (SELECT, MATCH, SELECT EDGES, SHOW, DESCRIBE, EXPLAIN); any other is refused with VELES-010 before it runs |
 | `sparse_search` | Sparse-only search (inverted index) |
 | `hybrid_sparse_search` | Hybrid dense + sparse search |
 | `sparse_upsert` | Insert points carrying a sparse vector |
@@ -143,20 +144,34 @@ whole plugin:
 }
 ```
 
+A window that must only read gets one of the two bundled read sets, which a
+test keeps free of any command that writes:
+
+- `velesdb:read-only` — listing, point reads, every search, graph reads, and
+  VelesQL through `read_query` (`readQuery` in guest-js). It does **not**
+  grant `query`, which runs DDL and DML.
+- `velesdb:search-only` — dense, ids, text and hybrid search.
+
+```json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "velesdb-readonly",
+  "description": "Reads and searches, no writes",
+  "windows": ["viewer"],
+  "permissions": ["velesdb:read-only"]
+}
+```
+
 Or grant commands one by one — every command has an `allow-<command>` (and a
 matching `deny-<command>`) permission, generated at build time by `build.rs`:
 
 ```json
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "velesdb-readonly",
-  "description": "Search only, no writes",
+  "identifier": "velesdb-search",
+  "description": "Search one collection kind, no writes",
   "windows": ["main"],
-  "permissions": [
-    "velesdb:allow-create-collection",
-    "velesdb:allow-upsert",
-    "velesdb:allow-search"
-  ]
+  "permissions": ["velesdb:allow-search", "velesdb:allow-read-query"]
 }
 ```
 
