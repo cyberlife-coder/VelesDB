@@ -471,6 +471,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM: a `MATCH` walk is bounded, and stops at `LIMIT` when nothing
+  orders its rows** (WASM, core, 2026-11-17). The walk collected every row
+  before ORDER BY and LIMIT, with no bound, so a fan-out pattern grew one
+  array until the tab ran out of memory. The row past core's
+  `DEFAULT_MAX_CARDINALITY` (100 000) is now refused with the error core
+  raises for the same violation (`VELES-027`, "Cardinality exceeded"), and
+  without ORDER BY or a `/match` query vector the walk stops at `LIMIT` rows
+  — the rows the truncation kept before. The WHERE scan's refusal now carries
+  core's message too. Core's guard-rail limits and `GuardRailViolation`
+  build without the `persistence` feature, so the binding reads them instead
+  of keeping copies.
+
 - **TypeScript SDK: `trainPq({ opq: true })` over REST trains OPQ; core
   refuses an unknown `TRAIN QUANTIZER` parameter** (TypeScript SDK, core,
   2026-11-17). The REST backend sent `WITH (m=…, k=…, opq=true)`, and core
