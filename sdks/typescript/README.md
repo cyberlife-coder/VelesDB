@@ -58,7 +58,9 @@ On Node.js the WASM backend's `init()` reads `velesdb_wasm_bg.wasm` from disk wi
 
 The WASM backend runs entirely in-process -- no server required. Ideal for browser apps, prototyping, and edge deployments.
 
-> **Binding version:** the WASM backend reads its results from `@wiscale/velesdb-wasm` since 8.0.0, the floor this SDK release pins (`^8.0.0` in `package.json`). velesdb-wasm 6.x and 7.x return `textSearch`, `hybridSearch`, filtered `search` and `get` records as ES2015 `Map`s, which the SDK cannot read: those calls throw on any row (#2332, fixed in velesdb-wasm 8.0.0). A point id past `Number.MAX_SAFE_INTEGER` needs a binding that returns point ids as decimal strings (the one released with this SDK): earlier bindings throw inside a search, `get` or `query` over such a point.
+> **Binding version:** the WASM backend reads its results from `@wiscale/velesdb-wasm` since 8.0.0, the floor this SDK release pins (`^8.0.0` in `package.json`). velesdb-wasm 6.x and 7.x return `textSearch`, `hybridSearch`, filtered `search` and `get` records as ES2015 `Map`s, which the SDK cannot read: those calls throw on any row (#2332, fixed in velesdb-wasm 8.0.0).
+
+A point id past `Number.MAX_SAFE_INTEGER` needs a binding that returns point ids as decimal strings (the one released with this SDK): earlier bindings throw inside a search, `get` or `query` over such a point.
 
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
