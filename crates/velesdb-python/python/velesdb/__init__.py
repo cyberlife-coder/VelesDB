@@ -103,6 +103,15 @@ class GraphStore:
         source: int | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
+        """Add an edge. Accepted forms:
+
+        - ``add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})``
+        - ``add_edge(1, source=10, target=20, label="KNOWS")`` (id positional)
+        - ``add_edge(10, 20, "KNOWS", id=1)`` (source positional, id keyword)
+        - ``add_edge(10, 20, "KNOWS")`` (an id is assigned)
+
+        Passing both ``id=`` and ``source=`` raises ``ValueError``.
+        """
         if isinstance(edge, dict):
             self._inner.add_edge(edge)
             return
@@ -251,6 +260,15 @@ class GraphCollection:
         source: int | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
+        """Add an edge. Accepted forms:
+
+        - ``add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})``
+        - ``add_edge(1, source=10, target=20, label="KNOWS")`` (id positional)
+        - ``add_edge(10, 20, "KNOWS", id=1)`` (source positional, id keyword)
+        - ``add_edge(10, 20, "KNOWS")`` (an id is assigned)
+
+        Passing both ``id=`` and ``source=`` raises ``ValueError``.
+        """
         if isinstance(edge, dict):
             self._inner.add_edge(edge)
             return

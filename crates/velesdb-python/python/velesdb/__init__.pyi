@@ -1602,6 +1602,7 @@ class GraphStore:
 
     def __init__(self) -> None: ...
 
+    @overload
     def add_edge(self, edge: Dict[str, Any]) -> None:
         """Add an edge.
 
@@ -1609,6 +1610,44 @@ class GraphStore:
             edge: Dict with keys: id (int), source (int), target (int),
                   label (str), properties (dict, optional)
         """
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        edge_id: int,
+        *,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add an edge using the explicit-id legacy shape."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+        *,
+        id: int,
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add edge ``id`` from ``source`` to ``target``: the positional is the source."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+    ) -> None:
+        """Add an edge using the legacy no-id positional shape."""
         ...
 
     def get_edges_by_label(self, label: str) -> List[GraphEdgeDict]: ...
@@ -2020,6 +2059,20 @@ class GraphCollection:
         properties: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Add an edge using the explicit-id legacy shape."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+        *,
+        id: int,
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add edge ``id`` from ``source`` to ``target``: the positional is the source."""
         ...
 
     @overload

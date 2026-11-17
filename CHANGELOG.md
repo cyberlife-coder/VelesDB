@@ -348,7 +348,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the legacy `(max_weight, hit_weight)` pair; only two positional weights
   are that pair now, and an incomplete keyword set is refused.
   `add_edge(source, target, label, id=n)` stored the edge from node 0; the
-  positional is now the source, and `id=` with `source=` is refused.
+  positional is now the source, `id=` with `source=` is refused, and the
+  stubs declare every form `GraphStore` and `GraphCollection` accept.
 
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two
