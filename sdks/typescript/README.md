@@ -58,7 +58,7 @@ On Node.js the WASM backend's `init()` reads `velesdb_wasm_bg.wasm` from disk wi
 
 The WASM backend runs entirely in-process -- no server required. Ideal for browser apps, prototyping, and edge deployments.
 
-> **Binding version:** the WASM backend reads its results from `@wiscale/velesdb-wasm` since 8.0.0, the floor this SDK release pins (`^8.0.0` in `package.json`). velesdb-wasm 6.x and 7.x return `textSearch`, `hybridSearch`, filtered `search` and `get` records as ES2015 `Map`s, which the SDK cannot read: those calls throw on any row (#2332, fixed in velesdb-wasm 8.0.0).
+> **Binding version:** the WASM backend reads its results from `@wiscale/velesdb-wasm` since 8.0.0, the floor this SDK release pins (`^8.0.0` in `package.json`). velesdb-wasm 6.x and 7.x return `textSearch`, `hybridSearch`, filtered `search` and `get` records as ES2015 `Map`s, which the SDK cannot read: those calls throw on any row (#2332, fixed in velesdb-wasm 8.0.0). A point id past `Number.MAX_SAFE_INTEGER` needs a binding that returns point ids as decimal strings (the one released with this SDK): earlier bindings throw inside a search, `get` or `query` over such a point.
 
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
@@ -867,9 +867,11 @@ await db.alterCollection('docs', { autoReindex: false });
 > past `Number.MAX_SAFE_INTEGER`), which `removeEdge` takes back as is; an id that is not a
 > non-negative integer is refused with `BAD_REQUEST`, never hashed into another id. `delete` and
 > `bulkDelete` remove a point's edges with it, as the server does. A decimal point id past
-> `Number.MAX_SAFE_INTEGER` is refused with `BAD_REQUEST` on this backend: it used to be hashed
-> into another point's id. `matchQuery` names the collection for the MATCH and returns REST's `{ bindings,
-> depth, projected, score? }` rows: the points' vectors score `similarity()` as on the server,
+> `Number.MAX_SAFE_INTEGER` (up to `u64::MAX`) is addressed exactly, as on REST: the binding
+> returns every point id as its decimal string, so `search`, `get` and the other reads give it
+> back as it went in; one past `u64::MAX` is refused with `BAD_REQUEST`. `matchQuery` names the
+> collection for the MATCH and returns REST's `{ bindings, depth, projected, score? }` rows,
+> each binding's node id a decimal string as on REST: the points' vectors score `similarity()` as on the server,
 > and `options.vector` / `threshold` behave as on REST `/match`. Traversal (`traverseGraph`, `traverseParallel`)
 > and `getNodeDegree` stay server-only, so `capabilities().graphTraversal` is `false`. An older
 > binding refuses every graph method with `NOT_SUPPORTED`.

@@ -47,7 +47,7 @@ export function newSparseIds(): SparseIds {
 export function indexSparse(
   ids: SparseIds,
   newStore: NewSparseStore,
-  pointId: number,
+  pointId: bigint,
   vector: SparseVector
 ): void {
   const { indices, values } = sparseVectorToArrays(vector);
@@ -65,7 +65,7 @@ export function indexSparse(
 }
 
 /** Retire `pointId`'s sparse id, if it has one: its postings stop matching. */
-export function retireSparse(ids: SparseIds, newStore: NewSparseStore, pointId: number): void {
+export function retireSparse(ids: SparseIds, newStore: NewSparseStore, pointId: bigint): void {
   const current = ids.byPoint.get(pointId);
   if (current === undefined) {
     return;
@@ -81,7 +81,8 @@ export function freeSparse(ids: SparseIds): void {
 }
 
 /**
- * The top `k` sparse hits as `[pointId, score]`, live points only. `k` must
+ * The top `k` sparse hits as `[pointId, score]`, live points only, each
+ * point id the exact `BigInt` it was upserted under. `k` must
  * be a positive integer, as the search boundary guarantees
  * (`validateSearchInputs`); anything else fetches nothing, since the
  * over-fetch by `dead` would otherwise return live hits the `k` cap never
@@ -92,7 +93,7 @@ export function sparseHits(
   indices: number[],
   values: number[],
   k: number
-): Array<[number, number]> {
+): Array<[bigint, number]> {
   if (!Number.isInteger(k) || k <= 0 || ids.store === null) {
     return [];
   }
@@ -101,7 +102,7 @@ export function sparseHits(
     new Float32Array(values),
     k + ids.dead
   );
-  const hits: Array<[number, number]> = [];
+  const hits: Array<[bigint, number]> = [];
   for (const { doc_id, score } of raw) {
     const pointId = ids.byId.get(BigInt(doc_id));
     if (pointId !== undefined) {

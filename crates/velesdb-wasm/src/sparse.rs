@@ -6,12 +6,20 @@
 //! vectors with the engine's own code, so it ranks exactly as core does.
 
 use serde::{Deserialize, Serialize};
+use velesdb_core::api_types::serde_id;
 use velesdb_core::sparse_index::{sparse_search, SparseInvertedIndex, SparseVector};
 use wasm_bindgen::prelude::*;
 
-/// Result from sparse search.
+use crate::js_value::PointId;
+
+/// Result from sparse search. `doc_id` is a decimal string in JSON, as every
+/// point id the binding returns, and reads back from a string or a number.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SparseSearchResult {
+    #[serde(
+        serialize_with = "serde_id::serialize_id_as_string",
+        deserialize_with = "serde_id::deserialize_id_from_string_or_number"
+    )]
     doc_id: u64,
     score: f32,
 }
@@ -90,7 +98,8 @@ impl SparseIndex {
 
     /// Searches the index with the given sparse query vector.
     ///
-    /// Returns a JSON array of `{doc_id, score}` objects, sorted by score descending.
+    /// Returns a JSON array of `{doc_id, score}` objects, sorted by score
+    /// descending, `doc_id` a decimal string.
     #[wasm_bindgen]
     pub fn search(
         &self,
@@ -155,9 +164,10 @@ impl SparseIndex {
 
 /// Fuses pre-computed dense and sparse search results using Reciprocal Rank Fusion (RRF).
 ///
-/// Both `dense_results` and `sparse_results` should be JSON arrays of `[doc_id, score]` pairs.
-/// Returns a JSON array of `{doc_id, score}` objects, sorted by fused score descending,
-/// truncated to the top `k` entries.
+/// Both `dense_results` and `sparse_results` should be arrays of `[doc_id, score]` pairs,
+/// each `doc_id` a decimal string (the form every search returns), a safe-integer number
+/// or a `BigInt`. Returns an array of `{doc_id, score}` objects, `doc_id` a decimal
+/// string, sorted by fused score descending, truncated to the top `k` entries.
 #[wasm_bindgen]
 pub fn hybrid_search_fuse(
     dense_results: JsValue,
@@ -165,26 +175,39 @@ pub fn hybrid_search_fuse(
     rrf_k: u32,
     k: usize,
 ) -> Result<JsValue, JsValue> {
-    let dense: Vec<(u64, f32)> = serde_wasm_bindgen::from_value(dense_results)
+    let dense: Vec<(PointId, f32)> = serde_wasm_bindgen::from_value(dense_results)
         .map_err(|e| JsValue::from_str(&format!("Invalid dense_results: {e}")))?;
-    let sparse: Vec<(u64, f32)> = serde_wasm_bindgen::from_value(sparse_results)
+    let sparse: Vec<(PointId, f32)> = serde_wasm_bindgen::from_value(sparse_results)
         .map_err(|e| JsValue::from_str(&format!("Invalid sparse_results: {e}")))?;
 
+    let results = fuse_scored(dense, sparse, rrf_k, k).map_err(|e| JsValue::from_str(&e))?;
+
+    crate::js_value::to_js_value(&results)
+        .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
+}
+
+/// The fusion behind [`hybrid_search_fuse`], without the `JsValue` boundary.
+pub(crate) fn fuse_scored(
+    dense: Vec<(PointId, f32)>,
+    sparse: Vec<(PointId, f32)>,
+    rrf_k: u32,
+    k: usize,
+) -> Result<Vec<SparseSearchResult>, String> {
+    let raw_ids = |hits: Vec<(PointId, f32)>| -> Vec<(u64, f32)> {
+        hits.into_iter().map(|(id, score)| (id.0, score)).collect()
+    };
     // Delegate to the canonical RRF in velesdb-core so the browser engine
     // reproduces core's ranking 1:1 (single source of truth for fusion math)
     // instead of re-deriving the formula here.
     let fused = velesdb_core::FusionStrategy::RRF { k: rrf_k }
-        .fuse(vec![dense, sparse])
-        .map_err(|e| JsValue::from_str(&format!("Fusion error: {e}")))?;
+        .fuse(vec![raw_ids(dense), raw_ids(sparse)])
+        .map_err(|e| format!("Fusion error: {e}"))?;
 
-    let mut results: Vec<SparseSearchResult> = fused
+    Ok(fused
         .into_iter()
+        .take(k)
         .map(|(doc_id, score)| SparseSearchResult { doc_id, score })
-        .collect();
-    results.truncate(k);
-
-    crate::js_value::to_js_value(&results)
-        .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
+        .collect())
 }
 
 #[cfg(test)]

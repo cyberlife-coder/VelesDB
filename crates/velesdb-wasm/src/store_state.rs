@@ -169,9 +169,10 @@ impl StoreState {
         store_insert::remove_at_index(self, idx);
     }
 
-    /// k-NN search. Returns [[id, score], ...].
+    /// k-NN search. Returns `[[id, score], ...]`, each id its exact decimal
+    /// string ([`store_search::scored_points`]).
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
-        store_search::to_js(&self.top_k(query, k)?)
+        store_search::to_js(&store_search::scored_points(self.top_k(query, k)?))
     }
 
     /// [`search_scored`](Self::search_scored) for a caller-supplied query:
@@ -385,7 +386,8 @@ impl StoreState {
         )
     }
 
-    /// Batch search for multiple vectors. Returns [[[id, score], ...], ...].
+    /// Batch search for multiple vectors. Returns `[[[id, score], ...], ...]`,
+    /// each id its exact decimal string.
     pub fn batch_search(
         &self,
         vectors: &[f32],
@@ -393,8 +395,10 @@ impl StoreState {
         k: usize,
     ) -> Result<JsValue, JsValue> {
         if num_vectors == 0 {
-            return crate::js_value::to_js_value::<Vec<Vec<(u64, f32)>>>(&vec![])
-                .map_err(|e| JsValue::from_str(&e.to_string()));
+            return crate::js_value::to_js_value::<Vec<Vec<(crate::js_value::PointId, f32)>>>(
+                &vec![],
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()));
         }
         store_search::validate_query_vectors(vectors, num_vectors, self.dimension)
             .map_err(WasmError::into_js_value)?;

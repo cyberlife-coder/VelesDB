@@ -3,7 +3,7 @@
  *
  * Covers the pure helpers in `src/backends/wasm-helpers.ts`:
  * normalizeIdString, canonicalPayloadKey, canonicalPayloadKeyFromResultId,
- * toNumericId, exactGraphId, sparseVectorToArrays, buildWasmContext,
+ * toPointId, exactGraphId, sparseVectorToArrays, buildWasmContext,
  * buildCollectionInfo.
  * These are all pure/synchronous — no fetch or WASM module instantiation
  * required.
@@ -14,7 +14,7 @@ import {
   normalizeIdString,
   canonicalPayloadKey,
   canonicalPayloadKeyFromResultId,
-  toNumericId,
+  toPointId,
   exactGraphId,
   sparseVectorToArrays,
   buildWasmContext,
@@ -62,7 +62,7 @@ describe('canonicalPayloadKey', () => {
     expect(canonicalPayloadKey('100')).toBe('100');
   });
 
-  it('falls back to toNumericId hash for non-integer strings', () => {
+  it('falls back to toPointId hash for non-integer strings', () => {
     const key = canonicalPayloadKey('abc');
     // hash is deterministic; we just assert it's a stringified numeric
     expect(key).toMatch(/^\d+$/);
@@ -89,39 +89,44 @@ describe('canonicalPayloadKeyFromResultId', () => {
   });
 });
 
-describe('toNumericId', () => {
-  it('passes number through unchanged', () => {
-    expect(toNumericId(42)).toBe(42);
-    expect(toNumericId(0)).toBe(0);
+describe('toPointId', () => {
+  it('takes a number as that integer', () => {
+    expect(toPointId(42)).toBe(42n);
+    expect(toPointId(0)).toBe(0n);
   });
 
-  it('parses safe integer string directly', () => {
-    expect(toNumericId('42')).toBe(42);
+  it('parses a decimal string, trimmed and without leading zeros', () => {
+    expect(toPointId('42')).toBe(42n);
+    expect(toPointId(' 0042 ')).toBe(42n);
   });
 
-  it('hashes non-integer strings to a positive integer', () => {
-    const h = toNumericId('hello');
-    expect(Number.isInteger(h)).toBe(true);
-    expect(h).toBeGreaterThanOrEqual(0);
+  it('hashes non-integer strings to a non-negative integer', () => {
+    const h = toPointId('hello');
+    expect(typeof h).toBe('bigint');
+    expect(h >= 0n).toBe(true);
+    expect(String(h)).toBe(canonicalPayloadKey('hello'));
   });
 
   it('returns same hash for same string (deterministic)', () => {
-    expect(toNumericId('hello')).toBe(toNumericId('hello'));
+    expect(toPointId('hello')).toBe(toPointId('hello'));
   });
 
-  it('refuses a decimal id past MAX_SAFE_INTEGER instead of hashing it into another point', () => {
-    // A decimal id names a u64; a hash of its digits would address — and
-    // could collide with — another point. The binding hands search ids back
-    // as JS numbers, so no exact form of it exists on this backend.
-    expect(() => toNumericId('9007199254740997')).toThrow(VelesDBError);
-    expect(() => toNumericId('9007199254740997')).toThrow(/MAX_SAFE_INTEGER/);
+  it('keeps a decimal id past MAX_SAFE_INTEGER exactly, up to u64::MAX', () => {
+    // The binding returns every point id as its decimal string, so the id
+    // comes back as it went in: no hash, no rounding, no refusal.
+    expect(toPointId('9007199254740993')).toBe(9007199254740993n);
+    expect(toPointId('18446744073709551615')).toBe(18446744073709551615n);
+  });
+
+  it('refuses a decimal id past u64::MAX instead of hashing it into another point', () => {
+    expect(() => toPointId('18446744073709551616')).toThrow(VelesDBError);
+    expect(() => toPointId('18446744073709551616')).toThrow(/u64::MAX/);
   });
 });
 
 describe('exactGraphId', () => {
-  it('keeps a decimal id past 2^53 exactly, where toNumericId would not', () => {
+  it('keeps a decimal id past 2^53 exactly', () => {
     expect(exactGraphId('9007199254740993', 'Edge id')).toBe('9007199254740993');
-    expect(() => toNumericId('9007199254740993')).toThrow(VelesDBError);
   });
 
   it('writes a safe integer as its decimal string and trims a string id', () => {
@@ -175,7 +180,7 @@ describe('buildWasmContext', () => {
     expect(ctx.getCollection('missing')).toBeUndefined();
     expect(ctx.canonicalPayloadKey('00042')).toBe('42');
     expect(ctx.canonicalPayloadKeyFromResultId(42n)).toBe('42');
-    expect(ctx.toNumericId('7')).toBe(7);
+    expect(ctx.toPointId('7')).toBe(7n);
     expect(ctx.sparseVectorToArrays({ 1: 0.5 })).toEqual({
       indices: [1],
       values: [0.5],

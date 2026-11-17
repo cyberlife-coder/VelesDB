@@ -107,9 +107,14 @@ const rows = JSON.parse(db.executeMatch(
   "MATCH (a)-[:CITES]->(b) RETURN b.title AS cited, b.id",
   JSON.stringify({ _collection: 'docs' })
 ));
-// [{ "bindings": { "a": 1, "b": 2 }, "depth": 1,
+// [{ "bindings": { "a": "1", "b": "2" }, "depth": 1,
 //    "projected": { "cited": "world", "b.id": 2 } }]
 ```
+
+Each `bindings` node id is its exact decimal string, as REST `/match` sends it
+(a JSON number rounds a `u64` past 2^53). `projected` keeps core's VelesQL row
+contract, shared with `executeQuery` and REST `/query`: an `alias.id` there is
+a number.
 
 `projected` follows core's RETURN rules: `alias.property` under its `AS` alias or
 its text, `alias.id` for the element id, a bare alias as every `alias.key` plus

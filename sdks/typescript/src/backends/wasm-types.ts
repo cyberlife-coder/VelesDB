@@ -39,21 +39,29 @@ type StoreParams<M extends keyof BindingVectorStore> = AllParams<BindingVectorSt
 // ---------------------------------------------------------------------------
 
 /**
- * Dense search result: [id, score] tuple returned by VectorStore.search() and
- * multi_query_search(). Ids go into the binding as BigInt and come back as
- * plain numbers.
+ * A point id as the binding returns it: its exact decimal string, as REST
+ * sends `SearchResultResponse.id`. Ids go into the binding as `BigInt`. A
+ * binding before this release returned a plain number, which threw past
+ * 2^53; every reader here takes either (`String(id)`, `BigInt(id)`,
+ * {@link WasmContext.canonicalPayloadKeyFromResultId}).
  */
-export type WasmDenseResult = [number, number];
+export type WasmPointId = string;
+
+/**
+ * Dense search result: [id, score] tuple returned by VectorStore.search(),
+ * search_with_quality() and multi_query_search().
+ */
+export type WasmDenseResult = [WasmPointId, number];
 
 /** Sparse/hybrid search result returned by sparse_search / hybrid_search_fuse. */
 export interface WasmSparseResult {
-  doc_id: bigint | number;
+  doc_id: WasmPointId;
   score: number;
 }
 
 /** Filtered search result returned by VectorStore.search_with_filter(). */
 export interface WasmFilteredResult {
-  id: number;
+  id: WasmPointId;
   score: number;
   payload?: Record<string, unknown> | null;
 }
@@ -63,7 +71,7 @@ export interface WasmFilteredResult {
  * velesdb-wasm 8.0.0 (#2332), `payload` null when the point has none.
  */
 export interface WasmHybridResult {
-  id: bigint | number;
+  id: WasmPointId;
   score: number;
   payload?: Record<string, unknown> | null;
 }
@@ -74,14 +82,14 @@ export interface WasmHybridResult {
  * `score` is always null.
  */
 export interface WasmTextResult {
-  id: number;
+  id: WasmPointId;
   score: null;
   payload: Record<string, unknown>;
 }
 
 /** Point returned by VectorStore.get(). */
 export interface WasmPoint {
-  id: bigint | number;
+  id: WasmPointId;
   vector: number[] | Float32Array;
   payload?: Record<string, unknown> | null;
 }
@@ -172,7 +180,7 @@ export interface WasmVectorStore {
    */
   multi_query_search(...args: StoreParams<'multi_query_search'>): WasmDenseResult[];
 
-  /** VelesQL-style query returning multi-model results. */
+  /** VelesQL-style query returning multi-model results; `nodeId` is a {@link WasmPointId}. */
   query(...args: StoreParams<'query'>): Record<string, unknown>[];
 }
 
@@ -322,10 +330,10 @@ export interface WasmModule {
 export interface SparseIds {
   /** The metadata-only store holding the sparse index; `null` until the first sparse upsert. */
   store: WasmVectorStore | null;
-  /** Live sparse id of each point that has a sparse vector, by numeric point id. */
-  byPoint: Map<number, bigint>;
+  /** Live sparse id of each point that has a sparse vector, by point id ({@link WasmContext.toPointId}). */
+  byPoint: Map<bigint, bigint>;
   /** Point behind each live sparse id. */
-  byId: Map<bigint, number>;
+  byId: Map<bigint, bigint>;
   /** Each live sparse id's vector, kept to rebuild the index from when the binding cannot remove. */
   vectors: Map<bigint, { indices: Uint32Array; values: Float32Array }>;
   /** Retired ids a remove-incapable binding still holds; a search over-fetches by this many. */
@@ -355,5 +363,5 @@ export interface WasmContext {
   canonicalPayloadKeyFromResultId(id: bigint | number | string): string;
   canonicalPayloadKey(id: string | number): string;
   sparseVectorToArrays(sv: SparseVector): { indices: number[]; values: number[] };
-  toNumericId(id: string | number): number;
+  toPointId(id: string | number): bigint;
 }

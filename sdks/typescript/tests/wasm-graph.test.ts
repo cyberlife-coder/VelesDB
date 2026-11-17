@@ -206,12 +206,15 @@ describe('WASM backend matchQuery through executeMatch', () => {
   it('when a MATCH runs, then the collection is named by _collection and the rows come back REST-shaped', async () => {
     const backend = await backendWithDocs();
     const db = MockWasmDatabase.last!;
-    db.matchRows = [{ bindings: { a: 1, b: 2 }, depth: 1, projected: { 'b.title': 'doc 2' } }];
+    // The binding writes each binding's node id as its decimal string, as REST /match.
+    db.matchRows = [{ bindings: { a: '1', b: '9007199254740993' }, depth: 1, projected: { 'b.title': 'doc 2' } }];
 
     const response = await backend.matchQuery('docs', 'MATCH (a)-[:CITES]->(b) RETURN b.title', { min: 1 });
 
     expect(JSON.parse(db.executeMatch.mock.calls[0]![1] as string)).toEqual({ min: 1, _collection: 'docs' });
-    expect(response.results).toEqual([{ bindings: { a: 1, b: 2 }, depth: 1, projected: { 'b.title': 'doc 2' } }]);
+    expect(response.results).toEqual([
+      { bindings: { a: '1', b: '9007199254740993' }, depth: 1, projected: { 'b.title': 'doc 2' } },
+    ]);
     expect(response.count).toBe(1);
     expect(response.meta).toEqual({ velesqlContractVersion: '3.0.0' });
     expect(Number.isInteger(response.tookMs)).toBe(true);
@@ -227,7 +230,7 @@ describe('WASM backend matchQuery through executeMatch', () => {
   it('when a query vector and threshold are passed, then they reach executeMatch and rows keep their score', async () => {
     const backend = await backendWithDocs();
     const db = MockWasmDatabase.last!;
-    db.matchRows = [{ bindings: { d: 3 }, depth: 1, projected: {}, score: 0.97 }];
+    db.matchRows = [{ bindings: { d: '3' }, depth: 1, projected: {}, score: 0.97 }];
 
     const response = await backend.matchQuery('docs', 'MATCH (a)-[:R]->(d) RETURN d', undefined, {
       vector: new Float32Array([1, 0]),

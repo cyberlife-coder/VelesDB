@@ -2,36 +2,55 @@
 //!
 //! Provides search functionality extracted from the main store.
 
-use crate::js_value::to_js_value;
+use crate::js_value::{to_js_value, PointId};
 use crate::wasm_error::WasmError;
 use crate::{fusion, text_search, vector_ops, DistanceMetric};
 use serde::Serialize;
+use velesdb_core::api_types::serde_id::id_to_json;
 use wasm_bindgen::JsValue;
 
 /// Serializes a search result through [`to_js_value`], rendering a failure
-/// (an id above `Number.MAX_SAFE_INTEGER`) as a JS string error.
+/// as a JS string error.
 #[inline]
 pub(crate) fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     to_js_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
-/// Converts scored triples `(id, score, payload)` to a JSON array of objects.
+/// Dense hits as JavaScript receives them: `[[id, score], …]`, each id its
+/// exact decimal string ([`PointId`]), each score a number.
+///
+/// The one shape of `search`, `search_with_quality`, `similarity_search`,
+/// `multi_query_search` and `batch_search`.
+pub(crate) fn scored_points(hits: Vec<(u64, f32)>) -> Vec<(PointId, f32)> {
+    hits.into_iter()
+        .map(|(id, score)| (PointId(id), score))
+        .collect()
+}
+
+/// Scored triples `(id, score, payload)` as `{id, score, payload}` records,
+/// the id its exact decimal string, as REST's `SearchResultResponse`.
 ///
 /// Shared by `hybrid_search_impl` and `search_with_filter_impl`.
-pub(crate) fn scored_triples_to_js(
+pub(crate) fn scored_triples_json(
     results: Vec<(u64, f32, Option<&serde_json::Value>)>,
-) -> Result<JsValue, JsValue> {
-    let output: Vec<serde_json::Value> = results
+) -> Vec<serde_json::Value> {
+    results
         .into_iter()
         .map(|(id, score, payload)| {
             serde_json::json!({
-                "id": id,
+                "id": id_to_json(id),
                 "score": score,
                 "payload": payload
             })
         })
-        .collect();
-    to_js(&output)
+        .collect()
+}
+
+/// [`scored_triples_json`], rendered for JavaScript.
+pub(crate) fn scored_triples_to_js(
+    results: Vec<(u64, f32, Option<&serde_json::Value>)>,
+) -> Result<JsValue, JsValue> {
+    to_js(&scored_triples_json(results))
 }
 
 /// Sorts `(id, score, payload)` triples by score according to metric ordering.
@@ -145,10 +164,20 @@ pub fn text_search_impl(
     field: Option<&str>,
     k: usize,
 ) -> Result<JsValue, JsValue> {
+    to_js(&text_search_matches(query, ids, payloads, field, k))
+}
+
+/// The records behind [`text_search_impl`], each id its exact decimal string.
+pub(crate) fn text_search_matches(
+    query: &str,
+    ids: &[u64],
+    payloads: &[Option<serde_json::Value>],
+    field: Option<&str>,
+    k: usize,
+) -> Vec<serde_json::Value> {
     let query_lower = query.to_lowercase();
 
-    let results: Vec<serde_json::Value> = ids
-        .iter()
+    ids.iter()
         .zip(payloads.iter())
         .filter_map(|(&id, payload)| {
             payload.as_ref().and_then(|p| {
@@ -159,7 +188,7 @@ pub fn text_search_impl(
 
                 if matches {
                     Some(serde_json::json!({
-                        "id": id,
+                        "id": id_to_json(id),
                         "score": serde_json::Value::Null,
                         "payload": p
                     }))
@@ -169,9 +198,7 @@ pub fn text_search_impl(
             })
         })
         .take(k)
-        .collect();
-
-    to_js(&results)
+        .collect()
 }
 
 /// Scored `(id, combined_score, payload)` triples behind
@@ -346,7 +373,7 @@ pub fn multi_query_search_impl(
     .map_err(|e| JsValue::from_str(&e))?;
     let fused: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
 
-    to_js(&fused)
+    to_js(&scored_points(fused))
 }
 
 /// Search with metadata filter.
@@ -415,7 +442,7 @@ pub fn similarity_search_impl(
     vector_ops::sort_results(&mut results, higher_is_better);
     results.truncate(k);
 
-    to_js(&results)
+    to_js(&scored_points(results))
 }
 
 /// Batch search for multiple vectors.
@@ -432,9 +459,9 @@ pub fn batch_search_impl(
     // front by the browser guardrails (#2679).
     crate::guardrails::check_fanout_memory(num_vectors, k.min(ids.len()))
         .map_err(|e| WasmError::from(e).into_js_value())?;
-    let all_results: Vec<Vec<(u64, f32)>> = vectors
+    let all_results: Vec<Vec<(PointId, f32)>> = vectors
         .chunks_exact(dimension)
-        .map(|query| top_k(query, ids, data, dimension, metric, k))
+        .map(|query| scored_points(top_k(query, ids, data, dimension, metric, k)))
         .collect();
     to_js(&all_results)
 }

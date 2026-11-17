@@ -6,7 +6,8 @@
  * `remove` deletes a document's postings, as `sparse_remove` does on the
  * bindings that carry it (8.0.0 does not — tests mock its absence by not
  * exposing `sparse_remove`); a search sums query × document weight per
- * document and returns the top `k` by score.
+ * document and returns the top `k` by score, each `doc_id` its decimal
+ * string, as the binding writes every id it returns.
  *
  * Tests use it so the SDK's sparse bookkeeping is checked against what the
  * binding actually does, not against an index that forgets on its behalf.
@@ -47,7 +48,7 @@ export class FakeSparseIndex {
     indices: Uint32Array,
     values: Float32Array,
     k: number
-  ): Array<{ doc_id: bigint; score: number }> {
+  ): Array<{ doc_id: string; score: number }> {
     const scores = new Map<bigint, number>();
     indices.forEach((term, i) => {
       for (const [doc, weight] of this.postings.get(term) ?? []) {
@@ -55,7 +56,7 @@ export class FakeSparseIndex {
       }
     });
     return [...scores]
-      .map(([doc_id, score]) => ({ doc_id, score }))
+      .map(([doc, score]) => ({ doc_id: String(doc), score }))
       .sort((a, b) => b.score - a.score)
       .slice(0, k);
   }

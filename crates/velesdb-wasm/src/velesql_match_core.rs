@@ -16,11 +16,15 @@
 //!   row carries it as `score`, when the MATCH computes one: a WHERE
 //!   `similarity()` leaf or a query vector ([`crate::velesql_match_score`]).
 //!
-//! `bindings` holds the explicitly aliased nodes only, and `depth` the number
-//! of relationships walked, as in core.
+//! `bindings` holds the explicitly aliased nodes only, each id its exact
+//! decimal string as REST `/match` sends it (`MatchQueryResultItem`), and
+//! `depth` the number of relationships walked, as in core. `projected`
+//! keeps core's VelesQL row contract, shared with `executeQuery` and REST
+//! `/query`: an `alias.id` there is a number.
 
 use std::collections::HashMap;
 
+use velesdb_core::api_types::serde_id;
 use velesdb_core::velesql::json_path::payload_path;
 use velesdb_core::velesql::{
     parse_projection_item, Parser, ProjectionItem, QueryValidator, ReturnClause, ReturnItem,
@@ -70,7 +74,7 @@ fn core_row(candidate: &MatchCandidate, return_clause: &ReturnClause) -> serde_j
     let bindings: serde_json::Map<String, serde_json::Value> = binding
         .nodes
         .iter()
-        .filter_map(|n| Some((n.alias.clone()?, serde_json::json!(n.id))))
+        .filter_map(|n| Some((n.alias.clone()?, serde_id::id_to_json(n.id))))
         .collect();
     let mut projected = HashMap::new();
     for item in &return_clause.items {
