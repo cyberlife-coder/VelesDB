@@ -299,7 +299,18 @@ class SearchOptions:
         include_vectors: Include raw vectors in results (default: False).
         fusion: Optional :class:`FusionStrategy` applied to hybrid dense+sparse
             search (both ``vector`` and ``sparse_vector`` set). Defaults to
-            RRF (k=60); has no effect on dense-only or sparse-only searches.
+            RRF (k=60); ``search_request`` refuses it with ``ValueError`` on a
+            dense-only or sparse-only search.
+        principal: Optional caller identity forwarded to the read gate.
+        tenant: Optional tenant hint forwarded to the read gate.
+        ef_search: Optional HNSW ef override in [16, 4096] for a dense-only
+            search; wins over ``quality``. ``search_request`` refuses it with
+            ``ValueError`` when ``sparse_vector`` is set: core's sparse and
+            hybrid searches take no ef.
+        quality: Optional search-quality profile for a dense-only search
+            (``"fast"``, ``"balanced"``, ``"accurate"``, ``"perfect"``,
+            ``"autotune"``, ``"custom:<ef>"``, ``"adaptive:<min>:<max>"``);
+            refused with ``sparse_vector`` like ``ef_search``.
 
     Example:
         >>> cond = {"type": "eq", "field": "lang", "value": "en"}
@@ -316,6 +327,8 @@ class SearchOptions:
     fusion: Optional["FusionStrategy"]
     principal: Optional[str]
     tenant: Optional[str]
+    ef_search: Optional[int]
+    quality: Optional[str]
 
     def __init__(
         self,
@@ -329,6 +342,8 @@ class SearchOptions:
         fusion: Optional["FusionStrategy"] = None,
         principal: Optional[str] = None,
         tenant: Optional[str] = None,
+        ef_search: Optional[int] = None,
+        quality: Optional[str] = None,
     ) -> None: ...
     def with_vector(
         self, vector: Optional[Union[List[float], "np.ndarray"]]
@@ -343,6 +358,8 @@ class SearchOptions:
     def with_fusion(self, fusion: Optional["FusionStrategy"]) -> "SearchOptions": ...
     def with_principal(self, principal: Optional[str]) -> "SearchOptions": ...
     def with_tenant(self, tenant: Optional[str]) -> "SearchOptions": ...
+    def with_ef_search(self, ef_search: Optional[int]) -> "SearchOptions": ...
+    def with_quality(self, quality: Optional[str]) -> "SearchOptions": ...
 
 
 class Collection:
@@ -585,6 +602,12 @@ class Collection:
 
         Returns:
             List of dicts with ``id``, ``score``, and ``payload`` keys.
+
+        Raises:
+            ValueError: If a knob does not apply to the path the options
+                select: ``ef_search`` or ``quality`` with a ``sparse_vector``
+                (they tune a dense-only search), or ``fusion`` without both
+                ``vector`` and ``sparse_vector``.
 
         Example:
             >>> opts = SearchOptions(vector=my_embedding, k=20)

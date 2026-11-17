@@ -420,6 +420,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python: `search_request` refuses a knob its search path ignores**
+  (Python, 2026-11-17). `SearchOptions.ef_search` and `quality` were honoured
+  on a dense-only search and silently dropped once `sparse_vector` was set
+  (core's sparse and hybrid searches take neither), and `fusion` was ignored
+  on a dense-only or sparse-only search. Each now raises `ValueError` on a
+  path that does not apply it; `ef_search`, `quality`, `with_ef_search` and
+  `with_quality` gain their stubs.
+
 - **Python: `Collection.batch_search` reads a 2-D numpy array** (Python,
   2026-11-17). It tested `queries` for truth, which a numpy matrix refuses
   with "truth value of an array is ambiguous", where `multi_query_search` and

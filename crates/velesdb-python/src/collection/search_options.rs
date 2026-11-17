@@ -73,8 +73,8 @@ pub struct SearchOptions {
     /// Optional fusion strategy applied when both ``vector`` and
     /// ``sparse_vector`` are provided (typed hybrid dense+sparse search).
     /// When ``None`` the default Reciprocal Rank Fusion (RRF, k=60) is used,
-    /// preserving the historical behavior.  Has no effect on dense-only or
-    /// sparse-only searches.
+    /// preserving the historical behavior.  A dense-only or sparse-only
+    /// search refuses it with ``ValueError``.
     #[pyo3(get, set)]
     pub fusion: Option<FusionStrategy>,
     /// Optional principal (caller identity) forwarded to the control-plane read
@@ -88,13 +88,16 @@ pub struct SearchOptions {
     pub tenant: Option<String>,
     /// Optional HNSW ``ef_search`` override for dense search, in
     /// ``[16, 4096]`` (core's `MIN_EF_SEARCH`/`MAX_EF_SEARCH`). Wins over
-    /// ``quality`` when both are set, exactly like core's gate.
+    /// ``quality`` when both are set, exactly like core's gate. A search
+    /// with ``sparse_vector`` (sparse-only or hybrid) refuses it with
+    /// ``ValueError``: core's sparse and hybrid searches take no ef.
     #[pyo3(get, set)]
     pub ef_search: Option<usize>,
     /// Optional named search-quality profile for dense search
     /// (``"fast"``, ``"balanced"``, ``"accurate"``, ``"perfect"``,
     /// ``"adaptive"``, ``"autotune"``, ``"custom"``). Parsed through core's
     /// own mode parser, so the accepted set can never drift from the engine.
+    /// Refused with ``sparse_vector`` like ``ef_search``.
     #[pyo3(get, set)]
     pub quality: Option<String>,
 }
@@ -115,11 +118,14 @@ impl SearchOptions {
     ///     sparse_index_name: Named sparse index to query.
     ///     include_vectors: Include raw vectors in results (default: False).
     ///     fusion: Optional :py:class:`FusionStrategy` for hybrid dense+sparse
-    ///         fusion (default: RRF k=60).
+    ///         fusion (default: RRF k=60). Hybrid only: ``search_request``
+    ///         refuses it without both vectors.
     ///     principal: Optional caller identity forwarded to the read gate.
     ///     tenant: Optional tenant hint forwarded to the read gate.
-    ///     ef_search: Optional HNSW ef override in [16, 4096] for dense search.
-    ///     quality: Optional search-quality profile name for dense search.
+    ///     ef_search: Optional HNSW ef override in [16, 4096] for a dense-only
+    ///         search; ``search_request`` refuses it with ``sparse_vector``.
+    ///     quality: Optional search-quality profile name for a dense-only
+    ///         search; refused with ``sparse_vector`` like ``ef_search``.
     #[new]
     #[pyo3(signature = (
         vector = None,

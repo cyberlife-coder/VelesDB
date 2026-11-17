@@ -43,6 +43,12 @@ impl Collection {
     /// Returns:
     ///     List of dicts with ``id``, ``score``, and ``payload`` keys.
     ///
+    /// Raises:
+    ///     ValueError: If a knob does not apply to the path the options
+    ///         select: ``ef_search`` or ``quality`` with a ``sparse_vector``
+    ///         (they tune a dense-only search), or ``fusion`` without both
+    ///         ``vector`` and ``sparse_vector``.
+    ///
     /// Example:
     ///     >>> opts = SearchOptions(vector=my_emb, k=20, filter={"lang": "en"})
     ///     >>> results = collection.search_request(opts)
