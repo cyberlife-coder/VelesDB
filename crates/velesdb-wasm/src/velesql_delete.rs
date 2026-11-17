@@ -18,7 +18,16 @@ pub(crate) fn execute(
 ) -> Result<u32, String> {
     let store = db.get_shared_store(&stmt.table)?;
     let to_remove = collect_matching_indices(&store, Some(&stmt.where_clause), params)?;
+    let ids: Vec<u64> = {
+        let borrowed = store.borrow();
+        to_remove
+            .iter()
+            .filter_map(|&idx| borrowed.ids.get(idx).copied())
+            .collect()
+    };
     remove_indices_desc(&store, &to_remove);
+    // As core's delete (#900): a deleted point takes its edges with it.
+    db.drop_edges_of(&stmt.table, &ids);
 
     Ok(u32::try_from(to_remove.len()).unwrap_or(u32::MAX))
 }

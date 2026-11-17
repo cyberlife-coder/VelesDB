@@ -226,6 +226,32 @@ export interface WasmVelesQLDatabase {
   delete_collection(...args: AllParams<BindingWasmDatabase['delete_collection']>): void;
   /** Execute one VelesQL statement; `params_json` is a JSON object or `null`. */
   executeQuery(sql: string, params_json: string | null): WasmQueryResult;
+  /**
+   * Run a `MATCH`; returns a JSON array of core-shaped rows
+   * (`{ bindings, depth, projected, score? }`). `vector` and `threshold` are
+   * REST `/match`'s. Declared by hand and optional, like
+   * the edge methods below: bindings before it do not have it.
+   */
+  executeMatch?(sql: string, params_json: string | null, vector?: Float32Array, threshold?: number): string;
+  /**
+   * Add an edge given as JSON `{ id?, source, target, label, properties? }`
+   * (ids as decimal strings or numbers); returns its id as a decimal string.
+   */
+  addEdge?(name: string, edge_json: string): string;
+  /**
+   * The edges of a collection, as a JSON array, optionally only one label.
+   * Each edge's `id`, `source` and `target` is a decimal string.
+   */
+  getEdges?(name: string, label?: string): string;
+  /**
+   * Remove points with the edges they are an end of, as core's delete does;
+   * returns how many points were there. Optional: bindings before it lack it.
+   */
+  removePoints?(name: string, ids: BigUint64Array): number;
+  /** Remove an edge by its decimal-string id; `false` when it was absent. */
+  removeEdge?(name: string, id: string): boolean;
+  /** The number of edges in a collection. */
+  edgeCount?(name: string): number;
   /** Release the database's WASM memory. */
   free(): void;
 }
@@ -277,6 +303,9 @@ export interface WasmModule {
 
   /** The VelesQL parser the backend classifies statements with (`wasm-velesql.ts`). */
   VelesQL?: WasmVelesQLParser;
+
+  /** The VelesQL contract version the binding implements (core's constant). */
+  velesqlContractVersion?(): string;
 
   /** Fuse dense + sparse search results via Reciprocal Rank Fusion. */
   hybrid_search_fuse(...args: AllParams<typeof bindingHybridSearchFuse>): WasmSparseResult[];

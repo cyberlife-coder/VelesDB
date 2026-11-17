@@ -574,6 +574,20 @@ impl WasmDatabase {
             .map_err(|e| JsValue::from_str(&e))
     }
 
+    /// Removes the points `ids` of collection `name` and the edges they are
+    /// an end of, as core's delete does; returns how many points were there.
+    /// Use it instead of the store's `remove` once the collection has edges.
+    ///
+    /// # Errors
+    /// Returns a `JsValue` error string when the collection does not exist.
+    #[wasm_bindgen(js_name = removePoints)]
+    pub fn remove_points(&mut self, name: &str, ids: Vec<u64>) -> Result<u32, JsValue> {
+        self.inner
+            .remove_points(name, &ids)
+            .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
     /// The number of edges in collection `name`.
     ///
     /// # Errors

@@ -137,4 +137,74 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
       db.query('docs', 'SELECT category, COUNT(*) FROM docs GROUP BY category')
     ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
   });
+
+  it('graph: edges between stored points are listed, counted and matched with REST shapes', async () => {
+    await db.addEdge('docs', { id: 10, source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } });
+
+    expect(await db.getEdges('docs', { label: 'NEXT' })).toEqual([
+      { id: '10', source: '1', target: '2', label: 'NEXT', properties: { weight: 0.5 } },
+    ]);
+    expect(await db.getEdgeCount('docs')).toBe(1);
+
+    // The collection's points are the MATCH's nodes: their payloads project.
+    const response = await db.matchQuery('docs', 'MATCH (a)-[r:NEXT]->(b) RETURN a.title, b.category, r.weight');
+    expect(response.results).toEqual([
+      {
+        bindings: { a: 1, b: 2 },
+        depth: 1,
+        projected: { 'a.title': 'hello rust', 'b.category': 'docs', 'r.weight': 0.5 },
+      },
+    ]);
+    expect(response.count).toBe(1);
+    expect(response.meta.velesqlContractVersion).toMatch(/^\d+\.\d+\.\d+$/);
+
+    expect(await db.removeEdge('docs', 10)).toBe(true);
+    expect(await db.getEdgeCount('docs')).toBe(0);
+  });
+
+  it('graph: a derived edge id past 2^53 is listed and removed exactly', async () => {
+    await db.addEdge('docs', { id: '9007199254740993', source: 1, target: 2, label: 'BIG' });
+
+    const [edge] = await db.getEdges('docs', { label: 'BIG' });
+    expect(edge?.id).toBe('9007199254740993');
+    expect(await db.removeEdge('docs', edge!.id)).toBe(true);
+    expect(await db.getEdges('docs', { label: 'BIG' })).toEqual([]);
+  });
+
+  it('graph: deleting a point deletes its edges, so a new point under its id starts unconnected', async () => {
+    await db.addEdge('docs', { id: 30, source: 1, target: 2, label: 'GONE' });
+
+    expect(await db.delete('docs', 2)).toBe(true);
+    expect(await db.getEdges('docs', { label: 'GONE' })).toEqual([]);
+
+    await db.upsert('docs', { id: 2, vector: [0, 1], payload: NOTES });
+    const response = await db.matchQuery('docs', 'MATCH (a)-[:GONE]->(b) RETURN b.id');
+    expect(response.results).toEqual([]);
+  });
+
+  it('graph: an edge to a point that does not exist is NOT_FOUND, as on REST', async () => {
+    await expect(
+      db.addEdge('docs', { id: 11, source: 1, target: 99, label: 'NEXT' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('graph: matchQuery scores the points\' vectors with similarity(), as on REST', async () => {
+    await db.addEdge('docs', { id: 20, source: 1, target: 2, label: 'SEES' });
+    await db.addEdge('docs', { id: 21, source: 1, target: 3, label: 'SEES' });
+
+    // Cosine to [0, 1]: point 2 ([0, 1]) 1.0, point 3 ([0.6, 0.8]) 0.8.
+    const where = await db.matchQuery(
+      'docs',
+      'MATCH (a)-[:SEES]->(b) WHERE similarity(b.embedding, $v) > 0.5 RETURN b.id ORDER BY similarity() DESC',
+      { v: [0, 1] }
+    );
+    expect(where.results.map(r => r.bindings.b)).toEqual([2, 3]);
+    expect(where.results[0]!.score).toBeCloseTo(1, 4);
+
+    const scored = await db.matchQuery('docs', 'MATCH (a)-[:SEES]->(b) RETURN b.id', undefined, {
+      vector: [0, 1],
+      threshold: 0.9,
+    });
+    expect(scored.results.map(r => r.bindings.b)).toEqual([2]);
+  });
 });

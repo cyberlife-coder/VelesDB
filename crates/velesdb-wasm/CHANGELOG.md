@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`WasmDatabase.addEdge` reads `source` and `target` as REST does: a
+  decimal string or a number, and `getEdges` lists them as decimal
+  strings.** They took and gave numbers only, so a node id past 2^53 could
+  not be named exactly in either direction.
+
+- **Deleting a point deletes the edges it is an end of, as core does
+  (#900).** A VelesQL `DELETE` removed the rows and left their edges, so a
+  later point under the same id inherited them in every MATCH. It now drops
+  them, and the new `WasmDatabase.removePoints(name, ids)` removes points
+  with their edges for a caller that holds the store handle, whose `remove`
+  cannot reach the graph.
+
 - **A `USING FUSION` the strategy refuses is an error, not an empty
   result.** `velesql_fusion::apply` turned every fusion error (e.g. two
   `weighted_rrf` weights over three branches) into an empty ranking that

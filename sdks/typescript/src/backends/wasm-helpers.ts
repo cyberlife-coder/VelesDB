@@ -7,6 +7,7 @@
  */
 
 import type { SparseVector } from '../types';
+import { VelesDBError } from '../types';
 import type { CollectionData, WasmModule, WasmContext } from './wasm-types';
 
 /**
@@ -95,7 +96,32 @@ export function sparseVectorToArrays(sv: SparseVector): { indices: number[]; val
   return { indices, values };
 }
 
-/** Convert a string or number document ID to a numeric ID. */
+/**
+ * A graph id (edge or node) as the binding takes it: its exact decimal
+ * string. Unlike {@link toNumericId}, which hashes a document id that is not
+ * a number, a graph id is a `u64` and nothing else: a derived edge id is
+ * routinely above 2^53, so a lossy or hashed stand-in would address another
+ * edge. Anything but a non-negative integer is refused.
+ */
+export function exactGraphId(id: string | number, what: string): string {
+  if (typeof id === 'number') {
+    if (Number.isSafeInteger(id) && id >= 0) { return String(id); }
+  } else {
+    const normalized = normalizeIdString(id);
+    if (normalized !== null) { return normalized; }
+  }
+  throw new VelesDBError(`${what} must be a non-negative integer id, got ${JSON.stringify(id)}`, 'BAD_REQUEST');
+}
+
+/**
+ * Convert a string or number document ID to a numeric ID.
+ *
+ * A decimal string is that number. One past `Number.MAX_SAFE_INTEGER` is
+ * refused (`BAD_REQUEST`) rather than hashed: a hash of its digits would
+ * address, and could collide with, another point, and this backend has no
+ * exact form for it — the binding hands search ids back as JS numbers.
+ * Any other string keeps its stable hash.
+ */
 export function toNumericId(id: string | number): number {
   if (typeof id === 'number') {
     return id;
@@ -106,6 +132,10 @@ export function toNumericId(id: string | number): number {
     if (Number.isSafeInteger(parsed)) {
       return parsed;
     }
+    throw new VelesDBError(
+      `Point id ${normalized} is past Number.MAX_SAFE_INTEGER; the WASM backend cannot address it exactly`,
+      'BAD_REQUEST'
+    );
   }
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
@@ -149,4 +179,14 @@ export function buildCollectionInfo(
     count: data.store.len,
     createdAt: data.createdAt,
   };
+}
+
+/** Serialize `params` for the executor: typed arrays become JSON arrays. */
+export function paramsJson(params: Record<string, unknown> | undefined): string | undefined {
+  if (params === undefined) { return undefined; }
+  return JSON.stringify(params, (_key, value: unknown) =>
+    ArrayBuffer.isView(value) && !(value instanceof DataView)
+      ? Array.from(value as unknown as ArrayLike<number>)
+      : value
+  );
 }

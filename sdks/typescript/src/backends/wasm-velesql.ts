@@ -22,7 +22,8 @@
 
 import { VelesDBError } from '../types';
 import type { QueryResponse } from '../types';
-import { describeWasmThrow } from './wasm-helpers';
+import { describeWasmThrow, paramsJson } from './wasm-helpers';
+import { WasmGraph } from './wasm-graph';
 import type {
   WasmModule,
   WasmParsedQuery,
@@ -30,16 +31,6 @@ import type {
   WasmVelesQLDatabase,
   WasmVelesQLParser,
 } from './wasm-types';
-
-/** Serialize `params` for the executor: typed arrays become JSON arrays. */
-function paramsJson(params: Record<string, unknown> | undefined): string | undefined {
-  if (params === undefined) { return undefined; }
-  return JSON.stringify(params, (_key, value: unknown) =>
-    ArrayBuffer.isView(value) && !(value instanceof DataView)
-      ? Array.from(value as unknown as ArrayLike<number>)
-      : value
-  );
-}
 
 /**
  * Whether the executor takes the statement: a `SELECT` the parser does not
@@ -76,6 +67,16 @@ export class WasmVelesQL {
     this.db.attachStore!(name, store);
   }
 
+  /**
+   * Remove points `ids` of collection `name` with the edges they are an end
+   * of, as core's delete does; `null` when the binding has no such call, and
+   * the caller removes them through the store (which has no edges to keep).
+   */
+  removePoints(name: string, ids: bigint[]): number | null {
+    if (typeof this.db.removePoints !== 'function') { return null; }
+    return this.db.removePoints(name, BigUint64Array.from(ids));
+  }
+
   /** Drop collection `name`; call before freeing its store. */
   detach(name: string): void {
     this.db.delete_collection(name);
@@ -101,6 +102,15 @@ export class WasmVelesQL {
       );
     }
     return this.execute(queryString, params);
+  }
+
+  /**
+   * Graph operations over this executor's database — the graph store a
+   * MATCH on each attached collection reads — or `null` when the binding
+   * lacks the edge API or `executeMatch`.
+   */
+  graph(mod: WasmModule, hasCollection: (name: string) => boolean): WasmGraph | null {
+    return WasmGraph.create(mod, this.db, hasCollection);
   }
 
   /** Release the executor; the stores stay owned by their handles. */
