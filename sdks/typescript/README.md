@@ -894,6 +894,19 @@ Query edges, optionally filtered by label.
 const edges = await db.getEdges('social', { label: 'FOLLOWS' });
 ```
 
+#### `db.removeEdge(collection, edgeId)`
+
+Remove an edge by id; `true` if it was removed, `false` if it did not exist.
+`edgeId` is a `GraphNodeId` (`number | string`): pass back the `id` an edge
+read returned as is. A derived edge id is hashed and routinely above
+`Number.MAX_SAFE_INTEGER`, so it arrives as a decimal string — converting it to
+a `number` would round it to another id.
+
+```typescript
+const [edge] = await db.getEdges('social', { label: 'FOLLOWS' });
+const removed = await db.removeEdge('social', edge.id); // e.g. '9007199254740993'
+```
+
 #### `db.traverseGraph(collection, request)`
 
 Traverse the graph using BFS or DFS from a source node.
