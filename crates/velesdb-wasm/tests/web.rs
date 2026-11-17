@@ -590,3 +590,29 @@ fn attached_store_payloads_written_from_js_are_filtered_by_velesql() {
     let ids: Vec<u64> = rows.iter().filter_map(|r| r["id"].as_u64()).collect();
     assert_eq!(ids, vec![1]);
 }
+
+// =============================================================================
+// Input guards: refusals, never a trap
+// =============================================================================
+
+/// A batch or multi-query search on a metadata-only store used to reach
+/// `chunks_exact(0)` and trap the module (`RuntimeError: unreachable`).
+#[wasm_bindgen_test]
+fn test_vector_search_on_a_metadata_only_store_is_refused() {
+    let store = VectorStore::new_metadata_only();
+    assert!(store.batch_search(&[], 1, 5).is_err());
+    let mut store = VectorStore::new_metadata_only();
+    assert!(store
+        .multi_query_search(&[], 1, 5, "rrf", None, None)
+        .is_err());
+}
+
+/// A non-finite vector is refused on ingest and on query, as core refuses it.
+#[wasm_bindgen_test]
+fn test_non_finite_vectors_are_refused() {
+    let mut store = VectorStore::new(2, "cosine").expect("store");
+    assert!(store.insert(1, &[f32::NAN, 0.0]).is_err());
+    assert_eq!(store.len(), 0);
+    store.insert(1, &[1.0, 0.0]).expect("finite insert");
+    assert!(store.search(&[f32::INFINITY, 0.0], 1).is_err());
+}

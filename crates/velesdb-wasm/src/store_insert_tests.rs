@@ -215,7 +215,11 @@ fn test_insert_batch_raw_length_mismatch_errors() {
     let mut store = mk_full_store(4);
     // 2 ids but only 4 floats (need 8). Must error, leaving the store empty.
     let err = insert_batch_raw(&mut store, &[1u64, 2], &[1.0, 2.0, 3.0, 4.0], 4).unwrap_err();
-    assert!(err.contains("size mismatch"), "unexpected error: {err}");
+    assert!(
+        err.message().contains("size mismatch"),
+        "unexpected error: {err:?}"
+    );
+    assert_eq!(err.code(), "VELES-005");
     assert!(store.ids.is_empty());
     assert!(store.data.is_empty());
 }
@@ -225,9 +229,20 @@ fn test_insert_batch_raw_dimension_mismatch_errors() {
     let mut store = mk_full_store(4);
     let err = insert_batch_raw(&mut store, &[1u64], &[1.0, 2.0, 3.0], 3).unwrap_err();
     assert!(
-        err.contains("dimension mismatch"),
-        "unexpected error: {err}"
+        err.message().contains("dimension mismatch"),
+        "unexpected error: {err:?}"
     );
+    assert_eq!(err.code(), "VELES-004");
+    assert!(store.ids.is_empty());
+}
+
+/// A non-finite component is refused with core's code, VELES-005, as a
+/// single insert refuses it — not as an uncoded string.
+#[test]
+fn test_insert_batch_raw_non_finite_component_carries_veles_005() {
+    let mut store = mk_full_store(2);
+    let err = insert_batch_raw(&mut store, &[1u64], &[f32::NAN, 0.0], 2).unwrap_err();
+    assert_eq!(err.code(), "VELES-005");
     assert!(store.ids.is_empty());
 }
 
@@ -236,7 +251,10 @@ fn test_insert_batch_raw_overflow_errors() {
     let mut store = mk_full_store(usize::MAX);
     // ids.len() * dimension overflows usize -> checked_mul guard rejects.
     let err = insert_batch_raw(&mut store, &[1u64, 2], &[], usize::MAX).unwrap_err();
-    assert!(err.contains("overflow"), "unexpected error: {err}");
+    assert!(
+        err.message().contains("overflow"),
+        "unexpected error: {err:?}"
+    );
     assert!(store.ids.is_empty());
 }
 

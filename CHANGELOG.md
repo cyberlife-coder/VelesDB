@@ -372,6 +372,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   136-year TTL and `2**32 + 60` a 60-second one. A count must now be a whole
   number in `0..=2^32-1`; anything else rejects with `INVALID_INPUT`.
 
+- **VelesQL `NOW()` and `INTERVAL` run in the browser** (core, WASM,
+  2026-11-16). Every temporal expression read `std::time::SystemTime::now`,
+  which panics on `wasm32-unknown-unknown`: a WASM query naming `NOW()` — or
+  an `INTERVAL` alone, since the clock was read before the expression was
+  inspected — trapped the module (`RuntimeError: unreachable`). `NOW()` now
+  reads one clock, `velesql::clock`, which takes the page's time
+  (`Date.now()`, through `web-time`) on wasm32 and the system clock
+  elsewhere, and only `NOW()` reads it. Pinned by
+  `crates/velesdb-wasm/tests/velesql_temporal_web.rs`, run under Node by the
+
+- **WASM `SemanticMemory.query()` answers** (WASM, 2026-11-16). Since 4.0.0
+  it threw `Invalid search results` on every call: it ran the store's
+  JavaScript-facing `search`, then tried to re-read the array it returned as
+  a JSON string. It now reads the store's typed top-k, and returns the
+  nearest facts as `{ id, score, content }`. Pinned by
+  `crates/velesdb-wasm/tests/semantic_memory_web.rs`, run under Node by the
+  wasm-bindgen CI step.
+
+- **WASM `VectorStore`: a metadata-only store refuses a vector search, a
+  non-finite vector is refused, and a hybrid search ranks a distance metric
+  nearest-first** (WASM, 2026-11-16). `batch_search` / `multi_query_search`
+  on a dimension-0 store reached `chunks_exact(0)` and trapped the module
+  (`RuntimeError: unreachable`); every vector search now refuses a
+  metadata-only store with `SearchNotSupported` (VELES-015), as core does.
+  Inserts and searches accepted `NaN` / infinite components, which core
+  refuses (`InvalidVector`, VELES-005); they now refuse them too, through
+  core's `validate_vector_is_finite`. And `hybrid_search` blended a raw
+  distance as if it were a similarity, dropped rows at or below 0 and sorted
+  descending, so on a `euclidean` or `hamming` store the exact match was
+  dropped and the farthest vector ranked first; the distance is now negated
+  before the blend, as core's fusion orients a lower-is-better branch; with
+  `vector_weight = 0` the search is text-only under every metric. The
+  TypeScript SDK checked a `quality` preset by searching a metadata-only
+  probe store; it now calls the new `VectorStore.validate_search_quality`
+  when the binding has it (and keeps the probe for an older binding).
+  `insertBatchRaw` refusals carry core's codes (VELES-004 / VELES-005) like
+  every other insert.
+
+- **WASM: an edge id is held once, as in core** (WASM, 2026-11-16). An
+  edge whose id is derived from (source, target, label) was stored again on
+  every insert — `WasmDatabase.addEdge` or `INSERT EDGE` run twice,
+  `MemoryService.relate` called twice — so `getEdges` listed it twice,
+  `why()` / `entity()` showed the relation twice, and `removeEdge` /
+  `unrelate` deleted every copy at once. Inserting under an id the store
+  already holds, explicit or derived, is now refused and leaves the stored
+  edge untouched, as core refuses it (`EdgeExists`); `relate` answers an
+  existing relation with its id and writes nothing, as core's agent-memory
+  relation does.
+
+- **WASM: deleting a row drops its sparse postings, and `CREATE COLLECTION
+  … WITH (storage = …)` is honoured** (WASM, 2026-11-16).
+  `VectorStore.remove` and VelesQL `DELETE` left the row's postings in the
+  store's sparse index, so `search_sparse` kept returning a deleted
+  document. The storage mode of a VelesQL `CREATE COLLECTION` was ignored
+  (every collection Full) and an unknown mode accepted; it is now read by
+  core's parser, which refuses unknown names.
+
 - **Python: the facade forwards `principal` / `tenant`, and a scipy sparse
   query reads like its dict** (Python, 2026-11-16). The `Collection` every
   `Database` call returns defined `search`, `batch_search`,

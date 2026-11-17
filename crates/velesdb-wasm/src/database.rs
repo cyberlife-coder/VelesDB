@@ -133,13 +133,11 @@ impl DatabaseInner {
         self.create_collection_with_mode(name, dimension, metric, crate::StorageMode::Full)
     }
 
-    /// Creates a collection with an explicit storage mode.
-    ///
-    /// Used by the TRUNCATE path to preserve the existing storage mode
-    /// (Full / SQ8 / Binary / PQ / RaBitQ) when re-provisioning the
-    /// collection. `create_collection` delegates to this with
-    /// `StorageMode::Full` for backward compatibility with the public
-    /// WASM surface. Fixes Devin Review Finding M.
+    /// Creates a collection with an explicit storage mode (Full / SQ8 /
+    /// Binary / PQ / RaBitQ): VelesQL `CREATE COLLECTION … WITH (storage =
+    /// …)` runs it. `create_collection` delegates to this with
+    /// `StorageMode::Full` for backward compatibility with the public WASM
+    /// surface.
     pub(crate) fn create_collection_with_mode(
         &mut self,
         name: &str,
