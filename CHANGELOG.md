@@ -471,6 +471,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: `streamTraverse` times the connection and each event,
+  not the whole stream** (TypeScript SDK, 2026-11-17). The client `timeout`
+  was armed once and cleared only when the stream ended, so a traversal (or a
+  consumer) taking longer than it was aborted mid-stream with "Request
+  timeout". It now bounds the wait for the response headers, then each wait
+  for the next body chunk; the consumer's own time between events is not
+  counted, and a stream silent for longer than the timeout still fails.
+
 - **Tauri plugin: memory reads no longer create the memory collections**
   (Tauri plugin, core, 2026-11-17). The agent-memory handle was built on the
   first memory command of any kind, and building it created

@@ -985,7 +985,10 @@ A traversal has no cursor: `result.hasMore` is `true` when it stopped at
 Stream a graph traversal over SSE (`GET .../graph/traverse/stream`) as an
 async iterable of `TraverseStreamEvent` — `node` (one per visited node, with
 `depth` and `path`), `stats` (progress), `done` (totals), and `error`.
-**REST backend only** (the WASM backend throws `NOT_SUPPORTED`).
+**REST backend only** (the WASM backend throws `NOT_SUPPORTED`). The client
+`timeout` bounds the wait for the response, then each wait for the next
+event, not the length of the stream; a stream silent for longer fails with
+`ConnectionError('Request timeout')`.
 
 ```typescript
 for await (const event of db.streamTraverse('social', {

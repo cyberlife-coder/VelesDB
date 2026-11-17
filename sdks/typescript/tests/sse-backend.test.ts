@@ -161,6 +161,96 @@ describe('streamTraverse (SSE)', () => {
   });
 });
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A body that delivers `count` node events `gapMs` apart, then closes, and
+ * errors with an AbortError once the request signal aborts — as fetch's
+ * body does.
+ */
+function pacedResponse(init: RequestInit, count: number, gapMs: number) {
+  const encoder = new TextEncoder();
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      init.signal?.addEventListener('abort', () =>
+        controller.error(new DOMException('aborted', 'AbortError'))
+      );
+    },
+    async pull(controller) {
+      await delay(gapMs);
+      if (init.signal?.aborted) return;
+      if (sent === count) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(
+        encoder.encode(`event: node\ndata: {"id":"${sent}","depth":0,"path":[]}\n\n`)
+      );
+      sent += 1;
+    },
+  });
+  return { ok: true, status: 200, headers: { get: () => 'text/event-stream' }, body };
+}
+
+describe('streamTraverse timeout', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const quick: SseTransport = { ...transport, timeout: 60 };
+
+  it('lets a stream outlast the timeout while each event arrives within it', async () => {
+    mockFetch.mockImplementationOnce((_url: string, init: RequestInit) =>
+      Promise.resolve(pacedResponse(init, 5, 30))
+    );
+
+    const events = await collect(quick, 'kg', { startNode: 1 });
+
+    expect(events.map((e) => (e.type === 'node' ? e.id : e.type))).toEqual([
+      '0', '1', '2', '3', '4',
+    ]);
+  });
+
+  it('does not count the time the consumer spends on an event', async () => {
+    mockFetch.mockImplementationOnce((_url: string, init: RequestInit) =>
+      Promise.resolve(pacedResponse(init, 3, 0))
+    );
+
+    const seen: TraverseStreamEvent[] = [];
+    for await (const ev of streamTraverse(quick, 'kg', { startNode: 1 })) {
+      seen.push(ev);
+      await delay(100);
+    }
+
+    expect(seen).toHaveLength(3);
+  });
+
+  it('times out a stream that goes silent for longer than the timeout', async () => {
+    mockFetch.mockImplementationOnce((_url: string, init: RequestInit) =>
+      Promise.resolve(pacedResponse(init, 1, 200))
+    );
+
+    await expect(collect(quick, 'kg', { startNode: 1 })).rejects.toMatchObject({
+      code: 'CONNECTION_ERROR',
+      message: 'Request timeout',
+    });
+  });
+
+  it('times out a server that never answers the request', async () => {
+    mockFetch.mockImplementationOnce(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError'))
+          );
+        })
+    );
+
+    await expect(collect(quick, 'kg', { startNode: 1 })).rejects.toMatchObject({
+      code: 'CONNECTION_ERROR',
+      message: 'Request timeout',
+    });
+  });
+});
+
 describe('client streamTraverse delegation', () => {
   beforeEach(() => vi.clearAllMocks());
 
