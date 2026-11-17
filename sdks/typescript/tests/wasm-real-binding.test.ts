@@ -355,9 +355,9 @@ describe.skipIf(!PKG)('VelesQL SPARSE_NEAR through the WASM backend, on the real
 
   it("only a genuinely missing index is refused, with core's message", async () => {
     await expect(db.query('dense', 'SELECT * FROM dense WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 5'))
-      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining("Sparse index '<default>' not found") });
+      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: "[VELES-009] Configuration error: Sparse index '<default>' not found" });
     await expect(db.query('sp', "SELECT * FROM sp WHERE vector SPARSE_NEAR {1: 1.0} USING 'splade' LIMIT 5"))
-      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining("Sparse index 'splade' not found") });
+      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: "[VELES-009] Configuration error: Sparse index 'splade' not found" });
   });
 
   it('the typed sparse and hybrid searches read the same store and rank as before', async () => {

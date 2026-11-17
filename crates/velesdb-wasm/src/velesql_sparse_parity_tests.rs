@@ -187,3 +187,29 @@ fn a_lone_sparse_near_ranks_by_the_sparse_score() {
         "SELECT * FROM c WHERE vector SPARSE_NEAR {1: 1.0, 2: 1.0} AND cat = 'b' LIMIT 1 OFFSET 1",
     );
 }
+
+/// The one refusal left is a genuinely missing index — a collection never
+/// given a sparse vector, or an index name WASM does not keep — and it reads
+/// as core's, error code included.
+#[test]
+fn a_missing_sparse_index_fails_with_cores_message() {
+    let core_err = |db: &Database, sql: &str| {
+        let query = Parser::parse(sql).expect("test: parse");
+        db.execute_query(&query, &HashMap::new())
+            .expect_err("core: missing index")
+            .to_string()
+    };
+    let named = "SELECT * FROM c WHERE vector SPARSE_NEAR {1: 1.0} USING 'title' LIMIT 5";
+    let wasm_named = execute(&mut wasm_db("cosine"), named, None).expect_err("wasm: named");
+    assert_eq!(wasm_named, core_err(&core_db(CoreMetric::Cosine).1, named));
+
+    let default = "SELECT * FROM d WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 5";
+    let mut wasm = DatabaseInner::new();
+    wasm.create_collection("d", 4, "cosine").expect("test: create");
+    let dir = tempfile::TempDir::new().expect("test: temp dir");
+    let core = Database::open(dir.path()).expect("test: open");
+    core.create_vector_collection("d", 4, CoreMetric::Cosine)
+        .expect("test: create");
+    let wasm_default = execute(&mut wasm, default, None).expect_err("wasm: default");
+    assert_eq!(wasm_default, core_err(&core, default));
+}

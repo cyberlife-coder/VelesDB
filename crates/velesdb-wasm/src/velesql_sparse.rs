@@ -94,7 +94,10 @@ impl SparseQuery<'_> {
 }
 
 /// The store's sparse index, the one a `SPARSE_NEAR` names: WASM keeps a
-/// single, default, index per store.
+/// single, default, index per store. A missing one is refused with core's
+/// error (`Error::Config`, VELES-009), the text core's
+/// `sparse_index_not_found` writes; `a_missing_sparse_index_fails_with_cores_message`
+/// pins the two together.
 fn sparse_index<'a>(
     store: &'a StoreState,
     svs: &SparseVectorSearch,
@@ -109,7 +112,7 @@ fn sparse_index<'a>(
         .filter(|_| name == DEFAULT_SPARSE_INDEX_NAME)
         .ok_or_else(|| {
             let shown = if name.is_empty() { "<default>" } else { name };
-            format!("Sparse index '{shown}' not found")
+            velesdb_core::Error::Config(format!("Sparse index '{shown}' not found")).to_string()
         })
 }
 
