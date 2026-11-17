@@ -294,25 +294,6 @@ impl Collection {
         py.detach(|| self.inner.flush().map_err(core_err))
     }
 
-    /// Insert points via the streaming ingestion channel.
-    ///
-    /// Points are buffered and merged asynchronously into the HNSW index.
-    /// This is faster than `upsert` for high-throughput workloads but offers
-    /// eventual consistency (points appear in search after buffer merge).
-    ///
-    /// Args:
-    ///     points: List of point dicts (same format as upsert).
-    ///
-    /// Returns:
-    ///     Number of points successfully queued.
-    ///
-    /// Raises:
-    ///     RuntimeError: If the streaming buffer is full or not configured.
-    ///
-    /// Example:
-    ///     >>> count = collection.stream_insert([
-    ///     ...     {"id": 1, "vector": [...], "payload": {"key": "value"}}
-    ///     ... ])
     /// Enables streaming ingestion on this collection.
     ///
     /// Must be called before `stream_insert`; otherwise stream inserts fail
@@ -338,6 +319,25 @@ impl Collection {
         self.inner.enable_streaming(core_config).map_err(core_err)
     }
 
+    /// Insert points via the streaming ingestion channel.
+    ///
+    /// Points are buffered and merged asynchronously into the HNSW index.
+    /// This is faster than `upsert` for high-throughput workloads but offers
+    /// eventual consistency (points appear in search after buffer merge).
+    ///
+    /// Args:
+    ///     points: List of point dicts (same format as upsert).
+    ///
+    /// Returns:
+    ///     Number of points successfully queued.
+    ///
+    /// Raises:
+    ///     RuntimeError: If the streaming buffer is full or not configured.
+    ///
+    /// Example:
+    ///     >>> count = collection.stream_insert([
+    ///     ...     {"id": 1, "vector": [...], "payload": {"key": "value"}}
+    ///     ... ])
     #[pyo3(signature = (points))]
     fn stream_insert(
         &self,

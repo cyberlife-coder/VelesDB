@@ -399,7 +399,8 @@ class Collection:
         principal: str | None = None,
         tenant: str | None = None,
     ) -> list[list[dict[str, Any]]]:
-        if queries and isinstance(queries[0], dict):
+        # `len()`, not truthiness: a 2-D numpy array has no truth value.
+        if len(queries) > 0 and isinstance(queries[0], dict):
             # Pass dicts through to Rust, injecting the default top_k only
             # when the caller omitted both "top_k" and "topK".
             searches = []

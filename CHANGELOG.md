@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already a string. With a velesdb-wasm binding older than this release a
   search over a point past 2^53 still throws inside the binding.
 
+- **Python: a collection's query methods run reads only** (Python,
+  2026-11-17). `Collection.query` / `query_ids` / `explain_analyze` and their
+  `GraphCollection` twins rewrite a SELECT's `FROM` to their own collection,
+  but forwarded any other statement as written, so
+  `docs.query("DROP COLLECTION other")` dropped `other` and
+  `docs.query("DELETE FROM other …")` deleted from it. A statement core's
+  `Query::is_read_only` refuses (DDL, DML, `TRAIN`, `FLUSH`) now raises
+  `ValueError`. Migration: run writes through `Database.execute_query`.
+
 - **BREAKING (Tauri IPC): graph node ids cross the IPC boundary as REST's
   graph DTOs carry them** (Tauri, 2026-11-17). The plugin read and wrote node
   ids as JSON numbers, which JavaScript rounds past 2^53, while REST reads a
@@ -456,6 +465,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file. Anything else is now a usage error (exit 2).
 
 ### Fixed
+
+- **Python: the type stub declares every runtime member and keyword**
+  (Python, 2026-11-17). `__init__.pyi` lacked dozens of methods and
+  keywords the module has — among them `Collection.enable_streaming`,
+  `create_index`, `scroll_batch`, `rebuild_index`, `compact_storage`;
+  `Database.explain`, `explain_analyze`, `train_quantizer`, `flush_all`;
+  `GraphStore.get_edge`, `in_degree`, `out_degree`;
+  `GraphCollection.truncate`, `try_remove_edge`, `metrics`; the
+  `GraphSchema` builders; `hybrid_search(rrf_k=)`,
+  `StreamingConfig(limit=, deadline_ms=)`, the traversals' `min_depth` /
+  `timeout_ms` and `search_by_embedding(principal=, tenant=)` — and
+  declared `Collection.upsert` and `batch_search` with keywords the facade
+  does not take. A test now diffs the built module's members and
+  signatures against the stub's AST, both ways, so the stub cannot drift
+  again. The `GraphCollection` a `Database` returns now types the members
+  it forwards to `PyGraphCollection` (`query`, `traverse_bfs`, `len()`, a
+  `with` block, …), which a type checker refused: both stub classes share a
+  stub-only base, and the test resolves only the bases the stub declares.
+  `Collection.stream_insert` gets back the docstring that had landed on
+  `enable_streaming`.
+
+- **Python: `search_request` refuses a knob its search path ignores**
+  (Python, 2026-11-17). `SearchOptions.ef_search` and `quality` were honoured
+  on a dense-only search and silently dropped once `sparse_vector` was set
+  (core's sparse and hybrid searches take neither), and `fusion` was ignored
+  on a dense-only or sparse-only search. Each now raises `ValueError` on a
+  path that does not apply it; `ef_search`, `quality`, `with_ef_search` and
+  `with_quality` gain their stubs.
+
+- **Python: `Collection.batch_search` reads a 2-D numpy array** (Python,
+  2026-11-17). It tested `queries` for truth, which a numpy matrix refuses
+  with "truth value of an array is ambiguous", where `multi_query_search` and
+  `search_batch_parallel` read the same matrix; it now checks the length.
+
+- **Python: the observer receives point deletes** (Python, 2026-11-17).
+  Core reports every completed delete with `on_delete`, but the binding's
+  observer adapter did not implement it, so `Collection.delete` and VelesQL
+  `DELETE` never reached a Python callback. It now receives
+  `observer("delete", collection=…, point_count=…)`, like `upsert`. The
+  `Database` docstring lists every event, `ddl_request` and
+  `dml_mutation_request` included, and `CORE_OPERATIONS_API.md` no longer
+  says `on_upsert` / `on_query` fire only for VelesQL statements, and lists
+  `on_delete`.
 
 - **WASM: `VectorStore.save()` / `export_to_bytes()` keep the sparse
   index.** It was dropped, so a loaded store answered no sparse query until
