@@ -26,6 +26,7 @@ import { newSparseIds, sparseHits } from '../src/backends/wasm-sparse';
 import type {
   CollectionData,
   WasmContext,
+  WasmDenseResult,
   WasmModule,
   WasmVectorStore,
 } from '../src/backends/wasm-types';
@@ -48,7 +49,7 @@ type MultiQuerySearchArgs = [
   weights: Float32Array | null,
 ];
 
-const multiQuerySearchStub = (result: [bigint, number][]) =>
+const multiQuerySearchStub = (result: WasmDenseResult[]) =>
   vi.fn((..._args: MultiQuerySearchArgs) => result);
 
 function buildStore(overrides: StoreStub = {}): WasmVectorStore {
@@ -152,7 +153,7 @@ describe('wasmSearch — validation + dense happy path', () => {
       ['42', { title: 'x' }],
     ]);
     const store = buildStore({
-      search: vi.fn(() => [[42n, 0.9]]),
+      search: vi.fn(() => [['42', 0.9]]),
     });
     const ctx = buildCtx('docs', store, { dimension: 2, payloads });
 
@@ -162,7 +163,7 @@ describe('wasmSearch — validation + dense happy path', () => {
   });
 
   it('dense-only branch omits payload when the map has no entry', async () => {
-    const store = buildStore({ search: vi.fn(() => [[7n, 0.5]]) });
+    const store = buildStore({ search: vi.fn(() => [['7', 0.5]]) });
     const ctx = buildCtx('docs', store);
 
     const result = await wasmSearch(ctx, 'docs', [0.1, 0.2]);
@@ -208,7 +209,7 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
   beforeEach(() => vi.clearAllMocks());
 
   it('runs a dense search under the preset the caller named', async () => {
-    const search_with_quality = vi.fn(() => [[1n, 0.9]]);
+    const search_with_quality = vi.fn(() => [['1', 0.9]]);
     const store = buildStore({ search_with_quality });
     const ctx = buildCtx('docs', store);
 
@@ -236,10 +237,10 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
   });
 
   it("fuses a hybrid search's dense leg under the caller's preset", async () => {
-    const search_with_quality = vi.fn(() => [[1n, 0.9]]);
+    const search_with_quality = vi.fn(() => [['1', 0.9]]);
     const store = buildStore({
       search_with_quality,
-      sparse_search: vi.fn(() => [{ doc_id: 2n, score: 0.5 }]),
+      sparse_search: vi.fn(() => [{ doc_id: '2', score: 0.5 }]),
     });
     const ctx = buildCtx('docs', store, {
       wasmModule: { hybrid_search_fuse: vi.fn(() => []) },
@@ -353,7 +354,7 @@ describe('wasmSearchBatch — an unparseable preset stops the batch before it st
       }
       return [];
     });
-    const search_with_quality = vi.fn(() => [[1n, 0.9]]);
+    const search_with_quality = vi.fn(() => [['1', 0.9]]);
     const ctx = buildCtx('docs', buildStore({ search_with_quality }), {
       wasmModule: moduleWithProbe(buildStore({ search_with_quality: parse })),
     });
@@ -391,8 +392,8 @@ describe('wasmSearch — filter / sparse / hybrid branches', () => {
     ]);
     const store = buildStore({
       search_with_filter: vi.fn(() => [
-        { id: 1n, score: 0.9, payload: { inline: true } },
-        { id: 9n, score: 0.5 }, // no inline payload → falls back to map
+        { id: '1', score: 0.9, payload: { inline: true } },
+        { id: '9', score: 0.5 }, // no inline payload → falls back to map
       ]),
     });
     const ctx = buildCtx('docs', store, { payloads });
@@ -407,7 +408,7 @@ describe('wasmSearch — filter / sparse / hybrid branches', () => {
   });
 
   it('sparse-only branch activates when dimension=0 and sparseVector provided', async () => {
-    const sparse_search = vi.fn(() => [{ doc_id: 5n, score: 0.7 }]);
+    const sparse_search = vi.fn(() => [{ doc_id: '5', score: 0.7 }]);
     const store = buildStore({ sparse_search });
     const ctx = buildCtx('docs', store, { dimension: 0 });
     // Sparse id 5 is point 5's live sparse vector, in the collection's
@@ -471,8 +472,8 @@ describe('wasmSearchBatch', () => {
     const store = buildStore({
       search: vi
         .fn()
-        .mockReturnValueOnce([[1n, 0.1]])
-        .mockReturnValueOnce([[2n, 0.2]]),
+        .mockReturnValueOnce([['1', 0.1]])
+        .mockReturnValueOnce([['2', 0.2]]),
     });
     const ctx = buildCtx('docs', store);
 
@@ -555,8 +556,8 @@ describe('wasmHybridSearch', () => {
     ]);
     const store = buildStore({
       hybrid_search: vi.fn(() => [
-        { id: 5n, score: 0.8, payload: { inline: true } },
-        { id: 9n, score: 0.1 },
+        { id: '5', score: 0.8, payload: { inline: true } },
+        { id: '9', score: 0.1 },
       ]),
     });
     const ctx = buildCtx('docs', store, { payloads });
@@ -589,7 +590,7 @@ describe('wasmMultiQuerySearch', () => {
   });
 
   it('flattens vectors to a single Float32Array and forwards strategy/rrfK', async () => {
-    const multi = multiQuerySearchStub([[7n, 0.77]]);
+    const multi = multiQuerySearchStub([['7', 0.77]]);
     const store = buildStore({ multi_query_search: multi });
     const ctx = buildCtx('docs', store, { dimension: 2 });
 
@@ -865,7 +866,7 @@ describe('WASM search — a filter is refused, never dropped (#2095)', () => {
     // velesdb-wasm's text_search(query, k, field?) has no filter slot: its
     // third argument names a payload field. Dropping the filter returns this
     // row, which the caller's filter excludes.
-    const text_search = vi.fn(() => [{ id: 2n, payload: { tenant: 'other' } }]);
+    const text_search = vi.fn(() => [{ id: '2', payload: { tenant: 'other' } }]);
     const ctx = buildCtx('docs', buildStore({ text_search }));
 
     const outcome = await settle(
@@ -878,7 +879,7 @@ describe('WASM search — a filter is refused, never dropped (#2095)', () => {
 
   it('hybridSearch refuses a filter', async () => {
     const hybrid_search = vi.fn(() => [
-      { id: 2n, score: 0.9, payload: { tenant: 'other' } },
+      { id: '2', score: 0.9, payload: { tenant: 'other' } },
     ]);
     const ctx = buildCtx('docs', buildStore({ hybrid_search }));
 
@@ -891,7 +892,7 @@ describe('WASM search — a filter is refused, never dropped (#2095)', () => {
   });
 
   it('multiQuerySearch refuses a filter', async () => {
-    const multi_query_search = vi.fn(() => [[2n, 0.9]]);
+    const multi_query_search = vi.fn(() => [['2', 0.9]]);
     const ctx = buildCtx('docs', buildStore({ multi_query_search }));
 
     const outcome = await settle(
@@ -903,7 +904,7 @@ describe('WASM search — a filter is refused, never dropped (#2095)', () => {
   });
 
   it('search refuses a filter combined with a sparse vector', async () => {
-    const sparse_search = vi.fn(() => [{ doc_id: 2n, score: 0.9 }]);
+    const sparse_search = vi.fn(() => [{ doc_id: '2', score: 0.9 }]);
     const ctx = buildCtx('docs', buildStore({ sparse_search }));
 
     const outcome = await settle(
@@ -1149,17 +1150,17 @@ describe('WASM search — k = 0 returns nothing, before any binding call (#2095)
   /** A collection whose binding would return a hit on every path, with one retired sparse id. */
   function collectionWithHits(dimension: number) {
     const store = buildStore({
-      search: vi.fn(() => [[1n, 0.9]]),
-      search_with_filter: vi.fn(() => [{ id: 1n, score: 0.9 }]),
-      text_search: vi.fn(() => [{ id: 1n, payload: {} }]),
-      hybrid_search: vi.fn(() => [{ id: 1n, score: 0.9 }]),
-      multi_query_search: vi.fn(() => [[1n, 0.9]]),
+      search: vi.fn(() => [['1', 0.9]]),
+      search_with_filter: vi.fn(() => [{ id: '1', score: 0.9 }]),
+      text_search: vi.fn(() => [{ id: '1', payload: {} }]),
+      hybrid_search: vi.fn(() => [{ id: '1', score: 0.9 }]),
+      multi_query_search: vi.fn(() => [['1', 0.9]]),
       query: vi.fn(() => [{ id: 1 }]),
     });
-    const fuse = vi.fn(() => [{ doc_id: 1n, score: 0.9 }]);
+    const fuse = vi.fn(() => [{ doc_id: '1', score: 0.9 }]);
     const ctx = buildCtx('docs', store, { dimension, wasmModule: { hybrid_search_fuse: fuse } });
     const sparseIds = ctx.getCollection('docs')!.sparseIds;
-    const sparseStore = buildStore({ sparse_search: vi.fn(() => [{ doc_id: 1n, score: 1 }]) });
+    const sparseStore = buildStore({ sparse_search: vi.fn(() => [{ doc_id: '1', score: 1 }]) });
     sparseIds.store = sparseStore;
     sparseIds.byId.set(1n, 1n);
     sparseIds.dead = 1;
@@ -1207,7 +1208,7 @@ describe('WASM search — k = 0 returns nothing, before any binding call (#2095)
 
 describe('sparseHits — a k that is not a positive integer fetches nothing (#2095)', () => {
   it.each([0, -1, 0.5])('returns [] for k = %s without calling the sparse store', (k) => {
-    const sparse_search = vi.fn(() => [{ doc_id: 1n, score: 1 }]);
+    const sparse_search = vi.fn(() => [{ doc_id: '1', score: 1 }]);
     const ids = newSparseIds();
     ids.store = buildStore({ sparse_search });
     ids.byId.set(1n, 1n);
@@ -1269,7 +1270,7 @@ describe("WASM search — a search's inputs are validated before any early retur
   });
 
   it('searchBatch validates every entry before it runs any', async () => {
-    const store = buildStore({ search: vi.fn(() => [[1n, 0.9]]) });
+    const store = buildStore({ search: vi.fn(() => [['1', 0.9]]) });
     const ctx = buildCtx('docs', store, { dimension: 2 });
 
     const outcome = await settle(
@@ -1283,11 +1284,11 @@ describe("WASM search — a search's inputs are validated before any early retur
   it.each([0.5, 1.5, Number.NaN, -1])(
     "every search path refuses k = %s: core's k is an unsigned integer",
     async (k) => {
-      const denseStore = buildStore({ search: vi.fn(() => [[1n, 0.9]]) });
+      const denseStore = buildStore({ search: vi.fn(() => [['1', 0.9]]) });
       const dense = buildCtx('docs', denseStore, { dimension: 2 });
       const sparseOnly = buildCtx('docs', buildStore(), { dimension: 0 });
       const sparseIds = sparseOnly.getCollection('docs')!.sparseIds;
-      const sparse_search = vi.fn(() => [{ doc_id: 1n, score: 1 }]);
+      const sparse_search = vi.fn(() => [{ doc_id: '1', score: 1 }]);
       sparseIds.store = buildStore({ sparse_search });
       sparseIds.byId.set(1n, 1n);
 
@@ -1587,7 +1588,7 @@ describe("WASM search — k fits velesdb-wasm's 32-bit usize (#2095)", () => {
   it.each([2 ** 32, 2 ** 32 + 2])(
     'every search path refuses k = %s, which the binding would wrap modulo 2^32',
     async (k) => {
-      const store = buildStore({ search: vi.fn(() => [[1n, 0.9]]) });
+      const store = buildStore({ search: vi.fn(() => [['1', 0.9]]) });
       const ctx = buildCtx('docs', store, { dimension: 2 });
 
       const calls: Array<() => Promise<unknown>> = [
