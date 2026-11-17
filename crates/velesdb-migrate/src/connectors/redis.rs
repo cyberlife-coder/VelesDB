@@ -239,7 +239,7 @@ impl SourceConnector for RedisConnector {
         )
         .query_async(&mut *con)
         .await
-        .map_err(|e| Error::Extraction(format!("FT.SEARCH batch failed: {e}")))?;
+        .map_err(ft_search_batch_error)?;
         drop(con);
 
         let points =
@@ -304,6 +304,26 @@ pub fn decode_vector_blob(bytes: &[u8]) -> Vec<f32> {
             f32::from_le_bytes(arr)
         })
         .collect()
+}
+
+/// Classifies an `FT.SEARCH` failure during extraction.
+///
+/// A timed-out, refused or dropped connection becomes the I/O error it is,
+/// so `retry::with_retry` retries the batch; anything else (bad query,
+/// missing index) is an extraction error and is not retried.
+fn ft_search_batch_error(e: redis::RedisError) -> Error {
+    use std::io::ErrorKind;
+    let message = format!("FT.SEARCH batch failed: {e}");
+    let kind = if e.is_timeout() {
+        ErrorKind::TimedOut
+    } else if e.is_connection_refusal() {
+        ErrorKind::ConnectionRefused
+    } else if e.is_connection_dropped() {
+        ErrorKind::ConnectionReset
+    } else {
+        return Error::Extraction(message);
+    };
+    Error::Io(std::io::Error::new(kind, message))
 }
 
 /// Parses a `FT.SEARCH` RESP response into extracted points.

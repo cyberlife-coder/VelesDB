@@ -340,6 +340,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb-migrate` retries the failures that are transient, and only
+  those** (migrate, 2026-11-17). `retry::is_retryable_error` decided by
+  searching the error's text for `500`, `timeout`, `temporary` and similar
+  words. A source body is part of that text, so a `400` whose body quoted
+  `500` was retried three times, and so was an extraction error mentioning
+  dimension `1500`. Meanwhile a `reqwest` connect or timeout failure, whose
+  text reads `error sending request for url (...)`, was never retried.
+  Elasticsearch's request failures and Redis's dropped connections were
+  stringified before the check and were not retried either. The decision now
+  reads types: a non-2xx response becomes the new `Error::SourceStatus` with
+  its numeric status (408, 429, 500, 502, 503 and 504 retry), plus
+  `reqwest`'s timeout/connect/request predicates, transient
+  `io::ErrorKind`s, and `RateLimit`. Status errors print the same text as
+  before. Elasticsearch request failures now print as `HTTP error: ...` (the
+  `reqwest` error itself). `velesdb_migrate::Error` is not
+  `#[non_exhaustive]`, so a downstream exhaustive `match` on it needs a
+  `SourceStatus` arm; a non-2xx response that used to arrive as
+  `SourceConnection(String)` arrives as `SourceStatus`. Pinned
+  by `retry_tests.rs` and
+  `test_pipeline_qdrant_400_quoting_500_is_not_retried`, which made four
+  scroll calls before the fix and makes one now.
+
 - **VelesQL `NOW()` and `INTERVAL` run in the browser** (core, WASM,
   2026-11-16). Every temporal expression read `std::time::SystemTime::now`,
   which panics on `wasm32-unknown-unknown`: a WASM query naming `NOW()` — or
