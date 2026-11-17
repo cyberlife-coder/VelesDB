@@ -82,6 +82,13 @@ apart.
 | `traverse_graph_parallel` | Multi-source parallel BFS with deduplication |
 | `get_node_degree` | In-degree and out-degree of a node |
 
+Graph ids follow REST's graph endpoints. Every node or edge id a command
+returns (`EdgeOutput.id` / `source` / `target`, `TraversalOutput.targetId` and
+`path`, `NodeDegreeOutput.nodeId`) is a decimal string, because a derived edge id is
+routinely above 2^53 and a JavaScript number would round it. Every id a
+command takes is a decimal string or a number, so an id read back from a result
+can be passed in as is.
+
 ## Secondary indexes
 
 | Command | Description |
