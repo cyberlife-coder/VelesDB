@@ -9,6 +9,13 @@ three times on `develop` and every failure read as "this lockfile is
 vulnerable". None of them was: the lockfiles had not changed, and the same
 content had been green at merge time hours earlier.
 
+An advisory with no fixed version published can be ACCEPTED, by GHSA id,
+in `scripts/npm-audit-accepted.json`, with a reason and a `review_by` date.
+Acceptance is narrow and fails closed: a lockfile passes only when every
+advisory at or above the level is attributable (npm's report names it) and
+accepted, and an acceptance past its `review_by` date refuses again. A count
+the report does not attribute to an advisory is never accepted.
+
 A transport failure is not a security verdict. It proves nothing either way,
 so this gate keeps failing closed — an unaudited lockfile is not an audited
 one — but it says which of the two happened, and it retries first so a
@@ -38,6 +45,8 @@ import math
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 # npm's severity ladder, weakest first. `--audit-level=high` means "high and
@@ -47,10 +56,71 @@ SEVERITIES = ["info", "low", "moderate", "high", "critical"]
 EXIT_CLEAN = 0
 EXIT_ADVISORY = 1
 EXIT_UNREACHABLE = 75  # EX_TEMPFAIL
+EXIT_USAGE = 2  # argparse's own code for a bad invocation
 
 
 class Unreachable(Exception):
     """The audit did not run: no verdict was produced, only a transport error."""
+
+
+DEFAULT_ACCEPTED = Path(__file__).resolve().parent / "npm-audit-accepted.json"
+
+
+@dataclass(frozen=True)
+class Acceptance:
+    """One accepted advisory: why, and until when it is re-examined."""
+
+    ghsa: str
+    package: str
+    reason: str
+    review_by: date
+
+
+def load_accepted(path: Path) -> list[Acceptance]:
+    """The accepted advisories in `path` (a JSON list); none when it is absent.
+
+    Raises `ValueError` for an entry without a GHSA id, a package, a reason or
+    an ISO `review_by` date: an acceptance nobody can re-examine is not one.
+    """
+    if not path.exists():
+        return []
+    entries = json.loads(path.read_text())
+    if not isinstance(entries, list):
+        raise ValueError(f"{path}: expected a JSON list of acceptances")
+    accepted = []
+    for entry in entries:
+        try:
+            ghsa, package, reason = (str(entry[key]) for key in ("ghsa", "package", "reason"))
+            review_by = date.fromisoformat(str(entry["review_by"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{path}: acceptance {entry!r} needs ghsa, package, reason and an ISO review_by ({exc})") from exc
+        if not ghsa.startswith("GHSA-") or not reason.strip():
+            raise ValueError(f"{path}: acceptance {entry!r} needs a GHSA id and a non-empty reason")
+        accepted.append(Acceptance(ghsa, package, reason, review_by))
+    return accepted
+
+
+@dataclass(frozen=True)
+class Report:
+    """A completed audit: its per-severity counts and the raw JSON report."""
+
+    counts: dict[str, int]
+    text: str
+
+    def advisories(self, blocking: list[str]) -> set[str] | None:
+        """The GHSA ids of the advisories at a blocking severity, or `None`
+        when the report does not attribute one of them to a GHSA advisory."""
+        packages = json.loads(self.text).get("vulnerabilities")
+        ids: set[str] = set()
+        for package in (packages if isinstance(packages, dict) else {}).values():
+            vias = package.get("via", []) if isinstance(package, dict) else []
+            for via in vias:
+                if isinstance(via, dict) and via.get("severity") in blocking:
+                    ghsa = str(via.get("url", "")).rsplit("/", 1)[-1]
+                    if not ghsa.startswith("GHSA-"):
+                        return None
+                    ids.add(ghsa)
+        return ids or None
 
 
 def severities_at_or_above(level: str) -> list[str]:
@@ -122,7 +192,7 @@ def audit_with_retries(
     backoff_seconds: float,
     attempt_timeout: float = 180.0,
     sleep=time.sleep,
-) -> dict[str, int]:
+) -> Report:
     """Audit `root`, retrying only the attempts that produced no verdict.
 
     An advisory is a stable fact about the lockfile: it does not become false
@@ -138,7 +208,8 @@ def audit_with_retries(
     last: Unreachable | None = None
     for attempt in range(1, attempts + 1):
         try:
-            return classify(run_audit(npm, root, attempt_timeout))
+            text = run_audit(npm, root, attempt_timeout)
+            return Report(classify(text), text)
         except Unreachable as exc:
             last = exc
             if attempt < attempts:
@@ -202,14 +273,25 @@ def main(argv: list[str] | None = None) -> int:
         default=180.0,
         help="seconds to let one npm audit run before treating it as unreachable",
     )
+    parser.add_argument(
+        "--accepted",
+        type=Path,
+        default=DEFAULT_ACCEPTED,
+        help="JSON list of accepted advisories (ghsa, reason, review_by)",
+    )
     parser.add_argument("--npm", default="npm", help="npm executable (injected by the refusal vectors)")
     args = parser.parse_args(argv)
 
     root = Path(args.root)
     blocking = severities_at_or_above(args.audit_level)
+    try:
+        accepted = load_accepted(args.accepted)
+    except (OSError, ValueError) as exc:
+        print(f"::error::unusable advisory acceptances: {exc}", file=sys.stderr)
+        return EXIT_USAGE
 
     try:
-        counts = audit_with_retries(
+        report = audit_with_retries(
             args.npm,
             root,
             args.attempts,
@@ -227,17 +309,49 @@ def main(argv: list[str] | None = None) -> int:
         )
         return EXIT_UNREACHABLE
 
-    found = {name: counts[name] for name in blocking if counts[name] > 0}
-    if found:
-        detail = ", ".join(f"{count} {name}" for name, count in found.items())
+    found = {name: report.counts[name] for name in blocking if report.counts[name] > 0}
+    if not found:
+        print(f"npm advisories clean for {args.root} (level {args.audit_level}).")
+        return EXIT_CLEAN
+    return judge_findings(args.root, found, report.advisories(blocking), accepted)
+
+
+def judge_findings(
+    root: str,
+    found: dict[str, int],
+    advisories: set[str] | None,
+    accepted: list[Acceptance],
+) -> int:
+    """The exit for a report with blocking findings: clean only when every one
+    is an attributed advisory under an acceptance that is still in date."""
+    detail = ", ".join(f"{count} {name}" for name, count in found.items())
+    if advisories is None:
         print(
-            f"::error::npm advisories in {args.root}: {detail}. "
-            f"Run `npm audit` there and update the lockfile.",
+            f"::error::npm advisories in {root}: {detail}, not all attributed to a "
+            f"GHSA advisory. Run `npm audit` there and update the lockfile.",
             file=sys.stderr,
         )
         return EXIT_ADVISORY
-
-    print(f"npm advisories clean for {args.root} (level {args.audit_level}).")
+    by_id = {entry.ghsa: entry for entry in accepted}
+    unaccepted = sorted(advisories - by_id.keys())
+    expired = sorted(ghsa for ghsa in advisories & by_id.keys() if by_id[ghsa].review_by < date.today())
+    if unaccepted or expired:
+        reasons = []
+        if unaccepted:
+            reasons.append(f"not accepted: {', '.join(unaccepted)}")
+        if expired:
+            reasons.append(f"acceptance past its review_by date: {', '.join(expired)}")
+        print(
+            f"::error::npm advisories in {root}: {detail} ({'; '.join(reasons)}). "
+            f"Run `npm audit` there and update the lockfile, or re-examine the "
+            f"acceptance in scripts/npm-audit-accepted.json.",
+            file=sys.stderr,
+        )
+        return EXIT_ADVISORY
+    for ghsa in sorted(advisories):
+        entry = by_id[ghsa]
+        print(f"accepted {ghsa} ({entry.package}) until {entry.review_by.isoformat()}: {entry.reason}")
+    print(f"npm advisories in {root}: {detail}, all accepted (level-blocking advisories: {len(advisories)}).")
     return EXIT_CLEAN
 
 
