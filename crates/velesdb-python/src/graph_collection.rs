@@ -109,7 +109,8 @@ impl PyGraphCollection {
     ///     GraphSchema: The schema configuration
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     #[getter]
     fn schema(&self) -> PyResult<PyGraphSchema> {
         self.authorize("schema")?;
@@ -125,7 +126,8 @@ impl PyGraphCollection {
     ///     bool: True if vector search is available
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     #[getter]
     fn has_embeddings(&self) -> PyResult<bool> {
         self.authorize("has_embeddings")?;
@@ -213,7 +215,8 @@ impl PyGraphCollection {
     /// Returns `true` if an edge with the given ID exists.
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     #[pyo3(signature = (edge_id))]
     fn has_edge(&self, edge_id: u64) -> PyResult<bool> {
         self.authorize("has_edge")?;
@@ -506,8 +509,9 @@ impl PyGraphCollection {
     ///     List of node IDs
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a
-    ///         scope (ids carry no payload to filter — fail closed).
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (ids carry no
+    ///         payload to filter — fail closed).
     fn all_node_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
         self.authorize("all_node_ids")?;
         Ok(py.detach(|| self.inner.all_node_ids()))
@@ -702,7 +706,8 @@ impl PyGraphCollection {
     ///     int: Edge count
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn edge_count(&self) -> PyResult<usize> {
         self.authorize("edge_count")?;
         Ok(self.inner.edge_count())
@@ -722,7 +727,8 @@ impl PyGraphCollection {
     ///     int: Point count
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn __len__(&self) -> PyResult<usize> {
         self.authorize("__len__")?;
         Ok(self.inner.len())
@@ -735,7 +741,8 @@ impl PyGraphCollection {
     ///     int: Point count
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn count(&self) -> PyResult<usize> {
         self.authorize("count")?;
         Ok(self.inner.len())
@@ -747,7 +754,8 @@ impl PyGraphCollection {
     ///     bool: True if empty
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn is_empty(&self) -> PyResult<bool> {
         self.authorize("is_empty")?;
         Ok(self.inner.is_empty())

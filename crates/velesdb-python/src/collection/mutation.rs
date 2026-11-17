@@ -252,7 +252,7 @@ impl Collection {
     /// Get points by their IDs.
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read.
+    ///     ValueError: If the read gate denies the read.
     ///
     /// When the read gate returns a scope filter, out-of-scope points are
     /// masked to ``None`` (id-alignment with the input list is preserved).

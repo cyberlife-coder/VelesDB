@@ -969,6 +969,21 @@ class TestFusionStrategy:
         assert strategy is not None
         assert "k=30" in repr(strategy)
 
+    def test_fusion_strategy_weighted_keywords_are_never_reread_as_legacy(self):
+        """Only two *positional* weights are the legacy (max, hit) shape: a
+        keyword ``avg_weight`` / ``max_weight`` pair without ``hit_weight`` is
+        incomplete, not silently re-read as (max, hit)."""
+        with pytest.raises(ValueError):
+            velesdb.FusionStrategy.weighted(avg_weight=0.5, max_weight=0.5)
+        with pytest.raises(ValueError):
+            velesdb.FusionStrategy.weighted(0.5, max_weight=0.5)
+        full = velesdb.FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.1)
+        assert repr(full) == repr(velesdb.FusionStrategy.weighted(0.6, 0.3, 0.1))
+        keyword_legacy = velesdb.FusionStrategy.weighted(None, max_weight=0.3, hit_weight=0.1)
+        assert repr(keyword_legacy) == repr(velesdb.FusionStrategy.weighted(0.3, 0.1))
+        legacy = velesdb.FusionStrategy.weighted(0.3, 0.1)
+        assert repr(legacy) == repr(velesdb.FusionStrategy.weighted(max_weight=0.3, hit_weight=0.1))
+
     def test_fusion_strategy_weighted(self):
         """Test FusionStrategy.weighted() with valid weights."""
         strategy = velesdb.FusionStrategy.weighted(
