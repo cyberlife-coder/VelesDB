@@ -128,6 +128,27 @@ impl SparseIndex {
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn doc_count(&self) -> usize {
+        self.doc_count_inner()
+    }
+}
+
+impl SparseIndex {
+    /// The index as per-document sparse vectors, ids ascending: what
+    /// [`Self::insert`] rebuilds it from (the store's persistence writes it).
+    pub(crate) fn documents(&self) -> Vec<(u64, Vec<(u32, f32)>)> {
+        let mut docs: std::collections::BTreeMap<u64, Vec<(u32, f32)>> =
+            std::collections::BTreeMap::new();
+        for term in self.inner.all_term_ids() {
+            for posting in self.inner.get_all_postings(term) {
+                docs.entry(posting.doc_id)
+                    .or_default()
+                    .push((term, posting.weight));
+            }
+        }
+        docs.into_iter().collect()
+    }
+
+    fn doc_count_inner(&self) -> usize {
         usize::try_from(self.inner.doc_count()).unwrap_or(usize::MAX)
     }
 }

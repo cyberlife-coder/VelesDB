@@ -340,6 +340,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM: `VectorStore.save()` / `export_to_bytes()` keep the sparse
+  index.** It was dropped, so a loaded store answered no sparse query until
+  every sparse vector was inserted again. Format v4 appends one record per
+  document (id, then its term/weight pairs); v1 to v3 still load, without a
+  sparse index, and an older build rejects a v4 blob.
+
 - **Python binding, second audit pass.**
   - `MemoryService.list_memories` returns `next_cursor` as an int, like every
     id of the binding, so it is passed back as `cursor` unchanged (it was a
