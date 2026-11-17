@@ -80,7 +80,8 @@ fn write_payloads(out: &mut Vec<u8>, payloads: &[Option<serde_json::Value>]) {
 /// `data` is populated whatever the mode. The version bump makes an older
 /// build reject a v3 blob ("Unsupported version: 3") rather than load a
 /// quantized-mode store with empty code buffers. The sparse index is not
-/// persisted (rebuilt on demand), as in v1/v2.
+/// persisted, as in v1/v2, and nothing rebuilds it: a loaded store has no
+/// sparse postings until the caller inserts them again (`sparse_insert`).
 pub fn export_to_bytes(store: &StoreState) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"VELS");

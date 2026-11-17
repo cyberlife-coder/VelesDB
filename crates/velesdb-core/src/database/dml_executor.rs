@@ -189,34 +189,8 @@ fn build_graph_edge(
     if stmt.properties.is_empty() {
         return Ok(edge);
     }
-    let props = resolve_edge_properties(&stmt.properties)?;
-    Ok(edge.with_properties(props))
-}
-
-/// Resolves AST `Value` properties into a `HashMap<String, serde_json::Value>`.
-///
-/// # Errors
-///
-/// Returns an error if a property value type is unsupported.
-fn resolve_edge_properties(
-    properties: &[(String, crate::velesql::Value)],
-) -> Result<std::collections::HashMap<String, serde_json::Value>> {
-    properties
-        .iter()
-        .map(|(key, val)| {
-            match val {
-                crate::velesql::Value::Parameter(_)
-                | crate::velesql::Value::Temporal(_)
-                | crate::velesql::Value::Subquery(_) => {
-                    return Err(Error::Query(
-                        "Edge properties must be literal values".to_string(),
-                    ));
-                }
-                _ => {}
-            }
-            Ok((key.clone(), val.to_json()))
-        })
-        .collect()
+    let props = crate::velesql::EdgeQuery::literal_properties(&stmt.properties)?;
+    Ok(edge.with_properties(props.into_iter().collect()))
 }
 
 /// The point ids a DELETE WHERE names outright — `id = N` or
@@ -241,180 +215,45 @@ fn point_ids_named(condition: &crate::velesql::Condition) -> Option<Result<Vec<u
 
 /// Extracts a single ID from a comparison `id = N`.
 fn extract_single_id(cmp: &crate::velesql::Comparison) -> Result<Vec<u64>> {
-    let id = value_to_u64(&cmp.value)?;
+    let id = crate::velesql::literal_id(&cmp.value)?;
     Ok(vec![id])
 }
 
 /// Extracts multiple IDs from an IN condition `id IN (N1, N2, ...)`.
 fn extract_in_ids(in_cond: &crate::velesql::InCondition) -> Result<Vec<u64>> {
-    in_cond.values.iter().map(value_to_u64).collect()
-}
-
-/// Converts a `VelesQL` `Value` to a `u64` point ID.
-///
-/// # Errors
-///
-/// Returns an error if the value is not a non-negative integer.
-fn value_to_u64(val: &crate::velesql::Value) -> Result<u64> {
-    match val {
-        crate::velesql::Value::Integer(v) => {
-            u64::try_from(*v).map_err(|_| Error::Query(format!("ID must be non-negative, got {v}")))
-        }
-        crate::velesql::Value::UnsignedInteger(v) => Ok(*v),
-        _ => Err(Error::Query("ID values must be integers".to_string())),
-    }
+    in_cond
+        .values
+        .iter()
+        .map(crate::velesql::literal_id)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
 // SELECT EDGES helpers
 // ---------------------------------------------------------------------------
 
-/// Resolves edges from a graph collection based on an optional WHERE clause.
+/// Resolves edges from a graph collection based on an optional WHERE clause
+/// ([`crate::velesql::EdgeQuery`]: `source = N`, `target = N`, `label = 'X'`
+/// and AND combinations; anything else is refused).
 ///
-/// Supports: `source = N`, `target = N`, `label = 'X'`, and AND combinations.
+/// The most selective constraint drives the lookup (source, then target,
+/// then label); the others filter its edges.
 fn resolve_edge_query(
     collection: &crate::collection::Collection,
     where_clause: Option<&crate::velesql::Condition>,
 ) -> Result<Vec<crate::collection::GraphEdge>> {
-    let Some(condition) = where_clause else {
-        return Ok(collection.get_all_edges());
-    };
-    dispatch_edge_condition(collection, condition)
-}
-
-/// Dispatches a single WHERE condition to the appropriate edge lookup.
-fn dispatch_edge_condition(
-    collection: &crate::collection::Collection,
-    condition: &crate::velesql::Condition,
-) -> Result<Vec<crate::collection::GraphEdge>> {
-    match condition {
-        crate::velesql::Condition::Comparison(cmp) => dispatch_edge_comparison(collection, cmp),
-        crate::velesql::Condition::And(left, right) => dispatch_edge_and(collection, left, right),
-        _ => Err(Error::Query(
-            "SELECT EDGES WHERE supports: source=N, target=N, label='X', and AND combinations"
-                .to_string(),
-        )),
-    }
-}
-
-/// Handles a single comparison: source=N, target=N, or label='X'.
-fn dispatch_edge_comparison(
-    collection: &crate::collection::Collection,
-    cmp: &crate::velesql::Comparison,
-) -> Result<Vec<crate::collection::GraphEdge>> {
-    if cmp.operator != crate::velesql::CompareOp::Eq {
-        return Err(Error::Query(
-            "SELECT EDGES WHERE only supports '=' operator".to_string(),
-        ));
-    }
-    match cmp.column.as_str() {
-        "source" => {
-            let id = value_to_u64(&cmp.value)?;
-            Ok(collection.get_outgoing_edges(id))
-        }
-        "target" => {
-            let id = value_to_u64(&cmp.value)?;
-            Ok(collection.get_incoming_edges(id))
-        }
-        "label" => {
-            let label = extract_string_value(&cmp.value)?;
-            Ok(collection.get_edges_by_label(&label))
-        }
-        col => Err(Error::Query(format!(
-            "SELECT EDGES WHERE does not support column '{col}'. Use: source, target, label"
-        ))),
-    }
-}
-
-/// Handles AND: (source=N AND label='X') or (target=N AND label='X').
-///
-/// Prefers the most selective condition (source > target > label) as
-/// the fetch path, regardless of left/right ordering in the SQL.
-/// This means `label = 'KNOWS' AND source = 1` is as efficient as
-/// `source = 1 AND label = 'KNOWS'`.
-fn dispatch_edge_and(
-    collection: &crate::collection::Collection,
-    left: &crate::velesql::Condition,
-    right: &crate::velesql::Condition,
-) -> Result<Vec<crate::collection::GraphEdge>> {
-    // Prefer fetching by source/target (most selective) as the primary
-    // condition. If the right side has source/target and left does not,
-    // swap so the more selective side drives the index lookup.
-    let (fetch, filter_side) = if condition_selectivity(right) > condition_selectivity(left) {
-        (right, left)
+    let query = crate::velesql::EdgeQuery::from_where(where_clause)?;
+    let mut edges = if let Some(source) = query.source {
+        collection.get_outgoing_edges(source)
+    } else if let Some(target) = query.target {
+        collection.get_incoming_edges(target)
+    } else if let Some(label) = &query.label {
+        collection.get_edges_by_label(label)
     } else {
-        (left, right)
+        collection.get_all_edges()
     };
-    let mut edges = dispatch_edge_condition(collection, fetch)?;
-    let filter = extract_and_filter(filter_side)?;
-    edges.retain(|e| edge_matches_filter(e, &filter));
+    edges.retain(|e| query.matches(e.source(), e.target(), e.label()));
     Ok(edges)
-}
-
-/// Returns a selectivity score for a condition (higher = more selective).
-///
-/// `source` lookups are the most selective (indexed by node), followed
-/// by `target`, then `label` (which may match many edges).
-fn condition_selectivity(condition: &crate::velesql::Condition) -> u8 {
-    match condition {
-        crate::velesql::Condition::Comparison(cmp)
-            if cmp.operator == crate::velesql::CompareOp::Eq =>
-        {
-            match cmp.column.as_str() {
-                "source" => 3,
-                "target" => 2,
-                "label" => 1,
-                _ => 0,
-            }
-        }
-        _ => 0,
-    }
-}
-
-/// A simple filter derived from one side of an AND condition.
-enum EdgeFilter {
-    Source(u64),
-    Target(u64),
-    Label(String),
-}
-
-/// Extracts a filter from a condition for use in AND filtering.
-fn extract_and_filter(condition: &crate::velesql::Condition) -> Result<EdgeFilter> {
-    match condition {
-        crate::velesql::Condition::Comparison(cmp)
-            if cmp.operator == crate::velesql::CompareOp::Eq =>
-        {
-            match cmp.column.as_str() {
-                "source" => Ok(EdgeFilter::Source(value_to_u64(&cmp.value)?)),
-                "target" => Ok(EdgeFilter::Target(value_to_u64(&cmp.value)?)),
-                "label" => Ok(EdgeFilter::Label(extract_string_value(&cmp.value)?)),
-                col => Err(Error::Query(format!(
-                    "SELECT EDGES WHERE does not support column '{col}'"
-                ))),
-            }
-        }
-        _ => Err(Error::Query(
-            "SELECT EDGES AND condition must be a simple comparison (source=N, target=N, label='X')"
-                .to_string(),
-        )),
-    }
-}
-
-/// Tests whether an edge matches a filter criterion.
-fn edge_matches_filter(edge: &crate::collection::GraphEdge, filter: &EdgeFilter) -> bool {
-    match filter {
-        EdgeFilter::Source(id) => edge.source() == *id,
-        EdgeFilter::Target(id) => edge.target() == *id,
-        EdgeFilter::Label(lbl) => edge.label() == lbl,
-    }
-}
-
-/// Extracts a string value from a `VelesQL` `Value`.
-fn extract_string_value(val: &crate::velesql::Value) -> Result<String> {
-    match val {
-        crate::velesql::Value::String(s) => Ok(s.clone()),
-        _ => Err(Error::Query("Expected a string value".to_string())),
-    }
 }
 
 /// Resolves the effective LIMIT for a SELECT EDGES query.
@@ -433,13 +272,13 @@ fn edges_to_results(edges: &[crate::collection::GraphEdge]) -> Vec<SearchResult>
     edges
         .iter()
         .map(|edge| {
-            let payload = serde_json::json!({
-                "edge_id": edge.id(),
-                "source": edge.source(),
-                "target": edge.target(),
-                "label": edge.label(),
-                "properties": edge.properties(),
-            });
+            let payload = crate::velesql::EdgeQuery::row(
+                edge.id(),
+                edge.source(),
+                edge.target(),
+                edge.label(),
+                &serde_json::json!(edge.properties()),
+            );
             SearchResult::new(crate::Point::metadata_only(edge.id(), payload), 0.0)
         })
         .collect()

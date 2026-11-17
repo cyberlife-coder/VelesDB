@@ -340,6 +340,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM VelesQL answers as core does.**
+  - `SELECT EDGES … WHERE` refuses a shape it cannot apply (`OR`, `!=`,
+    another column, a parameter, a negative id) instead of dropping it and
+    returning every edge, and answers core's row (`edge_id`, `source`,
+    `target`, `label`, `properties` nested — a property named `source` no
+    longer overwrites the column). Core and WASM read the clause through one
+    `velesql::EdgeQuery`.
+  - A multi-row `INSERT`/`UPSERT` is all or nothing: a refused row no longer
+    leaves the rows before it written.
+  - A `NEAR` query is asked of the observer as a vector search, the kind
+    `WasmCollectionHandle.search` asks with, not as a plain `Select`.
+  - An edge label is trimmed and never empty, as core's `GraphEdge::new`
+    makes it, so `' KNOWS'` is found by `label = 'KNOWS'`.
+
 - **Tauri: a scoped sparse search fills its top-k or refuses** (Tauri,
   2026-11-17). `sparse_search` and `hybrid_sparse_search` narrowed their
   top-k to the observer's scope after cutting it, so a scoped search could
