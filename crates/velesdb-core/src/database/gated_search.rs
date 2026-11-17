@@ -109,32 +109,6 @@ fn and_filters(caller: Option<&Filter>, scope: Option<Filter>) -> Option<Filter>
     }
 }
 
-/// Runs a dense kNN search, picking the leaf by the effective filter and tuning.
-/// A filter (caller filter already AND-composed with any scope) routes through
-/// the filtered leaves, with `ef`/`quality` honoured the way the unfiltered
-/// dispatch resolves them — `ef` wins, as `SearchQuality::Custom`; otherwise
-/// `ef` wins over `quality`, then plain search.
-fn run_dense(
-    coll: &VectorCollection,
-    query: &[f32],
-    k: usize,
-    ef: Option<usize>,
-    quality: Option<crate::SearchQuality>,
-    filter: Option<Filter>,
-) -> Result<Vec<SearchResult>> {
-    match filter {
-        Some(f) => match ef.map(crate::SearchQuality::Custom).or(quality) {
-            Some(q) => coll.search_with_quality_and_filter(query, k, q, &f),
-            None => coll.search_with_filter(query, k, &f),
-        },
-        None => match (ef, quality) {
-            (Some(ef), _) => coll.search_with_ef(query, k, ef),
-            (None, Some(q)) => coll.search_with_quality(query, k, q),
-            (None, None) => coll.search(query, k),
-        },
-    }
-}
-
 /// Dispatches a gated read to its collection search leaf, AND-composing the
 /// observer scope filter with any caller filter first.
 fn dispatch_gated_read(
@@ -150,13 +124,12 @@ fn dispatch_gated_read(
             ef,
             quality,
             filter,
-        } => run_dense(
-            coll,
+        } => coll.search_dense(
             query,
             k,
             ef,
             quality,
-            and_filters(filter, scope_filter),
+            and_filters(filter, scope_filter).as_ref(),
         ),
         GatedRead::Text { query, k, filter } => match and_filters(filter, scope_filter) {
             Some(f) => coll.text_search_with_filter(query, k, &f),

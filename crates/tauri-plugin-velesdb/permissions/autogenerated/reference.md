@@ -26,6 +26,7 @@ Default permissions for VelesDB plugin - allows all database operations
 - `allow-hybrid-search`
 - `allow-multi-query-search`
 - `allow-query`
+- `allow-read-query`
 - `allow-sparse-search`
 - `allow-hybrid-sparse-search`
 - `allow-sparse-upsert`
@@ -1353,6 +1354,32 @@ Enables the query command without any pre-configured scope.
 <td>
 
 Denies the query command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:allow-read-query`
+
+</td>
+<td>
+
+Enables the read_query command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`velesdb:deny-read-query`
+
+</td>
+<td>
+
+Denies the read_query command without any pre-configured scope.
 
 </td>
 </tr>

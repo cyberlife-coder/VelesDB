@@ -304,6 +304,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Tauri: the `read-only` permission set no longer admits writes**
+  (core, Tauri, 2026-11-16). `velesdb:read-only` granted `query`, which runs
+  every VelesQL statement — a window holding only that set could
+  `DROP COLLECTION`, `DELETE` or `INSERT`. It now grants `read_query`
+  (`readQuery` in guest-js), which runs a statement only when
+  `Query::is_read_only` admits it (SELECT, MATCH, `SELECT EDGES`, `SHOW`,
+  `DESCRIBE`, `EXPLAIN`) and refuses the rest with VELES-010 before anything
+  runs. A test now fails if `read-only` or `search-only` ever grants a
+  command that writes. **Embedder action:** a read-only window that ran
+  SELECTs through `query` must call `readQuery`; `query` itself is unchanged
+  and stays in the `default` set.
+
 - **The install wizard never runs a downloaded installer under `--yes`**
   (`scripts/wizard_embedder.py`). On Linux, Ollama is installed with
   Ollama's own script, which nothing verifies once downloaded; `--apply --yes`
@@ -334,6 +346,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recall(q, Infinity)` returned `[]`, a `ttlSeconds` of `-1` stored a
   136-year TTL and `2**32 + 60` a 60-second one. A count must now be a whole
   number in `0..=2^32-1`; anything else rejects with `INVALID_INPUT`.
+
+- **Tauri commands honour every argument and keep core's error codes**
+  (core, Tauri, 2026-11-16). `search_ids` and `batch_search` dropped
+  `quality` whenever a filter was present; they now run core's new
+  `VectorCollection::search_dense`, the one dispatch that honours a filter,
+  an `ef` and a quality together (`gated_search` runs it too). `get_edges`
+  applied only the first of `label` / `source` / `target`; it now keeps the
+  edges matching all of them. `add_edge` and `create_index` reported core
+  errors as VELES-009 (a caller configuration error); they keep core's code
+  (an invalid edge label is VELES-021).
 
 - **Relative-score fusion fuses every branch, in every engine** (core,
   WASM, 2026-11-16). `relative_score` / `rsf` fused only the first two

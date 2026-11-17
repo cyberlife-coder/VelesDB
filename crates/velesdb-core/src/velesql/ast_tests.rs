@@ -293,3 +293,39 @@ fn test_display_names_mixed_without_columns_still_exposes_score_and_wildcard() {
         vec!["similarity".to_string(), "docs.*".to_string()]
     );
 }
+
+/// A statement is read-only when running it changes nothing: what a
+/// read-only surface may accept (a "read-only" permission must not admit a
+/// DROP through a generic query entry point).
+#[test]
+fn test_is_read_only_admits_reads_and_refuses_every_write() {
+    let parse = |sql: &str| super::Parser::parse(sql).expect("test: parse");
+    for read in [
+        "SELECT * FROM docs WHERE x > 1",
+        "SELECT COUNT(*) FROM docs GROUP BY x",
+        "SELECT * FROM a UNION SELECT * FROM b",
+        "MATCH (a)-[:R]->(b) RETURN b",
+        "SELECT EDGES FROM g WHERE label = 'R'",
+        "SHOW COLLECTIONS",
+        "DESCRIBE COLLECTION docs",
+        "EXPLAIN SELECT * FROM docs",
+    ] {
+        assert!(parse(read).is_read_only(), "{read} only reads");
+    }
+    for write in [
+        "INSERT INTO docs (id, x) VALUES (1, 2)",
+        "UPSERT INTO docs (id, x) VALUES (1, 2)",
+        "UPDATE docs SET x = 3 WHERE id = 1",
+        "DELETE FROM docs WHERE id = 1",
+        "INSERT EDGE INTO g (source = 1, target = 2, label = 'R')",
+        "DELETE EDGE 7 FROM g",
+        "INSERT NODE INTO g (id = 1, payload = '{}')",
+        "CREATE COLLECTION c (dimension = 4, metric = 'cosine')",
+        "DROP COLLECTION docs",
+        "TRUNCATE COLLECTION docs",
+        "FLUSH",
+        "TRAIN QUANTIZER ON docs WITH (m = 8, k = 256)",
+    ] {
+        assert!(!parse(write).is_read_only(), "{write} writes");
+    }
+}
