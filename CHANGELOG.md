@@ -444,6 +444,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM: IndexedDB persistence works in a Web Worker** (WASM, 2026-11-17).
+  `VectorStore` and `GraphPersistence` looked the IndexedDB factory up on
+  `window`, which a worker does not have, so every save, load and delete
+  inside one failed with "No window object" although the README lists Web
+  Workers as supported. The factory is now read from the global scope, which
+  a window and a `WorkerGlobalScope` both carry.
+
 - **WASM: the `SemanticMemory` docs no longer promise a `save()` it does not
   have** (WASM, 2026-11-17). Its documentation, copied into the generated
   TypeScript typings, told users to call `save()` to keep facts across
