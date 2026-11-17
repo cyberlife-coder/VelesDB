@@ -233,23 +233,27 @@ fn scenario_select_edges_non_eq_operator_rejected() {
     );
 }
 
+/// Not a reject: an AND of any number of supported equalities filters on
+/// each of them, in core and WASM alike (`velesql::EdgeQuery`). The old
+/// two-term cap rejected a well-formed filter.
 #[test]
-fn scenario_select_edges_nested_and_rejected() {
+fn scenario_select_edges_and_of_three_terms_filters_on_each() {
     let (_dir, db) = create_test_db();
     setup_graph(&db);
 
-    // A third AND term nests an `And` on the filter side, which is not a
-    // simple comparison; only a single AND of two comparisons is supported.
-    let err = execute_sql(
+    let hits = execute_sql(
         &db,
         "SELECT EDGES FROM kg WHERE source = 1 AND target = 2 AND label = 'KNOWS'",
     )
-    .expect_err("test: SELECT EDGES with >2 AND terms must be rejected");
-    assert!(
-        err.to_string()
-            .contains("AND condition must be a simple comparison"),
-        "expected nested-AND marker, got: {err}"
-    );
+    .expect("test: a three-term AND is a valid edge filter");
+    assert_eq!(hits.len(), 1, "edge 10 matches every term");
+
+    let none = execute_sql(
+        &db,
+        "SELECT EDGES FROM kg WHERE source = 1 AND target = 2 AND label = 'LIKES'",
+    )
+    .expect("test: a three-term AND is a valid edge filter");
+    assert!(none.is_empty(), "the label term is applied too: {none:?}");
 }
 
 // =========================================================================
