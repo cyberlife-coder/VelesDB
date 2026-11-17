@@ -26,7 +26,7 @@ class MockVectorStore {
   }
 }
 
-interface StoredEdge { id: string; source: number; target: number; label: string; properties?: unknown }
+interface StoredEdge { id: string; source: string; target: string; label: string; properties?: unknown }
 
 class MockWasmDatabase {
   static last: MockWasmDatabase | null = null;
@@ -38,11 +38,11 @@ class MockWasmDatabase {
   executeQuery = vi.fn();
   free = vi.fn();
   addEdge = vi.fn((_name: string, json: string) => {
-    // As the binding reads it: ids arrive as strings or numbers, the edge id
-    // leaves as its decimal string and the ends as numbers.
+    // As the binding reads it: ids arrive as strings or numbers and leave as
+    // decimal strings, as REST's EdgeResponse.
     const sent = JSON.parse(json) as { id?: string; source: string; target: string; label: string; properties?: unknown };
     if (sent.target === '99') { throw "Node 99 not found in collection 'docs'"; }
-    const edge: StoredEdge = { ...sent, id: sent.id ?? '7', source: Number(sent.source), target: Number(sent.target) };
+    const edge: StoredEdge = { ...sent, id: sent.id ?? '7' };
     this.edges.push(edge);
     return edge.id;
   });
@@ -55,6 +55,11 @@ class MockWasmDatabase {
     return before !== this.edges.length;
   });
   edgeCount = vi.fn(() => this.edges.length);
+  removePoints = vi.fn((_name: string, ids: BigUint64Array) => {
+    const gone = new Set(Array.from(ids, String));
+    this.edges = this.edges.filter((e) => !gone.has(e.source) && !gone.has(e.target));
+    return ids.length;
+  });
   executeMatch = vi.fn((_sql: string, _params: string | null, _vector?: Float32Array, _threshold?: number) => {
     if (this.matchError) { throw this.matchError; }
     return JSON.stringify(this.matchRows);
@@ -113,7 +118,7 @@ describe('WASM backend graph operations through the WasmDatabase edge API', () =
       id: '10', source: '1', target: '2', label: 'CITES', properties: { weight: 0.5 },
     });
     expect(await backend.getEdges('docs')).toEqual([
-      { id: '10', source: 1, target: 2, label: 'CITES', properties: { weight: 0.5 } },
+      { id: '10', source: '1', target: '2', label: 'CITES', properties: { weight: 0.5 } },
     ]);
     expect(await backend.getEdgeCount('docs')).toBe(1);
   });
@@ -157,6 +162,22 @@ describe('WASM backend graph operations through the WasmDatabase edge API', () =
     await expectCode(backend.addEdge('docs', { id: 1, source: -1, target: 2, label: 'R' }), 'BAD_REQUEST');
     await expectCode(backend.removeEdge('docs', 1.5), 'BAD_REQUEST');
     expect(MockWasmDatabase.last!.addEdge).not.toHaveBeenCalled();
+  });
+
+  it('when points are deleted, then the database removes them with their edges', async () => {
+    const backend = await backendWithDocs();
+    await backend.addEdge('docs', { id: 10, source: 1, target: 2, label: 'CITES' });
+    await backend.addEdge('docs', { id: 11, source: 2, target: 3, label: 'CITES' });
+
+    await backend.delete('docs', 1);
+    await backend.bulkDelete('docs', [3]);
+
+    const db = MockWasmDatabase.last!;
+    expect(db.removePoints.mock.calls.map(([name, ids]) => [name, Array.from(ids)])).toEqual([
+      ['docs', [1n]],
+      ['docs', [3n]],
+    ]);
+    expect(await backend.getEdgeCount('docs')).toBe(0);
   });
 
   it('when an endpoint is not a node, then addEdge is NOT_FOUND, as on REST', async () => {

@@ -142,7 +142,7 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     await db.addEdge('docs', { id: 10, source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } });
 
     expect(await db.getEdges('docs', { label: 'NEXT' })).toEqual([
-      { id: '10', source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } },
+      { id: '10', source: '1', target: '2', label: 'NEXT', properties: { weight: 0.5 } },
     ]);
     expect(await db.getEdgeCount('docs')).toBe(1);
 
@@ -169,6 +169,17 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     expect(edge?.id).toBe('9007199254740993');
     expect(await db.removeEdge('docs', edge!.id)).toBe(true);
     expect(await db.getEdges('docs', { label: 'BIG' })).toEqual([]);
+  });
+
+  it('graph: deleting a point deletes its edges, so a new point under its id starts unconnected', async () => {
+    await db.addEdge('docs', { id: 30, source: 1, target: 2, label: 'GONE' });
+
+    expect(await db.delete('docs', 2)).toBe(true);
+    expect(await db.getEdges('docs', { label: 'GONE' })).toEqual([]);
+
+    await db.upsert('docs', { id: 2, vector: [0, 1], payload: NOTES });
+    const response = await db.matchQuery('docs', 'MATCH (a)-[:GONE]->(b) RETURN b.id');
+    expect(response.results).toEqual([]);
   });
 
   it('graph: an edge to a point that does not exist is NOT_FOUND, as on REST', async () => {

@@ -22,6 +22,7 @@ import {
   describeWasmThrow,
 } from '../src/backends/wasm-helpers';
 import { newSparseIds } from '../src/backends/wasm-sparse';
+import { VelesDBError } from '../src/types';
 import type {
   CollectionData,
   WasmModule,
@@ -108,19 +109,19 @@ describe('toNumericId', () => {
     expect(toNumericId('hello')).toBe(toNumericId('hello'));
   });
 
-  it('hashes string beyond MAX_SAFE_INTEGER', () => {
-    // More than 2^53, Number parse would lose precision → falls into hash
-    const big = '9007199254740997';
-    const h = toNumericId(big);
-    expect(Number.isInteger(h)).toBe(true);
-    expect(h).toBeGreaterThanOrEqual(0);
+  it('refuses a decimal id past MAX_SAFE_INTEGER instead of hashing it into another point', () => {
+    // A decimal id names a u64; a hash of its digits would address — and
+    // could collide with — another point. The binding hands search ids back
+    // as JS numbers, so no exact form of it exists on this backend.
+    expect(() => toNumericId('9007199254740997')).toThrow(VelesDBError);
+    expect(() => toNumericId('9007199254740997')).toThrow(/MAX_SAFE_INTEGER/);
   });
 });
 
 describe('exactGraphId', () => {
   it('keeps a decimal id past 2^53 exactly, where toNumericId would not', () => {
     expect(exactGraphId('9007199254740993', 'Edge id')).toBe('9007199254740993');
-    expect(String(toNumericId('9007199254740993'))).not.toBe('9007199254740993');
+    expect(() => toNumericId('9007199254740993')).toThrow(VelesDBError);
   });
 
   it('writes a safe integer as its decimal string and trims a string id', () => {

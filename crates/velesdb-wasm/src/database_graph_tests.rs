@@ -46,7 +46,7 @@ fn an_added_edge_is_listed_counted_and_matched() {
     assert_eq!(
         serde_json::to_value(db.edges("docs", None).expect("edges")).expect("json"),
         json!([{
-            "id": "10", "source": 1, "target": 2, "label": "CITES",
+            "id": "10", "source": "1", "target": "2", "label": "CITES",
             "properties": {"weight": 0.5, "tags": ["a", "b"]},
         }])
     );
@@ -183,4 +183,50 @@ fn a_match_returns_a_relationship_id_as_a_string() {
         json!({"r.id": "9007199254740993", "b.id": 2}),
         "an edge id is a string, a node id stays a number"
     );
+}
+
+/// As REST's `EdgeResponse`: an edge's ends are node ids, listed as decimal
+/// strings, so a node id past 2^53 reads back as the node it named.
+#[test]
+fn an_edges_ends_are_listed_as_exact_strings() {
+    let mut db = docs();
+    db.add_edge("docs", edge(10, 1, 2, "CITES")).expect("add");
+    let listed = serde_json::to_value(db.edges("docs", None).expect("edges")).expect("json");
+    assert_eq!(
+        (&listed[0]["source"], &listed[0]["target"]),
+        (&json!("1"), &json!("2"))
+    );
+}
+
+/// As core's `Collection::delete` (#900): removing a point removes the edges
+/// it is an end of, so a later point under the same id starts unconnected.
+#[test]
+fn removing_points_removes_the_edges_they_end() {
+    let mut db = docs();
+    db.add_edge("docs", edge(10, 1, 2, "CITES")).expect("add");
+    db.add_edge("docs", edge(11, 3, 1, "CITES")).expect("add");
+    db.add_edge("docs", edge(12, 2, 3, "CITES")).expect("add");
+
+    assert_eq!(db.remove_points("docs", &[1, 99]).expect("remove"), 1);
+
+    let left: Vec<u64> = db
+        .edges("docs", None)
+        .expect("edges")
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(left, [12], "only the edge not touching point 1 is left");
+    assert!(db
+        .get_shared_store("docs")
+        .expect("store")
+        .borrow()
+        .ids
+        .iter()
+        .all(|&id| id != 1));
+}
+
+#[test]
+fn removing_points_of_a_missing_collection_is_an_error() {
+    let mut db = docs();
+    assert!(db.remove_points("ghost", &[1]).is_err());
 }

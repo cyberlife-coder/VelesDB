@@ -380,32 +380,25 @@ export class WasmBackend implements IVelesDBBackend {
   async upsertBatchRaw(c: string, d: VectorDocument[]): Promise<number> { return wasmUpsertBatchRaw(c, d); }
 
   async delete(collectionName: string, id: string | number): Promise<boolean> {
-    this.ensureInitialized();
-    const collection = this.collections.get(collectionName);
-    if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
-    const numericId = toNumericId(id);
-    const removed = collection.store.remove(BigInt(numericId));
-    if (removed) {
-      collection.payloads.delete(canonicalPayloadKey(id));
-      retireSparse(collection.sparseIds, this.newSparseStore, numericId);
-    }
-    return removed;
+    return (await this.bulkDelete(collectionName, [id])) > 0;
   }
 
+  /**
+   * Remove points and their bookkeeping. Through the database when it can,
+   * so the edges a removed point is an end of go with it, as core's delete
+   * cascades (#900); otherwise through the store, which then has no edges.
+   */
   async bulkDelete(collectionName: string, ids: Array<string | number>): Promise<number> {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
-    let count = 0;
-    for (const id of ids) {
-      const numericId = toNumericId(id);
-      const removed = collection.store.remove(BigInt(numericId));
-      if (removed) {
-        collection.payloads.delete(canonicalPayloadKey(id));
-        retireSparse(collection.sparseIds, this.newSparseStore, numericId);
-        count += 1;
-      }
-    }
+    const numericIds = ids.map((id) => toNumericId(id));
+    const count = this.velesql?.removePoints(collectionName, numericIds.map((id) => BigInt(id)))
+      ?? numericIds.filter((id) => collection.store.remove(BigInt(id))).length;
+    ids.forEach((id, i) => {
+      collection.payloads.delete(canonicalPayloadKey(id));
+      retireSparse(collection.sparseIds, this.newSparseStore, numericIds[i]!);
+    });
     return count;
   }
 

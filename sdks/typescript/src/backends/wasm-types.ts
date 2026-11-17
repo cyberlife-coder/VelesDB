@@ -240,9 +240,14 @@ export interface WasmVelesQLDatabase {
   addEdge?(name: string, edge_json: string): string;
   /**
    * The edges of a collection, as a JSON array, optionally only one label.
-   * Each edge's `id` is a decimal string; `source` and `target` are numbers.
+   * Each edge's `id`, `source` and `target` is a decimal string.
    */
   getEdges?(name: string, label?: string): string;
+  /**
+   * Remove points with the edges they are an end of, as core's delete does;
+   * returns how many points were there. Optional: bindings before it lack it.
+   */
+  removePoints?(name: string, ids: BigUint64Array): number;
   /** Remove an edge by its decimal-string id; `false` when it was absent. */
   removeEdge?(name: string, id: string): boolean;
   /** The number of edges in a collection. */

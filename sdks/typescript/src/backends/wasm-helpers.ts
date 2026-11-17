@@ -113,7 +113,15 @@ export function exactGraphId(id: string | number, what: string): string {
   throw new VelesDBError(`${what} must be a non-negative integer id, got ${JSON.stringify(id)}`, 'BAD_REQUEST');
 }
 
-/** Convert a string or number document ID to a numeric ID. */
+/**
+ * Convert a string or number document ID to a numeric ID.
+ *
+ * A decimal string is that number. One past `Number.MAX_SAFE_INTEGER` is
+ * refused (`BAD_REQUEST`) rather than hashed: a hash of its digits would
+ * address, and could collide with, another point, and this backend has no
+ * exact form for it — the binding hands search ids back as JS numbers.
+ * Any other string keeps its stable hash.
+ */
 export function toNumericId(id: string | number): number {
   if (typeof id === 'number') {
     return id;
@@ -124,6 +132,10 @@ export function toNumericId(id: string | number): number {
     if (Number.isSafeInteger(parsed)) {
       return parsed;
     }
+    throw new VelesDBError(
+      `Point id ${normalized} is past Number.MAX_SAFE_INTEGER; the WASM backend cannot address it exactly`,
+      'BAD_REQUEST'
+    );
   }
   let hash = 0;
   for (let i = 0; i < id.length; i++) {

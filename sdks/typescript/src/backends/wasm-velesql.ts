@@ -67,6 +67,16 @@ export class WasmVelesQL {
     this.db.attachStore!(name, store);
   }
 
+  /**
+   * Remove points `ids` of collection `name` with the edges they are an end
+   * of, as core's delete does; `null` when the binding has no such call, and
+   * the caller removes them through the store (which has no edges to keep).
+   */
+  removePoints(name: string, ids: bigint[]): number | null {
+    if (typeof this.db.removePoints !== 'function') { return null; }
+    return this.db.removePoints(name, BigUint64Array.from(ids));
+  }
+
   /** Drop collection `name`; call before freeing its store. */
   detach(name: string): void {
     this.db.delete_collection(name);

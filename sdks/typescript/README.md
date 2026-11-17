@@ -863,9 +863,12 @@ await db.alterCollection('docs', { autoReindex: false });
 > the browser with REST's shapes. A collection's points are its nodes, labelled by their
 > `_labels` payload key, so an edge's `source` and `target` must be stored points, as on the
 > server. Every id crosses to the binding as its exact decimal string: `getEdges` lists an
-> edge's `id` as a string (a derived edge id is routinely past `Number.MAX_SAFE_INTEGER`), which
-> `removeEdge` takes back as is; an id that is not a non-negative integer is refused with
-> `BAD_REQUEST`, never hashed into another id. `matchQuery` names the collection for the MATCH and returns REST's `{ bindings,
+> edge's `id`, `source` and `target` as strings, as REST does (a derived edge id is routinely
+> past `Number.MAX_SAFE_INTEGER`), which `removeEdge` takes back as is; an id that is not a
+> non-negative integer is refused with `BAD_REQUEST`, never hashed into another id. `delete` and
+> `bulkDelete` remove a point's edges with it, as the server does. A decimal point id past
+> `Number.MAX_SAFE_INTEGER` is refused with `BAD_REQUEST` on this backend: it used to be hashed
+> into another point's id. `matchQuery` names the collection for the MATCH and returns REST's `{ bindings,
 > depth, projected, score? }` rows: the points' vectors score `similarity()` as on the server,
 > and `options.vector` / `threshold` behave as on REST `/match`. Traversal (`traverseGraph`, `traverseParallel`)
 > and `getNodeDegree` stay server-only, so `capabilities().graphTraversal` is `false`. An older
