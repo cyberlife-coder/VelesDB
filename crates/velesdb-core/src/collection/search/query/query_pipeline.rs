@@ -333,13 +333,17 @@ impl Collection {
             similarity_conditions = Self::extract_all_similarity_conditions(cond, params)?;
             filter_condition = Some(cond.clone());
         }
-        let similarity_scan = stmt.where_clause.as_ref().is_some_and(|cond| {
-            Self::needs_similarity_scan(
-                cond,
-                &similarity_conditions,
-                vector_search.is_some() || sparse_vector_search.is_some() || fused_search.is_some(),
-            )
-        });
+        // A `SPARSE_NEAR` ranks its own rows and applies a `similarity()`
+        // threshold beside it itself (`sparse_dispatch.rs`); the scan would
+        // drop the sparse leaf.
+        let similarity_scan = sparse_vector_search.is_none()
+            && stmt.where_clause.as_ref().is_some_and(|cond| {
+                Self::needs_similarity_scan(
+                    cond,
+                    &similarity_conditions,
+                    vector_search.is_some() || fused_search.is_some(),
+                )
+            });
 
         Ok(ExtractedComponents {
             vector_search,

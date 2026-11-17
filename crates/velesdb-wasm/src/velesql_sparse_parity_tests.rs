@@ -301,3 +301,23 @@ fn distinct_and_vector_group_by_read_every_candidate_not_the_window() {
     );
     assert_eq!(distinct, vec![json!({"cat": "a"}), json!({"cat": "b"})]);
 }
+
+/// A `similarity()` threshold beside `SPARSE_NEAR` bounds both branches,
+/// under AND, OR and NOT, the same on both engines (similarity to `$q`:
+/// 1 > 0.8 > 0.6 > 0.3 > 0 for points 1, 2, 3, 5, 4).
+#[test]
+fn a_similarity_threshold_beside_sparse_near_filters_as_core_does() {
+    for sql in [
+        "SELECT * FROM c WHERE vector SPARSE_NEAR {1: 1.0, 2: 1.0} AND similarity(vector, $q) > 0.5 LIMIT 5",
+        "SELECT * FROM c WHERE vector NEAR $q AND vector SPARSE_NEAR $s \
+         AND similarity(vector, $q) > 0.5 LIMIT 5",
+        "SELECT * FROM c WHERE vector SPARSE_NEAR {1: 1.0, 2: 1.0} \
+         AND (similarity(vector, $q) > 0.9 OR cat = 'b') LIMIT 5",
+        "SELECT * FROM c WHERE vector NEAR $q AND vector SPARSE_NEAR $s \
+         AND (similarity(vector, $q) > 0.9 OR cat = 'b') LIMIT 5",
+        "SELECT * FROM c WHERE vector SPARSE_NEAR {1: 1.0, 2: 1.0} \
+         AND NOT similarity(vector, $q) > 0.9 LIMIT 5",
+    ] {
+        assert_parity(COSINE, sql);
+    }
+}

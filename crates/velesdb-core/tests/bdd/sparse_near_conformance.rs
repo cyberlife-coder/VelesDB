@@ -317,3 +317,59 @@ fn test_vector_group_by_over_sparse_near_groups_the_hits() {
         );
     }
 }
+
+/// Runs `sql` over the `cats` corpus with `$q = [1, 0]` (similarity 1, 0.8
+/// and 0 to points 1, 2 and 3) and returns `(id, score)` in order.
+fn cats_rows(sql: &str) -> Vec<(u64, f32)> {
+    let (_dir, db) = create_test_db();
+    setup_categories(&db);
+    let params = HashMap::from([("q".to_string(), json!([1.0, 0.0]))]);
+    id_scores(&execute_sql_with_params(&db, sql, &params).unwrap_or_else(|e| panic!("{sql}: {e}")))
+}
+
+/// WHEN a `similarity()` threshold sits beside `SPARSE_NEAR`, alone or with a
+/// `NEAR` THEN it bounds the points either branch returns: point 3
+/// (similarity 0) fails `> 0.5` and is not returned — the threshold used to
+/// be dropped.
+#[test]
+fn test_similarity_threshold_bounds_sparse_near() {
+    let sparse = cats_rows(
+        "SELECT * FROM cats WHERE vector SPARSE_NEAR {7: 1.0} AND similarity(vector, $q) > 0.5 LIMIT 5",
+    );
+    assert_eq!(sparse.iter().map(|r| r.0).collect::<Vec<_>>(), vec![1, 2]);
+    assert!(
+        approx_eq(sparse[0].1, 3.0, EPS) && approx_eq(sparse[1].1, 2.0, EPS),
+        "{sparse:?}"
+    );
+    let hybrid = cats_rows(
+        "SELECT * FROM cats WHERE vector NEAR $q AND vector SPARSE_NEAR {7: 1.0} \
+         AND similarity(vector, $q) > 0.5 LIMIT 5",
+    );
+    assert_eq!(hybrid.iter().map(|r| r.0).collect::<Vec<_>>(), vec![1, 2]);
+}
+
+/// WHEN the threshold sits under `OR` or `NOT` beside `SPARSE_NEAR` THEN it
+/// composes with the other predicates and the survivors rank by the sparse
+/// score — the query used to run the `similarity()` scan, dropping
+/// `SPARSE_NEAR` and scoring by similarity.
+#[test]
+fn test_similarity_threshold_under_or_and_not_keeps_sparse_near() {
+    let or = cats_rows(
+        "SELECT * FROM cats WHERE vector SPARSE_NEAR {7: 1.0} \
+         AND (similarity(vector, $q) > 0.9 OR cat = 'B') LIMIT 5",
+    );
+    assert_eq!(or.iter().map(|r| r.0).collect::<Vec<_>>(), vec![1, 3]);
+    assert!(
+        approx_eq(or[0].1, 3.0, EPS) && approx_eq(or[1].1, 1.0, EPS),
+        "{or:?}"
+    );
+    let not = cats_rows(
+        "SELECT * FROM cats WHERE vector SPARSE_NEAR {7: 1.0} \
+         AND NOT similarity(vector, $q) > 0.9 LIMIT 5",
+    );
+    assert_eq!(not.iter().map(|r| r.0).collect::<Vec<_>>(), vec![2, 3]);
+    assert!(
+        approx_eq(not[0].1, 2.0, EPS) && approx_eq(not[1].1, 1.0, EPS),
+        "{not:?}"
+    );
+}

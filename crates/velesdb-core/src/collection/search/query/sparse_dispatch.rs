@@ -6,6 +6,13 @@
 
 use super::{Collection, ExtractedComponents, Result, SearchResult, MAX_LIMIT};
 
+/// What bounds a sparse or hybrid fetch: the condition both branches filter
+/// by, and the GraphFirst anchor ids a sparse-only fetch is restricted to.
+struct SparseFetch<'a> {
+    filter: Option<&'a crate::velesql::Condition>,
+    anchors: Option<&'a std::collections::HashSet<u64>>,
+}
+
 impl Collection {
     /// Dispatches sparse-only or hybrid dense+sparse search.
     pub(super) fn dispatch_sparse_query(
@@ -26,9 +33,13 @@ impl Collection {
         // keeps the window: its fusion legs rank independently.
         let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
         let anchors = self.sparse_anchor_prefilter(stmt, params, extracted, &mut graph_cache)?;
+        let filter = self.sparse_branch_filter(stmt, params, extracted)?;
+        let fetch = SparseFetch {
+            filter: filter.as_ref(),
+            anchors: anchors.as_ref(),
+        };
 
-        let mut results =
-            self.fetch_sparse_results(stmt, params, extracted, svs, limit, anchors.as_ref())?;
+        let mut results = self.fetch_sparse_results(stmt, params, extracted, svs, limit, &fetch)?;
 
         if has_graph_predicates {
             results = self.filter_by_graph_predicates_with_cache(
@@ -45,6 +56,39 @@ impl Collection {
         Ok(results)
     }
 
+    /// The condition both branches of a sparse or hybrid search filter by:
+    /// the WHERE clause, whose metadata part each branch pushes down — or,
+    /// when the clause holds a `similarity()` threshold, the ids the whole
+    /// clause holds for, as the exact scan evaluates it (each threshold on
+    /// its own vector, three-valued under AND / OR / NOT, the vector and
+    /// sparse leaves read as true). A threshold is no metadata predicate, so
+    /// pushing the metadata part alone dropped it.
+    fn sparse_branch_filter(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+    ) -> Result<Option<crate::velesql::Condition>> {
+        let (Some(cond), false) = (
+            stmt.where_clause.as_ref(),
+            extracted.similarity_conditions.is_empty(),
+        ) else {
+            return Ok(extracted.filter_condition.clone());
+        };
+        let values = self
+            .execute_similarity_scan(cond, params, usize::MAX, None)?
+            .into_iter()
+            .map(|r| crate::velesql::Value::UnsignedInteger(r.point.id))
+            .collect();
+        Ok(Some(crate::velesql::Condition::In(
+            crate::velesql::InCondition {
+                column: "id".to_string(),
+                values,
+                negated: false,
+            },
+        )))
+    }
+
     /// Fetches sparse/hybrid results: anchored exact fetch when a GraphFirst
     /// anchor set is available, MAX_LIMIT window fetch otherwise.
     fn fetch_sparse_results(
@@ -54,24 +98,25 @@ impl Collection {
         extracted: &ExtractedComponents,
         svs: &crate::velesql::SparseVectorSearch,
         limit: usize,
-        anchors: Option<&std::collections::HashSet<u64>>,
+        fetch: &SparseFetch<'_>,
     ) -> Result<Vec<SearchResult>> {
-        let Some(anchor_ids) = anchors else {
+        let Some(anchor_ids) = fetch.anchors else {
             let execution_limit = if extracted.graph_match_predicates.is_empty() {
                 limit
             } else {
                 MAX_LIMIT
             };
-            return self.execute_sparse_or_hybrid(stmt, extracted, svs, params, execution_limit);
+            return self.execute_sparse_or_hybrid(
+                stmt,
+                extracted,
+                fetch.filter,
+                svs,
+                params,
+                execution_limit,
+            );
         };
-        self.execute_sparse_search_in_anchors(
-            svs,
-            params,
-            extracted.filter_condition.as_ref(),
-            limit,
-            Some(anchor_ids),
-        )
-        .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
+        self.execute_sparse_search_in_anchors(svs, params, fetch.filter, limit, Some(anchor_ids))
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
     }
 
     /// Computes the GraphFirst anchor set for a sparse-only fetch.
@@ -106,6 +151,7 @@ impl Collection {
         &self,
         stmt: &crate::velesql::SelectStatement,
         extracted: &ExtractedComponents,
+        filter: Option<&crate::velesql::Condition>,
         svs: &crate::velesql::SparseVectorSearch,
         params: &std::collections::HashMap<String, serde_json::Value>,
         execution_limit: usize,
@@ -116,19 +162,14 @@ impl Collection {
                 dense_vec,
                 svs,
                 params,
-                extracted.filter_condition.as_ref(),
+                filter,
                 execution_limit,
                 &fusion_strategy,
             )
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
         } else {
-            self.execute_sparse_search(
-                svs,
-                params,
-                extracted.filter_condition.as_ref(),
-                execution_limit,
-            )
-            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
+            self.execute_sparse_search(svs, params, filter, execution_limit)
+                .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
         }
     }
 

@@ -280,10 +280,8 @@ One case deserves more than a one-liner:
   apply (`SelectStatement::reshapes_rows_before_window`), so the window bounds
   the distinct rows or groups, not the hits.
 - A `similarity()` threshold beside a `SPARSE_NEAR` bounds both branches,
-  evaluated as on the dense path, under `AND`, `OR` and `NOT`. Core does not
-  apply it on that path yet: it drops the threshold under `AND`, and under
-  `OR` / `NOT` runs its `similarity()` scan without the sparse leaf, so the
-  two engines can return different rows for these shapes.
+  evaluated as on the dense path, under `AND`, `OR` and `NOT`, as core
+  bounds them.
 - The vector-predicate shapes core refuses (`NEAR_FUSED` under `OR` / `NOT` or
   beside another vector predicate, several `SPARSE_NEAR`, several
   `similarity()` under one `OR`) are refused by the same check

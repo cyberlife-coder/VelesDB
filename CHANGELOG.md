@@ -458,16 +458,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Core: a `similarity()` threshold beside `SPARSE_NEAR` is applied** (core,
+  2026-11-17). Under `AND` the sparse and hybrid search pushed down only the
+  metadata part of the WHERE clause, so `vector SPARSE_NEAR {…} AND
+  similarity(vector, $q) > t` returned points failing the threshold; under
+  `OR` or `NOT` the query ran the exact `similarity()` scan instead, which
+  dropped the `SPARSE_NEAR` leaf and scored by similarity. Both branches now
+  keep only the points the whole clause holds for, the threshold evaluated as
+  the scan evaluates it (three-valued, on each point's own vector), and the
+  rows rank by the sparse or fused score — the same rows as the WASM
+  executor.
+
 - **WASM: a `similarity()` threshold beside `SPARSE_NEAR` filters instead of
   failing** (WASM, 2026-11-17). `vector SPARSE_NEAR {…} AND similarity(vector,
   $q) > t`, alone or beside a `NEAR`, failed with "similarity() threshold
   filters are not supported in WASM", though the dense path evaluates the same
   threshold. The rest of the WHERE clause now bounds both branches, its
   `similarity()` leaves evaluated as on the dense path, under `AND`, `OR` and
-  `NOT`, and the survivors rank by the sparse or fused score. Core does not
-  apply the threshold on this path yet (it drops it under `AND`, and under
-  `OR` / `NOT` runs its `similarity()` scan without the sparse leaf), so the two
-  engines can differ on these shapes.
+  `NOT`, and the survivors rank by the sparse or fused score, as in core.
 
 - **Core and WASM: `DISTINCT` and a vector `GROUP BY` read every candidate;
   beside `SPARSE_NEAR` or `NEAR_FUSED` a vector `GROUP BY` groups** (core,
