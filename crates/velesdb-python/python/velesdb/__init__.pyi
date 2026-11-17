@@ -914,11 +914,25 @@ class Collection:
     # VelesQL query methods
 
     def query(self, query_str: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Execute a VelesQL query."""
+        """Execute a read-only VelesQL query against this collection.
+
+        A SELECT's ``FROM`` is rewritten to this collection.
+
+        Raises:
+            ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): a collection's query methods run reads only, since
+                a write names its own target. Use ``Database.execute_query``.
+        """
         ...
 
     def query_ids(self, velesql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Execute a VelesQL query returning only IDs and scores."""
+        """Execute a read-only VelesQL query returning only IDs and scores.
+
+        Raises:
+            ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): a collection's query methods run reads only, since
+                a write names its own target. Use ``Database.execute_query``.
+        """
         ...
 
     def match_query(
@@ -969,7 +983,9 @@ class Collection:
 
         Raises:
             ValueError: If the query does not parse or is invalid for this
-                database.
+                database, or if the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): EXPLAIN ANALYZE executes it, so it runs reads
+                only, like ``query``. Use ``Database.execute_query``.
             PermissionError: If the database's observer refuses it.
             VelesDBError: If execution fails in the engine.
         """
@@ -1887,6 +1903,11 @@ class PyGraphCollection:
 
         Returns:
             List of result dicts
+
+        Raises:
+            ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): a collection's query methods run reads only, since
+                a write names its own target. Use ``Database.execute_query``.
         """
         ...
 
@@ -1951,7 +1972,9 @@ class PyGraphCollection:
 
         Raises:
             ValueError: If the query does not parse or is invalid for this
-                database.
+                database, or if the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): EXPLAIN ANALYZE executes it, so it runs reads
+                only, like ``query``. Use ``Database.execute_query``.
             PermissionError: If the database's observer refuses it.
             VelesDBError: If execution fails in the engine.
         """
@@ -1966,6 +1989,11 @@ class PyGraphCollection:
 
         Returns:
             List of dicts with 'id' and 'score' fields
+
+        Raises:
+            ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): a collection's query methods run reads only, since
+                a write names its own target. Use ``Database.execute_query``.
         """
         ...
 

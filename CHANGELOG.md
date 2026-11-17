@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Python: a collection's query methods run reads only** (Python,
+  2026-11-17). `Collection.query` / `query_ids` / `explain_analyze` and their
+  `GraphCollection` twins rewrite a SELECT's `FROM` to their own collection,
+  but forwarded any other statement as written, so
+  `docs.query("DROP COLLECTION other")` dropped `other` and
+  `docs.query("DELETE FROM other …")` deleted from it. A statement core's
+  `Query::is_read_only` refuses (DDL, DML, `TRAIN`, `FLUSH`) now raises
+  `ValueError`. Migration: run writes through `Database.execute_query`.
+
 - **BREAKING (Tauri IPC): graph node ids cross the IPC boundary as REST's
   graph DTOs carry them** (Tauri, 2026-11-17). The plugin read and wrote node
   ids as JSON numbers, which JavaScript rounds past 2^53, while REST reads a

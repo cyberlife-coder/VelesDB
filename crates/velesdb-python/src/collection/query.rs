@@ -292,43 +292,81 @@ pub(crate) fn convert_params(
 // Shared VelesQL execution helpers (used by Collection + PyGraphCollection)
 // ---------------------------------------------------------------------------
 
-/// Execute a VelesQL SELECT query and convert results to multimodel dicts.
-pub(crate) fn run_velesql_select<F>(
-    py: Python<'_>,
-    query_str: &str,
-    params: Option<HashMap<String, Py<PyAny>>>,
-    execute: F,
-) -> PyResult<Vec<Py<PyAny>>>
-where
+/// The executor a collection-scoped VelesQL read hands its parsed,
+/// read-only statement to.
+pub(crate) trait VelesqlReadExecutor:
+    FnOnce(
+        &velesdb_core::velesql::Query,
+        &HashMap<String, serde_json::Value>,
+    ) -> velesdb_core::error::Result<Vec<velesdb_core::SearchResult>>
+    + Send
+{
+}
+
+impl<F> VelesqlReadExecutor for F where
     F: FnOnce(
             &velesdb_core::velesql::Query,
             &HashMap<String, serde_json::Value>,
         ) -> velesdb_core::error::Result<Vec<velesdb_core::SearchResult>>
-        + Send,
+        + Send
 {
+}
+
+/// Parses `query_str` and refuses any statement that writes.
+///
+/// The collection-scoped methods that execute a statement (`query`,
+/// `query_ids` and `explain_analyze` on `Collection` and `GraphCollection`)
+/// retarget a SELECT's `FROM` to their
+/// own collection, but a DDL or DML statement names its own target: run as
+/// is, `docs.query("DROP COLLECTION other")` would drop `other`. Those belong
+/// to `Database.execute_query`, so only what core's
+/// [`Query::is_read_only`](velesdb_core::velesql::Query::is_read_only) admits
+/// passes here.
+pub(crate) fn parse_read_only_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::Query> {
     let parsed = parse_velesql(query_str)?;
+    if parsed.is_read_only() {
+        Ok(parsed)
+    } else {
+        Err(PyValueError::new_err(
+            "a collection's query methods run read-only VelesQL only (SELECT, \
+             MATCH, SELECT EDGES, SHOW, DESCRIBE, EXPLAIN); run DDL and DML \
+             through Database.execute_query",
+        ))
+    }
+}
+
+/// Parses a read-only statement (see [`parse_read_only_velesql`]), converts
+/// `params` and runs `execute` off the GIL.
+fn run_velesql_read(
+    py: Python<'_>,
+    query_str: &str,
+    params: Option<HashMap<String, Py<PyAny>>>,
+    execute: impl VelesqlReadExecutor,
+) -> PyResult<Vec<velesdb_core::SearchResult>> {
+    let parsed = parse_read_only_velesql(query_str)?;
     let rust_params = convert_params(py, params)?;
-    let results = py.detach(move || execute(&parsed, &rust_params).map_err(core_err))?;
+    py.detach(move || execute(&parsed, &rust_params).map_err(core_err))
+}
+
+/// Execute a read-only VelesQL query and convert results to multimodel dicts.
+pub(crate) fn run_velesql_select(
+    py: Python<'_>,
+    query_str: &str,
+    params: Option<HashMap<String, Py<PyAny>>>,
+    execute: impl VelesqlReadExecutor,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let results = run_velesql_read(py, query_str, params, execute)?;
     crate::collection_helpers::search_results_to_multimodel_dicts(py, results)
 }
 
-/// Execute a VelesQL SELECT query and return only IDs and scores.
-pub(crate) fn run_velesql_select_ids<F>(
+/// Execute a read-only VelesQL query and return only IDs and scores.
+pub(crate) fn run_velesql_select_ids(
     py: Python<'_>,
     query_str: &str,
     params: Option<HashMap<String, Py<PyAny>>>,
-    execute: F,
-) -> PyResult<Vec<Py<PyAny>>>
-where
-    F: FnOnce(
-            &velesdb_core::velesql::Query,
-            &HashMap<String, serde_json::Value>,
-        ) -> velesdb_core::error::Result<Vec<velesdb_core::SearchResult>>
-        + Send,
-{
-    let parsed = parse_velesql(query_str)?;
-    let rust_params = convert_params(py, params)?;
-    let results = py.detach(move || execute(&parsed, &rust_params).map_err(core_err))?;
+    execute: impl VelesqlReadExecutor,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let results = run_velesql_read(py, query_str, params, execute)?;
     search_results_to_id_score(py, results)
 }
 
@@ -376,6 +414,12 @@ impl Collection {
     /// Returns:
     ///     List of query results with node_id, vector_score, graph_score,
     ///     fused_score, bindings (payload), and column_data
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     ///
     /// Example:
     ///     >>> results = collection.query(
@@ -483,6 +527,12 @@ impl Collection {
     ///
     /// Returns:
     ///     Dict with keys: plan, actual_stats, node_stats
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     #[pyo3(signature = (query_str, params=None))]
     fn explain_analyze(
         &self,
@@ -490,7 +540,7 @@ impl Collection {
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Py<PyAny>> {
-        let parsed = parse_velesql(query_str)?;
+        let parsed = parse_read_only_velesql(query_str)?;
         let rust_params = convert_params(py, params)?;
         // EXPLAIN ANALYZE *executes* the query, so it must pass the same
         // control-plane read gate as `query()`. The `Database` facade twin is
@@ -516,6 +566,12 @@ impl Collection {
     ///
     /// Returns:
     ///     List of dicts with 'id' and 'score' fields
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     ///
     /// Example:
     ///     >>> ids = collection.query_ids("SELECT * FROM docs WHERE price > 100 LIMIT 5")

@@ -190,6 +190,7 @@ so your IDE and mypy/pyright are the reference. Task-oriented guides:
 - **No GPU in the published wheels.** The `gpu` Cargo feature exists but is not enabled by `[tool.maturin]`; it requires building from source.
 - **`Collection.search(vector, top_k=...)`** is the keyword shorthand over `search_request(SearchOptions(...))`, which adds fusion, `include_vectors` and the read-gate options.
 - **Read-gate refusals.** An observer *deny* or *veto* raises `PermissionError` (core's `VELES-037`, `AccessDenied`); so does a scope on an ids-only read (`all_ids`, `all_point_ids`, `search_ids`, `count`), which cannot be applied to bare ids.
+- **A collection's query methods run reads only.** `query`, `query_ids` and `explain_analyze` on a `Collection` or `GraphCollection` raise `ValueError` for DDL and DML (a write names its own target collection); run those through `Database.execute_query`.
 - **`add_edge(source, target, label, id=n)`** takes the positional value as the source; `id=` together with `source=` raises `ValueError`.
 - **Graph persistence** goes through `Database.create_graph_collection()`; `Collection.get_graph_store()` (a standalone in-memory graph) was removed in 8.0.0.
 

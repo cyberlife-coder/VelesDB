@@ -7,9 +7,9 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::collection::query::{
-    build_explain_analyze_dict, build_explain_dict, convert_params, parse_velesql,
-    retarget_to_collection, run_velesql_match, run_velesql_select, run_velesql_select_ids,
-    validate_query,
+    build_explain_analyze_dict, build_explain_dict, convert_params, parse_read_only_velesql,
+    parse_velesql, retarget_to_collection, run_velesql_match, run_velesql_select,
+    run_velesql_select_ids, validate_query,
 };
 use crate::collection_helpers::core_err;
 use crate::graph_collection::PyGraphCollection;
@@ -24,6 +24,12 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     List of result dicts
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     ///
     /// # Cross-Collection MATCH
     ///
@@ -139,6 +145,12 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     Dict with keys: plan, actual_stats, node_stats
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     #[pyo3(signature = (query_str, params=None))]
     fn explain_analyze(
         &self,
@@ -146,7 +158,7 @@ impl PyGraphCollection {
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Py<PyAny>> {
-        let parsed = parse_velesql(query_str)?;
+        let parsed = parse_read_only_velesql(query_str)?;
         let rust_params = convert_params(py, params)?;
         // EXPLAIN ANALYZE *executes* the query — route through the gated
         // `Database` facade twin (deny fails closed, and a scope is refused:
@@ -168,6 +180,12 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     List of dicts with 'id' and 'score' fields
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     #[pyo3(signature = (velesql, params = None))]
     fn query_ids(
         &self,
