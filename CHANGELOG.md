@@ -444,6 +444,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tauri: `traverse_graph` refuses an unknown `algorithm` instead of running
+  BFS** (Tauri, 2026-11-17). Any value but `"dfs"` — `"DFS"` and
+  `"dijkstra"` included — silently ran a breadth-first traversal. The name is
+  now matched case-insensitively against `bfs` / `dfs`, as REST's traverse
+  endpoint does, and anything else is an `InvalidConfig` error (VELES-009).
+
 - **WASM: `VectorStore.save()` / `export_to_bytes()` keep the sparse
   index.** It was dropped, so a loaded store answered no sparse query until
   every sparse vector was inserted again. Format v4 appends one record per

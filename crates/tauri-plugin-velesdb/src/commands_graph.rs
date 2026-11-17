@@ -97,6 +97,25 @@ fn build_traversal_config(
         .with_rel_types(rel_types.unwrap_or_default())
 }
 
+/// The traversal orders a [`traverse_graph`] request may name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraversalAlgorithm {
+    Bfs,
+    Dfs,
+}
+
+/// Parses a request's `algorithm` case-insensitively, as the REST traverse
+/// endpoint does, and refuses any other name rather than running BFS.
+fn parse_algorithm(name: &str) -> std::result::Result<TraversalAlgorithm, Error> {
+    match name.to_lowercase().as_str() {
+        "bfs" => Ok(TraversalAlgorithm::Bfs),
+        "dfs" => Ok(TraversalAlgorithm::Dfs),
+        _ => Err(Error::InvalidConfig(format!(
+            "Invalid algorithm '{name}'. Use 'bfs' or 'dfs'."
+        ))),
+    }
+}
+
 /// Maps core traversal results into the API [`TraversalOutput`] shape. Shared by
 /// [`traverse_graph`] and [`traverse_graph_parallel`].
 fn to_traversal_outputs(
@@ -217,15 +236,15 @@ pub async fn traverse_graph<R: Runtime>(
                 velesdb_core::observer::QueryOperationKind::GraphTraversal,
                 "graph reads",
             )?;
+            let algorithm = parse_algorithm(&request.algorithm)?;
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let config =
                 build_traversal_config(request.max_depth, request.limit, request.rel_types);
 
-            let results = if request.algorithm == "dfs" {
-                coll.traverse_dfs(request.source, &config)
-            } else {
-                coll.traverse_bfs(request.source, &config)
+            let results = match algorithm {
+                TraversalAlgorithm::Bfs => coll.traverse_bfs(request.source, &config),
+                TraversalAlgorithm::Dfs => coll.traverse_dfs(request.source, &config),
             };
 
             Ok(to_traversal_outputs(results))

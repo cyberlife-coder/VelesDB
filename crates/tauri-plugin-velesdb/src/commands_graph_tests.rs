@@ -48,3 +48,23 @@ fn test_an_invalid_edge_label_keeps_cores_code() {
     let err = super::build_edge(1, 1, 2, "", None).expect_err("an empty label is refused");
     assert_eq!(crate::error::CommandError::from(err).code, "VELES-021");
 }
+
+/// The algorithm is matched case-insensitively against `bfs` / `dfs`, as the
+/// REST traverse endpoint does — anything else is refused instead of
+/// silently running BFS.
+#[test]
+fn test_traversal_algorithm_is_parsed_like_rest() {
+    use super::{parse_algorithm, TraversalAlgorithm};
+    assert_eq!(parse_algorithm("bfs").ok(), Some(TraversalAlgorithm::Bfs));
+    assert_eq!(parse_algorithm("BFS").ok(), Some(TraversalAlgorithm::Bfs));
+    assert_eq!(parse_algorithm("dfs").ok(), Some(TraversalAlgorithm::Dfs));
+    assert_eq!(parse_algorithm("DFS").ok(), Some(TraversalAlgorithm::Dfs));
+    for unknown in ["dijkstra", "", "b f s"] {
+        let err = parse_algorithm(unknown).expect_err("an unknown algorithm is refused");
+        assert!(
+            matches!(err, crate::error::Error::InvalidConfig(_)),
+            "{err}"
+        );
+        assert!(err.to_string().contains("Use 'bfs' or 'dfs'"), "{err}");
+    }
+}
