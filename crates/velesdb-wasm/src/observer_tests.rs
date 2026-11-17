@@ -351,3 +351,32 @@ fn match_gate_names_every_collection_the_match_reads() {
     let _ = crate::velesql_exec::execute(&mut inner, "MATCH (a)-[:R]->(b@docs) RETURN a, b", None);
     assert_eq!(*observer.seen.borrow(), ["graph", "docs"]);
 }
+
+/// A VelesQL `NEAR` is a vector search, as core classifies it: a policy that
+/// refuses vector search refuses it through `executeQuery` too, where it used
+/// to be asked as a plain `Select` and pass.
+#[test]
+fn a_velesql_near_is_gated_as_a_vector_search() {
+    let mut inner = DatabaseInner::new();
+    inner
+        .create_collection("vecs", 2, "cosine")
+        .expect("test: create");
+    crate::velesql_exec::execute(
+        &mut inner,
+        "INSERT INTO vecs (id, vector) VALUES (1, $v)",
+        Some(r#"{"v": [1.0, 0.0]}"#),
+    )
+    .expect("test: insert");
+    inner.register_observer(DenyObserver::new(vec![
+        WasmQueryOperationKind::VectorSearch,
+    ]));
+    let err = crate::velesql_exec::execute(
+        &mut inner,
+        "SELECT * FROM vecs WHERE vector NEAR $v LIMIT 1",
+        Some(r#"{"v": [1.0, 0.0]}"#),
+    )
+    .expect_err("test: a NEAR query is a vector search");
+    assert!(err.contains("denied"), "{err}");
+    crate::velesql_exec::execute(&mut inner, "SELECT * FROM vecs", None)
+        .expect("test: a plain SELECT is still a Select");
+}

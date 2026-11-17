@@ -152,8 +152,22 @@ fn scan(
 /// Consults the read gate for every collection a SELECT reads: its source,
 /// and each JOIN's secondary collection, whose rows the join merges into the
 /// result. Zero-overhead when no observer is registered.
+///
+/// The source is asked as core classifies the statement: a `NEAR` in the
+/// WHERE makes it a vector search — the kind `WasmCollectionHandle.search`
+/// asks with — so a policy refusing vector search is not bypassed through
+/// VelesQL.
 fn check_select_access(db: &DatabaseInner, select: &SelectStatement) -> Result<(), String> {
-    db.check_query_access(&select.from, WasmQueryOperationKind::Select)?;
+    let kind = if select
+        .where_clause
+        .as_ref()
+        .is_some_and(velesdb_core::velesql::Condition::has_vector_search)
+    {
+        WasmQueryOperationKind::VectorSearch
+    } else {
+        WasmQueryOperationKind::Select
+    };
+    db.check_query_access(&select.from, kind)?;
     for join in &select.joins {
         db.check_query_access(&join.table, WasmQueryOperationKind::Select)?;
     }

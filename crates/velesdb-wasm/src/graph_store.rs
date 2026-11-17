@@ -104,9 +104,13 @@ impl WasmGraphStore {
     /// "add if absent" (`MemoryService.relate`) checks [`Self::edge`] first,
     /// as core's agent-memory relation does.
     ///
+    /// The label follows core's rule (`GraphEdge::new`): trimmed, never
+    /// empty; a derived id hashes the label as given, as core's does.
+    ///
     /// # Errors
     ///
-    /// Returns `Err` when the id collides with an edge already in the store.
+    /// Returns `Err` for an empty or whitespace-only label, or when the id
+    /// collides with an edge already in the store.
     /// Without this check, `delete_edge_by_id(n)` would delete every
     /// duplicate at once — a data-integrity risk for user SQL like
     /// `INSERT EDGE (id = 1, ...)` executed twice (Devin Review Finding J).
@@ -121,6 +125,10 @@ impl WasmGraphStore {
         // Delegate to core's canonical edge-id derivation so the same
         // logical edge gets the same id across every VelesDB engine.
         let id = explicit_id.unwrap_or_else(|| velesdb_core::hash_edge_id(source, target, &label));
+        let label = velesdb_core::GraphEdge::new(id, source, target, &label)
+            .map_err(|e| e.to_string())?
+            .label()
+            .to_string();
         if self.edge(id).is_some() {
             return Err(format!(
                 "Edge id {id} already exists; edge ids must be unique (an edge without \
