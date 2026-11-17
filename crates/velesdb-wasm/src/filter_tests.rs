@@ -81,13 +81,3 @@ fn a_filter_core_refuses_is_refused_with_cores_message() {
         "a null filter is refused"
     );
 }
-
-#[test]
-fn test_nested_field() {
-    let payload = json!({"user": {"name": "John"}});
-    assert_eq!(
-        get_nested_field(&payload, "user.name"),
-        Some(&json!("John"))
-    );
-    assert_eq!(get_nested_field(&payload, "user.age"), None);
-}

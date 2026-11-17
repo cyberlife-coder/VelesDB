@@ -8,7 +8,7 @@
 //! engine-shared [`crate::velesql::Grouper`].
 
 use crate::collection::types::Collection;
-use crate::velesql::{HavingClause, Value};
+use crate::velesql::HavingClause;
 use std::collections::HashMap;
 
 impl Collection {
@@ -71,7 +71,7 @@ impl Collection {
                 Ok(crate::velesql::HavingCondition {
                     aggregate: cond.aggregate.clone(),
                     operator: cond.operator,
-                    value: Self::resolve_where_param(&cond.value, params)?,
+                    value: crate::velesql::bind_value(&cond.value, params)?,
                 })
             })
             .collect::<crate::error::Result<Vec<_>>>()?;
@@ -79,102 +79,5 @@ impl Collection {
             conditions,
             operators: having.operators.clone(),
         })
-    }
-
-    /// BUG-5 FIX: Resolve parameter placeholders in a condition.
-    /// Replaces `Value::Parameter("name")` with the actual value from params `HashMap`.
-    ///
-    /// Delegates leaf resolution to [`Self::resolve_where_param`] (the single
-    /// strict resolver) so a missing or unsupported parameter is an error,
-    /// never a silent `NULL`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a referenced parameter is missing from `params`
-    /// or has an unsupported type (array/object).
-    pub(crate) fn resolve_condition_params(
-        cond: &crate::velesql::Condition,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> crate::error::Result<crate::velesql::Condition> {
-        use crate::velesql::Condition;
-
-        match cond {
-            Condition::And(left, right) => Ok(Condition::And(
-                Self::resolve_boxed_condition(left, params)?,
-                Self::resolve_boxed_condition(right, params)?,
-            )),
-            Condition::Or(left, right) => Ok(Condition::Or(
-                Self::resolve_boxed_condition(left, params)?,
-                Self::resolve_boxed_condition(right, params)?,
-            )),
-            Condition::Not(inner) => Ok(Condition::Not(Self::resolve_boxed_condition(
-                inner, params,
-            )?)),
-            Condition::Group(inner) => Ok(Condition::Group(Self::resolve_boxed_condition(
-                inner, params,
-            )?)),
-            other => Self::resolve_leaf_condition_params(other, params),
-        }
-    }
-
-    /// Boxes the recursive resolution of a nested condition.
-    fn resolve_boxed_condition(
-        cond: &crate::velesql::Condition,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> crate::error::Result<Box<crate::velesql::Condition>> {
-        Ok(Box::new(Self::resolve_condition_params(cond, params)?))
-    }
-
-    /// Resolves parameters in leaf conditions (Comparison, IN, BETWEEN,
-    /// CONTAINS / CONTAINS ANY / CONTAINS ALL).
-    ///
-    /// The remaining leaf variants are cloned unchanged: they carry no scalar
-    /// `Value` operands (geo thresholds are `f64` literals, LIKE/MATCH
-    /// patterns are strings, vector parameters are resolved by the vector
-    /// pipeline), except `GraphMatch`, whose pattern properties are evaluated
-    /// by the MATCH engine rather than by this resolver.
-    fn resolve_leaf_condition_params(
-        cond: &crate::velesql::Condition,
-        params: &HashMap<String, serde_json::Value>,
-    ) -> crate::error::Result<crate::velesql::Condition> {
-        use crate::velesql::Condition;
-
-        Ok(match cond {
-            Condition::Comparison(cmp) => Condition::Comparison(crate::velesql::Comparison {
-                column: cmp.column.clone(),
-                operator: cmp.operator,
-                value: Self::resolve_where_param(&cmp.value, params)?,
-            }),
-            Condition::In(in_cond) => Condition::In(crate::velesql::InCondition {
-                column: in_cond.column.clone(),
-                values: Self::resolve_value_list(&in_cond.values, params)?,
-                negated: in_cond.negated,
-            }),
-            Condition::Between(btw) => Condition::Between(crate::velesql::BetweenCondition {
-                column: btw.column.clone(),
-                low: Self::resolve_where_param(&btw.low, params)?,
-                high: Self::resolve_where_param(&btw.high, params)?,
-            }),
-            Condition::Contains(contains) => {
-                Condition::Contains(crate::velesql::ContainsCondition {
-                    column: contains.column.clone(),
-                    mode: contains.mode,
-                    values: Self::resolve_value_list(&contains.values, params)?,
-                })
-            }
-            // These conditions don't have Value parameters to resolve
-            other => other.clone(),
-        })
-    }
-
-    /// Resolves every value in a list via [`Self::resolve_where_param`].
-    fn resolve_value_list(
-        values: &[Value],
-        params: &HashMap<String, serde_json::Value>,
-    ) -> crate::error::Result<Vec<Value>> {
-        values
-            .iter()
-            .map(|v| Self::resolve_where_param(v, params))
-            .collect()
     }
 }

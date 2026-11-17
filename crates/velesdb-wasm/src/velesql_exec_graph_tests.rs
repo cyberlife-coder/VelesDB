@@ -230,22 +230,19 @@ fn test_match_single_node_order_by_property_asc() {
 }
 
 #[test]
-fn test_match_order_by_arithmetic_rejected() {
+fn test_match_order_by_arithmetic_orders_by_the_target() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
-    // Bare-property arithmetic ORDER BY parses (a dotted `a.age - 2000` would be
-    // a parse error instead) but is not evaluable in the WASM MATCH path, so it
-    // must be rejected by the ORDER BY evaluator rather than silently ignored.
-    let err = execute(
-        &mut db,
-        "MATCH (a:Person) RETURN a ORDER BY age - 2000",
-        None,
-    );
-    assert!(
-        err.expect_err("arithmetic MATCH ORDER BY must error")
-            .contains("arithmetic"),
-        "the error must come from the ORDER BY evaluator (mention 'arithmetic'), not an incidental failure"
-    );
+    // An arithmetic ORDER BY reads the row's target, as core's MATCH does:
+    // `id * -1` puts the largest id first.
+    let result = execute(&mut db, "MATCH (a:Person) RETURN a ORDER BY id * -1", None)
+        .expect("arithmetic MATCH ORDER BY");
+    let ids: Vec<u64> = result
+        .rows_ref()
+        .iter()
+        .map(crate::velesql_result::QueryResultRow::id)
+        .collect();
+    assert_eq!(ids, vec![3, 2, 1]);
 }
 
 // =========================================================================
@@ -700,26 +697,26 @@ fn test_match_where_two_hop_filters_middle_node() {
     );
 }
 
+/// GIVEN Alice KNOWS Bob KNOWS Carol
+/// WHEN WHERE reads a bare column (no alias prefix)
+/// THEN it reads the walk's target, the last node, as core does: `name =
+///      'Bob'` keeps the Alice -> Bob row, `name = 'Alice'` keeps none.
 #[test]
-fn test_match_where_bare_field_applies_to_first_node() {
-    // Backward compat: `WHERE name = 'Alice'` (no alias prefix) must
-    // resolve against the starting node `a`.
+fn test_match_where_bare_field_reads_the_walk_target() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
-    let r = execute(
-        &mut db,
-        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE name = 'Alice' RETURN a, b LIMIT 10",
-        None,
-    )
-    .expect("test: bare field on first node");
-    assert_eq!(
-        r.row_count(),
-        1,
-        "bare `name` must bind to node a, got: {}",
-        r.rows_json()
-    );
-    assert!(r.rows_json().contains("\"name\":\"Alice\""));
-    assert!(r.rows_json().contains("\"name\":\"Bob\""));
+    let run = |db: &mut DatabaseInner, name: &str| {
+        execute(
+            db,
+            &format!("MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE name = '{name}' RETURN a, b"),
+            None,
+        )
+        .expect("test: bare field")
+    };
+    let bob = run(&mut db, "Bob");
+    assert_eq!(bob.row_count(), 1, "{}", bob.rows_json());
+    assert!(bob.rows_json().contains("\"name\":\"Alice\""));
+    assert_eq!(run(&mut db, "Alice").row_count(), 0);
 }
 
 #[test]
@@ -781,46 +778,26 @@ fn test_eval_in_missing_column_returns_false() {
     );
 }
 
+/// GIVEN Persons none of which carries `city`
+/// WHEN a MATCH WHERE applies `NOT IN` or `!=` to `a.city`
+/// THEN no Person matches, as in core's MATCH and SELECT: a missing property
+///      makes the predicate UNKNOWN, and WHERE admits only TRUE.
 #[test]
-fn test_eval_not_in_missing_column_returns_false() {
-    // REGRESSION: before the fix this returned 3 rows (every Person,
-    // because `NOT IN` on a missing column was `true`). After the fix
-    // it returns 0 rows, consistent with `!=` on a missing column.
+fn test_eval_negative_predicates_on_a_missing_column_match_like_core() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
-    let r = execute(
-        &mut db,
+    let persons = execute(&mut db, "MATCH (a:Person) RETURN a LIMIT 10", None)
+        .expect("test: all persons")
+        .row_count();
+    assert!(persons > 0, "test: the seed has Persons");
+    for sql in [
         "MATCH (a:Person) WHERE a.city NOT IN ('Paris','Lyon') RETURN a LIMIT 10",
-        None,
-    )
-    .expect("test: not-in on missing col");
-    assert_eq!(
-        r.row_count(),
-        0,
-        "missing `city`: NOT IN must also return false (missing-column rule), got: {}",
-        r.rows_json()
-    );
-}
-
-#[test]
-fn test_eval_ne_missing_column_returns_false() {
-    // Backward-compat guard: `!=` on a missing column was already
-    // false and must remain false. This pins the convention that
-    // Finding B's fix aligns `NOT IN` with.
-    let mut db = DatabaseInner::new();
-    seed_graph(&mut db);
-    let r = execute(
-        &mut db,
         "MATCH (a:Person) WHERE a.city != 'Paris' RETURN a LIMIT 10",
-        None,
-    )
-    .expect("test: != on missing col");
-    assert_eq!(
-        r.row_count(),
-        0,
-        "missing `city`: != must return false, got: {}",
-        r.rows_json()
-    );
+        "MATCH (a:Person) WHERE NOT (a.city = 'Paris') RETURN a LIMIT 10",
+    ] {
+        let r = execute(&mut db, sql, None).expect("test: negative predicate");
+        assert_eq!(r.row_count(), 0, "{sql}: {}", r.rows_json());
+    }
 }
 
 #[test]
@@ -969,7 +946,7 @@ fn test_match_where_missing_param_returns_error() {
 //
 // Before the fix, `make_binding` stored only the payload. The merged
 // payload fed to `velesql_where::matches` had no way to surface the
-// node id through `get_nested_field("a.id")`, so predicates like
+// node id through core's `payload_path("a.id")`, so predicates like
 // `WHERE a.id = 1` matched 0 rows. The fix injects the node id as a
 // top-level `"id"` field inside each alias object (and also at the
 // root of the merged payload, for the bare `WHERE id = ...` form that
@@ -1040,27 +1017,26 @@ fn test_match_where_by_node_id_with_param() {
     assert!(rows.contains("\"name\":\"Carol\""));
 }
 
+/// GIVEN Alice (1) KNOWS Bob (2) KNOWS Carol (3)
+/// WHEN WHERE reads a bare `id`
+/// THEN it is the walk target's id, as in core, and the row's id too.
 #[test]
-fn test_match_where_bare_id_targets_starting_node() {
-    // Backward-compat: `WHERE id = 1` (no alias prefix) must resolve
-    // against the starting node's id — same convention as bare
-    // `WHERE name = 'Alice'` in `test_match_where_bare_field_applies_to_first_node`.
+fn test_match_where_bare_id_reads_the_walk_target() {
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
     let r = execute(
         &mut db,
-        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE id = 1 RETURN a, b LIMIT 10",
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) WHERE id = 3 RETURN a, b",
         None,
     )
-    .expect("test: bare id on starting node");
+    .expect("test: bare id");
+    assert_eq!(r.row_count(), 1, "{}", r.rows_json());
+    assert!(r.rows_json().contains("\"name\":\"Carol\""));
     assert_eq!(
-        r.row_count(),
-        1,
-        "bare `id = 1` must target node a, got: {}",
-        r.rows_json()
+        r.row(0).expect("test: row").id(),
+        3,
+        "the row is the walk target"
     );
-    assert!(r.rows_json().contains("\"name\":\"Alice\""));
-    assert!(r.rows_json().contains("\"name\":\"Bob\""));
 }
 
 #[test]
@@ -1445,5 +1421,167 @@ fn test_bdd_truncate_preserves_storage_mode_sq8() {
     assert_eq!(
         after_mode, "sq8",
         "TRUNCATE must preserve SQ8 storage mode, got {after_mode}"
+    );
+}
+
+// =========================================================================
+// MATCH — target collection (`_collection` param, core parity)
+// =========================================================================
+
+/// Seeds Alice -KNOWS-> Bob into the graph named `kg`, not the default `graph`.
+fn seed_kg(db: &mut DatabaseInner) {
+    for (id, name) in [(1, "Alice"), (2, "Bob")] {
+        execute(
+            db,
+            &format!(
+                "INSERT NODE INTO kg (id = {id}, payload = '{{\"name\": \"{name}\", \"labels\": [\"Person\"]}}')"
+            ),
+            None,
+        )
+        .expect("test: kg node");
+    }
+    execute(
+        db,
+        "INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS')",
+        None,
+    )
+    .expect("test: kg edge");
+}
+
+/// GIVEN a graph stored under `kg`
+/// WHEN MATCH runs with `{"_collection": "kg"}` (how core and the server
+///      name a MATCH target: MATCH has no FROM)
+/// THEN it matches `kg`, not the default `graph`.
+#[test]
+fn test_match_targets_the_collection_named_by_the_collection_param() {
+    let mut db = DatabaseInner::new();
+    seed_kg(&mut db);
+    let r = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b",
+        Some(r#"{"_collection": "kg"}"#),
+    )
+    .expect("test: match on kg");
+    assert_eq!(r.row_count(), 1);
+}
+
+/// GIVEN graph `kg` and a metadata collection `extra`
+/// WHEN the first node carries an `@extra` annotation and the param names `kg`
+/// THEN the walk reads `kg`, as in core: an annotation adds a collection's
+///      properties to its node, it never selects the graph.
+#[test]
+fn test_match_node_annotation_never_selects_the_graph() {
+    let mut db = DatabaseInner::new();
+    seed_kg(&mut db);
+    db.create_metadata_collection("extra")
+        .expect("test: create extra");
+    let plain = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b",
+        Some(r#"{"_collection": "kg"}"#),
+    )
+    .expect("test: plain match")
+    .row_count();
+    let annotated = execute(
+        &mut db,
+        "MATCH (a:Person@extra)-[:KNOWS]->(b:Person) RETURN a, b",
+        Some(r#"{"_collection": "kg"}"#),
+    )
+    .expect("test: annotated match");
+    assert_eq!(annotated.row_count(), plain, "{}", annotated.rows_json());
+}
+
+/// WHEN `_collection` is not a string
+/// THEN MATCH says so instead of silently falling back to `graph`.
+#[test]
+fn test_match_rejects_a_non_string_collection_param() {
+    let mut db = DatabaseInner::new();
+    seed_graph(&mut db);
+    let err = execute(
+        &mut db,
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b",
+        Some(r#"{"_collection": 7}"#),
+    )
+    .expect_err("a numeric _collection must be refused");
+    assert!(err.contains("_collection"), "{err}");
+}
+
+// =========================================================================
+// SELECT EDGES — core's WHERE grammar and row shape
+// =========================================================================
+
+/// A WHERE shape core refuses is refused here too. It used to be dropped,
+/// so the query returned every edge, the excluded ones included.
+#[test]
+fn test_select_edges_refuses_a_where_it_cannot_apply() {
+    let mut db = DatabaseInner::new();
+    execute(
+        &mut db,
+        "INSERT EDGE INTO kg (source = 1, target = 2, label = 'A')",
+        None,
+    )
+    .expect("test: edge 1");
+    execute(
+        &mut db,
+        "INSERT EDGE INTO kg (source = 3, target = 4, label = 'B')",
+        None,
+    )
+    .expect("test: edge 2");
+    for sql in [
+        "SELECT EDGES FROM kg WHERE source = 1 OR source = 3",
+        "SELECT EDGES FROM kg WHERE label != 'A'",
+        "SELECT EDGES FROM kg WHERE weight = 5",
+        "SELECT EDGES FROM kg WHERE source = -1",
+    ] {
+        assert!(
+            execute(&mut db, sql, None).is_err(),
+            "{sql} must be refused"
+        );
+    }
+}
+
+/// Each edge answers core's row: `edge_id`, the endpoints and the label at
+/// the top, the properties nested — a property named `source` can no longer
+/// overwrite the edge's source.
+#[test]
+fn test_select_edges_answers_cores_row_shape() {
+    let mut db = DatabaseInner::new();
+    execute(
+        &mut db,
+        "INSERT EDGE INTO kg (source = 1, target = 2, label = 'REL') WITH PROPERTIES (source = 'doc')",
+        None,
+    )
+    .expect("test: insert edge");
+    let r = execute(&mut db, "SELECT EDGES FROM kg WHERE source = 1", None)
+        .expect("test: select edges");
+    let rows: serde_json::Value = serde_json::from_str(&r.rows_json()).expect("test: rows json");
+    let row = &rows[0];
+    assert!(row.get("edge_id").is_some(), "edge_id at the top: {row}");
+    assert_eq!(row["source"], 1, "the column, not the property: {row}");
+    assert_eq!(row["properties"]["source"], "doc", "{row}");
+}
+
+/// An edge label follows core's rule: trimmed, so `' KNOWS'` is found by
+/// `label = 'KNOWS'` as on every other engine, and never empty.
+#[test]
+fn test_edge_labels_are_trimmed_and_never_empty() {
+    let mut db = DatabaseInner::new();
+    execute(
+        &mut db,
+        "INSERT EDGE INTO kg (source = 1, target = 2, label = ' KNOWS ')",
+        None,
+    )
+    .expect("test: padded label");
+    let r = execute(&mut db, "SELECT EDGES FROM kg WHERE label = 'KNOWS'", None)
+        .expect("test: select by label");
+    assert_eq!(r.row_count(), 1, "the trimmed label matches");
+    assert!(
+        execute(
+            &mut db,
+            "INSERT EDGE INTO kg (source = 1, target = 3, label = '  ')",
+            None
+        )
+        .is_err(),
+        "a whitespace-only label is refused"
     );
 }

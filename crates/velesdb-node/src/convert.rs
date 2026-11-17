@@ -3,12 +3,12 @@
 //! both worlds, so the dependency boundary is auditable by inspection.
 
 use serde_json::Value;
+use velesdb_memory::context::ingest::{resolve_transcript_path, IngestRoots};
 use velesdb_memory::context::CompileRequest;
-use velesdb_memory::limits;
-use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions, Link, Metadata};
+use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions, Link, MemoryError, Metadata};
 
 use crate::dto::{ColumnFilterJs, FusionOptionsJs, LinkJs};
-use crate::error::{invalid_input, to_napi_err};
+use crate::error::{internal, invalid_input, to_napi_err};
 
 /// Format a `u64` id as a decimal string (JS `number` loses precision >2^53).
 pub fn id_to_string(id: u64) -> String {
@@ -21,14 +21,57 @@ pub fn parse_id(s: &str) -> napi::Result<u64> {
         .map_err(|_| invalid_input(format!("invalid id '{s}' (expected a decimal u64 string)")))
 }
 
-/// JS object → engine [`Metadata`]. `null`/absent → `None`; a non-object is an
-/// error (callers must pass a plain object for metadata and filters).
+/// JSON data (read by [`crate::json_arg`]) → engine [`Metadata`].
+/// `null`/absent → `None`; anything but an object is an error (callers must
+/// pass a plain object for metadata and filters).
 pub fn to_metadata(value: Option<Value>) -> napi::Result<Option<Metadata>> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Object(map)) => Ok(Some(map)),
         Some(_) => Err(invalid_input("metadata/filter must be an object")),
     }
+}
+
+/// The largest whole number a JS `number` holds exactly (`2^53 - 1`).
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// Restores the integers napi's JSON conversion turned into floats, for the
+/// values napi still converts itself (a column filter's `value`, a field of
+/// a `#[napi(object)]`); the arguments [`crate::json_arg`] reads come out
+/// right.
+///
+/// napi reads a JS number as an integer only within `u32` / `i32` range: a
+/// whole number past it — a millisecond timestamp, a large id — arrives as
+/// `5000000000.0`. Stored so, it reads back as a float from Python or Rust,
+/// and misses a JSON equality against the integer every other surface stores
+/// (`[5000000000] != [5000000000.0]`). Every whole number a JS number holds
+/// exactly becomes an integer again, at any depth.
+pub fn integral_numbers(value: Value) -> Value {
+    match value {
+        Value::Number(n) => Value::Number(match n.as_f64() {
+            Some(f) if n.is_f64() => json_number(f).unwrap_or(n),
+            _ => n,
+        }),
+        Value::Array(items) => Value::Array(items.into_iter().map(integral_numbers).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, item)| (key, integral_numbers(item)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// A JS number as JSON: a whole number a JS `number` holds exactly (within
+/// `±(2^53 - 1)`) as an integer, any other finite number as a float, and
+/// `None` for `NaN` and the infinities, which JSON cannot hold.
+pub fn json_number(f: f64) -> Option<serde_json::Number> {
+    if f.fract() == 0.0 && f.abs() <= MAX_SAFE_INTEGER {
+        // Reason: a whole number within ±(2^53 - 1), checked just above.
+        #[allow(clippy::cast_possible_truncation)]
+        return Some(serde_json::Number::from(f as i64));
+    }
+    serde_json::Number::from_f64(f)
 }
 
 /// JS `[{target, relation}]` → engine `Vec<Link>`, parsing each id.
@@ -62,32 +105,32 @@ pub fn to_filters(filters: Vec<ColumnFilterJs>) -> napi::Result<Vec<ColumnFilter
             Ok(ColumnFilter {
                 field: f.field,
                 op: parse_op(&f.op)?,
-                value: f.value,
+                value: integral_numbers(f.value),
             })
         })
         .collect()
 }
 
-/// JS `{hops?, graphBoost?, pool?}` → engine [`FusionOptions`]. An omitted
-/// object, or an omitted field within it, falls back to
-/// [`FusionOptions::default`]'s proven value. `hops` and `pool` are each
-/// capped at their shared `DoS` limit ([`limits::MAX_WHY_HOPS`],
-/// [`limits::MAX_RECALL_LIMIT`]) — `pool` feeds the same oversampled vector
-/// search `k`/`hops` do, so an uncapped caller-supplied value is exactly as
-/// much of an unbounded-scan risk as an uncapped `k` or `hops` would be.
-pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> FusionOptions {
-    let defaults = FusionOptions::default();
-    let Some(opts) = opts else {
-        return defaults;
+/// JS `{hops?, graphBoost?, pool?}` → engine [`FusionOptions`]. Routed
+/// through [`FusionOptions::from_knobs`] — the same constructor the MCP tool
+/// and the `PyO3` binding use — so the defaults and the `DoS` clamps
+/// (`MAX_WHY_HOPS`, `MAX_RECALL_LIMIT`) live in exactly one place and a knob
+/// added upstream reaches this binding the day it exists. A hand-written
+/// mirror here is how the two would drift.
+///
+/// # Errors
+///
+/// `INVALID_INPUT` when `hops` or `pool` is not a whole number in
+/// `0..=u32::MAX` ([`crate::guards::count`]).
+pub fn to_fusion_options(opts: Option<FusionOptionsJs>) -> napi::Result<FusionOptions> {
+    let Some(o) = opts else {
+        return Ok(FusionOptions::default());
     };
-    FusionOptions {
-        hops: limits::clamp_hops(opts.hops.map_or(defaults.hops, |h| h as usize)),
-        graph_boost: opts.graph_boost.unwrap_or(defaults.graph_boost),
-        pool: opts
-            .pool
-            .map(|p| limits::clamp_recall_limit(p as usize))
-            .or(defaults.pool),
-    }
+    Ok(FusionOptions::from_knobs(
+        crate::guards::count("hops", o.hops)?.map(|h| h as usize),
+        o.graph_boost,
+        crate::guards::count("pool", o.pool)?.map(|p| p as usize),
+    ))
 }
 
 /// Recursively rewrite every `context` id field (see
@@ -100,21 +143,6 @@ pub fn stringify_id_fields(value: &mut Value) {
     velesdb_memory::context::wire::stringify_id_fields(value);
 }
 
-/// The inverse of [`stringify_id_fields`]: recursively rewrite every
-/// `context` id field given in the binding's decimal-string form back into
-/// the numeric form the domain types deserialize.
-pub fn parse_id_fields(value: &mut Value) -> napi::Result<()> {
-    velesdb_memory::context::wire::parse_id_fields(value)
-        .map_err(|error| invalid_input(error.to_string()))
-}
-
-/// Accept `fragments[].id` in the binding's decimal-string form by rewriting
-/// it to the numeric form the domain type deserializes.
-pub fn parse_fragment_id_strings(request: &mut Value) -> napi::Result<()> {
-    velesdb_memory::context::wire::parse_fragment_id_strings(request)
-        .map_err(|error| invalid_input(error.to_string()))
-}
-
 /// Marshal a resolved `ctx://source/<hash>` lookup into the binding's
 /// `{handle, content, media?}` wire shape (US-009, PR3) — the same envelope
 /// the MCP `retrieve_context_source` tool returns, built here since
@@ -124,12 +152,10 @@ pub fn to_retrieve_source_js(
     handle: &str,
     source: &velesdb_memory::context::ContextSource,
 ) -> napi::Result<Value> {
-    let internal =
-        |what: &str| napi::Error::from_reason(format!("[INTERNAL] context source: {what}"));
-    let Value::Object(fields) =
-        serde_json::to_value(source).map_err(|err| internal(&format!("serialize: {err}")))?
+    let Value::Object(fields) = serde_json::to_value(source)
+        .map_err(|err| internal(format!("context source serialization: {err}")))?
     else {
-        return Err(internal("not an object"));
+        return Err(internal("context source is not an object"));
     };
     let mut map = serde_json::Map::new();
     map.insert("handle".to_owned(), Value::String(handle.to_owned()));
@@ -162,8 +188,51 @@ pub fn build_transcript_compile_request(
     let (request, report) =
         velesdb_memory::context::build_transcript_compile_request(input).map_err(to_napi_err)?;
     let segmentation_value = serde_json::to_value(&report)
-        .map_err(|err| invalid_input(format!("segmentation report serialization: {err}")))?;
+        .map_err(|err| internal(format!("segmentation report serialization: {err}")))?;
     Ok((request, segmentation_value))
+}
+
+/// Transcript-or-path resolution for `compileTranscript`: `path` is a
+/// transcript-level field, not part of the bridge's input struct, so it is
+/// pulled out here and the text fed back as `transcript`, by the rule the
+/// MCP tool applies ([`velesdb_memory::context::resolve_transcript_source`]):
+/// exactly one of the two, never empty. A field set to `null` is absent, as
+/// it is on the MCP tool; a field of another type is `INVALID_INPUT`. A
+/// `path` with ingestion disabled fails closed (`IngestDisabled`, mapped by
+/// [`to_napi_err`]); the containment check runs at the sink
+/// ([`velesdb_memory::context::ingest`]), never here.
+pub fn resolve_transcript_input(
+    request: Value,
+    roots: Option<&IngestRoots>,
+) -> napi::Result<Value> {
+    // A non-object request is handed through unchanged: the bridge's own
+    // deserialization rejects it with INVALID_INPUT.
+    let mut map = match request {
+        Value::Object(map) => map,
+        other => return Ok(other),
+    };
+    let transcript = optional_string(map.remove("transcript"), "transcript")?;
+    let path = optional_string(map.remove("path"), "path")?;
+    let text =
+        velesdb_memory::context::resolve_transcript_source(transcript, path.as_deref(), |path| {
+            let roots = roots
+                .filter(|roots| roots.is_enabled())
+                .ok_or(MemoryError::IngestDisabled)?;
+            resolve_transcript_path(path, roots)
+        })
+        .map_err(to_napi_err)?;
+    map.insert("transcript".to_owned(), Value::String(text));
+    Ok(Value::Object(map))
+}
+
+/// A request field read as JS gives it: absent or `null` is `None`, a string
+/// is `Some`, anything else is `INVALID_INPUT` naming the field.
+fn optional_string(value: Option<Value>, field: &str) -> napi::Result<Option<String>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text)),
+        Some(_) => Err(invalid_input(format!("`{field}` must be a string"))),
+    }
 }
 
 /// Marshal a compiled context into its JS shape: serialize to the wire JSON,
@@ -248,3 +317,7 @@ fn compiled_envelope(
     );
     Ok(envelope)
 }
+
+#[cfg(test)]
+#[path = "convert_tests.rs"]
+mod convert_tests;

@@ -33,6 +33,41 @@ use velesdb_core::{
 /// Default fusion strategy when none is specified by the caller.
 const DEFAULT_FUSION: CoreFusionStrategy = CoreFusionStrategy::RRF { k: 60 };
 
+/// A `search_request` parsed off the Python objects, ready to route once the
+/// GIL is released: which query vectors it carries and how to run them.
+pub(crate) struct SearchPlan<'a> {
+    pub(crate) dense: Option<Vec<f32>>,
+    pub(crate) sparse: Option<velesdb_core::sparse_index::SparseVector>,
+    pub(crate) top_k: usize,
+    pub(crate) filter: Option<&'a Filter>,
+    pub(crate) sparse_index_name: Option<&'a str>,
+    /// Hybrid dense+sparse only; the other paths ignore it.
+    pub(crate) fusion: Option<&'a CoreFusionStrategy>,
+    /// Dense-only tuning knobs.
+    pub(crate) ef_search: Option<usize>,
+    pub(crate) quality: Option<&'a velesdb_core::SearchQuality>,
+}
+
+/// The caller identity a read forwards to the database's read gate.
+///
+/// Caller-supplied, so only meaningful when a trusted embedder forwards a
+/// verified identity (local-SDK trust boundary): the gate authorizes against
+/// it but cannot itself authenticate the caller.
+#[derive(Clone, Copy)]
+pub(crate) struct ReadIdentity<'a> {
+    pub(crate) principal: Option<&'a str>,
+    pub(crate) tenant: Option<&'a str>,
+}
+
+/// A sparse-only or hybrid dense+sparse search the read gate has authorized.
+struct SparseQuery<'a> {
+    dense: Option<&'a [f32]>,
+    sparse: &'a velesdb_core::sparse_index::SparseVector,
+    top_k: usize,
+    index_name: &'a str,
+    fusion: &'a CoreFusionStrategy,
+}
+
 use velesdb_core::collection::streaming::{AsyncIndexBuilderConfig, DeferredIndexerConfig};
 
 use crate::utils::opt_field;
@@ -174,17 +209,10 @@ impl Collection {
     /// sparse and hybrid-sparse reads have no `GatedRead` leaf, so they consult
     /// [`authorize_read`](CoreDatabase::authorize_read) and AND any observer
     /// scope filter into a post-filter (fail closed on deny, narrow on scope).
-    #[allow(clippy::too_many_arguments)] // gate identity (principal/tenant) threads through
     fn dispatch_search(
         &self,
-        dense: Option<Vec<f32>>,
-        sparse: Option<velesdb_core::sparse_index::SparseVector>,
-        top_k: usize,
-        filter: Option<&Filter>,
-        sparse_index_name: Option<&str>,
-        fusion: Option<&CoreFusionStrategy>,
-        principal: Option<&str>,
-        tenant: Option<&str>,
+        plan: SearchPlan<'_>,
+        identity: ReadIdentity<'_>,
     ) -> PyResult<Vec<SearchResult>> {
         use crate::collection_helpers::core_err;
         use pyo3::exceptions::PyValueError;
@@ -193,26 +221,27 @@ impl Collection {
         // not return an empty list.
         self.ensure_vector()?;
 
-        let index_name =
-            sparse_index_name.unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
+        let index_name = plan
+            .sparse_index_name
+            .unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
         // Hybrid dense+sparse honors a caller-supplied fusion strategy
         // (backlog #24); other paths ignore it. Default preserves RRF k=60.
-        let fusion = fusion.unwrap_or(&DEFAULT_FUSION);
+        let fusion = plan.fusion.unwrap_or(&DEFAULT_FUSION);
 
-        match (dense, sparse) {
+        match (plan.dense, plan.sparse) {
             // Dense-only / dense+filter: expressible as a governed `GatedRead`.
             (Some(d), None) => self
                 .db
                 .gated_search(
                     &self.name,
-                    principal,
-                    tenant,
+                    identity.principal,
+                    identity.tenant,
                     GatedRead::Dense {
                         query: &d,
-                        k: top_k,
-                        ef: None,
-                        quality: None,
-                        filter,
+                        k: plan.top_k,
+                        ef: plan.ef_search,
+                        quality: plan.quality.cloned(),
+                        filter: plan.filter,
                     },
                 )
                 .map_err(core_err),
@@ -220,24 +249,16 @@ impl Collection {
             // authorize the read (deny ⇒ Err, fail closed) then AND the observer
             // scope filter into a post-filter so a scoped read only narrows.
             (dense_opt, Some(s)) => {
-                let scope = self
-                    .db
-                    .authorize_read(
-                        &self.name,
-                        QueryOperationKind::VectorSearch,
-                        principal,
-                        tenant,
-                    )
-                    .map_err(core_err)?;
-                self.run_sparse_gated(
-                    dense_opt.as_deref(),
-                    &s,
-                    top_k,
-                    filter,
-                    scope.as_ref(),
+                let query = SparseQuery {
+                    dense: dense_opt.as_deref(),
+                    sparse: &s,
+                    top_k: plan.top_k,
                     index_name,
                     fusion,
-                )
+                };
+                self.run_gated_search(QueryOperationKind::VectorSearch, identity, |scope| {
+                    self.run_sparse_gated(&query, plan.filter, scope.as_ref())
+                })
             }
             (None, None) => Err(PyValueError::new_err(
                 "At least one of 'vector' or 'sparse_vector' must be provided",
@@ -246,32 +267,42 @@ impl Collection {
     }
 
     /// Runs a sparse-only or hybrid dense+sparse search after the read gate has
-    /// authorized it, applying the caller filter and any observer scope filter
-    /// via post-filtering (neither leaf accepts a metadata filter natively).
-    #[allow(clippy::too_many_arguments)] // scope threading is intrinsic to the gate
+    /// authorized it. Hybrid dense+sparse pre-filters both fusion branches via
+    /// core's `_filtered` leaf (caller filter ANDed with any observer scope);
+    /// sparse-only has no filtered leaf, so a scope filter still post-filters.
     fn run_sparse_gated(
         &self,
-        dense: Option<&[f32]>,
-        sparse: &velesdb_core::sparse_index::SparseVector,
-        top_k: usize,
+        query: &SparseQuery<'_>,
         caller_filter: Option<&Filter>,
         scope_filter: Option<&Filter>,
-        index_name: &str,
-        fusion: &CoreFusionStrategy,
     ) -> PyResult<Vec<SearchResult>> {
         use crate::collection_helpers::core_err;
         use pyo3::exceptions::PyValueError;
 
+        let SparseQuery {
+            dense,
+            sparse,
+            top_k,
+            index_name,
+            fusion,
+        } = *query;
         match dense {
-            // Hybrid dense+sparse: no filtered leaf — run unfiltered then
-            // post-filter by the caller filter AND the observer scope filter.
+            // Hybrid dense+sparse: filter BOTH branches before RRF fusion, like
+            // core's `hybrid_sparse_search_filtered`. Post-filtering after fusion
+            // can return fewer than k rows even when >= k points match, because
+            // the fused top-k was computed over unfiltered candidates.
             Some(d) => {
-                let mut results = self
-                    .inner
-                    .hybrid_sparse_search(d, sparse, top_k, index_name, fusion)
-                    .map_err(core_err)?;
-                retain_by_filters(&mut results, caller_filter, scope_filter);
-                Ok(results)
+                let combined = and_scope(caller_filter.cloned(), scope_filter.cloned());
+                self.inner
+                    .hybrid_sparse_search_filtered(
+                        d,
+                        sparse,
+                        top_k,
+                        index_name,
+                        fusion,
+                        combined.as_ref(),
+                    )
+                    .map_err(core_err)
             }
             // Sparse-only: a caller filter was never supported here (preserved
             // error). A governance scope filter still applies via post-filter,
@@ -292,10 +323,32 @@ impl Collection {
         }
     }
 
-    /// Consults the read gate for a non-`GatedRead` search path (sparse, text on
-    /// a non-vector collection, batch, multi-query). Returns the observer scope
-    /// filter to AND into the query, `Ok(None)` to allow unmodified, or an
-    /// `Err` when the read is denied (fail closed).
+    /// Runs a search with no `GatedRead` leaf (sparse, text, batch,
+    /// multi-query) through the database's read gate, which reports it to the
+    /// observer once it completes. `read` gets the scope filter to AND into
+    /// its search (`None` to run unmodified); a denial never runs it.
+    fn run_gated_search<T>(
+        &self,
+        operation: QueryOperationKind,
+        identity: ReadIdentity<'_>,
+        read: impl FnOnce(Option<Filter>) -> PyResult<T>,
+    ) -> PyResult<T> {
+        self.db
+            .run_gated_read(
+                &self.name,
+                operation,
+                identity.principal,
+                identity.tenant,
+                read,
+            )
+            .map_err(crate::collection_helpers::core_err)?
+    }
+
+    /// Consults the read gate for a read that is not a search (point lookups,
+    /// scrolls, graph reads), which the observer's `on_query` does not
+    /// report. Returns the observer scope filter to AND into the read,
+    /// `Ok(None)` to allow unmodified, or an `Err` when the read is denied
+    /// (fail closed).
     ///
     /// `principal`/`tenant` are caller-supplied and only meaningful when a
     /// trusted embedder forwards a verified identity (local-SDK trust boundary):
@@ -309,6 +362,16 @@ impl Collection {
         self.db
             .authorize_read(&self.name, operation, principal, tenant)
             .map_err(crate::collection_helpers::core_err)
+    }
+
+    /// An ids-only read (`what` names it in a refusal) through the read gate.
+    /// Ids carry no payload a governance scope filter could narrow, so a
+    /// scoped read fails closed (mirrors `search_ids`); a deny is an `Err`
+    /// from [`Self::authorize`]. No observer ⇒ a single `Option` check.
+    fn read_ids(&self, what: &str, read: impl FnOnce() -> Vec<u64>) -> PyResult<Vec<u64>> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, what)?;
+        Ok(read())
     }
 }
 
@@ -422,7 +485,8 @@ impl Collection {
     /// decides like ``count``.
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     PermissionError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn is_empty(&self) -> PyResult<bool> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "is_empty")?;
@@ -474,7 +538,8 @@ impl Collection {
     ///     int: The point count
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     PermissionError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn __len__(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "__len__")?;
@@ -488,7 +553,8 @@ impl Collection {
     ///     int: The point count
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     PermissionError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn count(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "count")?;
@@ -501,17 +567,11 @@ impl Collection {
     ///     List[int]: All point IDs
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read, or returns a
-    ///         scope filter (ids carry no payload to filter — fail closed).
+    ///     PermissionError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope filter (ids carry
+    ///         no payload to filter — fail closed).
     fn all_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
-        py.detach(|| {
-            // Ids-only shape: a governance scope filter cannot be applied, so
-            // a scoped read fails closed (mirrors search_ids); deny is an Err
-            // from authorize(). No observer ⇒ single Option check, unchanged.
-            let scope = self.authorize(QueryOperationKind::Select, None, None)?;
-            deny_if_scoped(scope, "all_ids")?;
-            Ok(self.inner.all_ids())
-        })
+        py.detach(|| self.read_ids("all_ids", || self.inner.all_ids()))
     }
 
     /// Full durability flush including vectors.idx serialization.
@@ -530,6 +590,28 @@ impl Collection {
     fn compact_storage(&self, py: Python<'_>) -> PyResult<usize> {
         use crate::collection_helpers::core_err;
         py.detach(|| self.inner.compact_storage().map_err(core_err))
+    }
+
+    /// Rebuild (vacuum) the HNSW index, reclaiming space left by deleted or
+    /// updated vectors. Same operation as the REST admin endpoint
+    /// ``POST /collections/{name}/index/rebuild``.
+    ///
+    /// Returns:
+    ///     int: Number of entries reclaimed.
+    fn rebuild_index(&self, py: Python<'_>) -> PyResult<usize> {
+        use crate::collection_helpers::core_err;
+        py.detach(|| self.inner.rebuild_index().map_err(core_err))
+    }
+
+    /// All point IDs in the collection (vector and payload indexes union),
+    /// ascending. Used by training paths that need every stored vector.
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope filter (ids carry
+    ///         no payload to filter — fail closed).
+    fn all_point_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
+        py.detach(|| self.read_ids("all_point_ids", || self.inner.all_point_ids()))
     }
 
     /// Reorder the HNSW adjacency lists and vector storage for cache
@@ -724,9 +806,10 @@ impl Collection {
     /// ``__iter__`` and raises ``TypeError`` for the ``in`` operator.
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read, or returns a
-    ///         scope filter (membership is id-only — fail closed rather than
-    ///         reveal the existence of out-of-scope points).
+    ///     PermissionError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope filter
+    ///         (membership is id-only — fail closed rather than reveal the
+    ///         existence of out-of-scope points).
     fn __contains__(&self, id: u64) -> PyResult<bool> {
         // Membership reveals point existence, so it is a gated read. The GIL
         // stays held (no `py` in the slot signature) — acceptable, since the

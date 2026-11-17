@@ -44,6 +44,73 @@ impl Collection {
         Ok(serde_json::Value::Array(results))
     }
 
+    /// Aggregates rows the caller produced — a JOIN's joined rows, WHERE
+    /// already applied — through the same [`Grouper`] as a scan: an array of
+    /// groups for a GROUP BY (ordered and paged as
+    /// [`Self::execute_grouped_aggregate`] pages them), else the one group's
+    /// object.
+    ///
+    /// # Errors
+    ///
+    /// An unbound HAVING parameter, an ORDER BY naming no grouped field, or
+    /// more groups than the query allows.
+    pub(crate) fn aggregate_rows(
+        query: &Query,
+        rows: &[crate::point::SearchResult],
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let stmt = &query.select;
+        let having = stmt
+            .having
+            .as_ref()
+            .map(|h| Self::resolve_having_params(h, params))
+            .transpose()?;
+        let mut grouper = Grouper::new(stmt, having.as_ref(), true)?;
+        // Id order, as a scan feeds the grouper (stable for 1:N joins).
+        let mut ordered: Vec<&crate::point::SearchResult> = rows.iter().collect();
+        ordered.sort_by_key(|row| row.point.id);
+        for row in ordered {
+            grouper.push(GroupInput::new(
+                row.point.id,
+                0.0,
+                row.point.payload.as_ref(),
+            ))?;
+        }
+        let groups: Vec<serde_json::Value> = grouper
+            .finish()
+            .into_iter()
+            .map(|group| group.row)
+            .collect();
+        Self::shape_groups(stmt, groups)
+    }
+
+    /// The aggregate's result from its groups: without GROUP BY, the one
+    /// group's object (an empty object when no row came); with it, the groups
+    /// ordered and paged as [`Self::execute_grouped_aggregate`] pages them.
+    fn shape_groups(
+        stmt: &crate::velesql::SelectStatement,
+        groups: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        if stmt.group_by.is_none() {
+            return Ok(groups
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())));
+        }
+        let sort_columns = if stmt.order_by.is_some() {
+            stmt.grouped_sort_keys()
+                .map_err(|e| crate::error::Error::Query(e.to_string()))?
+        } else {
+            Vec::new()
+        };
+        Ok(serde_json::Value::Array(Self::order_and_page(
+            groups,
+            &sort_columns,
+            stmt.limit,
+            stmt.offset,
+        )))
+    }
+
     /// Scans all points, applies WHERE filter, and feeds each kept row to
     /// `grouper`.
     // Both storage guards are lent by reference into MatchStorageGuards and
@@ -67,15 +134,7 @@ impl Collection {
         let metric = self.storage.config.read().metric;
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
-        let match_guards = MatchStorageGuards {
-            metric,
-            vector_guard: &vector_storage,
-            payload_guard: &payload_storage,
-            payload_memo: crate::collection::search::query::match_exec::PayloadMemo::new(
-                &payload_storage,
-            ),
-            where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
-        };
+        let match_guards = MatchStorageGuards::single(metric, &vector_storage, &payload_storage);
         // Rows feed the grouper in id order, so a float SUM or AVG adds its
         // values in the same order on every run, whatever the storage order.
         let ids = Self::aggregate_scan_ids(&*vector_storage, &*payload_storage, filter.as_ref());
@@ -130,7 +189,7 @@ impl Collection {
         }
         where_clause
             .map(|cond| {
-                let resolved = Self::resolve_condition_params(cond, params)?;
+                let resolved = crate::velesql::bind_condition(cond, params)?;
                 Ok(crate::filter::Filter::new(crate::filter::Condition::from(
                     resolved,
                 )))

@@ -78,6 +78,25 @@ impl Default for FusionConfig {
 }
 
 impl FusionConfig {
+    /// The strategy a `NEAR_FUSED` runs, on every engine (core's
+    /// `multi_query_search`, the WASM executor).
+    ///
+    /// `rrf` (default), `average`, and `maximum` map directly. `weighted` /
+    /// `rsf` take per-branch dense/sparse weights that are ill-defined for N
+    /// homogeneous query vectors, so they — and any unknown strategy — fall
+    /// back to RRF (matching the parser's default strategy).
+    #[must_use]
+    pub fn near_fused_strategy(&self) -> crate::fusion::FusionStrategy {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // Reason: `k` is a small positive RRF constant the parser accepts.
+        let k = self.params.get("k").map_or(60, |v| *v as u32);
+        match self.strategy.to_lowercase().as_str() {
+            "average" => crate::fusion::FusionStrategy::Average,
+            "maximum" => crate::fusion::FusionStrategy::Maximum,
+            _ => crate::fusion::FusionStrategy::RRF { k },
+        }
+    }
+
     /// Creates a new RRF fusion config with default k=60.
     #[must_use]
     pub fn rrf() -> Self {

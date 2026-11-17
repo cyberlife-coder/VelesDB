@@ -120,3 +120,27 @@ def test_every_exported_function_is_declared_in_stub() -> None:
     }
     missing = sorted(exported_functions - stub_functions)
     assert missing == [], f"exported functions missing from the type stub: {missing}"
+
+
+@pytest.mark.parametrize("class_name", ["GraphStore", "GraphCollection"])
+def test_add_edge_stub_declares_every_facade_call_shape(class_name):
+    """Each `add_edge` form the facade accepts has a typed overload.
+
+    `add_edge(source, target, label, id=n)` worked at runtime but no overload
+    declared a keyword-only `id`, so a type checker refused the call; the
+    `GraphStore` stub declared only the dict form (Devin, #2831).
+    """
+    overloads = [
+        node
+        for node in _classes()[class_name].body
+        if isinstance(node, ast.FunctionDef) and node.name == "add_edge"
+    ]
+    shapes = set()
+    for fn in overloads:
+        positional = [a.arg for a in fn.args.args[1:]]
+        keyword_only = [a.arg for a in fn.args.kwonlyargs]
+        shapes.add((positional[0] if positional else None, "id" in keyword_only, "source" in keyword_only))
+    assert ("edge", False, False) in shapes, "dict form"
+    assert ("edge_id", False, True) in shapes, "explicit id positional, source keyword"
+    assert ("source", True, False) in shapes, "source positional, id keyword"
+    assert ("source", False, False) in shapes, "no-id positional form"

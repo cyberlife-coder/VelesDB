@@ -198,26 +198,23 @@ fn test_graph_node_edge_lifecycle() {
 }
 
 // =========================================================================
-// E. Negative
+// E. Collections of other types
 // =========================================================================
 
 #[test]
-fn test_select_edges_from_vector_collection_fails() {
+fn test_select_edges_from_vector_collection_without_edges_is_empty() {
     let (_dir, db) = create_test_db();
 
-    // Create a vector collection (not a graph).
     execute_sql(
         &db,
         "CREATE COLLECTION docs (dimension = 4, metric = 'cosine');",
     )
     .expect("create vector collection");
 
-    let err = execute_sql(&db, "SELECT EDGES FROM docs;").expect_err("should fail on non-graph");
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("not found") || msg.contains("NotFound"),
-        "Error should indicate collection not found as graph: {msg}"
-    );
+    // Vector collections hold edges too (shared edge store): no edges yet.
+    let results = execute_sql(&db, "SELECT EDGES FROM docs;")
+        .expect("SELECT EDGES runs on a vector collection");
+    assert!(results.is_empty());
 }
 
 // =========================================================================

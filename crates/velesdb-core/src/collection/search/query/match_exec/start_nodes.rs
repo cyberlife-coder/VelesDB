@@ -31,7 +31,31 @@ impl Collection {
     /// the already-held guard deadlocks against any concurrent writer (the
     /// same rule `graph_api.rs::validate_edge_endpoints_exist` documents for
     /// the edge-write path).
-    pub(super) fn find_start_nodes(
+    /// The start nodes of `pattern` per `starts`: every node its first node
+    /// matches ([`Self::find_start_nodes`]), or the given seeds, in order,
+    /// each kept when it matches that first node exactly as a scanned node
+    /// would (labels, inline properties, annotation).
+    pub(super) fn resolve_start_nodes(
+        &self,
+        pattern: &GraphPattern,
+        guards: &MatchStorageGuards<'_>,
+        starts: super::StartNodes<'_>,
+    ) -> Result<Vec<(u64, HashMap<String, u64>)>> {
+        let super::StartNodes::Seeded(seeds) = starts else {
+            return self.find_start_nodes(pattern, guards);
+        };
+        let first_node = pattern
+            .nodes
+            .first()
+            .ok_or_else(|| Error::Query("Pattern must have at least one node".to_string()))?;
+        Ok(seeds
+            .iter()
+            .filter(|&&id| Self::node_matches_bound_pattern(id, first_node, &guards.payload_memo))
+            .map(|&id| Self::build_start_binding(id, first_node))
+            .collect())
+    }
+
+    fn find_start_nodes(
         &self,
         pattern: &GraphPattern,
         guards: &MatchStorageGuards<'_>,
@@ -44,7 +68,7 @@ impl Collection {
         // Fast path: use label index when labels are specified.
         if !first_node.labels.is_empty() {
             let has_large = self.graph.label_index.read().has_large_ids();
-            let indexed = self.find_start_nodes_indexed(first_node, guards.payload_guard);
+            let indexed = self.find_start_nodes_indexed(first_node, &guards.payload_memo);
 
             if has_large {
                 // RoaringBitmap cannot index IDs > u32::MAX, so the bitmap
@@ -82,12 +106,14 @@ impl Collection {
 
     /// O(k) label-indexed lookup for start nodes.
     ///
-    /// Uses the caller's hoisted `payload_guard` — never re-acquires the
-    /// payload lock (see the lock note on [`Self::find_start_nodes`]).
+    /// Reads through the caller's hoisted guards (`memo`) — never re-acquires
+    /// the payload lock (see the lock note on [`Self::find_start_nodes`]).
+    /// The bitmap decides the labels; the inline properties are checked on
+    /// the node's annotated union.
     fn find_start_nodes_indexed(
         &self,
         first_node: &crate::velesql::NodePattern,
-        payload_guard: &crate::storage::LogPayloadStorage,
+        memo: &super::PayloadMemo<'_>,
     ) -> Vec<(u64, HashMap<String, u64>)> {
         let label_idx = self.graph.label_index.read();
         let bitmap = label_idx.lookup_intersection(&first_node.labels);
@@ -107,11 +133,9 @@ impl Collection {
         bitmap
             .iter()
             .filter(|&id| {
-                Self::node_matches_properties_by_id(
-                    u64::from(id),
-                    &first_node.properties,
-                    payload_guard,
-                )
+                let id = u64::from(id);
+                let (_, properties) = memo.read_unmemoized(first_node.collection.as_deref(), id);
+                Self::properties_hold(id, properties.as_deref(), &first_node.properties)
             })
             .map(|id| Self::build_start_binding(u64::from(id), first_node))
             .collect()
@@ -121,13 +145,12 @@ impl Collection {
     ///
     /// Reads only through the hoisted guards — never re-acquires
     /// `vector_storage` or `payload_storage` (see the lock note on
-    /// [`Self::find_start_nodes`]).
+    /// [`Self::find_start_nodes`]) — and without memoizing: the scan reads
+    /// every node once.
     fn find_start_nodes_full_scan(
         first_node: &crate::velesql::NodePattern,
         guards: &MatchStorageGuards<'_>,
     ) -> Vec<(u64, HashMap<String, u64>)> {
-        let needs_payload = !first_node.properties.is_empty() || !first_node.labels.is_empty();
-
         let mut all_ids: std::collections::HashSet<u64> =
             guards.vector_guard.ids().into_iter().collect();
         for id in guards.payload_guard.ids() {
@@ -137,66 +160,68 @@ impl Collection {
         all_ids
             .into_iter()
             .filter(|id| {
-                Self::node_matches_pattern(*id, first_node, needs_payload, guards.payload_guard)
+                if Self::pattern_reads_nothing(first_node) {
+                    return true;
+                }
+                let (own, properties) = guards
+                    .payload_memo
+                    .read_unmemoized(first_node.collection.as_deref(), *id);
+                Self::payloads_match_pattern(*id, own.as_deref(), properties.as_deref(), first_node)
             })
             .map(|id| Self::build_start_binding(id, first_node))
             .collect()
     }
 
-    /// Checks if a node's payload satisfies property filters.
-    fn node_matches_properties_by_id(
-        id: u64,
-        properties: &HashMap<String, crate::velesql::Value>,
-        payload_storage: &crate::storage::LogPayloadStorage,
-    ) -> bool {
-        let payload_opt = payload_storage.retrieve(id).ok().flatten();
-        Self::node_matches_properties(payload_opt.as_ref(), properties)
-    }
-
-    /// Returns true if a node matches the label and property filters of a pattern.
-    pub(super) fn node_matches_pattern(
-        id: u64,
-        node: &NodePattern,
-        needs_payload: bool,
-        payload_storage: &crate::storage::LogPayloadStorage,
-    ) -> bool {
-        if !needs_payload {
-            return true;
-        }
-        let payload_opt = payload_storage.retrieve(id).ok().flatten();
-        Self::payload_matches_pattern(payload_opt.as_ref(), node)
-    }
-
-    /// Returns true if a bound node satisfies its pattern.
-    ///
-    /// `@collection` annotations are resolved after traversal by the database
-    /// enrichment layer, so they do not change traversal scope here.
+    /// Returns true if a bound node satisfies its pattern: its labels, read
+    /// on its own payload, and its inline properties, read on the node as
+    /// its `@collection` annotation unites it (see [`super::sources`]).
     pub(super) fn node_matches_bound_pattern(
         id: u64,
         node: &NodePattern,
         memo: &super::PayloadMemo<'_>,
     ) -> bool {
-        if node.collection.is_some() {
-            return true;
-        }
-        let needs_payload = !node.properties.is_empty() || !node.labels.is_empty();
-        if !needs_payload {
+        if Self::pattern_reads_nothing(node) {
             return true;
         }
         // Bound-node checks repeat per hop candidacy: read through the memo.
-        let payload_opt = memo.get(id);
-        Self::payload_matches_pattern(payload_opt.as_deref(), node)
+        let own = memo.get(id);
+        let properties = if node.properties.is_empty() {
+            None
+        } else {
+            memo.get_annotated(node.collection.as_deref(), id)
+        };
+        Self::payloads_match_pattern(id, own.as_deref(), properties.as_deref(), node)
     }
 
-    /// Label + property check against an already-loaded payload.
-    fn payload_matches_pattern(
-        payload_opt: Option<&serde_json::Value>,
+    /// Whether `node` has neither labels nor inline properties to check.
+    fn pattern_reads_nothing(node: &NodePattern) -> bool {
+        node.labels.is_empty() && node.properties.is_empty()
+    }
+
+    /// Label check against the node's own payload, property check against
+    /// its (possibly annotated) property payload — both as every MATCH
+    /// engine decides them ([`crate::velesql::has_every_label`],
+    /// [`crate::velesql::inline_properties_hold`]).
+    fn payloads_match_pattern(
+        id: u64,
+        own: Option<&serde_json::Value>,
+        properties: Option<&serde_json::Value>,
         node: &NodePattern,
     ) -> bool {
-        if !node.labels.is_empty() && !Self::node_matches_labels(payload_opt, &node.labels) {
-            return false;
-        }
-        node.properties.is_empty() || Self::node_matches_properties(payload_opt, &node.properties)
+        crate::velesql::has_every_label(&node.labels, &labels_of(own))
+            && Self::properties_hold(id, properties, &node.properties)
+    }
+
+    /// Whether node `id`, whose properties `payload` holds, satisfies the
+    /// inline properties `properties`.
+    fn properties_hold(
+        id: u64,
+        payload: Option<&serde_json::Value>,
+        properties: &HashMap<String, crate::velesql::Value>,
+    ) -> bool {
+        crate::velesql::inline_properties_hold(properties, |key| {
+            crate::velesql::element_property(id, key, |k| payload?.get(k))
+        })
     }
 
     /// Builds a `(node_id, bindings)` pair for a start node.
@@ -210,80 +235,15 @@ impl Collection {
         }
         (id, bindings)
     }
+}
 
-    /// Checks if a node's payload matches the required labels.
-    pub(super) fn node_matches_labels(
-        payload: Option<&serde_json::Value>,
-        required: &[String],
-    ) -> bool {
-        let Some(payload) = payload else { return false };
-        let Some(labels) = payload.get("_labels").and_then(|v| v.as_array()) else {
-            return false;
-        };
-        let node_labels: Vec<&str> = labels.iter().filter_map(|v| v.as_str()).collect();
-        required.iter().all(|r| node_labels.contains(&r.as_str()))
-    }
-
-    /// Checks if a node's payload matches the required properties.
-    pub(super) fn node_matches_properties(
-        payload: Option<&serde_json::Value>,
-        properties: &HashMap<String, crate::velesql::Value>,
-    ) -> bool {
-        let Some(payload) = payload else { return false };
-        properties.iter().all(|(key, expected)| {
-            payload
-                .get(key)
-                .is_some_and(|actual| Self::values_match(expected, actual))
-        })
-    }
-
-    /// Computes maximum traversal depth from pattern.
-    pub(super) fn compute_max_depth(pattern: &GraphPattern) -> u32 {
-        let mut max_depth = 0u32;
-
-        for rel in &pattern.relationships {
-            if let Some((_, end)) = rel.range {
-                max_depth = max_depth.saturating_add(end.min(10));
-            } else {
-                max_depth = max_depth.saturating_add(1);
-            }
-        }
-
-        if max_depth == 0 && !pattern.relationships.is_empty() {
-            max_depth = u32::try_from(pattern.relationships.len()).unwrap_or(10);
-        }
-
-        max_depth.min(10)
-    }
-
-    /// Extracts relationship type filters from pattern.
-    pub(super) fn extract_rel_types(pattern: &GraphPattern) -> Vec<String> {
-        let mut types = Vec::new();
-        for rel in &pattern.relationships {
-            types.extend(rel.types.clone());
-        }
-        types
-    }
-
-    /// Compares a VelesQL Value with a JSON value.
-    pub(super) fn values_match(
-        velesql_value: &crate::velesql::Value,
-        json_value: &serde_json::Value,
-    ) -> bool {
-        use crate::velesql::Value;
-
-        match (velesql_value, json_value) {
-            (Value::String(s), serde_json::Value::String(js)) => s == js,
-            // Numbers match by exact value, as a WHERE `=` decides: `1.0`
-            // is `1`, `-0.0` is `0`, `2^53 + 1` is not `2^53.0`.
-            (
-                literal @ (Value::Integer(_) | Value::UnsignedInteger(_) | Value::Float(_)),
-                serde_json::Value::Number(n),
-            ) => crate::velesql::compare_number_literal(n, literal)
-                .is_some_and(std::cmp::Ordering::is_eq),
-            (Value::Boolean(b), serde_json::Value::Bool(jb)) => b == jb,
-            (Value::Null, serde_json::Value::Null) => true,
-            _ => false,
-        }
-    }
+/// The `_labels` a node's own payload carries.
+fn labels_of(payload: Option<&serde_json::Value>) -> Vec<&str> {
+    payload
+        .and_then(|p| p.get("_labels"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect()
 }

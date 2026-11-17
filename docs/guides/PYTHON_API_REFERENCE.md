@@ -198,6 +198,12 @@ results = collection.hybrid_search(
 # Get specific points
 points = collection.get([1, 2, 3])
 
+# Every id: all_ids() lists the vector index, all_point_ids() the union of the
+# vector and payload indexes. Both pass the observer's read gate: a deny, and a
+# scope (bare ids cannot be scoped), raise PermissionError.
+ids = collection.all_ids()
+every_id = collection.all_point_ids()
+
 # Delete points
 collection.delete([1, 2, 3])
 
@@ -371,6 +377,8 @@ strategy = FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.
 strategy = FusionStrategy.weighted({"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1})
 strategy = FusionStrategy.weighted(0.3, 0.1)  # legacy: max_weight, hit_weight
 strategy = FusionStrategy.weighted(max_weight=0.3, hit_weight=0.1)  # legacy kwargs
+# Only two *positional* weights are the legacy pair: a keyword set without
+# hit_weight, or a weight given both positionally and by keyword, raises ValueError.
 
 # Relative Score Fusion -- linear blend of dense and sparse scores
 strategy = FusionStrategy.relative_score(dense_weight=0.7, sparse_weight=0.3)

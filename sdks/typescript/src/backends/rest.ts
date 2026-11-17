@@ -54,6 +54,14 @@ import type {
   RelateRequest,
   RelateResponse,
   RelationsResponse,
+  AddEdgesBatchResponse,
+  HealthStatus,
+  VacuumResult,
+  CompactResult,
+  ReorderResult,
+  CollectionDiagnostics,
+  StreamTraverseRequest,
+  TraverseStreamEvent,
 } from '../types';
 import type { FilterInput } from '../filter';
 import type { CapabilityMap } from '../capabilities';
@@ -70,6 +78,7 @@ import {
   buildSearchTransport,
   buildQueryTransport,
   buildStreamingTransport,
+  buildSseTransport,
   buildAgentMemoryTransport,
   type RestHttpConfig,
 } from './rest-http';
@@ -107,12 +116,18 @@ import {
   sparseSearchNamed as _sparseSearchNamed,
 } from './search-backend';
 import {
-  addEdge as _addEdge, getEdges as _getEdges,
+  addEdge as _addEdge, addEdgesBatch as _addEdgesBatch, getEdges as _getEdges,
   traverseGraph as _traverseGraph, traverseParallel as _traverseParallel,
   getNodeDegree as _getNodeDegree, createGraphCollection as _createGraphCollection,
   relate as _relate, unrelate as _unrelate,
   getRelations as _getRelations, setTtlDurable as _setTtlDurable,
 } from './graph-backend';
+import {
+  healthCheck as _healthCheck, readyCheck as _readyCheck,
+  vacuumCollection as _vacuumCollection, compactCollection as _compactCollection,
+  reorderForLocality as _reorderForLocality, collectionDiagnostics as _collectionDiagnostics,
+} from './maintenance-backend';
+import { streamTraverse as _streamTraverse } from './sse-backend';
 import { query as _query, queryExplain as _queryExplain, collectionSanity as _collectionSanity } from './query-backend';
 import { scroll as _scroll } from './scroll-backend';
 import { getCollectionStats as _getCollectionStats, analyzeCollection as _analyzeCollection, getCollectionConfig as _getCollectionConfig } from './admin-backend';
@@ -184,7 +199,7 @@ export class RestBackend implements IVelesDBBackend {
   async updateGuardrails(r: GuardRailsUpdateRequest): Promise<GuardRailsConfigResponse> { this.ensureInitialized(); return _updateGuardrails(buildBaseTransport(this.httpConfig), r); }
   async aggregate(q: string, p?: Record<string, unknown>, o?: AggregateQueryOptions): Promise<AggregateResponse> { this.ensureInitialized(); return _aggregate(buildBaseTransport(this.httpConfig), q, p, o); }
   async matchQuery(c: string, q: string, p?: Record<string, unknown>, o?: MatchQueryOptions): Promise<MatchQueryResponse> { this.ensureInitialized(); return _matchQuery(buildBaseTransport(this.httpConfig), c, q, p, o); }
-  async removeEdge(c: string, id: number): Promise<boolean> { this.ensureInitialized(); return _removeEdge(buildBaseTransport(this.httpConfig), c, id); }
+  async removeEdge(c: string, id: GraphNodeId): Promise<boolean> { this.ensureInitialized(); return _removeEdge(buildBaseTransport(this.httpConfig), c, id); }
   async getEdgeCount(c: string): Promise<number> { this.ensureInitialized(); return _getEdgeCount(buildBaseTransport(this.httpConfig), c); }
   async listNodes(c: string): Promise<ListNodesResponse> { this.ensureInitialized(); return _listNodes(buildBaseTransport(this.httpConfig), c); }
   async getNodeEdges(c: string, id: number, o?: GetNodeEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return _getNodeEdges(buildBaseTransport(this.httpConfig), c, id, o); }
@@ -216,6 +231,7 @@ export class RestBackend implements IVelesDBBackend {
 
   // Graph
   async addEdge(c: string, e: AddEdgeRequest): Promise<void> { this.ensureInitialized(); return _addEdge(buildCrudTransport(this.httpConfig), c, e); }
+  async addEdgesBatch(c: string, e: AddEdgeRequest[]): Promise<AddEdgesBatchResponse> { this.ensureInitialized(); return _addEdgesBatch(buildCrudTransport(this.httpConfig), c, e); }
   async getEdges(c: string, o?: GetEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return _getEdges(buildCrudTransport(this.httpConfig), c, o); }
   async traverseGraph(c: string, r: TraverseRequest): Promise<TraverseResponse> { this.ensureInitialized(); return _traverseGraph(buildCrudTransport(this.httpConfig), c, r); }
   async traverseParallel(c: string, r: TraverseParallelRequest): Promise<TraverseResponse> { this.ensureInitialized(); return _traverseParallel(buildCrudTransport(this.httpConfig), c, r); }
@@ -232,6 +248,15 @@ export class RestBackend implements IVelesDBBackend {
   async getCollectionStats(c: string): Promise<CollectionStatsResponse | null> { this.ensureInitialized(); return _getCollectionStats(buildCrudTransport(this.httpConfig), c); }
   async analyzeCollection(c: string): Promise<CollectionStatsResponse> { this.ensureInitialized(); return _analyzeCollection(buildCrudTransport(this.httpConfig), c); }
   async getCollectionConfig(c: string): Promise<CollectionConfigResponse> { this.ensureInitialized(); return _getCollectionConfig(buildCrudTransport(this.httpConfig), c); }
+
+  // Maintenance / ops
+  async healthCheck(): Promise<HealthStatus> { this.ensureInitialized(); return _healthCheck(buildCrudTransport(this.httpConfig)); }
+  async readyCheck(): Promise<HealthStatus> { this.ensureInitialized(); return _readyCheck(buildCrudTransport(this.httpConfig)); }
+  async vacuumCollection(c: string): Promise<VacuumResult> { this.ensureInitialized(); return _vacuumCollection(buildCrudTransport(this.httpConfig), c); }
+  async compactCollection(c: string): Promise<CompactResult> { this.ensureInitialized(); return _compactCollection(buildCrudTransport(this.httpConfig), c); }
+  async reorderForLocality(c: string): Promise<ReorderResult> { this.ensureInitialized(); return _reorderForLocality(buildCrudTransport(this.httpConfig), c); }
+  async collectionDiagnostics(c: string): Promise<CollectionDiagnostics> { this.ensureInitialized(); return _collectionDiagnostics(buildCrudTransport(this.httpConfig), c); }
+  streamTraverse(c: string, req: StreamTraverseRequest): AsyncIterable<TraverseStreamEvent> { this.ensureInitialized(); return _streamTraverse(buildSseTransport(this.httpConfig), c, req); }
 
   // Streaming / PQ
   async trainPq(c: string, o?: PqTrainOptions): Promise<string> { this.ensureInitialized(); return _trainPq(buildStreamingTransport(this.httpConfig), c, o); }

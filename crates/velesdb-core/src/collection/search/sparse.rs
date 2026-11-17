@@ -20,7 +20,8 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if either branch fails (a dense dimension mismatch,
-    /// an unknown sparse index) or fusion fails.
+    /// an unknown sparse index, a non-finite sparse query weight) or fusion
+    /// fails.
     pub(crate) fn hybrid_sparse_search_inner(
         &self,
         dense_vector: &[f32],
@@ -30,6 +31,7 @@ impl Collection {
         filter: Option<&crate::filter::Filter>,
         index_name: &str,
     ) -> Result<Vec<SearchResult>> {
+        crate::validation::validate_sparse_vector_is_finite(sparse_query)?;
         let candidate_k = k.saturating_mul(2).max(k.saturating_add(10));
 
         let (dense_results, sparse_results) = self.execute_both_branches(

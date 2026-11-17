@@ -132,19 +132,12 @@ pub enum TemporalExpr {
 }
 
 impl TemporalExpr {
-    /// Evaluates the temporal expression to epoch seconds.
+    /// Evaluates the temporal expression to epoch seconds. Only `NOW()` reads
+    /// the clock, so an `INTERVAL` alone is a pure duration.
     #[must_use]
     pub fn to_epoch_seconds(&self) -> i64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        // Reason: Current Unix timestamps fit in i64 until year 292 billion.
-        // Use saturating conversion for theoretical future-proofing.
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-
         match self {
-            Self::Now => now,
+            Self::Now => crate::velesql::clock::now_epoch_seconds(),
             Self::Interval(iv) => iv.to_seconds(),
             // Saturating: an extreme operand clamps to the i64 range instead
             // of panicking (debug) or wrapping to a meaningless instant (release).
@@ -214,7 +207,10 @@ impl Value {
         matches!(self, Self::Subquery(sq) if sq.references_outer_table(outer_tables))
     }
 
-    /// Converts this VelesQL value to a JSON value.
+    /// Converts this VelesQL value to a JSON value: the one conversion every
+    /// payload filter, index lookup and DML write uses, so a value compares
+    /// the same in every clause (a second, numbers-only converter once made
+    /// `BETWEEN` lose its string bounds).
     ///
     /// Literal values (integer, float, string, boolean, null) map directly
     /// to their JSON equivalents. Parameters serialize as `"$name"` strings.

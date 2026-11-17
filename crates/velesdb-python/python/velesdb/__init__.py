@@ -51,9 +51,13 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     VelesQLParameterError,
     VelesQLSyntaxError,
     __version__,
+    EXPIRES_AT_KEY,
+    VELESQL_CONTRACT_VERSION,
+    hash_edge_id,
     hash_id,
     metric_higher_is_better,
     metric_normalize,
+    score_range,
     validate_search_quality,
 )
 
@@ -99,6 +103,15 @@ class GraphStore:
         source: int | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
+        """Add an edge. Accepted forms:
+
+        - ``add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})``
+        - ``add_edge(1, source=10, target=20, label="KNOWS")`` (id positional)
+        - ``add_edge(10, 20, "KNOWS", id=1)`` (source positional, id keyword)
+        - ``add_edge(10, 20, "KNOWS")`` (an id is assigned)
+
+        Passing both ``id=`` and ``source=`` raises ``ValueError``.
+        """
         if isinstance(edge, dict):
             self._inner.add_edge(edge)
             return
@@ -123,13 +136,19 @@ class GraphStore:
         max_depth: int = 3,
         limit: int = 10_000,
         relationship_types: list[str] | None = None,
+        direction: str = "forward",
+        timeout_ms: int | None = None,
     ) -> list[TraversalResult]:
         cfg = StreamingConfig(
             max_depth=max_depth,
             max_visited=limit,
             relationship_types=relationship_types,
+            deadline_ms=timeout_ms,
         )
-        return self._inner.traverse_bfs_streaming(source, cfg)
+        if direction == "forward":
+            return self._inner.traverse_bfs_streaming(source, cfg)
+        # reverse / both run core's eager direction-aware BFS
+        return self._inner.traverse_bfs(source, cfg, direction)
 
     def traverse_dfs(
         self,
@@ -138,11 +157,13 @@ class GraphStore:
         max_depth: int = 3,
         limit: int = 10_000,
         relationship_types: list[str] | None = None,
+        timeout_ms: int | None = None,
     ) -> list[TraversalResult]:
         cfg = StreamingConfig(
             max_depth=max_depth,
             max_visited=limit,
             relationship_types=relationship_types,
+            deadline_ms=timeout_ms,
         )
         return self._inner.traverse_dfs(source, cfg)
 
@@ -166,10 +187,19 @@ def _legacy_edge_to_dict(
     elif weight is not None:
         props.setdefault("weight", weight)
 
-    # Current explicit-id shape: add_edge(id, source=..., target=..., label=...)
-    if source is not None or edge_id is not None:
-        eid = int(edge_or_source if edge_id is None else edge_id)
-        edge_source = int(source if source is not None else 0)
+    if edge_id is not None:
+        # add_edge(source, target, label, id=n): the positional is the source.
+        if source is not None:
+            raise ValueError(
+                "add_edge() got both id= and source=: pass the edge id "
+                "positionally with source=, or the source positionally with id="
+            )
+        eid = int(edge_id)
+        edge_source = int(edge_or_source)
+    elif source is not None:
+        # Explicit-id shape: add_edge(id, source=..., target=..., label=...)
+        eid = int(edge_or_source)
+        edge_source = int(source)
     else:
         # Legacy no-id shape: add_edge(source, target, label, weight=None)
         eid = int(next_id())
@@ -230,6 +260,15 @@ class GraphCollection:
         source: int | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
+        """Add an edge. Accepted forms:
+
+        - ``add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})``
+        - ``add_edge(1, source=10, target=20, label="KNOWS")`` (id positional)
+        - ``add_edge(10, 20, "KNOWS", id=1)`` (source positional, id keyword)
+        - ``add_edge(10, 20, "KNOWS")`` (an id is assigned)
+
+        Passing both ``id=`` and ``source=`` raises ``ValueError``.
+        """
         if isinstance(edge, dict):
             self._inner.add_edge(edge)
             return
@@ -318,6 +357,9 @@ class Collection:
         filter: dict[str, Any] | None = None,
         sparse_vector: Any | None = None,
         sparse_index_name: str | None = None,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search for similar vectors: dense, sparse, or hybrid (fused with RRF).
 
@@ -331,6 +373,8 @@ class Collection:
             k=top_k,
             filter=filter,
             sparse_index_name=sparse_index_name,
+            principal=principal,
+            tenant=tenant,
         )
         return self._inner.search_request(opts)
 
@@ -351,6 +395,9 @@ class Collection:
         self,
         queries: list[Any],
         top_k: int = 10,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[list[dict[str, Any]]]:
         if queries and isinstance(queries[0], dict):
             # Pass dicts through to Rust, injecting the default top_k only
@@ -363,7 +410,7 @@ class Collection:
                 searches.append(entry)
         else:
             searches = [{"vector": list(v), "top_k": int(top_k)} for v in queries]
-        return self._inner.batch_search(searches)
+        return self._inner.batch_search(searches, principal=principal, tenant=tenant)
 
     def multi_query_search(
         self,
@@ -371,6 +418,9 @@ class Collection:
         top_k: int = 10,
         fusion: Any = None,
         filter: dict[str, Any] | None = None,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[dict[str, Any]]:
         """Multi-query search with result fusion.
 
@@ -381,7 +431,12 @@ class Collection:
             filter: Optional metadata filter dict.
         """
         return self._inner.multi_query_search(
-            vectors, top_k=top_k, fusion=fusion, filter=filter,
+            vectors,
+            top_k=top_k,
+            fusion=fusion,
+            filter=filter,
+            principal=principal,
+            tenant=tenant,
         )
 
     def stream_insert(self, points: list[dict[str, Any]]) -> int:
@@ -392,15 +447,23 @@ class Collection:
         self,
         vectors: list[list[float]],
         top_k: int = 10,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[list[dict[str, Any]]]:
         """Parallel batch search using rayon."""
-        return self._inner.search_batch_parallel(vectors, top_k=top_k)
+        return self._inner.search_batch_parallel(
+            vectors, top_k=top_k, principal=principal, tenant=tenant,
+        )
 
     def search_with_quality(
         self,
         vector: Any,
         quality: str,
         top_k: int = 10,
+        *,
+        principal: str | None = None,
+        tenant: str | None = None,
     ) -> list[dict]:
         """Search with a named quality mode.
 
@@ -418,7 +481,9 @@ class Collection:
             ValueError: If ``quality`` names no mode, or gives an ef outside
                 16-4096.
         """
-        return self._inner.search_with_quality(vector, quality, top_k)
+        return self._inner.search_with_quality(
+            vector, quality, top_k, principal=principal, tenant=tenant,
+        )
 
     def count(self) -> int:
         """Return the number of points in the collection."""
@@ -426,9 +491,13 @@ class Collection:
 
 
 def _safe_len(vec: Any) -> int | None:
-    """Return the length of ``vec`` if measurable, else None."""
+    """Return the length of ``vec`` if it has one, else None.
+
+    Never iterates: measuring a one-shot iterator would consume the very
+    vector about to be written.
+    """
     try:
-        return len(list(vec))
+        return len(vec)
     except TypeError:
         return None
 
@@ -500,7 +569,10 @@ class _PendingCollection:
         vector: Iterable[float] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> int:
-        # Materialise *before* consuming the iterator so the vector is intact.
+        # A one-shot iterator is read once, here: measured and written from
+        # the same list.
+        if vector is not None and not hasattr(vector, "__len__"):
+            vector = list(vector)
         dim = _extract_dimension(points_or_id, vector)
         if dim is None:
             raise ValueError(
@@ -596,28 +668,33 @@ class Database:
                 ``kind`` is ``"vector"``/``"metadata"``/``"graph"``/``"unknown"``),
                 ``"collection_deleted"`` (``name``), ``"upsert"``
                 (``collection``, ``point_count``), ``"query"``
-                (``collection``, ``duration_us``), or the read-path veto
+                (``collection``, ``duration_us``), the read-path veto
                 ``"query_request"`` (``collection``, ``operation``,
-                ``principal``, ``tenant``). For ``"query_request"`` the return
-                value decides the read: ``None``/``True`` allow, ``False``/a
-                reason string deny, and a ``{"filter": "<VelesQL predicate>"}``
-                dict allow-with-scope (narrowing the read). The observer is
-                immutable once the database is opened.
-            observer_strict: Read-path failure policy for the
-                ``"query_request"`` veto. Default ``False`` (fail-open): if the
-                policy callback raises or returns an uninterpretable value, the
-                read is **allowed** so a bug in policy code never breaks reads.
-                Set ``True`` (fail-closed) for governance / RBAC deployments:
-                the same error cases then **deny** the read. Explicit decisions
+                ``principal``, ``tenant``), and the VelesQL vetoes
+                ``"ddl_request"`` / ``"dml_mutation_request"``
+                (``operation``, ``collection``). For ``"query_request"`` the
+                return value decides the read: ``None``/``True`` allow,
+                ``False``/a reason string deny, and a
+                ``{"filter": "<VelesQL predicate>"}`` dict allow-with-scope
+                (narrowing the read). For the two VelesQL vetoes,
+                ``None``/``True`` allow and ``False``/a reason string deny.
+                The observer is immutable once the database is opened.
+            observer_strict: Failure policy for callback errors on the veto
+                events (``"query_request"``, ``"ddl_request"``,
+                ``"dml_mutation_request"``). Default ``False`` (fail-open): if
+                the policy callback raises or returns an uninterpretable value,
+                the operation is **allowed** so a bug in policy code never
+                breaks reads or writes. Set ``True`` (fail-closed) for
+                governance / RBAC deployments: the same error cases then
+                **deny**. Explicit decisions
                 (``None``/``True``/``False``/str/dict) are unaffected by this
                 flag.
 
-                Caveat: in the embedded Python SDK the lifecycle
-                ``collection_created`` / ``collection_deleted`` events and the
-                ``query_request`` read gate fire from the core engine.
-                ``upsert`` / ``query`` are emitted only by callers that
-                explicitly call ``notify_upsert`` / ``notify_query`` — in this
-                ecosystem that is the REST server, not embedded usage.
+                In the embedded Python SDK every event fires from the core
+                engine: the lifecycle events, the ``query_request`` read gate,
+                the VelesQL vetoes, ``upsert`` (the core DML path and direct
+                SDK writes alike) and ``query`` (once per completed search,
+                VelesQL statement or ``match_query``).
         """
         self._inner = _RawDatabase(path, config, observer, observer_strict)
 
@@ -660,8 +737,9 @@ class Database:
                 see the v1.13 CHANGELOG for the migration guide.
             auto_reindex: Optional :class:`AutoReindexOptions` dataclass.
                 When provided, an ``AutoReindexManager`` is constructed and
-                attached to the freshly-created collection as a runtime-only
-                hook (not persisted — re-attach after every ``Database(path)``).
+                attached to the freshly-created collection; the policy is
+                persisted in the collection config (schema v2) and restored
+                automatically on every ``Database(path)`` open.
 
         Returns:
             :class:`Collection` when ``dimension`` is known, or a
@@ -798,14 +876,16 @@ class Database:
 
         Args:
             sql: VelesQL query string.
-            params: Optional parameter bindings (e.g., {"$v": [0.1, 0.2]}).
+            params: Optional parameter bindings (bare names, e.g., {"v": [0.1, 0.2]} for the ``$v`` placeholder).
 
         Returns:
             List of result dicts for SELECT queries, empty list for DDL/DML.
 
         Raises:
-            ValueError: If parsing fails.
-            RuntimeError: If execution fails.
+            ValueError: If the query does not parse or is invalid for this
+                database.
+            PermissionError: If the database's observer refuses it.
+            VelesDBError: If execution fails in the engine.
         """
         if params is None:
             params = {}
@@ -920,7 +1000,12 @@ __all__ = [
     # string -> u64 point id, a metric's score direction, and the search
     # quality grammar.
     "hash_id",
+    "hash_edge_id",
+    "score_range",
+    "EXPIRES_AT_KEY",
+    "VELESQL_CONTRACT_VERSION",
     "metric_higher_is_better",
+    "metric_normalize",
     "validate_search_quality",
     "embed",
     "__version__",

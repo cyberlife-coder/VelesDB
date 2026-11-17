@@ -161,14 +161,16 @@ struct AggregateCase {
     expect_groups: Vec<Value>,
 }
 
-/// A MATCH golden case (issue #1544). WASM addresses its graph store via
-/// `@collection`-annotated standalone `MATCH ... RETURN` queries, which is
-/// why this carries its own `wasm_query` instead of reusing `core_query` —
-/// see `documented_divergences` D004 in the fixture.
+/// A MATCH conformance case: the same query text core runs, with
+/// `params`, compared on the `binding` alias of each row (D004 covers only
+/// where the shared topology is stored).
 #[derive(Deserialize)]
 struct MatchCase {
     id: String,
-    wasm_query: String,
+    query: String,
+    #[serde(default)]
+    params: serde_json::Map<String, Value>,
+    binding: String,
     expect_ids: Vec<u64>,
 }
 
@@ -209,7 +211,8 @@ fn number_literal(n: &serde_json::Number) -> String {
 /// Builds the dataset *through the WASM executor* by issuing one
 /// `INSERT INTO <coll> (id, vector, <payload keys...>) VALUES (...)` per point,
 /// with the vector bound to the `$v` parameter (the canonical WASM vector-
-/// insert contract — inline vector literals are unsupported).
+/// insert contract — inline vector literals are unsupported) and each array
+/// or object payload value to a `$pN` parameter.
 fn build_dataset(ds: &Dataset) -> DatabaseInner {
     let mut db = DatabaseInner::new();
     seed_dataset(&mut db, ds);
@@ -230,9 +233,18 @@ fn seed_dataset(db: &mut DatabaseInner, ds: &Dataset) {
         };
         let mut columns = vec!["id".to_string(), "vector".to_string()];
         let mut values = vec![point.id.to_string(), "$v".to_string()];
+        let mut bound = serde_json::Map::new();
+        bound.insert("v".to_string(), serde_json::json!(point.vector));
         for (key, val) in obj {
             columns.push(key.clone());
-            values.push(payload_literal(val));
+            // VelesQL has no array or object literal: those bind as `$pN`.
+            if val.is_array() || val.is_object() {
+                let name = format!("p{}", bound.len());
+                values.push(format!("${name}"));
+                bound.insert(name, val.clone());
+            } else {
+                values.push(payload_literal(val));
+            }
         }
         let sql = format!(
             "INSERT INTO {} ({}) VALUES ({})",
@@ -240,9 +252,7 @@ fn seed_dataset(db: &mut DatabaseInner, ds: &Dataset) {
             columns.join(", "),
             values.join(", ")
         );
-        let vector_json =
-            serde_json::to_string(&point.vector).expect("test: serialize fixture vector");
-        let params = format!("{{\"v\": {vector_json}}}");
+        let params = Value::Object(bound).to_string();
         execute(db, &sql, Some(&params))
             .unwrap_or_else(|e| panic!("test: seed point {} failed: {e}", point.id));
     }
@@ -317,34 +327,18 @@ fn test_wasm_velesql_executor_known_bugs_are_correct() {
     assert_cases(&mut db, &fixture.known_bugs);
 }
 
-/// UNION / INTERSECT / EXCEPT conformance against the WASM executor (issue #1544).
-///
-/// Compared as a **sorted set of ids**, not an ordered list: `velesql_setops`
-/// concatenates branches left-to-right (preserving each branch's own ORDER BY)
-/// and de-duplicates first-seen, which is a *different* — but equally valid —
-/// sequence than core's score-sort. Only membership and count are part of the
-/// golden contract (`documented_divergences` D003 in the fixture).
+/// UNION / INTERSECT / EXCEPT conformance against core: ids in order (and
+/// scores where pinned), the order being `velesql::execute_compound`'s (D003,
+/// resolved).
 #[test]
 fn test_wasm_velesql_executor_setops_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
-    for case in &fixture.setops_cases {
-        let result = execute(&mut db, &case.query, None)
-            .unwrap_or_else(|e| panic!("setops case {} failed to execute: {e}", case.id));
-        let mut ids: Vec<u64> = result
-            .rows_ref()
-            .iter()
-            .map(crate::velesql_result::QueryResultRow::id)
-            .collect();
-        ids.sort_unstable();
-        let mut expected = case.expect_ids.clone();
-        expected.sort_unstable();
-        assert_eq!(
-            ids, expected,
-            "WASM setops conformance mismatch (compared as a set) for case {}: query={:?}",
-            case.id, case.query
-        );
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
     }
+    let params = params_json(&fixture);
+    assert_cases_with(&mut db, &fixture.setops_cases, Some(&params));
 }
 
 /// JOIN (ON and USING) conformance against the WASM executor (issue #1544).
@@ -415,12 +409,11 @@ fn test_wasm_velesql_executor_aggregate_cases() {
 
 /// MATCH (1- and 2-hop) conformance against the WASM executor (issue #1544).
 ///
-/// WASM keeps a graph store separate from vector collections, populated via
-/// `INSERT NODE`/`INSERT EDGE` and addressed by `@collection` annotations
-/// (see `documented_divergences` D004 in the fixture). Builds the SAME
-/// 4-node `KNOWS` chain topology as the core MATCH test
+/// WASM keeps its edges in a graph store beside the collection, populated
+/// via `INSERT NODE`/`INSERT EDGE` (`documented_divergences` D004). Builds
+/// the SAME 4-node `KNOWS` chain topology as the core MATCH test
 /// (`test_velesql_executor_conformance_match_cases`) and runs each case's
-/// `wasm_query`.
+/// shared `query` with its `params`.
 #[test]
 fn test_wasm_velesql_executor_match_cases() {
     let fixture = load_fixture();
@@ -441,7 +434,8 @@ fn test_wasm_velesql_executor_match_cases() {
     }
 
     for case in &fixture.match_cases {
-        let result = execute(&mut db, &case.wasm_query, None)
+        let params = Value::Object(case.params.clone()).to_string();
+        let result = execute(&mut db, &case.query, Some(&params))
             .unwrap_or_else(|e| panic!("match case {} failed to execute: {e}", case.id));
         let ids: Vec<u64> = result
             .rows_ref()
@@ -450,16 +444,18 @@ fn test_wasm_velesql_executor_match_cases() {
                 let parsed: Value =
                     serde_json::from_str(&row.data_json()).expect("test: parse row JSON");
                 parsed
-                    .get("a")
-                    .and_then(|a| a.get("id"))
+                    .get(&case.binding)
+                    .and_then(|node| node.get("id"))
                     .and_then(Value::as_u64)
-                    .unwrap_or_else(|| panic!("match case {}: row missing a.id", case.id))
+                    .unwrap_or_else(|| {
+                        panic!("match case {}: row missing {}", case.id, case.binding)
+                    })
             })
             .collect();
         assert_eq!(
             ids, case.expect_ids,
-            "WASM match conformance mismatch for case {}: wasm_query={:?}",
-            case.id, case.wasm_query
+            "WASM match conformance mismatch for case {}: query={:?}",
+            case.id, case.query
         );
     }
 }
@@ -470,6 +466,9 @@ fn test_wasm_velesql_executor_match_cases() {
 fn test_wasm_velesql_executor_near_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
     let params = params_json(&fixture);
     assert_cases_with(&mut db, &fixture.near_cases, Some(&params));
 }
@@ -480,6 +479,9 @@ fn test_wasm_velesql_executor_near_cases() {
 fn test_wasm_velesql_executor_fusion_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
     let params = params_json(&fixture);
     assert_cases_with(&mut db, &fixture.fusion_cases, Some(&params));
 }

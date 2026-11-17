@@ -6,6 +6,7 @@
 
 use napi_derive::napi;
 use serde_json::Value;
+use velesdb_memory::anchor::{AnchoredRecollection, Freshness};
 use velesdb_memory::{
     EntityProfile, EntityRelation, Explanation, MemoryEdge, MemoryNode, Recollection,
     RememberOutcome, RememberedExtraction, SimilarMemory, UnrelateOutcome,
@@ -40,11 +41,11 @@ pub struct ColumnFilterJs {
 #[napi(object)]
 pub struct FusionOptionsJs {
     /// Hops the graph traversal walks from the top vector seed.
-    pub hops: Option<u32>,
+    pub hops: Option<f64>,
     /// Weight added to a graph-reached fact's normalised vector score.
     pub graph_boost: Option<f64>,
     /// Depth of the oversampled vector pool fusion re-ranks.
-    pub pool: Option<u32>,
+    pub pool: Option<f64>,
 }
 
 /// One recalled memory (output of `recall` / `recallWhere`).
@@ -70,6 +71,88 @@ impl From<Recollection> for RecollectionJs {
             score: f64::from(r.score),
             content: r.content,
             metadata: r.metadata.map(Value::Object),
+        }
+    }
+}
+
+/// A recalled fact's freshness against the files it was anchored to (output
+/// of `recall` with `anchorRoot`) — the same verdict the MCP `recall` tool
+/// reports: `fresh` (every anchored file unchanged), `stale` (at least one
+/// changed or disappeared; listed in `changed`), or `unverified` (a file
+/// could not be checked — says nothing either way).
+#[napi(object)]
+pub struct FreshnessJs {
+    /// `"fresh"` | `"stale"` | `"unverified"`.
+    pub state: String,
+    /// The anchored repo-relative paths that changed or disappeared (`stale`
+    /// only; empty otherwise).
+    pub changed: Vec<String>,
+}
+
+impl From<&Freshness> for FreshnessJs {
+    fn from(verdict: &Freshness) -> Self {
+        let (state, changed) = match verdict {
+            Freshness::Fresh => ("fresh", Vec::new()),
+            Freshness::Stale { changed } => {
+                ("stale", changed.iter().map(ToString::to_string).collect())
+            }
+            // `Unanchored` never reaches here (the caller filtered it), and
+            // the wildcard keeps the `non_exhaustive` enum honest: an unknown
+            // future verdict reports the fail-safe "could not be checked",
+            // never a bare "fresh".
+            _ => ("unverified", Vec::new()),
+        };
+        Self {
+            state: state.to_owned(),
+            changed,
+        }
+    }
+}
+
+/// One hit of `recall` — same fields as [`RecollectionJs`], plus `freshness`
+/// when the call passed `anchorRoot` (absent — `undefined` — otherwise). Anchored hits are
+/// ranked lower when stale, but the `score` stays the raw similarity.
+#[napi(object)]
+pub struct AnchoredRecollectionJs {
+    /// Decimal-string id of the memory.
+    pub id: String,
+    /// Similarity score (higher is closer).
+    pub score: f64,
+    /// Stored fact content.
+    pub content: String,
+    /// Caller-supplied structured metadata stored with the fact, or
+    /// `undefined` when the fact carries none.
+    pub metadata: Option<Value>,
+    /// Freshness verdict when recalled with `anchorRoot`; absent
+    /// (`undefined`) otherwise.
+    pub freshness: Option<FreshnessJs>,
+}
+
+impl From<RecollectionJs> for AnchoredRecollectionJs {
+    /// The plain (unanchored) recall hit: identical fields, `freshness: None`.
+    fn from(r: RecollectionJs) -> Self {
+        Self {
+            id: r.id,
+            score: r.score,
+            content: r.content,
+            metadata: r.metadata,
+            freshness: None,
+        }
+    }
+}
+
+impl From<AnchoredRecollection> for AnchoredRecollectionJs {
+    fn from(r: AnchoredRecollection) -> Self {
+        let recollection = RecollectionJs::from(r.recollection);
+        Self {
+            id: recollection.id,
+            score: recollection.score,
+            content: recollection.content,
+            metadata: recollection.metadata,
+            freshness: match &r.freshness {
+                Freshness::Unanchored => None,
+                verdict => Some(FreshnessJs::from(verdict)),
+            },
         }
     }
 }
@@ -379,4 +462,18 @@ pub struct CompiledContextJs {
     /// either: `warnings_for` only reports retrieved fragments above a
     /// relevance floor, so `decisions` remains the exhaustive record.
     pub warnings: Value,
+}
+
+/// Result of [`compileTranscript`](crate::NodeMemoryService::compile_transcript):
+/// the compiled `context` in EXACTLY the same typed envelope as
+/// [`compileContext`](crate::NodeMemoryService::compile_context)'s own output
+/// (one payload, one casing — `retrievalHandles`, not `retrieval_handles`),
+/// plus the `segmentation` audit trail in wire shape.
+#[napi(object)]
+pub struct CompileTranscriptJs {
+    /// The compiled context, typed like `compileContext`'s result.
+    pub context: CompiledContextJs,
+    /// The detected format plus one audit entry per segment, wire shape
+    /// (`fragment_id` crosses as a decimal string).
+    pub segmentation: Value,
 }

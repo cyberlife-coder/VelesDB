@@ -77,6 +77,7 @@ fn status_cases() -> Vec<(velesdb_core::Error, StatusCode)> {
     vec![
         (Error::CollectionNotFound("c".into()), StatusCode::NOT_FOUND),
         (Error::EdgeExists(1), StatusCode::CONFLICT),
+        (Error::AccessDenied("policy".into()), StatusCode::FORBIDDEN),
         (Error::Query("[V015]".into()), StatusCode::BAD_REQUEST),
         (
             Error::GraphNotSupported("ORDER BY d".into()),
@@ -127,9 +128,9 @@ fn test_http_status_follows_the_caller_error_classification() {
     }
 }
 
-/// `/query` keeps its `422` for the client's errors and answers the engine's
-/// with the canonical `5xx`, so the same `4xx` ⇔ caller-error claim holds
-/// there too.
+/// `/query` keeps its `422` for the client's errors — an observer refusal
+/// excepted, a `403` as everywhere — and answers the engine's with the
+/// canonical `5xx`, so the same `4xx` ⇔ caller-error claim holds there too.
 #[test]
 fn test_query_status_follows_the_caller_error_classification() {
     for (err, _) in &status_cases() {
@@ -139,7 +140,9 @@ fn test_query_status_follows_the_caller_error_classification() {
             err.is_caller_error(),
             "{err}: {status}"
         );
-        if err.is_caller_error() {
+        if matches!(err, velesdb_core::Error::AccessDenied(_)) {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
+        } else if err.is_caller_error() {
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
         } else {
             assert_eq!(status, http_status_for_error(err), "{err}");

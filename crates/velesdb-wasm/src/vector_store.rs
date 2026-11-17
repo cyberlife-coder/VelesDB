@@ -62,6 +62,16 @@ impl VectorStore {
         StoreState::new(dimension, metric).map(Self::from_state)
     }
 
+    /// Checks a search-quality preset (`fast`, `balanced`, `accurate`,
+    /// `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`) with
+    /// the parser `search_with_quality` runs, without a store or a search:
+    /// what a caller validating a preset ahead of a search asks. Throws the
+    /// parser's refusal; returns nothing otherwise.
+    #[wasm_bindgen]
+    pub fn validate_search_quality(quality: &str) -> Result<(), JsValue> {
+        crate::parsing::parse_search_quality(quality)
+    }
+
     /// Creates a metadata-only store (no vectors, only payloads).
     #[wasm_bindgen]
     pub fn new_metadata_only() -> VectorStore {
@@ -371,13 +381,15 @@ impl VectorStore {
             .insert_batch_raw(ids, vectors, dimension)
     }
 
-    /// Exports to binary format for IndexedDB/localStorage.
+    /// Exports to binary format for IndexedDB/localStorage: ids, dense
+    /// vectors, payloads, configuration and the sparse index (format v4).
     #[wasm_bindgen]
     pub fn export_to_bytes(&self) -> Result<Vec<u8>, JsValue> {
         self.state.borrow().export_to_bytes()
     }
 
-    /// Saves to `IndexedDB`.
+    /// Saves to `IndexedDB`, as [`Self::export_to_bytes`] serializes the
+    /// store, sparse index included.
     #[wasm_bindgen]
     pub async fn save(&self, db_name: &str) -> Result<(), JsValue> {
         let bytes = self.state.borrow().export_to_bytes()?;

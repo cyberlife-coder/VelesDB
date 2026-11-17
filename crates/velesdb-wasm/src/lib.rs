@@ -53,6 +53,7 @@ use wasm_bindgen::prelude::*;
 
 mod agent;
 mod database;
+mod database_graph;
 mod filter;
 mod fusion;
 mod graph;
@@ -100,7 +101,11 @@ mod velesql_introspection;
 mod velesql_join;
 mod velesql_logic;
 mod velesql_match;
+mod velesql_match_core;
+mod velesql_match_nodes;
 mod velesql_match_orderby;
+mod velesql_match_score;
+mod velesql_match_sources;
 mod velesql_orderby;
 mod velesql_project;
 mod velesql_result;
@@ -117,6 +122,7 @@ mod wasm_error;
 pub use agent::SemanticMemory;
 pub use database::{WasmCollectionHandle, WasmDatabase};
 pub use graph::{GraphEdge, GraphNode, GraphStore};
+pub use graph_persistence::GraphPersistence;
 pub use memory_service::WasmMemoryService;
 pub use observer::{
     WasmAccessDecision, WasmObserver, WasmQueryAccessContext, WasmQueryOperationKind,

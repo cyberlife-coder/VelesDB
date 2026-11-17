@@ -201,3 +201,18 @@ fn test_command_error_io_uses_veles_011() {
     // Assert — IO maps to VELES-011
     assert_eq!(cmd_err.code, "VELES-011");
 }
+
+/// An agent-memory failure keeps its class instead of reading as the
+/// caller's configuration mistake (VELES-009).
+#[test]
+fn test_agent_memory_failures_keep_their_class() {
+    use velesdb_core::agent::AgentMemoryError as A;
+    let code = |err: A| CommandError::from(Error::from(err)).code;
+    assert_eq!(code(A::IoError("disk".into())), "VELES-011");
+    assert_ne!(code(A::SnapshotError("corrupt".into())), "VELES-009");
+    assert_ne!(code(A::CollectionError("write failed".into())), "VELES-009");
+    assert_ne!(
+        code(A::InitializationError("open failed".into())),
+        "VELES-009"
+    );
+}

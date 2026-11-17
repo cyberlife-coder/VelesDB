@@ -31,9 +31,12 @@ test(
         'with the database backup, which caused the Sunday slowdown. The backup ' +
         'cannot move because the storage vendor only gives a midnight window.'
 
-      // Success path: returns the stored fact ids — no relate()/links by hand.
-      const ids = await store.rememberExtracted(transcript, MODEL)
-      assert.ok(Array.isArray(ids), 'returns an array of ids')
+      // Success path: resolves to the {ids, skippedOverCap} envelope (#1692) —
+      // no relate()/links by hand.
+      const outcome = await store.rememberExtracted(transcript, MODEL)
+      assert.ok(Array.isArray(outcome.ids), 'resolves to the {ids, skippedOverCap} envelope')
+      assert.equal(typeof outcome.skippedOverCap, 'number')
+      const ids = outcome.ids
       assert.ok(ids.length >= 2, `extracted multiple facts (got ${ids.length})`)
       for (const id of ids) assert.match(id, /^\d+$/, 'each id is a decimal string')
 

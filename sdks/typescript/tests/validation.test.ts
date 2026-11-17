@@ -8,7 +8,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { validateRestPointId } from '../src/client/validation';
+import { requireDimensionInRange, requireVector, validateRestPointId } from '../src/client/validation';
+import { InvalidDimensionError, InvalidVectorError } from '../src/errors';
 import { ValidationError } from '../src/types';
 import type { VelesDBConfig } from '../src/types';
 
@@ -52,5 +53,24 @@ describe('validateRestPointId', () => {
   it('skips validation entirely for non-REST backends', () => {
     expect(() => validateRestPointId('anything', wasm)).not.toThrow();
     expect(() => validateRestPointId(-1, wasm)).not.toThrow();
+  });
+});
+
+describe('requireVector / requireDimensionInRange (core parity, VELES-005 / VELES-032)', () => {
+  it('requireVector rejects non-finite components with VELES-005', () => {
+    expect(() => requireVector([0.1, NaN], 'Vector')).toThrow(InvalidVectorError);
+    expect(() => requireVector([0.1, Infinity], 'Vector')).toThrow(/index 1/);
+    expect(() => requireVector([0.1, 0.2], 'Vector')).not.toThrow();
+    expect(() => requireVector(new Float32Array([0.1, NaN]), 'Vector')).toThrow(InvalidVectorError);
+    expect(() => requireVector('nope', 'Vector')).toThrow(ValidationError);
+  });
+
+  it('requireDimensionInRange enforces core 1..=65536', () => {
+    expect(() => requireDimensionInRange(1)).not.toThrow();
+    expect(() => requireDimensionInRange(65_536)).not.toThrow();
+    expect(() => requireDimensionInRange(0)).toThrow(InvalidDimensionError);
+    expect(() => requireDimensionInRange(65_537)).toThrow(InvalidDimensionError);
+    expect(() => requireDimensionInRange(2.5)).toThrow(InvalidDimensionError);
+    expect(() => requireDimensionInRange('128')).toThrow(InvalidDimensionError);
   });
 });

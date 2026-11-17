@@ -58,7 +58,15 @@ fn create_collection(
     match &stmt.kind {
         CreateCollectionKind::Metadata => db.create_metadata_collection(&stmt.name),
         CreateCollectionKind::Vector(params) => {
-            db.create_collection(&stmt.name, params.dimension, &params.metric)
+            // Read as core's DDL executor reads it: an unknown mode is refused.
+            // `m` / `ef_construction` tune an HNSW graph WASM does not build.
+            let mode = params
+                .storage
+                .as_deref()
+                .map(crate::parsing::parse_storage_mode_inner)
+                .transpose()?
+                .unwrap_or(crate::StorageMode::Full);
+            db.create_collection_with_mode(&stmt.name, params.dimension, &params.metric, mode)
         }
         CreateCollectionKind::Graph(_) => {
             Err("Graph collections are not supported in WASM (use GraphStore directly)".to_string())
@@ -141,9 +149,9 @@ fn index_noop_row(op: &str, collection: &str, field: &str) -> Result<QueryResult
 // Note: `metric_to_string` (Finding L DDL guard) was removed alongside
 // the delete+recreate TRUNCATE path (Finding F12). TRUNCATE now clears
 // the backing store in place, so we no longer serialize the metric back
-// to its string form — the metric stays on the struct. Enumeration
-// coverage of `DistanceMetric` variants remains enforced by
-// `velesql_introspection::metric_to_string` and its sibling test.
+// to its string form — the metric stays on the struct. DESCRIBE names a
+// metric through core's `DistanceMetric::canonical_name`, whose exhaustive
+// match is where a new variant gets its name.
 
 #[cfg(test)]
 #[path = "velesql_ddl_tests.rs"]

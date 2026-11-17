@@ -53,10 +53,13 @@ impl Collection {
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
+        sources: &super::match_exec::MatchSources,
     ) -> Result<Vec<SearchResult>> {
-        let raw = self.dispatch_match_strategy(match_clause, params, ctx);
+        let raw = self.dispatch_match_strategy(match_clause, params, ctx, sources);
         count_guard_rail_stop(
-            raw.and_then(|raw| self.finalize_match_results(match_clause, raw, ctx, params)),
+            raw.and_then(|raw| {
+                self.finalize_match_results(match_clause, raw, ctx, params, sources)
+            }),
         )
     }
 
@@ -85,13 +88,32 @@ impl Collection {
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
+        self.match_query_ordered_reading(
+            match_clause,
+            params,
+            &super::match_exec::MatchSources::default(),
+        )
+    }
+
+    /// [`Self::match_query_ordered`] whose `@collection`-annotated nodes read
+    /// `sources` too: the database's entry point for REST `/match`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::match_query_ordered`].
+    pub(crate) fn match_query_ordered_reading(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        sources: &super::match_exec::MatchSources,
+    ) -> Result<Vec<super::match_exec::MatchResult>> {
         self.runtime
             .guard_rails
             .pre_check("default")
             .map_err(crate::error::Error::from)?;
         validate_match_clause(match_clause)?;
         let ctx = self.runtime.guard_rails.create_context();
-        self.dispatch_match_ordered(match_clause, params, &ctx)
+        self.dispatch_match_ordered(match_clause, params, &ctx, sources)
     }
 
     /// Runs the cost-based MATCH planner and the selected execution strategy,
@@ -116,10 +138,13 @@ impl Collection {
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
+        sources: &super::match_exec::MatchSources,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
-        let raw = self.dispatch_match_strategy(match_clause, params, ctx);
+        let raw = self.dispatch_match_strategy(match_clause, params, ctx, sources);
         count_guard_rail_stop(
-            raw.and_then(|raw| self.finalize_match_ordering(match_clause, raw, ctx, params)),
+            raw.and_then(|raw| {
+                self.finalize_match_ordering(match_clause, raw, ctx, params, sources)
+            }),
         )
     }
 
@@ -134,11 +159,15 @@ impl Collection {
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
+        sources: &super::match_exec::MatchSources,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         let start = std::time::Instant::now();
-        if crate::velesql::match_planner::MatchQueryPlanner::has_similarity_condition(
-            match_clause.where_clause.as_ref(),
-        ) {
+        if match_clause
+            .where_clause
+            .as_ref()
+            .and_then(crate::velesql::match_planner::first_similarity)
+            .is_some()
+        {
             global_match_metrics().record_similarity_query();
         }
 
@@ -150,7 +179,7 @@ impl Collection {
         // A traversal failure never reaches the finalizing steps that record
         // the breaker outcome, so it is recorded here.
         let result = self
-            .run_match_strategy(match_clause, params, ctx, &strategy)
+            .run_match_strategy(match_clause, params, ctx, &strategy, sources)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e));
 
         // W6-A3: Record metrics.
@@ -174,22 +203,14 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
         strategy: &crate::velesql::match_planner::MatchExecutionStrategy,
+        sources: &super::match_exec::MatchSources,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         match strategy {
             crate::velesql::match_planner::MatchExecutionStrategy::VectorFirst {
-                similarity_alias,
-                top_k,
-                threshold,
-            } => self.execute_match_vector_first(
-                match_clause,
-                params,
-                ctx,
-                similarity_alias,
-                *top_k,
-                *threshold,
-            ),
+                top_k, ..
+            } => self.execute_match_vector_first(match_clause, params, ctx, *top_k, sources),
             crate::velesql::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {
-                self.execute_match_with_context(match_clause, params, Some(ctx))
+                self.execute_match_reading(match_clause, params, Some(ctx), sources)
             }
         }
     }
@@ -204,13 +225,14 @@ impl Collection {
         match_results: Vec<super::match_exec::MatchResult>,
         ctx: &crate::guardrails::QueryContext,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        sources: &super::match_exec::MatchSources,
     ) -> Result<Vec<SearchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         let mut sorted = match_results;
-        self.apply_match_order_by(&mut sorted, match_clause, params)
+        self.apply_match_order_by(&mut sorted, match_clause, params, sources)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         let mut results = self
@@ -247,13 +269,14 @@ impl Collection {
         match_results: Vec<super::match_exec::MatchResult>,
         ctx: &crate::guardrails::QueryContext,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        sources: &super::match_exec::MatchSources,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         let mut sorted = match_results;
-        self.apply_match_order_by(&mut sorted, match_clause, params)
+        self.apply_match_order_by(&mut sorted, match_clause, params, sources)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         // Final cardinality check for MATCH path (EPIC-048 US-003), matching
@@ -281,11 +304,12 @@ impl Collection {
         results: &mut [super::match_exec::MatchResult],
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        sources: &super::match_exec::MatchSources,
     ) -> Result<()> {
         if let Some(order_by) = match_clause.return_clause.order_by.as_ref() {
             sort_match_baseline(results);
             for item in order_by.iter().rev() {
-                self.order_match_results(results, &item.expr, item.descending, params)?;
+                self.order_match_results(results, &item.expr, item.descending, params, sources)?;
             }
         }
         Ok(())

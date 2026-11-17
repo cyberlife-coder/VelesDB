@@ -2,11 +2,10 @@
 //! Python callable.
 //!
 //! The Python SDK exposes the four *notify* callbacks (create/delete/upsert/
-//! query) plus the read-path **veto** hook (`query_request`): the callback may
-//! refuse a read by returning `False` or a string reason, so an SDK embedder can
-//! enforce governance on every gated read (VelesQL `SELECT`/`MATCH`). The DDL/DML
-//! veto hooks (`on_ddl_request` / `on_dml_mutation_request`) keep the trait's
-//! default-allow behavior and remain unexposed.
+//! query) plus the **veto** hooks (`query_request` for reads, `ddl_request` /
+//! `dml_mutation_request` for VelesQL DDL/DML): the callback may refuse by
+//! returning `False` or a string reason, so an SDK embedder can enforce
+//! governance on every gated operation (VelesQL `SELECT`/`MATCH`/DDL/DML).
 //!
 //! # GIL safety
 //!
@@ -41,12 +40,15 @@ use velesdb_core::{DatabaseObserver, Error};
 /// of `"collection_created"`, `"collection_deleted"`, `"upsert"`, or `"query"`,
 /// and the keyword fields carry the event payload:
 ///
-/// | event                | keyword fields              |
-/// |----------------------|-----------------------------|
-/// | `collection_created` | `name`, `kind`              |
-/// | `collection_deleted` | `name`                      |
-/// | `upsert`             | `collection`, `point_count` |
-/// | `query`              | `collection`, `duration_us` |
+/// | event                   | keyword fields              | return value        |
+/// |-------------------------|-----------------------------|---------------------|
+/// | `collection_created`    | `name`, `kind`              | ignored (notify)    |
+/// | `collection_deleted`    | `name`                      | ignored (notify)    |
+/// | `upsert`                | `collection`, `point_count` | ignored (notify)    |
+/// | `query`                 | `collection`, `duration_us` | ignored (notify)    |
+/// | `query_request`         | `collection`, `operation`, `principal`, `tenant` | veto/scope |
+/// | `ddl_request`           | `operation`, `collection`   | veto (`False`/str denies) |
+/// | `dml_mutation_request`  | `operation`, `collection`   | veto (`False`/str denies) |
 ///
 /// `kind` is one of `"vector"`, `"metadata"`, `"graph"`, or `"unknown"`
 /// (the last guards against a future [`CollectionType`] variant).
@@ -79,7 +81,7 @@ impl PyObserver {
     /// `Deny` under strict mode, `Allow` otherwise.
     fn on_error_decision(&self, what: &str) -> AccessDecision {
         if self.strict {
-            AccessDecision::Deny(Error::Query(format!(
+            AccessDecision::Deny(Error::AccessDenied(format!(
                 "read denied by observer strict mode: {what}"
             )))
         } else {
@@ -95,6 +97,68 @@ impl PyObserver {
     fn dispatch(&self, py: Python<'_>, event: &str, fields: &Bound<'_, PyDict>) {
         if let Err(err) = self.cb.bind(py).call((event,), Some(fields)) {
             eprintln!("[velesdb] observer callback '{event}' raised; ignoring: {err}");
+        }
+    }
+
+    /// Shared implementation of the DDL/DML veto hooks: invokes the callback as
+    /// `callback(event, operation=…, collection=…)` and maps the return value to
+    /// the trait's `Result<()>` veto channel — `None`/`True` allow, `False` or a
+    /// `str` veto with that reason, anything else (a scope dict, a number, a
+    /// list…) or a raised callback follows the strict-mode failure policy
+    /// ([`Self::veto_failure`]), exactly like `query_request`.
+    fn veto_request(
+        &self,
+        event: &str,
+        operation: &str,
+        collection_name: &str,
+    ) -> velesdb_core::Result<()> {
+        Python::attach(|py| {
+            let fields = PyDict::new(py);
+            if fields.set_item("operation", operation).is_err()
+                || fields.set_item("collection", collection_name).is_err()
+            {
+                return self.veto_failure(event, "could not populate veto fields");
+            }
+            let ret = match self.cb.bind(py).call((event,), Some(&fields)) {
+                Ok(ret) => ret,
+                Err(err) => {
+                    let verb = if self.strict { "denying" } else { "allowing" };
+                    eprintln!("[velesdb] observer callback '{event}' raised; {verb}: {err}");
+                    return self.veto_failure(event, "veto callback raised");
+                }
+            };
+            if ret.is_none() {
+                return Ok(());
+            }
+            // A string is a veto reason — check before bool, like
+            // `interpret_decision`, so "" still denies.
+            if let Ok(reason) = ret.extract::<String>() {
+                return Err(Error::AccessDenied(format!(
+                    "{event} vetoed by observer for collection '{collection_name}' ({operation}): {reason}"
+                )));
+            }
+            match ret.extract::<bool>() {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(Error::AccessDenied(format!(
+                    "{event} vetoed by observer policy for collection '{collection_name}' ({operation})"
+                ))),
+                Err(_) => self.veto_failure(
+                    event,
+                    "veto callback returned neither None, a bool nor a str",
+                ),
+            }
+        })
+    }
+
+    /// The strict-mode failure policy on a write veto: deny when strict, allow
+    /// otherwise — what [`Self::on_error_decision`] decides for a read.
+    fn veto_failure(&self, event: &str, what: &str) -> velesdb_core::Result<()> {
+        if self.strict {
+            Err(Error::AccessDenied(format!(
+                "{event} denied by observer strict mode: {what}"
+            )))
+        } else {
+            Ok(())
         }
     }
 }
@@ -143,13 +207,17 @@ fn interpret_decision(ret: &Bound<'_, PyAny>, strict: bool) -> AccessDecision {
     // A string is a deny *reason*. Check before bool so `""`—an empty reason—
     // still denies rather than being coerced to a falsey bool.
     if let Ok(reason) = ret.extract::<String>() {
-        return AccessDecision::Deny(Error::Query(format!("read denied by observer: {reason}")));
+        return AccessDecision::Deny(Error::AccessDenied(format!(
+            "read denied by observer: {reason}"
+        )));
     }
     if let Ok(allow) = ret.extract::<bool>() {
         return if allow {
             AccessDecision::Allow
         } else {
-            AccessDecision::Deny(Error::Query("read denied by observer policy".to_string()))
+            AccessDecision::Deny(Error::AccessDenied(
+                "read denied by observer policy".to_string(),
+            ))
         };
     }
     // A dict expresses an allow-with-scope narrowing.
@@ -161,7 +229,7 @@ fn interpret_decision(ret: &Bound<'_, PyAny>, strict: bool) -> AccessDecision {
     // under strict mode so a policy bug that returns the wrong type denies
     // rather than silently allowing.
     if strict {
-        return AccessDecision::Deny(Error::Query(
+        return AccessDecision::Deny(Error::AccessDenied(
             "read denied by observer strict mode: policy returned an \
              uninterpretable value (expected None/bool/str/dict)"
                 .to_string(),
@@ -192,13 +260,13 @@ fn interpret_scope(dict: &Bound<'_, PyDict>) -> AccessDecision {
         Ok(Some(v)) if !v.is_none() => match v.extract::<String>() {
             Ok(predicate) => predicate,
             Err(_) => {
-                return AccessDecision::Deny(Error::Query(
+                return AccessDecision::Deny(Error::AccessDenied(
                     "observer scope 'filter' must be a VelesQL predicate string".to_string(),
                 ))
             }
         },
         _ => {
-            return AccessDecision::Deny(Error::Query(
+            return AccessDecision::Deny(Error::AccessDenied(
                 "observer returned an allow-with-scope dict without an enforceable 'filter' \
                  predicate; OSS does not narrow by 'tenant' alone, so the read is denied \
                  (fail closed). Return a {\"filter\": \"<VelesQL predicate>\"} dict to scope, \
@@ -211,7 +279,7 @@ fn interpret_scope(dict: &Bound<'_, PyDict>) -> AccessDecision {
     let condition = match parse_scope_predicate(&predicate) {
         Ok(condition) => condition,
         Err(err) => {
-            return AccessDecision::Deny(Error::Query(format!(
+            return AccessDecision::Deny(Error::AccessDenied(format!(
                 "invalid observer scope filter: {err}"
             )))
         }
@@ -285,6 +353,24 @@ impl DatabaseObserver for PyObserver {
             }
             self.dispatch(py, "query", &fields);
         });
+    }
+
+    /// DDL veto (VelesQL `CREATE`/`DROP`/`ALTER`/`TRUNCATE`/…). The callback is
+    /// invoked as `callback("ddl_request", operation=…, collection=…)`;
+    /// returning `False` or a string vetoes the statement.
+    fn on_ddl_request(&self, operation: &str, collection_name: &str) -> velesdb_core::Result<()> {
+        self.veto_request("ddl_request", operation, collection_name)
+    }
+
+    /// DML veto (VelesQL `INSERT`/`UPDATE`/`DELETE`/edge mutations). Same
+    /// callback contract as [`Self::on_ddl_request`], with event
+    /// `"dml_mutation_request"`.
+    fn on_dml_mutation_request(
+        &self,
+        operation: &str,
+        collection_name: &str,
+    ) -> velesdb_core::Result<()> {
+        self.veto_request("dml_mutation_request", operation, collection_name)
     }
 
     /// Read-path veto. Invokes the callback as

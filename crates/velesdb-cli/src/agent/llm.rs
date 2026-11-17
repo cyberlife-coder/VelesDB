@@ -14,15 +14,42 @@ pub struct Backend {
     pub model: String,
 }
 
-/// `VELESDB_AGENT_URL`/`VELESDB_AGENT_MODEL` → probe `{url}/api/tags`
-/// (400 ms timeout). `Err(cause)` = offline mode, with the reason the
-/// caller shows as the fallback notice: unreachable, non-2xx, unparsable,
-/// or a model list that lacks the model — otherwise `/api/generate` just
-/// 404s mid-loop.
-pub fn backend() -> Result<Backend, String> {
-    let url =
-        std::env::var("VELESDB_AGENT_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
-    let model = std::env::var("VELESDB_AGENT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
+/// Where the agent's optional LLM is configured to live. Read from the
+/// environment once, at the CLI boundary ([`Self::from_env`]), then passed
+/// down: nothing below reads `VELESDB_AGENT_*` itself, so a run (or a test)
+/// is decided by the endpoint it is given, not by process-global state
+/// another thread may be changing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmEndpoint {
+    /// Base URL, e.g. `http://127.0.0.1:11434`.
+    pub url: String,
+    /// Model tag, e.g. `qwen3:4b`.
+    pub model: String,
+}
+
+impl LlmEndpoint {
+    /// The URL used when `VELESDB_AGENT_URL` is unset: a local Ollama.
+    pub const DEFAULT_URL: &'static str = "http://127.0.0.1:11434";
+    /// The model used when `VELESDB_AGENT_MODEL` is unset.
+    pub const DEFAULT_MODEL: &'static str = "qwen3:4b";
+
+    /// `VELESDB_AGENT_URL` / `VELESDB_AGENT_MODEL`, else the defaults.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            url: std::env::var("VELESDB_AGENT_URL").unwrap_or_else(|_| Self::DEFAULT_URL.into()),
+            model: std::env::var("VELESDB_AGENT_MODEL")
+                .unwrap_or_else(|_| Self::DEFAULT_MODEL.into()),
+        }
+    }
+}
+
+/// Probe `{endpoint.url}/api/tags` (400 ms timeout). `Err(cause)` = offline
+/// mode, with the reason the caller shows as the fallback notice:
+/// unreachable, non-2xx, unparsable, or a model list that lacks the model —
+/// otherwise `/api/generate` just 404s mid-loop.
+pub fn backend(endpoint: &LlmEndpoint) -> Result<Backend, String> {
+    let LlmEndpoint { url, model } = endpoint.clone();
     let tags = probe_tags(&format!("{url}/api/tags"))?;
     // Unknown response shapes don't block the backend — a mid-loop
     // transport failure falls back to offline anyway.

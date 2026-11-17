@@ -48,6 +48,7 @@ pub use result_kind::QueryResultKind;
 pub use select::{
     ArithmeticExpr, ArithmeticOp, Column, DistinctMode, LetBinding, OrderByExpr, SelectColumns,
     SelectOrderBy, SelectStatement, SimilarityOrderBy, SimilarityScoreExpr, DEFAULT_SELECT_LIMIT,
+    MAX_SELECT_LIMIT,
 };
 pub use train::TrainStatement;
 pub use values::{
@@ -147,6 +148,24 @@ impl Query {
     #[must_use]
     pub fn is_admin_query(&self) -> bool {
         self.admin.is_some()
+    }
+
+    /// Returns true if running this statement changes nothing: a SELECT
+    /// (compound included), a MATCH, `SELECT EDGES`, `SHOW`, `DESCRIBE`, or an
+    /// `EXPLAIN` of one of these. DDL, every other DML, `TRAIN` and `FLUSH`
+    /// write; a read-only surface accepts only what this admits.
+    #[must_use]
+    pub fn is_read_only(&self) -> bool {
+        if self.ddl.is_some() || self.train.is_some() || self.admin.is_some() {
+            return false;
+        }
+        if self.dml.is_some() && !self.is_select_edges_query() {
+            return false;
+        }
+        match &self.introspection {
+            Some(IntrospectionStatement::Explain(inner)) => inner.is_read_only(),
+            _ => true,
+        }
     }
 
     /// Returns true if this is a SELECT EDGES query.

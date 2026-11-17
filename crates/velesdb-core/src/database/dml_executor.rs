@@ -12,63 +12,76 @@ use super::Database;
 impl Database {
     /// Executes an INSERT EDGE statement.
     ///
-    /// Resolves the target graph collection and builds a `GraphEdge`
-    /// from the statement fields.
+    /// Resolves the target collection — any type: vector, graph and metadata
+    /// collections share one edge store — and builds a `GraphEdge` from the
+    /// statement fields.
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not a graph collection,
-    /// or if the edge insertion fails.
+    /// Returns `CollectionNotFound` if no collection has that name, or an
+    /// error if the edge insertion fails.
     pub(super) fn execute_insert_edge(
         &self,
         stmt: &crate::velesql::InsertEdgeStatement,
     ) -> Result<Vec<SearchResult>> {
         self.check_dml_mutation("INSERT_EDGE", &stmt.collection)?;
-        let graph = self.resolve_graph_collection(&stmt.collection)?;
+        let collection = self.resolve_edge_collection(&stmt.collection)?;
         let edge = build_graph_edge(stmt)?;
-        graph.add_edge(edge)?;
+        collection.add_edge(edge)?;
         Ok(Vec::new())
     }
 
-    /// Executes a DELETE FROM statement.
-    ///
-    /// Extracts point IDs from the WHERE clause and deletes them
-    /// from the resolved collection.
+    /// Executes a DELETE FROM statement: removes the points its WHERE
+    /// selects.
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not found, or the WHERE
-    /// clause does not match a supported ID pattern.
+    /// Returns an error if the collection is not found or not writable, a
+    /// named id is not a point id, or the WHERE holds a vector or graph
+    /// predicate (DML filters on metadata).
     pub(super) fn execute_delete(
         &self,
         stmt: &crate::velesql::DeleteStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         self.check_dml_mutation("DELETE", &stmt.table)?;
-        let ids = extract_delete_ids(&stmt.where_clause)?;
         let collection = self.resolve_writable_collection(&stmt.table)?;
+        // `id = N` / `id IN (...)` name the points to remove, whatever they
+        // carry (a graph node without a vector included). Any other WHERE
+        // removes the rows it selects, as UPDATE selects them.
+        let ids = if let Some(named) = point_ids_named(&stmt.where_clause) {
+            named?
+        } else {
+            let filter = Self::build_dml_filter("DELETE", Some(&stmt.where_clause), params)?;
+            Self::matching_points(&collection, filter.as_ref())
+                .iter()
+                .map(|point| point.id)
+                .collect()
+        };
         collection.delete(&ids)?;
         Ok(Vec::new())
     }
 
     /// Executes a DELETE EDGE statement.
     ///
-    /// Resolves the target graph collection and removes the edge by ID.
+    /// Resolves the target collection (any type, see
+    /// [`Self::resolve_edge_collection`]) and removes the edge by ID.
     /// Returns a single `SearchResult` with `deleted: true/false` so the
     /// caller knows whether the edge actually existed.
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not a graph collection.
+    /// Returns `CollectionNotFound` if no collection has that name.
     pub(super) fn execute_delete_edge(
         &self,
         stmt: &crate::velesql::DeleteEdgeStatement,
     ) -> Result<Vec<SearchResult>> {
         self.check_dml_mutation("DELETE_EDGE", &stmt.collection)?;
-        let graph = self.resolve_graph_collection(&stmt.collection)?;
-        let removed = graph.remove_edge(stmt.edge_id);
+        let collection = self.resolve_edge_collection(&stmt.collection)?;
+        let removed = collection.remove_edge(stmt.edge_id);
         let payload = serde_json::json!({
             "deleted": removed,
-            "edge_id": stmt.edge_id,
+            "edge_id": crate::api_types::serde_id::id_to_json(stmt.edge_id),
         });
         let result = SearchResult::new(crate::Point::metadata_only(0, payload), 0.0);
         Ok(vec![result])
@@ -76,18 +89,20 @@ impl Database {
 
     /// Executes a SELECT EDGES statement.
     ///
-    /// Resolves the target graph collection and retrieves edges based on
+    /// Resolves the target collection (any type, see
+    /// [`Self::resolve_edge_collection`]) and retrieves edges based on
     /// optional WHERE filters (source, target, label).
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not a graph collection.
+    /// Returns `CollectionNotFound` if no collection has that name, or a
+    /// query error for an unsupported WHERE shape.
     pub(super) fn execute_select_edges(
         &self,
         stmt: &crate::velesql::SelectEdgesStatement,
     ) -> Result<Vec<SearchResult>> {
-        let graph = self.resolve_graph_collection(&stmt.collection)?;
-        let edges = resolve_edge_query(&graph, stmt.where_clause.as_ref())?;
+        let collection = self.resolve_edge_collection(&stmt.collection)?;
+        let edges = resolve_edge_query(&collection, stmt.where_clause.as_ref())?;
         let limit = resolve_edge_limit(stmt.limit, edges.len());
         Ok(edges_to_results(&edges[..limit]))
     }
@@ -99,8 +114,10 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if the collection is not a graph collection,
-    /// or if the payload storage fails.
+    /// Returns `CollectionNotFound` if no collection has that name,
+    /// `GraphNotSupported` if it is not a graph collection (a node payload
+    /// there would be a point with no vector), or an error if the payload
+    /// storage fails.
     pub(super) fn execute_insert_node(
         &self,
         stmt: &crate::velesql::InsertNodeStatement,
@@ -115,19 +132,41 @@ impl Database {
     ///
     /// Returns `Ok(())` if no observer is configured or if the observer
     /// allows the operation. Propagates the observer's error otherwise.
-    fn check_dml_mutation(&self, operation: &str, collection: &str) -> Result<()> {
+    pub(super) fn check_dml_mutation(&self, operation: &str, collection: &str) -> Result<()> {
         if let Some(ref observer) = self.observer {
             observer.on_dml_mutation_request(operation, collection)?;
         }
         Ok(())
     }
 
+    /// Resolves the collection an edge statement reads or writes.
+    ///
+    /// Vector, graph and metadata collections share one edge store (the Rust
+    /// API, REST `/relations` and the agent-memory wedge add edges to all
+    /// three), so edge statements accept any of them.
+    fn resolve_edge_collection(&self, name: &str) -> Result<crate::collection::Collection> {
+        self.resolve_collection(name)
+    }
+
     /// Resolves a graph collection by name.
     ///
-    /// Returns `CollectionNotFound` if no graph collection exists with the given name.
+    /// Returns `CollectionNotFound` if no collection exists with the given
+    /// name, and `GraphNotSupported` if one exists but is not a graph
+    /// collection — so the error names the real reason.
     fn resolve_graph_collection(&self, name: &str) -> Result<crate::collection::GraphCollection> {
-        self.get_graph_collection(name)
-            .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+        if let Some(graph) = self.get_graph_collection(name) {
+            return Ok(graph);
+        }
+        let kind = match self.get_any_collection(name) {
+            Some(crate::collection::AnyCollection::Vector(_)) => "vector",
+            Some(crate::collection::AnyCollection::Metadata(_)) => "metadata",
+            Some(crate::collection::AnyCollection::Graph(_)) | None => {
+                return Err(Error::CollectionNotFound(name.to_string()));
+            }
+        };
+        Err(Error::GraphNotSupported(format!(
+            "'{name}' is a {kind} collection; this statement needs a graph collection"
+        )))
     }
 }
 
@@ -150,238 +189,71 @@ fn build_graph_edge(
     if stmt.properties.is_empty() {
         return Ok(edge);
     }
-    let props = resolve_edge_properties(&stmt.properties)?;
-    Ok(edge.with_properties(props))
+    let props = crate::velesql::EdgeQuery::literal_properties(&stmt.properties)?;
+    Ok(edge.with_properties(props.into_iter().collect()))
 }
 
-/// Resolves AST `Value` properties into a `HashMap<String, serde_json::Value>`.
+/// The point ids a DELETE WHERE names outright — `id = N` or
+/// `id IN (N1, N2, ...)` — or `None` for any other WHERE.
 ///
 /// # Errors
 ///
-/// Returns an error if a property value type is unsupported.
-fn resolve_edge_properties(
-    properties: &[(String, crate::velesql::Value)],
-) -> Result<std::collections::HashMap<String, serde_json::Value>> {
-    properties
-        .iter()
-        .map(|(key, val)| {
-            match val {
-                crate::velesql::Value::Parameter(_)
-                | crate::velesql::Value::Temporal(_)
-                | crate::velesql::Value::Subquery(_) => {
-                    return Err(Error::Query(
-                        "Edge properties must be literal values".to_string(),
-                    ));
-                }
-                _ => {}
-            }
-            Ok((key.clone(), val.to_json()))
-        })
-        .collect()
-}
-
-/// Extracts point IDs from a DELETE WHERE clause.
-///
-/// Supports two patterns:
-/// - `id = N` (single ID)
-/// - `id IN (N1, N2, ...)` (multi-ID)
-///
-/// # Errors
-///
-/// Returns an error if the WHERE clause does not match a supported pattern.
-fn extract_delete_ids(condition: &crate::velesql::Condition) -> Result<Vec<u64>> {
+/// A named id that is not a point id.
+fn point_ids_named(condition: &crate::velesql::Condition) -> Option<Result<Vec<u64>>> {
     match condition {
-        crate::velesql::Condition::Comparison(cmp) if cmp.column == "id" => extract_single_id(cmp),
-        crate::velesql::Condition::In(in_cond) if in_cond.column == "id" && !in_cond.negated => {
-            extract_in_ids(in_cond)
+        crate::velesql::Condition::Comparison(cmp)
+            if cmp.column == "id" && cmp.operator == crate::velesql::CompareOp::Eq =>
+        {
+            Some(extract_single_id(cmp))
         }
-        _ => Err(Error::Query(
-            "DELETE WHERE must use 'id = N' or 'id IN (N1, N2, ...)'".to_string(),
-        )),
+        crate::velesql::Condition::In(in_cond) if in_cond.column == "id" && !in_cond.negated => {
+            Some(extract_in_ids(in_cond))
+        }
+        _ => None,
     }
 }
 
 /// Extracts a single ID from a comparison `id = N`.
 fn extract_single_id(cmp: &crate::velesql::Comparison) -> Result<Vec<u64>> {
-    if cmp.operator != crate::velesql::CompareOp::Eq {
-        return Err(Error::Query(
-            "DELETE WHERE id must use '=' operator".to_string(),
-        ));
-    }
-    let id = value_to_u64(&cmp.value)?;
+    let id = crate::velesql::literal_id(&cmp.value)?;
     Ok(vec![id])
 }
 
 /// Extracts multiple IDs from an IN condition `id IN (N1, N2, ...)`.
 fn extract_in_ids(in_cond: &crate::velesql::InCondition) -> Result<Vec<u64>> {
-    in_cond.values.iter().map(value_to_u64).collect()
-}
-
-/// Converts a `VelesQL` `Value` to a `u64` point ID.
-///
-/// # Errors
-///
-/// Returns an error if the value is not a non-negative integer.
-fn value_to_u64(val: &crate::velesql::Value) -> Result<u64> {
-    match val {
-        crate::velesql::Value::Integer(v) => {
-            u64::try_from(*v).map_err(|_| Error::Query(format!("ID must be non-negative, got {v}")))
-        }
-        crate::velesql::Value::UnsignedInteger(v) => Ok(*v),
-        _ => Err(Error::Query("ID values must be integers".to_string())),
-    }
+    in_cond
+        .values
+        .iter()
+        .map(crate::velesql::literal_id)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
 // SELECT EDGES helpers
 // ---------------------------------------------------------------------------
 
-/// Resolves edges from a graph collection based on an optional WHERE clause.
+/// Resolves edges from a graph collection based on an optional WHERE clause
+/// ([`crate::velesql::EdgeQuery`]: `source = N`, `target = N`, `label = 'X'`
+/// and AND combinations; anything else is refused).
 ///
-/// Supports: `source = N`, `target = N`, `label = 'X'`, and AND combinations.
+/// The most selective constraint drives the lookup (source, then target,
+/// then label); the others filter its edges.
 fn resolve_edge_query(
-    graph: &crate::collection::GraphCollection,
+    collection: &crate::collection::Collection,
     where_clause: Option<&crate::velesql::Condition>,
 ) -> Result<Vec<crate::collection::GraphEdge>> {
-    let Some(condition) = where_clause else {
-        return Ok(graph.get_edges(None));
-    };
-    dispatch_edge_condition(graph, condition)
-}
-
-/// Dispatches a single WHERE condition to the appropriate edge lookup.
-fn dispatch_edge_condition(
-    graph: &crate::collection::GraphCollection,
-    condition: &crate::velesql::Condition,
-) -> Result<Vec<crate::collection::GraphEdge>> {
-    match condition {
-        crate::velesql::Condition::Comparison(cmp) => dispatch_edge_comparison(graph, cmp),
-        crate::velesql::Condition::And(left, right) => dispatch_edge_and(graph, left, right),
-        _ => Err(Error::Query(
-            "SELECT EDGES WHERE supports: source=N, target=N, label='X', and AND combinations"
-                .to_string(),
-        )),
-    }
-}
-
-/// Handles a single comparison: source=N, target=N, or label='X'.
-fn dispatch_edge_comparison(
-    graph: &crate::collection::GraphCollection,
-    cmp: &crate::velesql::Comparison,
-) -> Result<Vec<crate::collection::GraphEdge>> {
-    if cmp.operator != crate::velesql::CompareOp::Eq {
-        return Err(Error::Query(
-            "SELECT EDGES WHERE only supports '=' operator".to_string(),
-        ));
-    }
-    match cmp.column.as_str() {
-        "source" => {
-            let id = value_to_u64(&cmp.value)?;
-            Ok(graph.get_outgoing(id))
-        }
-        "target" => {
-            let id = value_to_u64(&cmp.value)?;
-            Ok(graph.get_incoming(id))
-        }
-        "label" => {
-            let label = extract_string_value(&cmp.value)?;
-            Ok(graph.get_edges(Some(&label)))
-        }
-        col => Err(Error::Query(format!(
-            "SELECT EDGES WHERE does not support column '{col}'. Use: source, target, label"
-        ))),
-    }
-}
-
-/// Handles AND: (source=N AND label='X') or (target=N AND label='X').
-///
-/// Prefers the most selective condition (source > target > label) as
-/// the fetch path, regardless of left/right ordering in the SQL.
-/// This means `label = 'KNOWS' AND source = 1` is as efficient as
-/// `source = 1 AND label = 'KNOWS'`.
-fn dispatch_edge_and(
-    graph: &crate::collection::GraphCollection,
-    left: &crate::velesql::Condition,
-    right: &crate::velesql::Condition,
-) -> Result<Vec<crate::collection::GraphEdge>> {
-    // Prefer fetching by source/target (most selective) as the primary
-    // condition. If the right side has source/target and left does not,
-    // swap so the more selective side drives the index lookup.
-    let (fetch, filter_side) = if condition_selectivity(right) > condition_selectivity(left) {
-        (right, left)
+    let query = crate::velesql::EdgeQuery::from_where(where_clause)?;
+    let mut edges = if let Some(source) = query.source {
+        collection.get_outgoing_edges(source)
+    } else if let Some(target) = query.target {
+        collection.get_incoming_edges(target)
+    } else if let Some(label) = &query.label {
+        collection.get_edges_by_label(label)
     } else {
-        (left, right)
+        collection.get_all_edges()
     };
-    let mut edges = dispatch_edge_condition(graph, fetch)?;
-    let filter = extract_and_filter(filter_side)?;
-    edges.retain(|e| edge_matches_filter(e, &filter));
+    edges.retain(|e| query.matches(e.source(), e.target(), e.label()));
     Ok(edges)
-}
-
-/// Returns a selectivity score for a condition (higher = more selective).
-///
-/// `source` lookups are the most selective (indexed by node), followed
-/// by `target`, then `label` (which may match many edges).
-fn condition_selectivity(condition: &crate::velesql::Condition) -> u8 {
-    match condition {
-        crate::velesql::Condition::Comparison(cmp)
-            if cmp.operator == crate::velesql::CompareOp::Eq =>
-        {
-            match cmp.column.as_str() {
-                "source" => 3,
-                "target" => 2,
-                "label" => 1,
-                _ => 0,
-            }
-        }
-        _ => 0,
-    }
-}
-
-/// A simple filter derived from one side of an AND condition.
-enum EdgeFilter {
-    Source(u64),
-    Target(u64),
-    Label(String),
-}
-
-/// Extracts a filter from a condition for use in AND filtering.
-fn extract_and_filter(condition: &crate::velesql::Condition) -> Result<EdgeFilter> {
-    match condition {
-        crate::velesql::Condition::Comparison(cmp)
-            if cmp.operator == crate::velesql::CompareOp::Eq =>
-        {
-            match cmp.column.as_str() {
-                "source" => Ok(EdgeFilter::Source(value_to_u64(&cmp.value)?)),
-                "target" => Ok(EdgeFilter::Target(value_to_u64(&cmp.value)?)),
-                "label" => Ok(EdgeFilter::Label(extract_string_value(&cmp.value)?)),
-                col => Err(Error::Query(format!(
-                    "SELECT EDGES WHERE does not support column '{col}'"
-                ))),
-            }
-        }
-        _ => Err(Error::Query(
-            "SELECT EDGES AND condition must be a simple comparison (source=N, target=N, label='X')"
-                .to_string(),
-        )),
-    }
-}
-
-/// Tests whether an edge matches a filter criterion.
-fn edge_matches_filter(edge: &crate::collection::GraphEdge, filter: &EdgeFilter) -> bool {
-    match filter {
-        EdgeFilter::Source(id) => edge.source() == *id,
-        EdgeFilter::Target(id) => edge.target() == *id,
-        EdgeFilter::Label(lbl) => edge.label() == lbl,
-    }
-}
-
-/// Extracts a string value from a `VelesQL` `Value`.
-fn extract_string_value(val: &crate::velesql::Value) -> Result<String> {
-    match val {
-        crate::velesql::Value::String(s) => Ok(s.clone()),
-        _ => Err(Error::Query("Expected a string value".to_string())),
-    }
 }
 
 /// Resolves the effective LIMIT for a SELECT EDGES query.
@@ -400,13 +272,13 @@ fn edges_to_results(edges: &[crate::collection::GraphEdge]) -> Vec<SearchResult>
     edges
         .iter()
         .map(|edge| {
-            let payload = serde_json::json!({
-                "edge_id": edge.id(),
-                "source": edge.source(),
-                "target": edge.target(),
-                "label": edge.label(),
-                "properties": edge.properties(),
-            });
+            let payload = crate::velesql::EdgeQuery::row(
+                edge.id(),
+                edge.source(),
+                edge.target(),
+                edge.label(),
+                &serde_json::json!(edge.properties()),
+            );
             SearchResult::new(crate::Point::metadata_only(edge.id(), payload), 0.0)
         })
         .collect()

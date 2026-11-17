@@ -147,6 +147,39 @@ impl VectorCollection {
             .search_with_quality_and_filter(query, self.capped_k(k), quality, filter)
     }
 
+    /// Dense kNN search with every optional knob at once — the one dispatch
+    /// a caller holding an optional filter, `ef_search` and quality profile
+    /// runs, so none of them is dropped on the way to a leaf. `ef` wins over
+    /// `quality` (it travels as [`crate::SearchQuality::Custom`]); a filter
+    /// routes through the filtered leaves with that tuning honoured.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the leaf it runs: [`Self::search`],
+    /// [`Self::search_with_ef`], [`Self::search_with_quality`],
+    /// [`Self::search_with_filter`] or
+    /// [`Self::search_with_quality_and_filter`].
+    pub fn search_dense(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: Option<usize>,
+        quality: Option<crate::SearchQuality>,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<Vec<SearchResult>> {
+        match filter {
+            Some(f) => match ef.map(crate::SearchQuality::Custom).or(quality) {
+                Some(q) => self.search_with_quality_and_filter(query, k, q, f),
+                None => self.search_with_filter(query, k, f),
+            },
+            None => match (ef, quality) {
+                (Some(ef), _) => self.search_with_ef(query, k, ef),
+                (None, Some(q)) => self.search_with_quality(query, k, q),
+                (None, None) => self.search(query, k),
+            },
+        }
+    }
+
     /// Returns [`crate::ScoredResult`] pairs without payload hydration.
     ///
     /// Faster than [`search`](Self::search) when only IDs and scores are needed.
@@ -371,13 +404,15 @@ impl VectorCollection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the named sparse index does not exist.
+    /// Returns an error if the named sparse index does not exist, or
+    /// [`crate::error::Error::InvalidVector`] if a query weight is not finite.
     pub fn sparse_search(
         &self,
         query: &crate::index::sparse::SparseVector,
         k: usize,
         index_name: &str,
     ) -> Result<Vec<SearchResult>> {
+        crate::validation::validate_sparse_vector_is_finite(query)?;
         let k = self.capped_k(k);
         let indexes = self.inner.query.sparse_indexes.read();
         let index = indexes.get(index_name).ok_or_else(|| {
@@ -555,6 +590,24 @@ impl VectorCollection {
         self.inner.explain_analyze_query(query, params)
     }
 
+    /// The checks an upsert runs on `points` before any write (runtime
+    /// ingest limits, dimension, finite components; a vector on a
+    /// metadata-only collection), without writing anything.
+    ///
+    /// Streaming runs them before queueing and answers a refusal with
+    /// `BackpressureError::InvalidPoint`; a surface calls this first to
+    /// report that refusal with core's code.
+    ///
+    /// # Errors
+    ///
+    /// The refusal of the first point that fails a check: `DimensionMismatch`
+    /// (VELES-004), `InvalidVector` (VELES-005), `VectorNotAllowed`
+    /// (VELES-014) or a runtime-limit error.
+    #[cfg(feature = "persistence")]
+    pub fn validate_points_for_upsert(&self, points: &[crate::point::Point]) -> Result<()> {
+        self.inner.validate_points_for_upsert(points)
+    }
+
     /// Sends a point into the streaming ingestion channel.
     ///
     /// Returns `Ok(())` on success (202 semantics). Returns
@@ -563,7 +616,10 @@ impl VectorCollection {
     ///
     /// # Errors
     ///
-    /// Returns `BackpressureError` on buffer-full or not-configured.
+    /// Returns `BackpressureError::InvalidPoint` — nothing queued — for a
+    /// point an upsert would refuse ([`Self::validate_points_for_upsert`]
+    /// names the refusal), else `BackpressureError` on buffer-full or
+    /// not-configured.
     #[cfg(feature = "persistence")]
     pub fn stream_insert(
         &self,
@@ -580,7 +636,9 @@ impl VectorCollection {
     ///
     /// # Errors
     ///
-    /// Returns `BackpressureError` on buffer-full, drain-dead, or not-configured.
+    /// Returns `BackpressureError::InvalidPoint` — nothing queued — when a
+    /// point fails the checks an upsert runs, else `BackpressureError` on
+    /// buffer-full, drain-dead, or not-configured.
     #[cfg(feature = "persistence")]
     pub fn stream_insert_batch(
         &self,

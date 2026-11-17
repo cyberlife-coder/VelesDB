@@ -3,7 +3,10 @@
 //! Extracted from `query/mod.rs` to keep file NLOC under 500.
 
 /// Maximum allowed LIMIT value to prevent overflow in over-fetch calculations.
-pub(in crate::collection::search::query) const MAX_LIMIT: usize = 100_000;
+pub(crate) const MAX_LIMIT: usize = 100_000;
+
+// One ceiling: the engine's and the one the WASM executor caps a LIMIT to.
+const _: () = assert!(MAX_LIMIT as u64 == crate::velesql::MAX_SELECT_LIMIT);
 
 /// Query-time search options extracted from the WITH clause.
 ///
@@ -124,8 +127,11 @@ pub(in crate::collection::search::query) struct ExtractedComponents {
     /// routed to `multi_query_search`. `None` for non-fused queries.
     pub(in crate::collection::search::query) fused_search:
         Option<(Vec<Vec<f32>>, crate::velesql::FusionConfig)>,
-    pub(in crate::collection::search::query) is_union_query: bool,
-    pub(in crate::collection::search::query) is_not_similarity_query: bool,
+    /// The WHERE needs the exact `similarity()` scan (`similarity_scan.rs`):
+    /// see [`Collection::needs_similarity_scan`].
+    ///
+    /// [`Collection::needs_similarity_scan`]: crate::collection::Collection
+    pub(in crate::collection::search::query) similarity_scan: bool,
 }
 
 /// Bundles the parameters for [`Collection::finalize_query_results`] to stay

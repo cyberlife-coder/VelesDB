@@ -408,9 +408,11 @@ scalar-expression ones below, which use the same single-collection dataset):
 - `cases` X011–X014: WHERE-expression evaluation (`BETWEEN`, parenthesized
   `AND`/`OR`, `NOT`, `IN`) — safe for CLI's strict-order comparison, so these
   run on all three executors.
-- `join_cases` J001–J005: `JOIN ... ON` (both condition-side orders on both
+- `join_cases` J001–J018: `JOIN ... ON` (both condition-side orders on both
   engines — J005 locks the joined-table-first order, issue #1555) and
-  `JOIN ... USING (col)`.
+  `JOIN ... USING (col)`; J006–J010 window, order and filter the joined rows;
+  J011–J018 join on a column no index covers and run RIGHT and FULL joins,
+  `id = id`, a LIMIT, a base WHERE and a later join included (D014).
 - `aggregate_cases` G001–G005: `GROUP BY` / `HAVING` / `COUNT` / `SUM` /
   `LIMIT`, checked via `Database::execute_aggregate` on core (not
   `execute_query`, which only groups when combined with vector `NEAR`
@@ -429,8 +431,9 @@ scalar-expression ones below, which use the same single-collection dataset):
   `GROUP BY` key, G019 the default order (`GROUP BY` key ascending), G020
   HAVING's `AND` binding tighter than `OR` and G021 an aggregate whose WHERE
   reads `id` as the point id.
-- `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
-  **sorted set of ids**, not an ordered list (see D003 below).
+- `setops_cases` S001–S008: `UNION` / `INTERSECT` / `EXCEPT`, ids in order:
+  the compound's window, the last operand's own clauses, value identity and
+  score ranking in the metric's direction (D003, resolved).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
   (see D004 below).
 
@@ -493,33 +496,35 @@ silently relied upon:
   above and the parity test
   (`test_wasm_join_condition_side_order_parity_1555` in
   `crates/velesdb-wasm/src/velesql_executor_conformance_tests.rs`).
-- **D003** — `UNION`/`INTERSECT`/`EXCEPT` row order for non-ranked (score 0.0)
-  branches is implementation-defined on both sides (core re-sorts by score
-  with an unstable tie-break that was observed to differ between two runs of
-  the *same* binary; WASM preserves branch/`ORDER BY` order via
-  concatenate-then-dedup). Only membership and count are part of the golden
-  contract.
+- ~~D003~~ — **fixed 2026-11-15**: both engines run
+  `velesql::execute_compound`, which defines the row order (the window's
+  `ORDER BY`, else score in the metric's direction, ties in the order met).
+  `setops_cases` assert ids in order.
 - **D004** — core treats vector-collection points as graph nodes (MATCH is
   `SELECT ... FROM <coll> WHERE MATCH (...)`); WASM keeps a separate
   in-memory graph store addressed via `@collection` annotations and the
   standalone `MATCH ... RETURN` form. An accepted architectural difference,
   not a bug.
-- **D005** — cross-reference to the pre-existing `relative_score`/`rsf`
-  multi-query fusion ranking divergence, already tracked in
-  `docs/reference/ECOSYSTEM_PARITY.md`.
+- ~~D005~~ — **fixed 2026-11-16**: multi-query `relative_score` / `rsf`
+  fusion ranks the same in every engine. Core's `RelativeScore` dropped every
+  branch past the second (one per query vector of `multi_query_search`), and
+  WASM averaged each document over the branches it appeared in. Core now
+  fuses every branch — its dense and sparse weights for two, `1/N` each
+  beyond, unequal weights over 3+ branches refused — and WASM runs it.
 - ~~D006~~ — **fixed 2026-07-24** (issue #1556):
   `Collection::build_grouped_results` now applies `OFFSET`/`LIMIT` to grouped
   results after `ORDER BY`, matching the WASM aggregate pipeline (no default
   cap — a LIMIT-less `GROUP BY` still returns every group). Locked by
   `aggregate_cases` G005 above and
   `crates/velesdb-core/tests/velesql_group_by_limit.rs`.
-- **D007** — `DELETE` on core accepts only `id = N` / `id IN (...)`; WASM
-  evaluates any `WHERE`. WASM is a superset, so the fixture's `dml_cases`
-  delete by id.
-- **D008** — `UPDATE ... SET vector = ...` works on core; WASM refuses it and
-  points to `UPSERT`. The fixture's `dml_cases` assign payload fields only.
-- **D009** — a row no vector ranked scores 1.0 on core and 0.0 on WASM; only
-  the vector cases assert scores.
+- ~~D007~~ — **fixed 2026-11-16**: `DELETE` removes the rows any metadata
+  `WHERE` selects on both engines (core accepted only `id` predicates).
+  Locked by `dml_cases` W010.
+- ~~D008~~ — **fixed 2026-11-16**: `UPDATE ... SET vector = ...` replaces the
+  embedding on both engines. Locked by `dml_cases` W009.
+- ~~D009~~ — **fixed 2026-11-15**: a row no vector ranked scores
+  `velesql::METADATA_MATCH_SCORE` (1.0) on both engines. Locked by
+  `near_cases` N023.
 - ~~D010~~ — **fixed 2026-10-29**: the WASM executor now runs core's
   `QueryValidator`, so it refuses `USING FUSION` over a single `NEAR` and
   `NEAR_FUSED` with `weighted`/`rsf` (V012) instead of answering them. Locked
@@ -531,6 +536,11 @@ silently relied upon:
 - ~~D012~~ — **fixed 2026-10-29**: WASM `SELECT DISTINCT` goes through core's
   `velesql::distinct_evaluator::apply_distinct` in the plain SELECT pipeline,
   so `ORDER BY` and the default `LIMIT` apply (`projection_cases` P001–P004).
+- ~~D014~~ — **fixed 2026-11-16**: both engines run one JOIN algorithm,
+  `velesql::hash_join`, on any column, indexed or not, for INNER, LEFT, RIGHT
+  and FULL joins. Core refused a non-primary-key column no index covered,
+  and RIGHT/FULL on anything but the primary key; WASM refused RIGHT and
+  FULL. Locked by `join_cases` J011–J018.
 
 ### Large production files vs the NLOC/complexity gate (audit F-5.13)
 

@@ -210,7 +210,19 @@ impl ParsedStatement {
     ///     list[str]: All aliases, empty if none
     #[getter]
     fn table_aliases(&self) -> Vec<String> {
-        self.inner.select.from_alias.clone()
+        self.inner
+            .select
+            .from_alias
+            .iter()
+            .cloned()
+            .chain(
+                self.inner
+                    .select
+                    .joins
+                    .iter()
+                    .filter_map(|join| join.alias.clone()),
+            )
+            .collect()
     }
 
     /// Get the list of selected columns — one entry per SELECT-list item.

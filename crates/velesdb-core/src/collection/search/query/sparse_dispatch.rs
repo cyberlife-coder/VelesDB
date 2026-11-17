@@ -5,7 +5,6 @@
 //! filtering, result finalization, and fusion strategy resolution.
 
 use super::{Collection, ExtractedComponents, Result, SearchResult, MAX_LIMIT};
-use crate::velesql::distinct_evaluator;
 use tracing::warn;
 
 impl Collection {
@@ -42,7 +41,9 @@ impl Collection {
         }
 
         self.check_guardrails_and_record(ctx, results.len())?;
-        self.finalize_sparse_results(stmt, params, results)
+        let results = self.finalize_ranked_results(stmt, params, results)?;
+        self.runtime.guard_rails.circuit_breaker.record_success();
+        Ok(results)
     }
 
     /// Fetches sparse/hybrid results: anchored exact fetch when a GraphFirst
@@ -156,39 +157,25 @@ impl Collection {
         }
     }
 
-    /// Applies DISTINCT, ORDER BY, OFFSET, and LIMIT to ranked results.
-    ///
-    /// Shared by the sparse/hybrid path and the NEAR_FUSED fusion path — both
-    /// produce an already-ranked set that needs the same SQL-standard finalize.
-    pub(super) fn finalize_sparse_results(
+    /// The SELECT post-processing of a path that ranks its own rows (the
+    /// sparse/hybrid search, the `NEAR_FUSED` fusion, the exact
+    /// `similarity()` scan): the main pipeline's
+    /// ([`Self::apply_select_postprocessing`]: DISTINCT, window functions,
+    /// ORDER BY, OFFSET), at the statement's own `LIMIT`. LET bindings never
+    /// reach these paths (`validate_let_binding_support`).
+    pub(super) fn finalize_ranked_results(
         &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        mut results: Vec<SearchResult>,
+        results: Vec<SearchResult>,
     ) -> Result<Vec<SearchResult>> {
-        if stmt.distinct == crate::velesql::DistinctMode::All {
-            results = distinct_evaluator::apply_distinct(results, &stmt.columns);
-        }
-        if let Some(ref order_by) = stmt.order_by {
-            self.apply_order_by(&mut results, order_by, params)?;
-        }
-        // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
-        // Intentional saturating clamp (also reached by the NEAR_FUSED path): an
-        // out-of-`usize`-range offset saturates to `usize::MAX`, yielding an
-        // empty page rather than an error.
-        if let Some(offset) = stmt.offset {
-            let skip = usize::try_from(offset).unwrap_or(usize::MAX);
-            results = results.into_iter().skip(skip).collect();
-        }
         // Intentional saturating clamp: a missing or out-of-range limit collapses
         // to `MAX_LIMIT` rather than erroring.
         let final_limit =
             usize::try_from(stmt.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
                 .unwrap_or(MAX_LIMIT)
                 .min(MAX_LIMIT);
-        results.truncate(final_limit);
-        self.runtime.guard_rails.circuit_breaker.record_success();
-        Ok(results)
+        self.apply_select_postprocessing(stmt, results, params, final_limit, &[])
     }
 
     /// Resolves the fusion strategy from the query's FUSION clause.

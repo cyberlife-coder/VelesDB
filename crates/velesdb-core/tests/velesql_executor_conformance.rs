@@ -151,14 +151,17 @@ struct AggregateCase {
     expect_groups: Vec<Value>,
 }
 
-/// A MATCH golden case (issue #1544). Core and WASM have genuinely different
-/// graph data models (see `documented_divergences` D004 in the fixture), so
-/// each engine gets its own query text over an equivalent graph topology; only
-/// `expect_ids` is shared.
+/// A MATCH conformance case (issue #1544): one query text, run on both
+/// engines with `params`, compared on the `binding` alias of each row. Only
+/// where each engine stores the shared topology differs (`documented_divergences`
+/// D004).
 #[derive(Deserialize)]
 struct MatchCase {
     id: String,
-    core_query: String,
+    query: String,
+    #[serde(default)]
+    params: HashMap<String, serde_json::Value>,
+    binding: String,
     expect_ids: Vec<u64>,
 }
 
@@ -256,7 +259,7 @@ fn test_velesql_executor_conformance_fixture_cases() {
 #[test]
 fn test_velesql_executor_conformance_near_cases() {
     let fixture = load_fixture();
-    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
     assert_cases_with(&db, &fixture.near_cases, &fixture.query_params);
 }
 
@@ -264,7 +267,7 @@ fn test_velesql_executor_conformance_near_cases() {
 #[test]
 fn test_velesql_executor_conformance_fusion_cases() {
     let fixture = load_fixture();
-    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
     assert_cases_with(&db, &fixture.fusion_cases, &fixture.query_params);
 }
 
@@ -519,36 +522,15 @@ fn test_velesql_executor_conformance_aggregate_cases() {
     }
 }
 
-/// UNION / INTERSECT / EXCEPT conformance against `velesdb-core` (issue #1544).
-///
-/// Compared as a **sorted set of ids**, not an ordered list: `apply_set_operation`
-/// (`set_operations.rs`) always re-sorts the merged result by score descending;
-/// when every row scores 0.0 (no vector `NEAR` in either branch) the tie-break
-/// is `Vec::sort_unstable_by`'s implementation-defined order, which was
-/// observed to differ between two consecutive runs of the same binary for the
-/// identical query. Only membership and count are part of the golden contract
-/// here (`documented_divergences` D003 in the fixture).
+/// UNION / INTERSECT / EXCEPT conformance against `velesdb-core`: ids in
+/// order (and scores where pinned). The order is part of the contract since
+/// `velesql::execute_compound` defines it — the window's ORDER BY, else score
+/// in the metric's direction with ties in the order met (D003, resolved).
 #[test]
 fn test_velesql_executor_conformance_setops_cases() {
     let fixture = load_fixture();
-    let (_dir, db) = open_loaded_db(&fixture.dataset);
-    let params = HashMap::new();
-    for case in &fixture.setops_cases {
-        let query = Parser::parse(&case.query)
-            .unwrap_or_else(|e| panic!("setops case {} failed to parse: {e}", case.id));
-        let results = db
-            .execute_query(&query, &params)
-            .unwrap_or_else(|e| panic!("setops case {} failed to execute: {e}", case.id));
-        let mut ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
-        ids.sort_unstable();
-        let mut expected = case.expect_ids.clone();
-        expected.sort_unstable();
-        assert_eq!(
-            ids, expected,
-            "setops conformance mismatch (compared as a set) for case {}: query={:?}",
-            case.id, case.query
-        );
-    }
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
+    assert_cases_with(&db, &fixture.setops_cases, &fixture.query_params);
 }
 
 /// Fixed graph topology shared by the core and WASM MATCH conformance tests
@@ -582,9 +564,8 @@ fn match_chain_edges() -> Vec<FixtureEdge> {
 ///
 /// Core treats vector-collection points as graph nodes: builds a `people`
 /// collection with a `_labels` payload field, wires up the chain topology via
-/// `Collection::add_edge`, and runs each case's `core_query`
-/// (`SELECT ... FROM people WHERE MATCH (...)`) through the same
-/// `Database::execute_query` path as every other SELECT case.
+/// `Collection::add_edge`, and runs each case's shared `query` with its
+/// `params` through `Database::execute_query`, as the WASM harness runs it.
 #[test]
 fn test_velesql_executor_conformance_match_cases() {
     let fixture = load_fixture();
@@ -617,18 +598,28 @@ fn test_velesql_executor_conformance_match_cases() {
             .unwrap_or_else(|e| panic!("add edge {}: {e}", edge.id));
     }
 
-    let params = HashMap::new();
     for case in &fixture.match_cases {
-        let query = Parser::parse(&case.core_query)
+        let query = Parser::parse(&case.query)
             .unwrap_or_else(|e| panic!("match case {} failed to parse: {e}", case.id));
         let results = db
-            .execute_query(&query, &params)
+            .execute_query(&query, &case.params)
             .unwrap_or_else(|e| panic!("match case {} failed to execute: {e}", case.id));
-        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+        let ids: Vec<u64> = results
+            .iter()
+            .map(|r| {
+                r.point
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p["_bindings"][&case.binding].as_u64())
+                    .unwrap_or_else(|| {
+                        panic!("match case {}: row missing {}", case.id, case.binding)
+                    })
+            })
+            .collect();
         assert_eq!(
             ids, case.expect_ids,
-            "match conformance mismatch for case {}: core_query={:?}",
-            case.id, case.core_query
+            "match conformance mismatch for case {}: query={:?}",
+            case.id, case.query
         );
     }
 }

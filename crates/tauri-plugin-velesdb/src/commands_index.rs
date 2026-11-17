@@ -3,8 +3,8 @@
 //! Extracted from commands.rs to keep file NLOC under 500.
 #![allow(clippy::missing_errors_doc)]
 
-use crate::error::{CommandError, Error};
-use crate::helpers::require_vector_collection;
+use crate::error::CommandError;
+use crate::helpers::require_collection;
 use crate::state::VelesDbState;
 use tauri::{command, AppHandle, Runtime, State};
 
@@ -17,9 +17,8 @@ pub async fn create_index<R: Runtime>(
 ) -> std::result::Result<(), CommandError> {
     state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
-            coll.create_index(&request.field_name)
-                .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+            let coll = require_collection(&db, &request.collection)?;
+            coll.create_index(&request.field_name)?;
             Ok(())
         })
         .await
@@ -35,7 +34,7 @@ pub async fn drop_index<R: Runtime>(
 ) -> std::result::Result<bool, CommandError> {
     state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
             Ok(coll.drop_secondary_index(&request.field_name))
         })
         .await
@@ -57,7 +56,7 @@ pub async fn list_indexes<R: Runtime>(
                 velesdb_core::observer::QueryOperationKind::Select,
                 "list_indexes",
             )?;
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
             let indexes = coll.list_indexes();
             Ok(indexes
                 .into_iter()

@@ -1,10 +1,12 @@
 //! WASM bindings for sparse vector search.
 //!
-//! Provides in-memory sparse index operations for browser-side use.
-//! Self-contained implementation that does not depend on the `persistence` feature gate.
+//! A thin binding over core's in-memory sparse index
+//! (`velesdb_core::sparse_index`, compiled without the `persistence`
+//! feature): the browser stores, replaces, removes and scores sparse
+//! vectors with the engine's own code, so it ranks exactly as core does.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use velesdb_core::sparse_index::{sparse_search, SparseInvertedIndex, SparseVector};
 use wasm_bindgen::prelude::*;
 
 /// Result from sparse search.
@@ -23,161 +25,67 @@ impl SparseSearchResult {
     }
 }
 
-/// A sparse vector: sorted parallel arrays of term indices and weights.
-struct SparseVec {
-    indices: Vec<u32>,
-    values: Vec<f32>,
-}
-
-impl SparseVec {
-    fn new(mut pairs: Vec<(u32, f32)>) -> Self {
-        pairs.sort_by_key(|&(idx, _)| idx);
-        // Merge duplicates, filter zeros
-        let mut indices = Vec::with_capacity(pairs.len());
-        let mut values = Vec::with_capacity(pairs.len());
-        if pairs.is_empty() {
-            return Self { indices, values };
-        }
-        let mut cur_idx = pairs[0].0;
-        let mut cur_val = pairs[0].1;
-        for &(idx, val) in &pairs[1..] {
-            if idx == cur_idx {
-                cur_val += val;
-            } else {
-                if cur_val.abs() >= f32::EPSILON {
-                    indices.push(cur_idx);
-                    values.push(cur_val);
-                }
-                cur_idx = idx;
-                cur_val = val;
-            }
-        }
-        if cur_val.abs() >= f32::EPSILON {
-            indices.push(cur_idx);
-            values.push(cur_val);
-        }
-        Self { indices, values }
+/// Builds core's `SparseVector` from the parallel arrays a JS caller passes,
+/// refusing mismatched lengths and — as core's ingest and query boundaries
+/// do — a non-finite weight. `what` names the arrays in the error.
+fn sparse_vector(what: &str, indices: &[u32], values: &[f32]) -> Result<SparseVector, String> {
+    if indices.len() != values.len() {
+        return Err(format!(
+            "{what}indices/values length mismatch: {} vs {}",
+            indices.len(),
+            values.len()
+        ));
     }
+    let vector = SparseVector::new(
+        indices
+            .iter()
+            .copied()
+            .zip(values.iter().copied())
+            .collect(),
+    );
+    velesdb_core::validation::validate_sparse_vector_is_finite(&vector)
+        .map_err(|e| e.to_string())?;
+    Ok(vector)
 }
 
-/// In-memory sparse inverted index for WASM.
-///
-/// Uses a `BTreeMap<u32, Vec<(u64, f32)>>` as posting lists.
+/// In-memory sparse inverted index for WASM, backed by core's
+/// [`SparseInvertedIndex`].
 #[wasm_bindgen]
+#[derive(Default)]
 pub struct SparseIndex {
-    /// term_id -> list of (doc_id, weight), sorted by doc_id.
-    postings: BTreeMap<u32, Vec<(u64, f32)>>,
-    /// Max weight per term (for MaxScore pruning).
-    max_weights: BTreeMap<u32, f32>,
-    /// Set of all doc_ids that have been inserted at least once.
-    ///
-    /// This is the authoritative source for "is this doc already in the index?"
-    /// — checking posting lists is unreliable when a re-insert touches different
-    /// terms than the original insert (disjoint-term upsert case).
-    known_docs: std::collections::BTreeSet<u64>,
-    /// Number of distinct documents (= `known_docs.len()`).
-    doc_count: usize,
-}
-
-impl Default for SparseIndex {
-    fn default() -> Self {
-        Self::new()
-    }
+    inner: SparseInvertedIndex,
 }
 
 #[wasm_bindgen]
 impl SparseIndex {
     /// Creates a new empty sparse index.
     #[wasm_bindgen(constructor)]
+    #[must_use]
     pub fn new() -> Self {
-        Self {
-            postings: BTreeMap::new(),
-            max_weights: BTreeMap::new(),
-            known_docs: std::collections::BTreeSet::new(),
-            doc_count: 0,
-        }
+        Self::default()
     }
 
     /// Inserts a document with the given sparse vector.
     ///
-    /// `indices` and `values` must have the same length.
-    ///
-    /// Re-inserting a `doc_id` replaces its vector, as core's upsert does
-    /// (delete + insert): terms the new vector drops stop matching instead of
-    /// keeping their previous postings.
+    /// `indices` and `values` must have the same length and every weight
+    /// must be finite. Duplicate indices are summed and zero weights dropped,
+    /// as core does. Re-inserting a `doc_id` replaces its vector: terms the
+    /// new vector drops stop matching.
     #[wasm_bindgen]
     pub fn insert(&mut self, doc_id: u64, indices: &[u32], values: &[f32]) -> Result<(), JsValue> {
-        if indices.len() != values.len() {
-            return Err(JsValue::from_str(&format!(
-                "indices/values length mismatch: {} vs {}",
-                indices.len(),
-                values.len()
-            )));
-        }
-        // `known_docs` is the authoritative set of all doc_ids ever inserted.
-        // A re-insert first drops the doc's previous postings so the index
-        // afterwards holds exactly the vector passed here.
-        if self.known_docs.contains(&doc_id) {
-            self.remove(doc_id);
-        }
-        let pairs: Vec<(u32, f32)> = indices
-            .iter()
-            .copied()
-            .zip(values.iter().copied())
-            .collect();
-        let sv = SparseVec::new(pairs);
-
-        for (&term_id, &weight) in sv.indices.iter().zip(sv.values.iter()) {
-            let list = self.postings.entry(term_id).or_default();
-            match list.binary_search_by_key(&doc_id, |&(id, _)| id) {
-                Ok(pos) => list[pos] = (doc_id, weight),
-                Err(pos) => list.insert(pos, (doc_id, weight)),
-            }
-            let max_w = self.max_weights.entry(term_id).or_insert(0.0);
-            if weight.abs() > *max_w {
-                *max_w = weight.abs();
-            }
-        }
-        // `remove` above already took the doc out of `known_docs` and off
-        // `doc_count`, so this restore keeps both correct on re-inserts too.
-        self.known_docs.insert(doc_id);
-        self.doc_count += 1;
+        let vector = sparse_vector("", indices, values).map_err(|e| JsValue::from_str(&e))?;
+        self.inner.insert(doc_id, &vector);
         Ok(())
     }
 
     /// Removes a document's postings from the index.
     ///
-    /// Returns `true` when the document was present. Posting lists left empty
-    /// are dropped and `max_weights` is recomputed for every term the document
-    /// touched, since the removed entry may have carried the term's maximum.
-    /// Mirrors core's `MutableSegment::delete`: this index is a single
-    /// always-mutable segment, so removal needs no tombstones.
+    /// Returns `true` when the document was present.
     #[wasm_bindgen]
     pub fn remove(&mut self, doc_id: u64) -> bool {
-        if !self.known_docs.remove(&doc_id) {
-            return false;
-        }
-        self.doc_count -= 1;
-        let mut touched = Vec::new();
-        for (&term_id, list) in &mut self.postings {
-            if let Ok(pos) = list.binary_search_by_key(&doc_id, |&(id, _)| id) {
-                list.remove(pos);
-                touched.push(term_id);
-            }
-        }
-        self.postings.retain(|_, list| !list.is_empty());
-        for term_id in touched {
-            match self.postings.get(&term_id) {
-                Some(list) => {
-                    let max_w = list.iter().fold(0.0_f32, |m, &(_, w)| m.max(w.abs()));
-                    self.max_weights.insert(term_id, max_w);
-                }
-                None => {
-                    self.max_weights.remove(&term_id);
-                }
-            }
-        }
-        true
+        let present = self.inner.contains(doc_id);
+        self.inner.delete(doc_id);
+        present
     }
 
     /// Searches the index with the given sparse query vector.
@@ -198,52 +106,50 @@ impl SparseIndex {
     }
 
     /// Native-testable scoring kernel shared by [`Self::search`] and the
-    /// `VectorStore::search_sparse` delegate.
-    ///
-    /// Performs DAAT (Document-At-A-Time) accumulation and top-`k` extraction
-    /// without touching `JsValue`, so it can be exercised off-`wasm32`.
+    /// `VectorStore::search_sparse` delegate: core's `sparse_search`, top-`k`
+    /// by inner product, without touching `JsValue`.
     pub(crate) fn search_scored(
         &self,
         query_indices: &[u32],
         query_values: &[f32],
         k: usize,
     ) -> Result<Vec<SparseSearchResult>, String> {
-        if query_indices.len() != query_values.len() {
-            return Err(format!(
-                "query indices/values length mismatch: {} vs {}",
-                query_indices.len(),
-                query_values.len()
-            ));
-        }
-        if k == 0 {
-            return Ok(Vec::new());
-        }
-
-        // DAAT (Document-At-A-Time) accumulation using a hash map.
-        let mut accum: std::collections::HashMap<u64, f32> = std::collections::HashMap::new();
-
-        for (&term_id, &q_weight) in query_indices.iter().zip(query_values.iter()) {
-            if let Some(list) = self.postings.get(&term_id) {
-                for &(doc_id, d_weight) in list {
-                    *accum.entry(doc_id).or_insert(0.0) += q_weight * d_weight;
-                }
-            }
-        }
-
-        // Top-k extraction.
-        let mut results: Vec<SparseSearchResult> = accum
+        let query = sparse_vector("query ", query_indices, query_values)?;
+        Ok(sparse_search(&self.inner, &query, k)
             .into_iter()
-            .map(|(doc_id, score)| SparseSearchResult { doc_id, score })
-            .collect();
-        results.sort_by(|a, b| b.score.total_cmp(&a.score));
-        results.truncate(k);
-        Ok(results)
+            .map(|doc| SparseSearchResult {
+                doc_id: doc.doc_id,
+                score: doc.score,
+            })
+            .collect())
     }
 
     /// Returns the number of documents in the index.
     #[wasm_bindgen(getter)]
+    #[must_use]
     pub fn doc_count(&self) -> usize {
-        self.doc_count
+        self.doc_count_inner()
+    }
+}
+
+impl SparseIndex {
+    /// The index as per-document sparse vectors, ids ascending: what
+    /// [`Self::insert`] rebuilds it from (the store's persistence writes it).
+    pub(crate) fn documents(&self) -> Vec<(u64, Vec<(u32, f32)>)> {
+        let mut docs: std::collections::BTreeMap<u64, Vec<(u32, f32)>> =
+            std::collections::BTreeMap::new();
+        for term in self.inner.all_term_ids() {
+            for posting in self.inner.get_all_postings(term) {
+                docs.entry(posting.doc_id)
+                    .or_default()
+                    .push((term, posting.weight));
+            }
+        }
+        docs.into_iter().collect()
+    }
+
+    fn doc_count_inner(&self) -> usize {
+        usize::try_from(self.inner.doc_count()).unwrap_or(usize::MAX)
     }
 }
 

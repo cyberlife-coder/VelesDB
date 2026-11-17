@@ -9,6 +9,7 @@ import type {
   CollectionStatsResponse,
   CollectionConfigResponse,
   ColumnStatsDetail,
+  IndexStatsDetail,
   DistanceMetric,
   StorageMode,
 } from '../types';
@@ -26,7 +27,7 @@ interface StatsApiResponse {
   deleted_count: number;
   avg_row_size_bytes: number;
   payload_size_bytes: number;
-  last_analyzed_epoch_ms: number;
+  last_analyzed_epoch_ms: number | null;
   column_stats?: Record<string, {
     name: string;
     null_count: number;
@@ -36,6 +37,13 @@ interface StatsApiResponse {
     avg_size_bytes: number;
     histogram_buckets: number | null;
     histogram_stale: boolean | null;
+  }>;
+  index_stats?: Record<string, {
+    name: string;
+    index_type: string;
+    entry_count: number;
+    depth: number;
+    size_bytes: number;
   }>;
 }
 
@@ -58,6 +66,20 @@ export function mapStatsResponse(data: StatsApiResponse): CollectionStatsRespons
     }
   }
 
+  let indexStats: Record<string, IndexStatsDetail> | undefined;
+  if (data.index_stats) {
+    indexStats = {};
+    for (const [key, idx] of Object.entries(data.index_stats)) {
+      indexStats[key] = {
+        name: idx.name,
+        indexType: idx.index_type,
+        entryCount: idx.entry_count,
+        depth: idx.depth,
+        sizeBytes: idx.size_bytes,
+      };
+    }
+  }
+
   return {
     totalPoints: data.total_points,
     totalSizeBytes: data.total_size_bytes,
@@ -67,6 +89,7 @@ export function mapStatsResponse(data: StatsApiResponse): CollectionStatsRespons
     payloadSizeBytes: data.payload_size_bytes,
     lastAnalyzedEpochMs: data.last_analyzed_epoch_ms,
     columnStats,
+    indexStats,
   };
 }
 

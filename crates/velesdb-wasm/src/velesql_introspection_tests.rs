@@ -56,23 +56,6 @@ fn test_describe_missing_collection_errors() {
     assert!(err.is_err());
 }
 
-// --- Finding L: metric_to_string coverage (introspection side) ------
-//
-// Exhaustive coverage of currently-supported DistanceMetric variants.
-// A future variant added in core without updating the match arms
-// surfaces honestly as "unknown" in DESCRIBE COLLECTION (never as a
-// silent "cosine" masquerade).
-
-#[test]
-fn test_introspection_metric_to_string_all_supported_variants() {
-    use velesdb_core::DistanceMetric;
-    assert_eq!(metric_to_string(DistanceMetric::Cosine), "cosine");
-    assert_eq!(metric_to_string(DistanceMetric::Euclidean), "euclidean");
-    assert_eq!(metric_to_string(DistanceMetric::DotProduct), "dot");
-    assert_eq!(metric_to_string(DistanceMetric::Hamming), "hamming");
-    assert_eq!(metric_to_string(DistanceMetric::Jaccard), "jaccard");
-}
-
 #[test]
 fn test_explain_returns_plan_rows() {
     let mut db = DatabaseInner::new();

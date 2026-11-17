@@ -4,7 +4,7 @@ This document lists every VelesQL feature with its parser and executor status.
 A feature can be **Parsed** (the grammar + AST accept it) without being
 **Executed** (the query engine acts on it at runtime).
 
-> Last updated: 2026-11-09 (VelesDB v8.2.0)
+> Last updated: 2026-11-16 (VelesDB v8.2.0)
 
 ## Fully Supported (Parsed AND Executed)
 
@@ -67,7 +67,7 @@ incorrect or empty results at execution time.
 | `GROUP BY` ORDER BY that names no column of the grouped rows (an aggregate missing from SELECT, a column outside `GROUP BY`, `similarity()` or arithmetic outside a vector `GROUP BY`) | `velesql/grouped_order.rs` | Parsed, then refused at validation with V016 (OrderByNotInResult); `rejected_cases` R010 | |
 | Aggregate query whose output columns share a name (a `GROUP BY` or selected column and an aggregate's name, two aggregates, an aggregate named `id`/`score` in a vector `GROUP BY` query) | `velesql/grouped_order.rs` | Parsed, then refused at validation with V017 (DuplicateOutputColumn); `rejected_cases` R011–R013 | |
 | `HAVING` without `GROUP BY`, or with a threshold that is neither a number nor `NULL` | `velesql/grouped_order.rs`, `velesql/grouping.rs` | Parsed, then refused at validation with V018 (InvalidHaving); a parameter or scalar subquery whose value is neither a number nor `null` is refused with V018 when the query runs; `rejected_cases` R014–R015 | |
-| MATCH `ORDER BY` in the WASM/browser executor | `velesdb-wasm/src/velesql_match_orderby.rs` | Reduced subset of the row above: only `depth` and `alias.property` are honored. Aggregates and bare names are refused at validation with V015, as in core (WASM runs core's `QueryValidator`; `rejected_cases` R005–R009). `similarity()`, `similarity(field, $v)` and arithmetic pass validation and are rejected by the WASM executor, because the browser MATCH path materializes no vector scores | Core supports the full set; the three score forms are a documented WASM-only divergence |
+| MATCH `ORDER BY` in the WASM/browser executor | `velesdb-wasm/src/velesql_match_orderby.rs` | Same set as the row above: `depth`, `alias.property`, bare `similarity()` (the row's score, most-similar-first under every metric), `similarity(alias.field, $v)` (the node `alias` binds; a bare field scores the target) and arithmetic over properties. Aggregates and bare names are refused at validation with V015, as in core (WASM runs core's `QueryValidator`; `rejected_cases` R005–R009) | No divergence |
 
 ## Not Parsed (Not in Grammar)
 

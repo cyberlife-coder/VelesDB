@@ -40,6 +40,10 @@ use serde_json::Value;
 #[cfg(feature = "persistence")]
 pub(crate) use point_ids::{exact_as_f64, value_as_point_id};
 
+// The WHERE `=` truth, for the inline pattern properties every MATCH engine
+// tests (`velesql::inline_properties_hold`).
+pub(crate) use matching::equality_truth;
+
 /// A filter for metadata-based search refinement.
 ///
 /// A filter is evaluated against a point — [`Filter::matches_point`] — so a
@@ -90,14 +94,27 @@ impl Filter {
         serde_json::from_value(value).map_err(|e| format!("Invalid filter: {e}"))
     }
 
-    /// Evaluates the filter against a point: its payload (`None` reads as
+    /// Whether the filter admits a point: its condition is known TRUE in
+    /// SQL's three-valued logic, so a comparison on a `null` or absent field
+    /// admits nothing, negated or not. The point's payload (`None` reads as
     /// `null`, the same on every path) and its id, which a `VelesQL` `id`
-    /// column reads. There is no payload-only evaluation outside the crate:
-    /// a scope or WHERE built from `VelesQL` and tested without the id could
-    /// let `id != x` match every row.
+    /// column reads, are what it tests. There is no payload-only evaluation
+    /// outside the crate: a scope or WHERE built from `VelesQL` and tested
+    /// without the id could let `id != x` match every row.
     #[must_use]
     pub fn matches_point(&self, id: u64, payload: Option<&Value>) -> bool {
         self.condition.matches_point(id, payload)
+    }
+
+    /// The filter's three-valued truth for a point: `None` is UNKNOWN. For a
+    /// caller that combines the filter with predicates of its own — the
+    /// graph-predicate WHERE, a `similarity()` WHERE, a browser MATCH — and
+    /// must apply their negations before folding UNKNOWN into "not admitted":
+    /// `NOT` over a [`Self::matches_point`] answer would admit the rows whose
+    /// condition is UNKNOWN. [`Self::matches_point`] is `== Some(true)`.
+    #[must_use]
+    pub fn evaluate_point(&self, id: u64, payload: Option<&Value>) -> Option<bool> {
+        self.condition.evaluate_point(id, payload)
     }
 
     /// Evaluates the filter against a payload alone; a `VelesQL` `id`

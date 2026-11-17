@@ -1,61 +1,140 @@
 use super::*;
 use velesdb_core::velesql::Parser;
 
+use crate::velesql_logic::push_not_inward;
+use crate::velesql_value::{parse_params, Params};
+
 fn parse_cond(sql: &str) -> Condition {
     let q = Parser::parse(sql).expect("test: parse");
     q.select.where_clause.expect("test: where")
 }
 
-#[test]
-fn test_find_similarity_returns_predicate() {
-    let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.8");
-    assert!(find_similarity(Some(&c)).is_some());
+/// `sql`'s WHERE clause, De-Morgan-normalized as the SELECT path reads it.
+fn normalized(sql: &str) -> Condition {
+    push_not_inward(parse_cond(sql))
 }
 
-#[test]
-fn test_find_similarity_returns_none_when_absent() {
-    let c = parse_cond("SELECT * FROM t WHERE x = 1");
-    assert!(find_similarity(Some(&c)).is_none());
+fn params(json: &str) -> Params {
+    parse_params(Some(json)).expect("test: params")
 }
 
-#[test]
-fn test_strip_similarity_keeps_other_predicates() {
-    let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.8 AND x = 1");
-    let stripped = strip_similarity(Some(&c)).expect("test: stripped");
-    assert!(find_similarity(Some(&stripped)).is_none());
-}
-
-#[test]
-fn test_strip_similarity_returns_none_when_only_pred() {
-    let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.8");
-    assert!(strip_similarity(Some(&c)).is_none());
-}
-
-#[test]
-fn test_evaluator_rejects_metadata_only_collection() {
+/// `v` (dimension 2, cosine): id 1 → [1,0], id 2 → [0,1]; id 1's payload
+/// holds a named vector `alt` = [0,1], id 2's holds none.
+fn db_with_named_vectors() -> DatabaseInner {
     let mut db = DatabaseInner::new();
-    db.create_metadata_collection("t").expect("test: create");
-    let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.5");
-    let sim = find_similarity(Some(&c)).expect("test: has sim");
-    let params =
-        crate::velesql_value::parse_params(Some(r#"{"q": [1.0, 0.0]}"#)).expect("test: params");
-    let err = SimilarityEvaluator::new(&db, "t", &sim, &params);
-    assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("metadata-only"));
-}
-
-#[test]
-fn test_evaluator_rejects_dim_mismatch() {
-    let mut db = DatabaseInner::new();
-    db.create_collection("v", 4, "cosine")
+    db.create_collection("v", 2, "cosine")
         .expect("test: create");
-    let c = parse_cond("SELECT * FROM v WHERE similarity(vector, $q) > 0.5");
-    let sim = find_similarity(Some(&c)).expect("test: has sim");
-    let params =
-        crate::velesql_value::parse_params(Some(r#"{"q": [1.0, 0.0]}"#)).expect("test: params");
-    let err = SimilarityEvaluator::new(&db, "v", &sim, &params);
-    assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("dimension mismatch"));
+    for (sql, params) in [
+        (
+            "INSERT INTO v (id, vector, alt) VALUES (1, $v, $alt)",
+            r#"{"v": [1.0, 0.0], "alt": [0.0, 1.0]}"#,
+        ),
+        (
+            "INSERT INTO v (id, vector) VALUES (2, $v)",
+            r#"{"v": [0.0, 1.0]}"#,
+        ),
+    ] {
+        crate::velesql_exec::execute(&mut db, sql, Some(params)).expect("test: seed");
+    }
+    db
+}
+
+fn evaluator(db: &DatabaseInner, sql: &str, json: &str) -> Result<SimilarityEvaluator, String> {
+    let cond = normalized(sql);
+    SimilarityEvaluator::for_condition(db, "v", Some(&cond), &params(json))
+        .map(|e| e.expect("test: the clause has a similarity() leaf"))
+}
+
+fn first_leaf(cond: &Condition) -> SimilarityCondition {
+    let mut leaves = Vec::new();
+    collect_similarity_leaves(cond, &mut leaves);
+    leaves[0].clone()
+}
+
+#[test]
+fn a_clause_without_similarity_needs_no_evaluator() {
+    let db = db_with_named_vectors();
+    let cond = normalized("SELECT * FROM v WHERE x = 1");
+    let eval = SimilarityEvaluator::for_condition(&db, "v", Some(&cond), &params("{}"))
+        .expect("test: no error");
+    assert!(eval.is_none());
+}
+
+#[test]
+fn the_own_vector_of_a_metadata_only_collection_cannot_be_scored() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("v").expect("test: create");
+    let err = evaluator(
+        &db,
+        "SELECT * FROM v WHERE similarity(vector, $q) > 0.5",
+        r#"{"q": [1.0, 0.0]}"#,
+    )
+    .expect_err("test: refused");
+    assert!(err.contains("metadata-only"), "{err}");
+}
+
+#[test]
+fn a_query_vector_of_another_dimension_is_refused() {
+    let db = db_with_named_vectors();
+    let err = evaluator(
+        &db,
+        "SELECT * FROM v WHERE similarity(vector, $q) > 0.5",
+        r#"{"q": [1.0, 0.0, 0.0]}"#,
+    )
+    .expect_err("test: refused");
+    assert!(err.contains("dimension mismatch"), "{err}");
+}
+
+/// Each leaf is scored against its own query vector, so two thresholds over
+/// distinct vectors filter independently (core's cascade).
+#[test]
+fn every_leaf_is_scored_against_its_own_vector() {
+    let db = db_with_named_vectors();
+    let sql = "SELECT * FROM v WHERE similarity(vector, $a) > 0.5 AND similarity(vector, $b) < 0.5";
+    let eval = evaluator(&db, sql, r#"{"a": [1.0, 0.0], "b": [0.0, 1.0]}"#).expect("test: eval");
+    let cond = normalized(sql);
+    let Condition::And(a, b) = &cond else {
+        panic!("test: AND expected, got {cond:?}");
+    };
+    let (Condition::Similarity(a), Condition::Similarity(b)) = (a.as_ref(), b.as_ref()) else {
+        panic!("test: two similarity leaves expected");
+    };
+    assert_eq!(
+        (eval.truth(a, 0), eval.truth(b, 0)),
+        (Some(true), Some(true))
+    );
+    assert_eq!(
+        (eval.truth(a, 1), eval.truth(b, 1)),
+        (Some(false), Some(false))
+    );
+    assert_eq!(eval.score_at(0), Some(1.0), "the first leaf's score");
+}
+
+/// `similarity(alt, $q)` scores the payload's `alt` array; a row without
+/// one makes the leaf UNKNOWN, under NOT too.
+#[test]
+fn a_named_vector_is_read_from_the_payload() {
+    let db = db_with_named_vectors();
+    let sql = "SELECT * FROM v WHERE similarity(alt, $q) > 0.5";
+    let eval = evaluator(&db, sql, r#"{"q": [0.0, 1.0]}"#).expect("test: eval");
+    let leaf = first_leaf(&normalized(sql));
+    assert_eq!(eval.truth(&leaf, 0), Some(true));
+    assert_eq!(eval.truth(&leaf, 1), None, "no `alt`: UNKNOWN");
+    assert_eq!(eval.score_at(1), None);
+
+    let negated = "SELECT * FROM v WHERE NOT similarity(alt, $q) > 0.5";
+    let leaf = first_leaf(&normalized(negated));
+    assert_eq!(eval.truth(&leaf, 1), None, "NOT UNKNOWN is UNKNOWN");
+}
+
+/// A named vector of another dimension cannot be scored: UNKNOWN, not a
+/// fabricated score.
+#[test]
+fn a_named_vector_of_another_dimension_is_unknown() {
+    let db = db_with_named_vectors();
+    let sql = "SELECT * FROM v WHERE similarity(alt, $q) > 0.5";
+    let eval = evaluator(&db, sql, r#"{"q": [0.0, 1.0, 0.0]}"#).expect("test: eval");
+    assert_eq!(eval.truth(&first_leaf(&normalized(sql)), 0), None);
 }
 
 // --- NOT similarity rewriting (finding E) ---------------------------------
@@ -68,48 +147,6 @@ fn test_flip_similarity_op_is_logical_complement() {
     assert_eq!(flip_similarity_op(CompareOp::Lte), CompareOp::Gt);
     assert_eq!(flip_similarity_op(CompareOp::Eq), CompareOp::NotEq);
     assert_eq!(flip_similarity_op(CompareOp::NotEq), CompareOp::Eq);
-}
-
-#[test]
-fn test_find_similarity_flips_op_under_not() {
-    let c = parse_cond("SELECT * FROM t WHERE NOT similarity(vector, $q) > 0.5");
-    let sim = find_similarity(Some(&c)).expect("test: flipped similarity");
-    // `NOT sim > 0.5` surfaces as `sim <= 0.5`.
-    assert_eq!(sim.operator, CompareOp::Lte);
-    assert!((sim.threshold - 0.5).abs() < f64::EPSILON);
-}
-
-#[test]
-fn test_strip_similarity_removes_not_wrapped_predicate() {
-    // After strip, the similarity subtree (including its NOT wrapper)
-    // must be gone from the residual. Without the normalization, the
-    // pre-fix implementation left the raw (un-flipped) similarity
-    // behind, which velesql_where::matches would reject.
-    let c = parse_cond("SELECT * FROM t WHERE NOT similarity(vector, $q) > 0.5");
-    let stripped = strip_similarity(Some(&c));
-    assert!(
-        stripped.is_none(),
-        "NOT similarity predicate must be fully removed from residual, got {stripped:?}"
-    );
-}
-
-#[test]
-fn test_strip_similarity_under_not_with_conjunction_keeps_residual() {
-    // `NOT sim > 0.5 AND x = 1` → after strip, only `x = 1` remains,
-    // since the NOT-similarity is surfaced via find_similarity with a
-    // flipped op.
-    let c = parse_cond("SELECT * FROM t WHERE NOT similarity(vector, $q) > 0.5 AND x = 1");
-    let stripped = strip_similarity(Some(&c)).expect("test: residual kept");
-    assert!(find_similarity(Some(&stripped)).is_none());
-}
-
-#[test]
-fn test_find_similarity_preserves_op_without_not() {
-    // Non-regression: no NOT wrapper means the operator is returned
-    // as-is (no accidental flip).
-    let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) >= 0.8");
-    let sim = find_similarity(Some(&c)).expect("test: plain similarity");
-    assert_eq!(sim.operator, CompareOp::Gte);
 }
 
 // --- combine_after_strip: finding G ---------------------------------------
@@ -172,7 +209,7 @@ fn test_strip_similarity_or_predicate_collapses_to_none() {
     // BDD-style regression of finding G at the strip layer: a
     // `similarity() OR x = 1` query has `None` residual after
     // stripping the similarity leaf — the OR is trivially satisfied.
-    let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.5 OR x = 1");
+    let c = normalized("SELECT * FROM t WHERE similarity(vector, $q) > 0.5 OR x = 1");
     assert!(
         strip_similarity(Some(&c)).is_none(),
         "OR(stripped, x) must collapse to None (true OR x = true)"
@@ -180,89 +217,41 @@ fn test_strip_similarity_or_predicate_collapses_to_none() {
 }
 
 #[test]
-fn test_strip_similarity_and_predicate_keeps_predicate() {
-    // Non-regression: `similarity() AND x = 1` still strips to `x = 1`.
-    let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.5 AND x = 1");
-    let residual = strip_similarity(Some(&c)).expect("test: residual");
-    assert!(find_similarity(Some(&residual)).is_none());
-}
-
-// --- assert_single_similarity_vector: finding H ---------------------------
-
-#[test]
-fn test_assert_single_sim_vec_accepts_none() {
-    assert!(assert_single_similarity_vector(None).is_ok());
+fn test_strip_similarity_keeps_other_predicates() {
+    let c = normalized("SELECT * FROM t WHERE similarity(vector, $q) > 0.8 AND x = 1");
+    let stripped = strip_similarity(Some(&c)).expect("test: stripped");
+    assert!(matches!(stripped, Condition::Comparison(_)), "{stripped:?}");
 }
 
 #[test]
-fn test_assert_single_sim_vec_accepts_no_similarity() {
-    let c = parse_cond("SELECT * FROM t WHERE x = 1");
-    assert!(assert_single_similarity_vector(Some(&c)).is_ok());
+fn test_strip_similarity_returns_none_when_only_pred() {
+    let c = normalized("SELECT * FROM t WHERE similarity(vector, $q) > 0.8");
+    assert!(strip_similarity(Some(&c)).is_none());
 }
 
 #[test]
-fn test_assert_single_sim_vec_accepts_single_predicate() {
-    let c = parse_cond("SELECT * FROM t WHERE similarity(vector, $q) > 0.5");
-    assert!(assert_single_similarity_vector(Some(&c)).is_ok());
+fn test_strip_similarity_removes_not_wrapped_predicate() {
+    // Normalized first, the NOT-wrapped similarity is a bare (flipped)
+    // leaf, so stripping leaves nothing behind.
+    let c = normalized("SELECT * FROM t WHERE NOT similarity(vector, $q) > 0.5");
+    assert!(strip_similarity(Some(&c)).is_none());
 }
 
 #[test]
-fn test_assert_single_sim_vec_accepts_same_param_twice() {
-    let c = parse_cond(
-        "SELECT * FROM t WHERE similarity(vector, $q) > 0.5 AND similarity(vector, $q) < 0.9",
-    );
-    assert!(assert_single_similarity_vector(Some(&c)).is_ok());
+fn test_strip_similarity_under_not_with_conjunction_keeps_residual() {
+    let c = normalized("SELECT * FROM t WHERE NOT similarity(vector, $q) > 0.5 AND x = 1");
+    let stripped = strip_similarity(Some(&c)).expect("test: residual kept");
+    assert!(matches!(stripped, Condition::Comparison(_)), "{stripped:?}");
 }
 
 #[test]
-fn test_assert_single_sim_vec_rejects_different_params_and() {
-    let c = parse_cond(
-        "SELECT * FROM t WHERE similarity(vector, $a) > 0.5 AND similarity(vector, $b) > 0.3",
-    );
-    let err = assert_single_similarity_vector(Some(&c));
-    assert!(err.is_err());
-    assert!(
-        err.expect_err("test: err")
-            .contains("Multiple similarity()"),
-        "error must name the feature"
-    );
-}
-
-#[test]
-fn test_assert_single_sim_vec_rejects_different_params_or() {
-    let c = parse_cond(
-        "SELECT * FROM t WHERE similarity(vector, $a) > 0.5 OR similarity(vector, $b) > 0.3",
-    );
-    assert!(assert_single_similarity_vector(Some(&c)).is_err());
-}
-
-#[test]
-fn test_assert_single_sim_vec_rejects_param_vs_literal() {
-    // A param vector and a literal vector are distinct VectorExprs
-    // even if the runtime-bound value would match — identity is at
-    // the AST level.
-    let c = parse_cond(
-        "SELECT * FROM t WHERE similarity(vector, $q) > 0.5 AND similarity(vector, [1.0, 0.0]) > 0.3",
-    );
-    assert!(assert_single_similarity_vector(Some(&c)).is_err());
-}
-
-#[test]
-fn test_assert_single_sim_vec_accepts_same_literal_twice() {
-    let c = parse_cond(
-        "SELECT * FROM t WHERE similarity(vector, [1.0, 0.0]) > 0.5 AND similarity(vector, [1.0, 0.0]) < 0.9",
-    );
-    assert!(assert_single_similarity_vector(Some(&c)).is_ok());
-}
-
-#[test]
-fn test_assert_single_sim_vec_walks_under_not_compound() {
-    // A compound `NOT (sim_a AND sim_b)` must still be caught.
-    // After De-Morgan normalization it becomes `sim_a' OR sim_b'` with
-    // flipped ops — the two distinct vectors are still present.
-    let raw = parse_cond(
-        "SELECT * FROM t WHERE NOT (similarity(vector, $a) > 0.5 AND similarity(vector, $b) > 0.3)",
-    );
-    let normalized = push_not_inward(raw);
-    assert!(assert_single_similarity_vector(Some(&normalized)).is_err());
+fn not_flips_the_similarity_operator() {
+    let leaf = first_leaf(&normalized(
+        "SELECT * FROM t WHERE NOT similarity(vector, $q) > 0.5",
+    ));
+    assert_eq!(leaf.operator, CompareOp::Lte);
+    let leaf = first_leaf(&normalized(
+        "SELECT * FROM t WHERE similarity(vector, $q) >= 0.8",
+    ));
+    assert_eq!(leaf.operator, CompareOp::Gte, "no NOT: no flip");
 }

@@ -427,3 +427,19 @@ fn test_resolve_sparse_vector_missing_param() {
     let result = Collection::resolve_sparse_vector(&expr, &params);
     assert!(result.is_err());
 }
+
+/// A JSON weight past `f32::MAX` narrows to infinity: VelesQL refuses it as
+/// every typed sparse search does, in both parameter shapes.
+#[test]
+fn test_resolve_sparse_vector_refuses_a_weight_past_f32() {
+    let expr = crate::velesql::SparseVectorExpr::Parameter("sv".to_string());
+    for shape in [
+        serde_json::json!({ "10": 1e300 }),
+        serde_json::json!({ "indices": [10], "values": [1e300] }),
+    ] {
+        let params = HashMap::from([("sv".to_string(), shape.clone())]);
+        let err = Collection::resolve_sparse_vector(&expr, &params)
+            .expect_err("an infinite weight is refused");
+        assert_eq!(err.code(), "VELES-005", "{shape}: {err}");
+    }
+}

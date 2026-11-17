@@ -7,7 +7,7 @@ use crate::velesql::{
 };
 use crate::{Error, Result, SearchResult};
 
-use super::read_authorization::{narrow_where, AuthorizedQuery, GateDecisions};
+use super::read_authorization::{narrow_where, read_target, AuthorizedQuery, GateDecisions};
 use super::Database;
 
 /// Outcome of the non-VelesQL read gate ([`Database::read_gate_raw`]).
@@ -375,8 +375,11 @@ impl Database {
         let decisions = GateDecisions::default();
         let plan = self.explain_query_ctx(query, params, &decisions)?;
         let start = std::time::Instant::now();
+        // The executed read is the statement's one report, MATCH or not.
         let (results, nodes, edges, executed_strategy) =
-            self.execute_query_counted(query, params, &decisions)?;
+            self.report_statement(query, params, || {
+                self.execute_query_counted(query, params, &decisions)
+            })?;
         let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges)
             .with_executed_filter_strategy(executed_strategy);
         let node_stats = crate::velesql::build_leaf_node_stats(
@@ -411,21 +414,45 @@ impl Database {
         // gated here (Requirement 3.5); `SELECT EDGES`, a read routed as DML,
         // is.
         //
-        // Requirement 2: `execute_query_timed` wraps the single top-level
-        // `execute_query_inner` call so `on_query` telemetry fires exactly once
-        // after the data-plane op completes. Resolving the `Cow` to a `&Query`
-        // (via deref coercion on `&gated`) keeps the timing in one place rather
-        // than duplicated across the borrowed / owned arms.
-        self.execute_query_gated(query, params, None, &GateDecisions::default())
+        // Requirement 2: `on_query` fires once per statement, here at its
+        // boundary — never inside `execute_query_gated`, which the scalar
+        // subqueries this statement resolves re-enter.
+        self.report_statement(query, params, || {
+            self.execute_query_gated(query, params, None, &GateDecisions::default())
+        })
     }
 
-    /// Shared pre-flight + execution used by both the plain path and the
-    /// EXPLAIN ANALYZE counted path, so the two can never drift: scalar
-    /// subquery resolution, validation, the read-path gate, then the timed
+    /// Runs one whole statement and, when it completes, reports it to the
+    /// observer's `on_query` once, under the collection it reads first
+    /// ([`read_target`]) — `select.from`, or `_collection` for a MATCH or an
+    /// aggregate addressed through it, which is exactly the case a telemetry
+    /// hook must not lose.
+    ///
+    /// The statement is the unit: its scalar subqueries, compound operands
+    /// and JOIN stages run inside `run` and are folded into this one
+    /// measurement, so none of them is reported on its own. A refused or
+    /// failed statement reports nothing. With no observer registered this is
+    /// a single `Option` presence check (Requirement 2.4); see
+    /// [`report_read`](Self::report_read).
+    pub(super) fn report_statement<T>(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        run: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        self.report_read(read_target(query, params).unwrap_or(""), run)
+    }
+
+    /// Shared pre-flight + execution used by the plain path, the EXPLAIN
+    /// ANALYZE counted path and scalar subqueries, so they can never drift:
+    /// subquery resolution, validation, the read-path gate, then the
     /// execution — with an optional executed-strategy probe threaded to the
     /// base-collection call. `decisions` is the statement's gate memo
     /// (issue #2588): subqueries resolved below record into it, so a subquery
     /// on the outer statement's own collection is decided once.
+    ///
+    /// Unreported: a subquery is part of its statement, so telemetry belongs
+    /// to the statement's entry point ([`report_statement`](Self::report_statement)).
     pub(super) fn execute_query_gated(
         &self,
         query: &crate::velesql::Query,
@@ -438,48 +465,13 @@ impl Database {
         }
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
         let authorized = self.authorize_statement(query, params, decisions)?;
-        let mut results = self.execute_query_timed(&authorized, params, probe, decisions)?;
+        let mut results = self.execute_query_inner(&authorized, params, probe, decisions)?;
         // `search.max_results` is the deployment-wide ceiling on the rows one
         // query hands back (#2591). It clamps here, at the outermost boundary,
         // rather than inside the engine: compound operands, JOIN stages and
         // MATCH candidate pools keep their own fetch windows, and only what
         // the caller receives is bounded.
         results.truncate(self.config.search.max_results);
-        Ok(results)
-    }
-
-    /// Executes the resolved (post-gate) query and fires the `on_query`
-    /// telemetry hook exactly once after the data-plane op completes
-    /// (Requirement 2.2, 2.5).
-    ///
-    /// The timer wraps only the single top-level `execute_query_inner` call, so
-    /// compound / UNION / INTERSECT / EXCEPT and JOIN sub-executions that
-    /// re-enter `execute_single_select` are folded into this one measurement
-    /// and never fire their own telemetry.
-    ///
-    /// When no observer is registered, this is a single `Option` presence check
-    /// with no timer and no notification beyond that check (Requirement 2.4).
-    /// The duration is reported in microseconds; `elapsed().as_micros()` is a
-    /// `u128`, converted with a bounds-guarded `try_from` that saturates at
-    /// `u64::MAX` rather than panicking (no `unwrap`/`expect`).
-    fn execute_query_timed(
-        &self,
-        authorized: &AuthorizedQuery<'_>,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        probe: Option<&crate::database::StrategyProbeSlot>,
-        decisions: &GateDecisions,
-    ) -> Result<Vec<SearchResult>> {
-        let Some(observer) = self.observer.as_ref() else {
-            return self.execute_query_inner(authorized, params, probe, decisions);
-            // zero-overhead fast path
-        };
-        let started = std::time::Instant::now();
-        let results = self.execute_query_inner(authorized, params, probe, decisions)?;
-        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        // Report the collection the gate decided on — `select.from` is ""
-        // for a MATCH addressed through `_collection`, which is exactly the
-        // case a telemetry hook must not lose.
-        observer.on_query(authorized.target().unwrap_or(""), duration_us);
         Ok(results)
     }
 
@@ -651,13 +643,16 @@ impl Database {
         }
     }
 
-    /// Routes a MATCH query to its target collection and applies cross-collection
-    /// enrichment, returning results plus the graph-traversal counters
-    /// `(nodes_visited, edges_traversed)` measured during execution (for
-    /// EXPLAIN ANALYZE; the plain execution path discards them).
+    /// Routes a MATCH query to its target collection, returning results plus
+    /// the graph-traversal counters `(nodes_visited, edges_traversed)`
+    /// measured during execution (for EXPLAIN ANALYZE; the plain execution
+    /// path discards them).
     ///
     /// The target is the collection the read gate decided on: the query's
     /// `FROM`, else a `"_collection"` key in `params` (programmatic API).
+    /// Each `@collection` annotation is resolved here, before the MATCH takes
+    /// any collection lock, so the annotated nodes' properties are read
+    /// during the walk — by WHERE, ORDER BY, RETURN and the pattern alike.
     fn execute_match_routed(
         &self,
         authorized: &AuthorizedQuery<'_>,
@@ -665,21 +660,15 @@ impl Database {
     ) -> Result<(Vec<SearchResult>, u64, u64)> {
         let query = authorized.query();
         let coll = self.resolve_read_target(authorized, MATCH_TARGET_MISSING)?;
-        let counted = coll.execute_query_counted(query, params)?;
+        let sources = self.match_sources(query.match_clause.as_ref())?;
+        let counted = coll.execute_query_counted_reading(query, params, &sources)?;
         let (mut results, nodes_visited, edges_traversed) = (
             counted.results,
             counted.nodes_visited,
             counted.edges_traversed,
         );
-        // Cross-collection enrichment: if any node pattern has a @collection
-        // annotation, look up payloads from those collections and merge them
-        // into the projected fields.
-        if let Some(mc) = &query.match_clause {
-            self.enrich_match_results_cross_collection(mc, &mut results);
-        }
         // MATCH `RETURN` has no implicit LIMIT — `search.max_results` is the
-        // ceiling that bounds it (#2591), applied post-enrichment so the
-        // merged payload columns cannot move a row past the cut.
+        // ceiling that bounds it (#2591).
         results.truncate(self.config.search.max_results);
         Ok((results, nodes_visited, edges_traversed))
     }
@@ -724,50 +713,23 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
-        // EPIC-040 US-006: For compound queries, strip LIMIT from each operand so
-        // the set operation sees the full result sets.  The final LIMIT is applied
-        // once on the merged output (SQL-standard behaviour).
-        // Use MAX_LIMIT (not None) to avoid the default-10 cap downstream.
-        const COMPOUND_LIMIT: usize = 100_000;
-        let compound_limit = Some(COMPOUND_LIMIT as u64); // 100_000 fits u64 exactly.
-        let left_results = if query.compound.is_some() {
-            // Compound queries execute several selects; a single reported
-            // strategy would be ambiguous, so the probe stays untouched.
-            let mut left_query = query.clone();
-            left_query.select.limit = compound_limit;
-            left_query.select.offset = None; // OFFSET applies to the combined result.
-            self.execute_single_select(&left_query, params, None)?
-        } else {
+        if query.compound.is_none() {
             return self.execute_single_select(query, params, probe);
-        };
-
-        // compound is guaranteed Some here (non-compound returns above).
-        if let Some(ref compound) = query.compound {
-            let mut accumulated = left_results;
-            for (operator, right_select) in &compound.operations {
-                let mut right_query = crate::velesql::Query::new_select(right_select.clone());
-                right_query.select.limit = compound_limit;
-                let right_results = self.execute_single_select(&right_query, params, None)?;
-                accumulated = crate::collection::search::query::set_operations::apply_set_operation(
-                    accumulated,
-                    right_results,
-                    *operator,
-                    // Intermediate ops keep the server-side ceiling: truncating to the
-                    // user LIMIT here would drop rows a later chained set op still needs.
-                    COMPOUND_LIMIT,
-                );
-            }
-            // SQL-standard: the outer SELECT's OFFSET then LIMIT window the final result.
-            return Ok(
-                crate::collection::search::query::set_operations::apply_offset_limit(
-                    accumulated,
-                    query.select.offset,
-                    query.select.limit,
-                ),
-            );
         }
-
-        Ok(left_results)
+        // Compound semantics are velesql's (`velesql::execute_compound`),
+        // shared with `Collection::execute_query` and WASM. A compound runs
+        // several selects, so no single strategy is reported: the probe stays
+        // untouched. The first operand's collection gives the metric direction
+        // and orders the combined rows.
+        let first = self.resolve_collection(&query.select.from)?;
+        let higher_is_better = first.config().metric.higher_is_better();
+        crate::velesql::execute_compound(
+            query,
+            higher_is_better,
+            u64::try_from(crate::collection::search::query::MAX_LIMIT).unwrap_or(u64::MAX),
+            |operand| self.execute_single_select(operand, params, None),
+            |rows, order_by| first.apply_order_by(rows, order_by, params),
+        )
     }
 
     /// Collects sorted, deduplicated collection names referenced by a query,
@@ -791,6 +753,28 @@ impl Database {
         names.sort();
         names.dedup();
         names
+    }
+
+    /// The collections `clause`'s `@collection` annotations name, resolved
+    /// before the MATCH takes any lock (see `match_exec::sources`). A clause
+    /// without annotations, or no clause, resolves nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::CollectionNotFound`] for an annotation naming no collection.
+    pub(super) fn match_sources(
+        &self,
+        clause: Option<&crate::velesql::MatchClause>,
+    ) -> Result<crate::collection::search::query::match_exec::MatchSources> {
+        clause.map_or_else(
+            || Ok(crate::collection::search::query::match_exec::MatchSources::default()),
+            |clause| {
+                crate::collection::search::query::match_exec::MatchSources::for_clause(
+                    clause,
+                    |name| self.resolve_collection(name),
+                )
+            },
+        )
     }
 
     /// Resolves a collection by name from all typed registries.
@@ -824,13 +808,8 @@ impl Database {
         self.resolve_collection(name)
     }
 
-    /// Executes a single SELECT (no compound), resolving JOINs if present.
-    ///
-    /// Orchestrates filter pushdown and join strategy selection:
-    /// 1. Analyze WHERE for pushdown-eligible conditions
-    /// 2. Strip pushed conditions from base query
-    /// 3. For each JOIN: lookup, filtered, or full `ColumnStore` path
-    /// 4. Apply post-join filters (cross-source predicates)
+    /// Executes a single SELECT (no compound): the base collection's query,
+    /// or the JOIN path ([`Self::execute_joined_select`]).
     fn execute_single_select(
         &self,
         query: &crate::velesql::Query,
@@ -849,96 +828,7 @@ impl Database {
             };
         }
 
-        let analysis = Self::prepare_join_pushdown(&mut single_query, params)?;
-        let pushed = analysis.column_store_filters.clone();
-
-        let row_budget = Self::join_row_budget(&query.select, &analysis);
-
-        let mut results = match probe {
-            Some(slot) => base_collection.execute_query_probed(&single_query, params, slot)?,
-            None => base_collection.execute_query(&single_query, params)?,
-        };
-        for join in &query.select.joins {
-            results = self.execute_single_join(results, join, &pushed, row_budget)?;
-        }
-
-        // Apply post-join filters: cross-source predicates that reference
-        // columns from both the base collection and joined ColumnStore tables.
-        if !analysis.post_join_filters.is_empty() {
-            results = Self::apply_post_join_filters(
-                &base_collection,
-                results,
-                &analysis.post_join_filters,
-                params,
-                &query.select.from_alias,
-            )?;
-        }
-
-        Ok(results)
-    }
-
-    /// Resolves WHERE parameters, runs pushdown analysis, and strips pushed
-    /// conditions from the base query (JOIN path of `execute_single_select`).
-    ///
-    /// Parameter placeholders are resolved before the analysis so pushed-down
-    /// filters never silently convert them to NULL at the `ColumnStore` layer
-    /// (the collection pipeline resolves its own copy independently).
-    fn prepare_join_pushdown(
-        single_query: &mut crate::velesql::Query,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<crate::collection::search::query::pushdown::PushdownAnalysis> {
-        if let Some(cond) = single_query.select.where_clause.take() {
-            single_query.select.where_clause = Some(
-                crate::collection::Collection::resolve_condition_params(&cond, params)?,
-            );
-        }
-
-        let analysis = Self::analyze_join_pushdown_for_select(&single_query.select);
-
-        let resolved_where = single_query.select.where_clause.clone();
-        single_query.select.joins.clear();
-        if !analysis.column_store_filters.is_empty() {
-            single_query.select.where_clause = Self::strip_pushed_conditions(
-                resolved_where.as_ref(),
-                &analysis.column_store_filters,
-            );
-        }
-        Ok(analysis)
-    }
-
-    /// Computes the bound on joined rows to materialize.
-    ///
-    /// When the query has an explicit LIMIT, no post-join filters, and no
-    /// ORDER BY (which could reorder past the window), the bound is the
-    /// effective `LIMIT + OFFSET`. GROUP BY / HAVING / DISTINCT also disqualify
-    /// the bounded shape: SQL LIMIT bounds output *groups/rows*, not input rows,
-    /// so truncating joined input to `LIMIT` would drop rows that belong to
-    /// groups still inside the window. Otherwise downstream stages may reorder or
-    /// drop rows, so we fall back to the conservative server-side ceiling
-    /// [`JOIN_ROW_CEILING`] — still bounding OOM without affecting correctness.
-    ///
-    /// [`JOIN_ROW_CEILING`]: crate::collection::search::query::JOIN_ROW_CEILING
-    pub(super) fn join_row_budget(
-        select: &crate::velesql::SelectStatement,
-        analysis: &crate::collection::search::query::pushdown::PushdownAnalysis,
-    ) -> usize {
-        use crate::collection::search::query::JOIN_ROW_CEILING;
-        use crate::velesql::DistinctMode;
-        let bounded_shape = analysis.post_join_filters.is_empty()
-            && select.order_by.is_none()
-            && select.group_by.is_none()
-            && select.having.is_none()
-            && select.distinct == DistinctMode::None;
-        match select.limit {
-            Some(limit) if bounded_shape => {
-                let limit = usize::try_from(limit).unwrap_or(JOIN_ROW_CEILING);
-                let offset = select
-                    .offset
-                    .map_or(0, |o| usize::try_from(o).unwrap_or(JOIN_ROW_CEILING));
-                limit.saturating_add(offset).min(JOIN_ROW_CEILING)
-            }
-            _ => JOIN_ROW_CEILING,
-        }
+        self.execute_joined_select(single_query, &query.select, &base_collection, params, probe)
     }
 
     // NOTE: analyze_join_pushdown_for_select, apply_post_join_filters
@@ -964,11 +854,15 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
         match dml {
-            crate::velesql::DmlStatement::Insert(stmt)
-            | crate::velesql::DmlStatement::Upsert(stmt) => self.execute_insert(stmt, params),
+            crate::velesql::DmlStatement::Insert(stmt) => {
+                self.execute_insert(stmt, params, "INSERT")
+            }
+            crate::velesql::DmlStatement::Upsert(stmt) => {
+                self.execute_insert(stmt, params, "UPSERT")
+            }
             crate::velesql::DmlStatement::Update(stmt) => self.execute_update(stmt, params),
             crate::velesql::DmlStatement::InsertEdge(stmt) => self.execute_insert_edge(stmt),
-            crate::velesql::DmlStatement::Delete(stmt) => self.execute_delete(stmt),
+            crate::velesql::DmlStatement::Delete(stmt) => self.execute_delete(stmt, params),
             crate::velesql::DmlStatement::DeleteEdge(stmt) => self.execute_delete_edge(stmt),
             crate::velesql::DmlStatement::SelectEdges(stmt) => self.execute_select_edges(stmt),
             crate::velesql::DmlStatement::InsertNode(stmt) => self.execute_insert_node(stmt),

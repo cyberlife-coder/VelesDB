@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
 use velesdb_core::{GatedRead, QueryOperationKind, SearchResult};
 
-use super::{and_scope, deny_if_scoped, retain_by_filters};
+use super::{and_scope, deny_if_scoped, retain_by_filters, ReadIdentity, SearchPlan};
 
 use crate::collection_helpers::{
     core_err, id_score_pairs_to_dicts, parse_filter, parse_optional_filter, parse_sparse_vector,
@@ -67,20 +67,43 @@ impl Collection {
         let fusion = opts.fusion.as_ref().map(FusionStrategy::inner);
         let principal = opts.principal.clone();
         let tenant = opts.tenant.clone();
+        // Dense-only tuning knobs; validated against core's ef range below.
+        let ef_search = match opts.ef_search {
+            Some(ef)
+                if !(velesdb_core::api_types::MIN_EF_SEARCH
+                    ..=velesdb_core::api_types::MAX_EF_SEARCH)
+                    .contains(&ef) =>
+            {
+                return Err(PyValueError::new_err(format!(
+                    "ef_search must be an integer between {} and {}, got {ef}",
+                    velesdb_core::api_types::MIN_EF_SEARCH,
+                    velesdb_core::api_types::MAX_EF_SEARCH
+                )))
+            }
+            other => other,
+        };
+        let quality = opts
+            .quality
+            .as_deref()
+            .map(parse_search_quality)
+            .transpose()?;
 
         // Phase 2: Release GIL during Rust computation
-        let results = py.detach(|| {
-            self.dispatch_search(
-                dense,
-                sparse,
-                top_k,
-                filter_obj.as_ref(),
-                sparse_index_name.as_deref(),
-                fusion.as_ref(),
-                principal.as_deref(),
-                tenant.as_deref(),
-            )
-        })?;
+        let plan = SearchPlan {
+            dense,
+            sparse,
+            top_k,
+            filter: filter_obj.as_ref(),
+            sparse_index_name: sparse_index_name.as_deref(),
+            fusion: fusion.as_ref(),
+            ef_search,
+            quality: quality.as_ref(),
+        };
+        let identity = ReadIdentity {
+            principal: principal.as_deref(),
+            tenant: tenant.as_deref(),
+        };
+        let results = py.detach(|| self.dispatch_search(plan, identity))?;
 
         // Phase 3: Convert results (GIL held — required for Py<PyAny> creation)
         Ok(search_results_to_dicts(py, results, include_vectors))
@@ -184,16 +207,17 @@ impl Collection {
         let results = py.detach(|| {
             // IDs-only results carry no payload, so an observer scope filter
             // cannot be applied — fail closed if one is returned (never leak
-            // unscoped ids). Deny propagates as an Err from authorize().
-            let scope = self.authorize(
-                QueryOperationKind::VectorSearch,
-                principal.as_deref(),
-                tenant.as_deref(),
-            )?;
-            deny_if_scoped(scope, "search_ids")?;
-            self.inner
-                .search_ids(&query_vector, top_k)
-                .map_err(core_err)
+            // unscoped ids). A denial never runs the read.
+            let identity = ReadIdentity {
+                principal: principal.as_deref(),
+                tenant: tenant.as_deref(),
+            };
+            self.run_gated_search(QueryOperationKind::VectorSearch, identity, |scope| {
+                deny_if_scoped(scope, "search_ids")?;
+                self.inner
+                    .search_ids(&query_vector, top_k)
+                    .map_err(core_err)
+            })
         })?;
 
         let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
@@ -318,36 +342,50 @@ impl Collection {
         // and takes no query vector, so it is valid on metadata/graph collections
         // that carry text fields — unlike the vector-only search paths. Because
         // `gated_search` resolves a *vector* collection leaf it cannot serve
-        // metadata/graph text search, so text search consults `authorize_read`
-        // (kind-agnostic) and AND-composes any observer scope filter into the
-        // text-search filter instead — same governance, no leaf mismatch.
+        // metadata/graph text search, so text search runs through
+        // `run_gated_search` (kind-agnostic) and AND-composes any observer
+        // scope filter into the text-search filter instead — same governance
+        // and telemetry, no leaf mismatch.
         let caller_filter = parse_optional_filter(py, filter)?;
         let query_owned = query.to_string();
 
-        let results = py.detach(|| {
-            let scope = self.authorize(
-                QueryOperationKind::TextSearch,
-                principal.as_deref(),
-                tenant.as_deref(),
-            )?;
-            match and_scope(caller_filter, scope) {
-                Some(f) => self
-                    .inner
-                    .text_search_with_filter(&query_owned, top_k, &f)
-                    .map_err(core_err),
-                None => self
-                    .inner
-                    .text_search(&query_owned, top_k)
-                    .map_err(core_err),
-            }
-        })?;
+        let results =
+            py.detach(|| {
+                let identity = ReadIdentity {
+                    principal: principal.as_deref(),
+                    tenant: tenant.as_deref(),
+                };
+                self.run_gated_search(QueryOperationKind::TextSearch, identity, |scope| {
+                    match and_scope(caller_filter, scope) {
+                        Some(f) => self
+                            .inner
+                            .text_search_with_filter(&query_owned, top_k, &f)
+                            .map_err(core_err),
+                        None => self
+                            .inner
+                            .text_search(&query_owned, top_k)
+                            .map_err(core_err),
+                    }
+                })
+            })?;
 
         Ok(search_results_to_dicts(py, results, false))
     }
 
     /// Hybrid search combining vector similarity and text search.
+    ///
+    /// Args:
+    ///     vector: Query embedding.
+    ///     query: Query text for the BM25 branch.
+    ///     top_k: Number of results (default: 10).
+    ///     vector_weight: Dense/text blend `alpha` (default: 0.5).
+    ///     filter: Optional metadata filter dict.
+    ///     principal / tenant: Read-gate identity hints.
+    ///     rrf_k: RRF fusion constant (default: None = core's 60). Threaded
+    ///         through `gated_search_outcome_with_rrf`, which applies it only
+    ///         to hybrid reads.
     #[allow(clippy::too_many_arguments)] // gate identity kwargs on top of the existing signature
-    #[pyo3(signature = (vector, query, top_k = 10, vector_weight = 0.5, filter = None, *, principal = None, tenant = None))]
+    #[pyo3(signature = (vector, query, top_k = 10, vector_weight = 0.5, filter = None, *, principal = None, tenant = None, rrf_k = None))]
     fn hybrid_search(
         &self,
         py: Python<'_>,
@@ -358,6 +396,7 @@ impl Collection {
         filter: Option<Py<PyAny>>,
         principal: Option<String>,
         tenant: Option<String>,
+        rrf_k: Option<u32>,
     ) -> PyResult<Vec<Py<PyAny>>> {
         self.ensure_vector()?;
         let query_vector = extract_vector(py, &vector)?;
@@ -368,7 +407,7 @@ impl Collection {
         // AND-composes any observer scope filter with this caller filter.
         let results = py.detach(|| {
             self.db
-                .gated_search(
+                .gated_search_outcome_with_rrf(
                     &self.name,
                     principal.as_deref(),
                     tenant.as_deref(),
@@ -379,7 +418,9 @@ impl Collection {
                         alpha: Some(vector_weight),
                         filter: filter_obj.as_ref(),
                     },
+                    rrf_k,
                 )
+                .map_err(core_err)?
                 .map_err(core_err)
         })?;
 
@@ -408,17 +449,18 @@ impl Collection {
         // Authorize the batch as a whole, then AND any observer scope filter
         // into every per-query filter so the filtered leaf enforces narrowing.
         let results = py.detach(move || {
-            let scope = self.authorize(
-                QueryOperationKind::VectorSearch,
-                principal.as_deref(),
-                tenant.as_deref(),
-            )?;
-            if let Some(s) = scope {
-                for p in &mut parsed {
-                    p.filter = and_scope(p.filter.take(), Some(s.clone()));
+            let identity = ReadIdentity {
+                principal: principal.as_deref(),
+                tenant: tenant.as_deref(),
+            };
+            self.run_gated_search(QueryOperationKind::VectorSearch, identity, |scope| {
+                if let Some(s) = scope {
+                    for p in &mut parsed {
+                        p.filter = and_scope(p.filter.take(), Some(s.clone()));
+                    }
                 }
-            }
-            self.dispatch_batch_by_top_k(&parsed)
+                self.dispatch_batch_by_top_k(&parsed)
+            })
         })?;
 
         Ok(Self::convert_batch_results(py, results))
@@ -448,16 +490,17 @@ impl Collection {
         // Authorize, then AND any observer scope filter into the caller filter so
         // the filtered leaf enforces narrowing (deny propagates as Err).
         let results = py.detach(move || {
-            let scope = self.authorize(
-                QueryOperationKind::VectorSearch,
-                principal.as_deref(),
-                tenant.as_deref(),
-            )?;
-            let effective = and_scope(filter_obj, scope);
-            let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
-            self.inner
-                .multi_query_search(&query_refs, top_k, fusion_strategy, effective.as_ref())
-                .map_err(core_err)
+            let identity = ReadIdentity {
+                principal: principal.as_deref(),
+                tenant: tenant.as_deref(),
+            };
+            self.run_gated_search(QueryOperationKind::VectorSearch, identity, |scope| {
+                let effective = and_scope(filter_obj, scope);
+                let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
+                self.inner
+                    .multi_query_search(&query_refs, top_k, fusion_strategy, effective.as_ref())
+                    .map_err(core_err)
+            })
         })?;
 
         Ok(search_results_to_dicts(py, results, false))
@@ -493,22 +536,23 @@ impl Collection {
         // The parallel leaf takes no metadata filter, so an observer scope
         // filter is applied by post-filtering each result list (narrow-only).
         let results = py.detach(move || {
-            let scope = self.authorize(
-                QueryOperationKind::VectorSearch,
-                principal.as_deref(),
-                tenant.as_deref(),
-            )?;
-            let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
-            let mut results = self
-                .inner
-                .search_batch_parallel(&query_refs, top_k)
-                .map_err(core_err)?;
-            if let Some(s) = scope {
-                for group in &mut results {
-                    retain_by_filters(group, None, Some(&s));
+            let identity = ReadIdentity {
+                principal: principal.as_deref(),
+                tenant: tenant.as_deref(),
+            };
+            self.run_gated_search(QueryOperationKind::VectorSearch, identity, |scope| {
+                let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
+                let mut results = self
+                    .inner
+                    .search_batch_parallel(&query_refs, top_k)
+                    .map_err(core_err)?;
+                if let Some(s) = scope {
+                    for group in &mut results {
+                        retain_by_filters(group, None, Some(&s));
+                    }
                 }
-            }
-            Ok::<_, PyErr>(results)
+                Ok::<_, PyErr>(results)
+            })
         })?;
 
         Ok(Self::convert_batch_results(py, results))
@@ -535,16 +579,17 @@ impl Collection {
         let results = py.detach(move || {
             // IDs-only results carry no payload, so an observer scope filter
             // cannot be applied — fail closed if one is returned.
-            let scope = self.authorize(
-                QueryOperationKind::VectorSearch,
-                principal.as_deref(),
-                tenant.as_deref(),
-            )?;
-            deny_if_scoped(scope, "multi_query_search_ids")?;
-            let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
-            self.inner
-                .multi_query_search_ids(&query_refs, top_k, fusion_strategy)
-                .map_err(core_err)
+            let identity = ReadIdentity {
+                principal: principal.as_deref(),
+                tenant: tenant.as_deref(),
+            };
+            self.run_gated_search(QueryOperationKind::VectorSearch, identity, |scope| {
+                deny_if_scoped(scope, "multi_query_search_ids")?;
+                let query_refs: Vec<&[f32]> = query_vectors.iter().map(|v| v.as_slice()).collect();
+                self.inner
+                    .multi_query_search_ids(&query_refs, top_k, fusion_strategy)
+                    .map_err(core_err)
+            })
         })?;
 
         let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();

@@ -41,7 +41,12 @@ fn validator_refuses_exactly_what_the_match_executor_refuses() {
         let query = Parser::parse(sql).unwrap_or_else(|e| panic!("{sql} must parse: {e}"));
         let clause = query.match_clause.expect("test: MATCH clause");
         let validator_refuses = QueryValidator::validate_match_clause(&clause).is_err();
-        let executor_refuses = match col.apply_match_order_by(&mut [], &clause, &params) {
+        let executor_refuses = match col.apply_match_order_by(
+            &mut [],
+            &clause,
+            &params,
+            &super::match_exec::MatchSources::default(),
+        ) {
             Ok(()) => false,
             Err(e) if e.code() == "VELES-018" => true,
             Err(e) => panic!("{sql}: unexpected executor error {e}"),

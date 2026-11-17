@@ -333,10 +333,11 @@ export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   // and the id-only, named-sparse and scroll entry points are not implemented.
   filteredSearch: Object.freeze<FilteredSearchOperation[]>(['search', 'searchBatch']),
   // velesdb-wasm's `multi_query_search` takes `rrf_k`, the weighted
-  // `[avg, max, hit]` triple, and `weighted_rrf`'s one weight per query
-  // vector — the two travel the same `weights` argument. Its `relative_score`
-  // averages the query branches with equal weight, so it has no use for
-  // dense/sparse weights.
+  // `[avg, max, hit]` triple, and one weight per query vector for
+  // `weighted_rrf` and `relative_score` — they travel the same `weights`
+  // argument. Its `relative_score` is core's, weighing the query branches
+  // equally unless given per-branch weights; it takes no dense/sparse
+  // weights.
   multiQueryFusionParams: Object.freeze<FusionParamName[]>([
     'k',
     'avgWeight',

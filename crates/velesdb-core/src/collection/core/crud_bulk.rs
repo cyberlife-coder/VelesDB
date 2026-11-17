@@ -72,6 +72,7 @@ impl Collection {
         // attachment and is left to the external consumer.
         self.notify_auto_reindex_after_bulk();
 
+        self.report_upsert(count);
         Ok(count)
     }
 

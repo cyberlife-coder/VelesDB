@@ -109,32 +109,6 @@ fn and_filters(caller: Option<&Filter>, scope: Option<Filter>) -> Option<Filter>
     }
 }
 
-/// Runs a dense kNN search, picking the leaf by the effective filter and tuning.
-/// A filter (caller filter already AND-composed with any scope) routes through
-/// the filtered leaves, with `ef`/`quality` honoured the way the unfiltered
-/// dispatch resolves them — `ef` wins, as `SearchQuality::Custom`; otherwise
-/// `ef` wins over `quality`, then plain search.
-fn run_dense(
-    coll: &VectorCollection,
-    query: &[f32],
-    k: usize,
-    ef: Option<usize>,
-    quality: Option<crate::SearchQuality>,
-    filter: Option<Filter>,
-) -> Result<Vec<SearchResult>> {
-    match filter {
-        Some(f) => match ef.map(crate::SearchQuality::Custom).or(quality) {
-            Some(q) => coll.search_with_quality_and_filter(query, k, q, &f),
-            None => coll.search_with_filter(query, k, &f),
-        },
-        None => match (ef, quality) {
-            (Some(ef), _) => coll.search_with_ef(query, k, ef),
-            (None, Some(q)) => coll.search_with_quality(query, k, q),
-            (None, None) => coll.search(query, k),
-        },
-    }
-}
-
 /// Dispatches a gated read to its collection search leaf, AND-composing the
 /// observer scope filter with any caller filter first.
 fn dispatch_gated_read(
@@ -150,13 +124,12 @@ fn dispatch_gated_read(
             ef,
             quality,
             filter,
-        } => run_dense(
-            coll,
+        } => coll.search_dense(
             query,
             k,
             ef,
             quality,
-            and_filters(filter, scope_filter),
+            and_filters(filter, scope_filter).as_ref(),
         ),
         GatedRead::Text { query, k, filter } => match and_filters(filter, scope_filter) {
             Some(f) => coll.text_search_with_filter(query, k, &f),
@@ -279,16 +252,67 @@ impl Database {
         read: GatedRead<'_>,
         rrf_k: Option<u32>,
     ) -> Result<Result<Vec<SearchResult>>> {
-        let scope_filter =
-            match self.read_gate_raw(collection, read.operation_kind(), principal, tenant_hint)? {
-                RawGateOutcome::Allow => None,
-                RawGateOutcome::Deny(err) => return Err(err),
-                RawGateOutcome::Scope(scope) => scope.filter.map(scope_to_core_filter),
-            };
+        self.run_gated_read(
+            collection,
+            read.operation_kind(),
+            principal,
+            tenant_hint,
+            |scope_filter| {
+                self.get_collection_view(collection)
+                    .ok_or_else(|| Error::CollectionNotFound(collection.to_string()))
+                    .and_then(|coll| dispatch_gated_read(&coll, read, scope_filter, rrf_k))
+            },
+        )
+    }
 
-        Ok(self
-            .get_vector_collection(collection)
-            .ok_or_else(|| Error::CollectionNotFound(collection.to_string()))
-            .and_then(|coll| dispatch_gated_read(&coll, read, scope_filter, rrf_k)))
+    /// Runs a read that has no [`GatedRead`] leaf — sparse, batch,
+    /// multi-query — through the read gate, and reports it.
+    ///
+    /// Consults the observer exactly as [`authorize_read`](Self::authorize_read)
+    /// does, then hands `read` the scope filter to AND into its search
+    /// (`None` when the read is allowed unmodified; a `read` that cannot apply
+    /// a filter must refuse a `Some` rather than run unfiltered). A completed
+    /// read fires `DatabaseObserver::on_query` once, with `collection` and the
+    /// duration of `read`, so the caller measures and reports nothing itself.
+    ///
+    /// With no observer registered this is a single `Option` check, then
+    /// `read(None)`, untimed.
+    ///
+    /// `read`'s error type is the caller's: a binding whose read fails with its
+    /// own error type keeps it, since core only needs to tell success from
+    /// failure.
+    ///
+    /// # Errors
+    ///
+    /// The outer error is the gate's refusal — the observer's `Deny` error or
+    /// its own failure; `read` never ran. The inner result is what `read`
+    /// returned; a failed read is not reported.
+    pub fn run_gated_read<T, E>(
+        &self,
+        collection: &str,
+        operation: QueryOperationKind,
+        principal: Option<&str>,
+        tenant_hint: Option<&str>,
+        read: impl FnOnce(Option<Filter>) -> std::result::Result<T, E>,
+    ) -> Result<std::result::Result<T, E>> {
+        let scope_filter = self.authorize_read(collection, operation, principal, tenant_hint)?;
+        Ok(self.report_read(collection, || read(scope_filter)))
+    }
+
+    /// Runs `read` and, when it succeeds, reports its duration to the
+    /// observer's `on_query` under `collection`. Untimed with no observer.
+    pub(super) fn report_read<T, E>(
+        &self,
+        collection: &str,
+        read: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E> {
+        let Some(observer) = self.observer.as_ref() else {
+            return read();
+        };
+        let started = std::time::Instant::now();
+        let outcome = read()?;
+        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        observer.on_query(collection, duration_us);
+        Ok(outcome)
     }
 }

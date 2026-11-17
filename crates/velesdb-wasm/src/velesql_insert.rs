@@ -17,8 +17,11 @@ use crate::database::DatabaseInner;
 use crate::velesql_value::{json_to_f32_vec, resolve_value, Params};
 
 /// Executes an INSERT or UPSERT statement. Returns the number of rows
-/// successfully upserted (INSERT with duplicate ID counts as an upsert in
-/// WASM because the underlying `VectorStore` already replaces on duplicate).
+/// upserted (INSERT with duplicate ID counts as an upsert in WASM because the
+/// underlying `VectorStore` already replaces on duplicate).
+///
+/// All or nothing, as core's single batch upsert: every row is resolved and
+/// checked first, and only a statement whose rows all pass writes any.
 pub(crate) fn execute(
     db: &DatabaseInner,
     stmt: &InsertStatement,
@@ -38,12 +41,34 @@ pub(crate) fn execute(
         ));
     }
 
-    let mut inserted: u32 = 0;
-    for row in &stmt.rows {
-        insert_row(&store, stmt, row, params, id_idx, vector_idx, is_metadata)?;
-        inserted = inserted.saturating_add(1);
+    let dimension = store.borrow().dimension();
+    let resolved = stmt
+        .rows
+        .iter()
+        .map(|row| resolve_row(stmt, row, params, id_idx, vector_idx, dimension))
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let mut borrowed = store.borrow_mut();
+    for row in &resolved {
+        match &row.vector {
+            Some(vector) => crate::store_insert::insert_with_payload(
+                &mut borrowed,
+                row.id,
+                vector,
+                row.payload.clone(),
+            ),
+            None => insert_metadata_row(&mut borrowed, row.id, row.payload.clone()),
+        }
     }
-    Ok(inserted)
+    Ok(u32::try_from(resolved.len()).unwrap_or(u32::MAX))
+}
+
+/// One row, resolved and checked, ready to write.
+struct ResolvedRow {
+    id: u64,
+    /// `None` on a metadata-only collection.
+    vector: Option<Vec<f32>>,
+    payload: Option<serde_json::Value>,
 }
 
 /// Validates global statement invariants (columns present, rows non-empty,
@@ -75,35 +100,42 @@ fn find_required_column(columns: &[String], name: &str) -> Result<usize, String>
         .ok_or_else(|| format!("INSERT must include an '{name}' column"))
 }
 
-/// Inserts a single row into the store.
-fn insert_row(
-    store: &std::rc::Rc<std::cell::RefCell<crate::store_state::StoreState>>,
+/// Resolves one row and runs the checks an upsert runs on it, writing
+/// nothing. `dimension` 0 is a metadata-only collection.
+fn resolve_row(
     stmt: &InsertStatement,
     row: &[Value],
     params: &Params,
     id_idx: usize,
     vector_idx: Option<usize>,
-    is_metadata: bool,
-) -> Result<(), String> {
+    dimension: usize,
+) -> Result<ResolvedRow, String> {
     let id = extract_row_id(row, id_idx, params)?;
     let payload = build_payload(&stmt.columns, row, id_idx, vector_idx, params)?;
 
-    if is_metadata {
-        insert_metadata_row(store, id, payload);
-        return Ok(());
+    if dimension == 0 {
+        // Core refuses a vector on a metadata-only collection rather than
+        // dropping it (`build_insert_point`): the same words here.
+        if vector_idx.is_some() {
+            return Err("INSERT on metadata-only collection cannot set 'vector'".to_string());
+        }
+        return Ok(ResolvedRow {
+            id,
+            vector: None,
+            payload,
+        });
     }
 
-    // Vector collection path — resolve the vector from its bound parameter.
+    // Vector collection path — the vector from its bound parameter, checked
+    // as `VectorStore.insert` checks it (dimension, finite components).
     let vector = resolve_vector_cell(row, vector_idx, params)?;
-    let expected = store.borrow().dimension();
-    if vector.len() != expected {
-        return Err(format!(
-            "Vector dimension mismatch for id {id}: expected {expected}, got {}",
-            vector.len()
-        ));
-    }
-    crate::store_insert::insert_with_payload(&mut store.borrow_mut(), id, &vector, payload);
-    Ok(())
+    crate::store_search::validate_ingest_vector(&vector, dimension)
+        .map_err(|e| format!("INSERT row with id {id}: {}", e.message()))?;
+    Ok(ResolvedRow {
+        id,
+        vector: Some(vector),
+        payload,
+    })
 }
 
 /// Resolves the `id` column of a row into a `u64`.
@@ -173,11 +205,10 @@ fn build_payload(
 
 /// Inserts a row into a metadata-only collection (no vector data).
 fn insert_metadata_row(
-    store: &std::rc::Rc<std::cell::RefCell<crate::store_state::StoreState>>,
+    borrowed: &mut crate::store_state::StoreState,
     id: u64,
     payload: Option<serde_json::Value>,
 ) {
-    let mut borrowed = store.borrow_mut();
     // Remove any existing row with the same id (upsert semantics).
     if let Some(idx) = borrowed.ids.iter().position(|&x| x == id) {
         borrowed.ids.swap_remove(idx);

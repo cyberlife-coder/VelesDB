@@ -1,25 +1,3 @@
-use super::*;
-
-/// #901: a `NOT similarity()` scan within the server ceiling is allowed.
-#[test]
-fn test_not_similarity_guard_allows_within_ceiling() {
-    assert!(Collection::guard_not_similarity_scan(Collection::NOT_SIMILARITY_MAX_SCAN).is_ok());
-    assert!(Collection::guard_not_similarity_scan(10_000).is_ok());
-}
-
-/// #901: a `NOT similarity()` scan over the server ceiling is REJECTED
-/// (not merely warned) to block the unbounded-scan DoS vector.
-#[test]
-fn test_not_similarity_guard_rejects_above_ceiling() {
-    let err = Collection::guard_not_similarity_scan(Collection::NOT_SIMILARITY_MAX_SCAN + 1)
-        .expect_err("scan above ceiling must be rejected");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("scan limit") || msg.contains("exceeding"),
-        "error should explain the scan-limit rejection, got: {msg}"
-    );
-}
-
 // ============================================================================
 // Regression (#2101): the GraphFirst exact-rescoring scan clamped every
 // metric's score into [-1, 1]. Euclidean/Hamming distances > 1 and raw dot
@@ -176,14 +154,13 @@ mod scan_score_semantics {
         // 3-dim query against a 2-dim collection. `similarity() > 0.9` on a
         // distance metric inverts to "distance < 0.9", so the fabricated 0.0
         // used to sail through as the most similar point there is.
-        let results = col.filter_by_similarity(
-            candidates,
-            "vector",
-            &[0.0, 0.0, 0.0],
+        let leaf = (
+            "vector".to_string(),
+            vec![0.0, 0.0, 0.0],
             crate::velesql::CompareOp::Gt,
             0.9,
-            10,
         );
+        let results = col.filter_by_similarity(candidates, &[leaf], 10);
 
         assert!(
             results.is_empty(),
@@ -254,12 +231,7 @@ mod scan_score_semantics {
         ));
 
         let results = col
-            .execute_not_similarity_query_over(
-                &condition,
-                &std::collections::HashMap::new(),
-                10,
-                None,
-            )
+            .execute_similarity_scan(&condition, &std::collections::HashMap::new(), 10, None)
             .expect("test: NOT similarity scan");
         let mut ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
         ids.sort_unstable();
@@ -276,7 +248,7 @@ mod scan_score_semantics {
     }
 
     /// The scan reports each hit's score against the query vector of the
-    /// negated similarity leaf, read once through `extract_not_similarity_condition`.
+    /// negated similarity leaf.
     #[test]
     fn test_not_similarity_reports_the_score_against_the_query_vector() {
         let (_dir, col) = setup(
@@ -289,7 +261,7 @@ mod scan_score_semantics {
 
         // sim(id 1) = 1.0 is excluded; sim(id 2) = cos 45 degrees is kept.
         let results = col
-            .execute_not_similarity_query_over(
+            .execute_similarity_scan(
                 &not_of(sim_gt(0.9)),
                 &std::collections::HashMap::new(),
                 10,
@@ -324,12 +296,7 @@ mod scan_score_semantics {
         ));
 
         let results = col
-            .execute_not_similarity_query_over(
-                &condition,
-                &std::collections::HashMap::new(),
-                10,
-                None,
-            )
+            .execute_similarity_scan(&condition, &std::collections::HashMap::new(), 10, None)
             .expect("test: NOT similarity scan");
         let mut ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
         ids.sort_unstable();
@@ -374,12 +341,7 @@ mod scan_score_semantics {
         ));
 
         let results = col
-            .execute_not_similarity_query_over(
-                &condition,
-                &std::collections::HashMap::new(),
-                10,
-                None,
-            )
+            .execute_similarity_scan(&condition, &std::collections::HashMap::new(), 10, None)
             .expect("test: NOT similarity scan");
         let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
 
@@ -416,12 +378,7 @@ mod scan_score_semantics {
         let condition = crate::velesql::Condition::Not(Box::new(condition));
 
         let results = col
-            .execute_not_similarity_query_over(
-                &condition,
-                &std::collections::HashMap::new(),
-                10,
-                None,
-            )
+            .execute_similarity_scan(&condition, &std::collections::HashMap::new(), 10, None)
             .expect("test: NOT similarity scan");
 
         assert!(

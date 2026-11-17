@@ -6,12 +6,15 @@
 //! are verified against source:
 //!   - V010 subquery code: `velesql/validation_types.rs:145` (+ Display embeds
 //!     `[V010]`), gate `velesql/validation.rs:reject_subqueries`.
-//!   - JOIN `USING(single_column)` / `requires primary key`:
-//!     `collection/search/query/join.rs:196,210`.
+//!   - JOIN `USING(single_column)`: `database/query_join.rs`
+//!     (`execute_single_join`, when `velesql::JoinKeys::of` finds no
+//!     single equality).
 //!   - `Graph expansion exceeded: max=32`: `velesql/validation.rs:289`
 //!     enforced inside `Parser::parse` (`parser/mod.rs:128`), cap 32 from
 //!     `validation_types.rs:DEFAULT_MAX_GRAPH_EXPANSION`.
-//!   - DELETE / SELECT EDGES markers: `database/dml_executor.rs:199,208,274,291,364`.
+//!   - DELETE / SELECT EDGES markers: `database/dml_executor.rs`
+//!     (`extract_delete_ids`, `extract_single_id`, `dispatch_edge_comparison`,
+//!     `extract_and_filter`).
 //!
 //! Scenarios skipped (no reliably-constructible SQL trigger) are documented in
 //! the module-level review notes, not coded as flaky tests.
@@ -41,7 +44,7 @@ fn setup_products(db: &Database) {
 }
 
 /// Creates a `products` vector collection JOINed against an `inventory`
-/// metadata collection so the JOIN reaches `validate_join_condition`.
+/// metadata collection.
 fn setup_join_collections(db: &Database) {
     setup_products(db);
     execute_sql(db, "CREATE METADATA COLLECTION inventory;").expect("test: create inventory");
@@ -125,29 +128,7 @@ fn scenario_multi_column_using_join_rejected() {
 }
 
 // =========================================================================
-// 3. Non-primary-key JOIN column -> requires primary key
-// =========================================================================
-
-#[test]
-fn scenario_non_primary_key_join_column_rejected() {
-    let (_dir, db) = create_test_db();
-    setup_join_collections(&db);
-
-    // The join column on the target side resolves to `product_id`, but the
-    // built join ColumnStore is keyed on the primary key `id`.
-    let err = execute_sql(
-        &db,
-        "SELECT * FROM products JOIN inventory ON products.id = inventory.product_id LIMIT 10",
-    )
-    .expect_err("test: non-primary-key JOIN column must be rejected");
-    assert!(
-        err.to_string().contains("requires primary key"),
-        "expected primary-key requirement marker, got: {err}"
-    );
-}
-
-// =========================================================================
-// 4. Over-cap graph hop -> Graph expansion exceeded: max=32
+// 3. Over-cap graph hop -> Graph expansion exceeded: max=32
 // =========================================================================
 
 #[test]
@@ -165,41 +146,63 @@ fn scenario_over_cap_graph_hop_rejected() {
 }
 
 // =========================================================================
-// 5. DELETE rejects
+// 4. DELETE: any metadata WHERE, no vector predicate
 // =========================================================================
 
-#[test]
-fn scenario_delete_non_id_where_column_rejected() {
-    let (_dir, db) = create_test_db();
-    setup_products(&db);
-
-    // DELETE only supports `id = N` or `id IN (...)`; a payload column WHERE
-    // must be rejected rather than silently matching nothing.
-    let err = execute_sql(&db, "DELETE FROM products WHERE price = 10")
-        .expect_err("test: DELETE on non-id column must be rejected");
-    assert!(
-        err.to_string().contains("DELETE WHERE must use 'id = N'"),
-        "expected DELETE id-pattern marker, got: {err}"
-    );
+fn product_ids(db: &Database) -> Vec<u64> {
+    let mut ids: Vec<u64> = execute_sql(db, "SELECT * FROM products LIMIT 10")
+        .expect("test: SELECT")
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+    ids.sort_unstable();
+    ids
 }
 
+/// GIVEN two products priced 10 and 20
+/// WHEN DELETE filters on a payload column, then on `id > 1`
+/// THEN each removes exactly the rows its WHERE selects, as UPDATE selects
+///      them (the WASM executor already did; core refused every non-id WHERE).
 #[test]
-fn scenario_delete_non_eq_operator_on_id_rejected() {
+fn scenario_delete_removes_the_rows_its_where_selects() {
     let (_dir, db) = create_test_db();
     setup_products(&db);
+    execute_sql(&db, "DELETE FROM products WHERE price = 10").expect("test: DELETE by price");
+    assert_eq!(product_ids(&db), vec![2]);
 
-    // `id` is the supported column, but only the `=` operator is allowed.
-    let err = execute_sql(&db, "DELETE FROM products WHERE id > 0")
-        .expect_err("test: DELETE id with non-= operator must be rejected");
+    let (_dir, db) = create_test_db();
+    setup_products(&db);
+    execute_sql(&db, "DELETE FROM products WHERE id > 1").expect("test: DELETE by id range");
+    assert_eq!(product_ids(&db), vec![1]);
+}
+
+/// GIVEN products
+/// WHEN DELETE's WHERE holds a vector predicate
+/// THEN it is refused: a DML WHERE filters on metadata, as UPDATE's does.
+#[test]
+fn scenario_delete_with_a_vector_predicate_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_products(&db);
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), json!([1.0, 0.0, 0.0, 0.0]));
+    let err = execute_sql_with_params(
+        &db,
+        "DELETE FROM products WHERE similarity(vector, $v) > 0.5",
+        &params,
+    )
+    .expect_err("test: vector DELETE must be rejected");
     assert!(
         err.to_string()
-            .contains("DELETE WHERE id must use '=' operator"),
-        "expected DELETE '=' operator marker, got: {err}"
+            .contains("DELETE WHERE supports metadata predicates only"),
+        "{err}"
     );
+    assert_eq!(product_ids(&db), vec![1, 2], "nothing deleted");
 }
 
 // =========================================================================
-// 7. SELECT EDGES rejects
+
+// =========================================================================
+// 5. SELECT EDGES rejects
 // =========================================================================
 
 #[test]
@@ -230,27 +233,31 @@ fn scenario_select_edges_non_eq_operator_rejected() {
     );
 }
 
+/// Not a reject: an AND of any number of supported equalities filters on
+/// each of them, in core and WASM alike (`velesql::EdgeQuery`). The old
+/// two-term cap rejected a well-formed filter.
 #[test]
-fn scenario_select_edges_nested_and_rejected() {
+fn scenario_select_edges_and_of_three_terms_filters_on_each() {
     let (_dir, db) = create_test_db();
     setup_graph(&db);
 
-    // A third AND term nests an `And` on the filter side, which is not a
-    // simple comparison; only a single AND of two comparisons is supported.
-    let err = execute_sql(
+    let hits = execute_sql(
         &db,
         "SELECT EDGES FROM kg WHERE source = 1 AND target = 2 AND label = 'KNOWS'",
     )
-    .expect_err("test: SELECT EDGES with >2 AND terms must be rejected");
-    assert!(
-        err.to_string()
-            .contains("AND condition must be a simple comparison"),
-        "expected nested-AND marker, got: {err}"
-    );
+    .expect("test: a three-term AND is a valid edge filter");
+    assert_eq!(hits.len(), 1, "edge 10 matches every term");
+
+    let none = execute_sql(
+        &db,
+        "SELECT EDGES FROM kg WHERE source = 1 AND target = 2 AND label = 'LIKES'",
+    )
+    .expect("test: a three-term AND is a valid edge filter");
+    assert!(none.is_empty(), "the label term is applied too: {none:?}");
 }
 
 // =========================================================================
-// 8. Bare-MATCH RETURN ORDER BY of an unsupported expression -> V015
+// 6. Bare-MATCH RETURN ORDER BY of an unsupported expression -> V015
 //
 // `order_match_results` (collection/search/query/match_exec/order_by.rs)
 // supports ORDER BY similarity(), similarity(field, $v), depth, a valid

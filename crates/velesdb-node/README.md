@@ -134,9 +134,10 @@ import { MemoryService } from '@wiscale/velesdb-memory-node'
 const store = MemoryService.open(mkdtempSync(join(tmpdir(), 'velesdb-')))
 
 // An earlier session recorded a decision and the human reason behind it.
-const reason = await store.remember(
+// remember() resolves to an envelope; take the id off it for links.
+const reason = (await store.remember(
   'field crews work from remote mining sites over satellite links',
-)
+)).id
 await store.remember('the default HTTP request timeout is 7 seconds', [
   { target: reason, relation: 'because' },
 ])
@@ -197,6 +198,15 @@ model and credential from the environment exclusively, so no token lands in
 source. `VELESDB_MEMORY_QUIET=1` silences the one-time offline-embedder
 notice.
 
+Set `VELESDB_MEMORY_INGEST_ROOTS` (a platform path-list of directories, read
+once at `open`) to enable the file-backed features: `path` fragments in
+`compileContext`/`compileTranscript`/`explainCompilation`, and the
+`anchors`/`anchorRoot` parameters of `remember`/`recall` — each anchored
+file's digest is recorded at store time, and `recall` with `anchorRoot`
+reports `freshness` (`fresh` | `stale` | `unverified`, with the changed paths)
+per hit. Without it, every `path`/anchor is refused with `[INVALID_INPUT]` —
+fail-closed; the containment check runs at the sink, never in the binding.
+
 ```js
 const store = MemoryService.open('./agent_mem', 'ollama')
 ```
@@ -237,7 +247,10 @@ Three contracts hold across all of them: every method returns a `Promise` and
 runs off the event-loop thread; every id crosses as a **decimal string** (a JS
 `number` loses precision above 2^53); every rejection is an `Error` whose
 message starts with `[INVALID_INPUT]`, `[NOT_FOUND]`, `[UNSUPPORTED]` or
-`[INTERNAL]`.
+`[INTERNAL]`. Metadata, filters and requests must be JSON data (a `Date` or a
+`Map` rejects instead of being stored as `{}`); an argument of the wrong JS
+type for a typed parameter throws synchronously, from napi — see
+[argument errors](../../docs/guides/NODE_ADDON.md#argument-errors).
 
 Parameter types are generated into `index.d.ts` and shipped with the package —
 read them from your editor. Everything else (per-method semantics, the
@@ -319,6 +332,7 @@ Prebuilt binaries, one per target declared in `package.json` `napi.targets`:
 | `[INTERNAL] storage error: [VELES-031] Database is already opened by another process: <path>` | The single-writer lock is held — a second `MemoryService` on the same directory. | Keep one instance per store, or give the second one its own path. |
 | `[NOT_FOUND] memory 999999999 does not exist` on `relate` / `feedback` | The id was rounded by JS number arithmetic, or came from a different store. | Never convert an id with `Number()`; pass the decimal string through verbatim. |
 | `[INVALID_INPUT] invalid id 'not-an-id' (expected a decimal u64 string)` | A non-numeric value reached an id argument (often an object or `undefined`). | Pass the exact string `remember` resolved to. |
+| `[INVALID_INPUT] k must be a whole number in 0..=4294967295, got Infinity` | A count (`k`, `ttlSeconds`, `maxHops`, `limit`, `reserveTokens`, `fragmentIndex`, `hops`, `pool`) was negative, fractional, non-finite or above 2^32 − 1. Such a value used to wrap silently (`Infinity` → 0). | Pass a whole number in range. |
 | `[INTERNAL] extraction error: ... ollama request failed: ... Connection refused` | `rememberExtracted` needs a running Ollama, whatever embedder the store uses. | Start Ollama and pull the model, or use `remember` with explicit `links`. |
 | `EPERM` / `EBUSY` deleting a store directory on Windows | The `velesdb.lock` file is still held; the release finalizer is not deterministic. | Retry the delete, or drop the directory on the next run. |
 

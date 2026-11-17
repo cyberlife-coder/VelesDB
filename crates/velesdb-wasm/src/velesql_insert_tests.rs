@@ -117,3 +117,54 @@ fn test_insert_rejects_row_arity_mismatch_at_parse_time() {
     let err = execute(&db, &stmt, &empty_params());
     assert!(err.is_err());
 }
+
+/// A vector on a metadata-only collection is refused, as core refuses it,
+/// rather than dropped.
+#[test]
+fn a_vector_on_a_metadata_only_collection_is_refused() {
+    let mut db = crate::database::DatabaseInner::new();
+    db.create_metadata_collection("m").expect("test: create");
+    let err = crate::velesql_exec::execute(
+        &mut db,
+        "INSERT INTO m (id, vector, k) VALUES (1, $v, 'x')",
+        Some(r#"{"v": [1.0, 0.0]}"#),
+    )
+    .map(|_| ())
+    .expect_err("test: refused");
+    assert!(
+        err.contains("metadata-only collection cannot set 'vector'"),
+        "{err}"
+    );
+}
+
+/// All or nothing, as core's single batch upsert: a refused row leaves the
+/// rows before it unwritten. Point 1 used to be stored before row 2 failed.
+#[test]
+fn test_a_refused_row_writes_none_of_the_statement() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 4, "cosine")
+        .expect("test: create");
+    let params = parse_params(Some(r#"{"a": [1.0, 0.0, 0.0, 0.0], "b": [1.0, 0.0]}"#))
+        .expect("test: parse params");
+    for sql in [
+        "INSERT INTO vecs (id, vector) VALUES (1, $a), (2, $b)",
+        "INSERT INTO vecs (id, vector) VALUES (1, $a), (2, $unbound)",
+        "INSERT INTO vecs (id, vector) VALUES (1, $a), (-1, $a)",
+    ] {
+        assert!(execute(&db, &parse_insert(sql), &params).is_err(), "{sql}");
+        let store = db.get_shared_store("vecs").expect("test: store");
+        assert_eq!(store.borrow().len(), 0, "{sql}: nothing written");
+    }
+}
+
+/// A VelesQL INSERT checks a vector as `VectorStore.insert` does: a JSON
+/// weight past `f32` (infinite once narrowed) is refused, not stored.
+#[test]
+fn test_insert_refuses_a_non_finite_vector() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("vecs", 2, "cosine")
+        .expect("test: create");
+    let params = parse_params(Some(r#"{"v": [1e300, 0.0]}"#)).expect("test: parse params");
+    let stmt = parse_insert("INSERT INTO vecs (id, vector) VALUES (1, $v)");
+    assert!(execute(&db, &stmt, &params).is_err());
+}

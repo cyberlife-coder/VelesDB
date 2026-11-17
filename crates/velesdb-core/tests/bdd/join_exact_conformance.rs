@@ -7,19 +7,15 @@
 //! and a self-JOIN.
 //!
 //! Routing notes verified against the engine source:
-//! - `Database::execute_single_join` (database/query_join.rs) takes the lookup
-//!   path only when both join sides reference `id` AND no filter is pushed; that
-//!   path (`execute_lookup_join`) appends unmatched rows for LEFT only. RIGHT and
-//!   FULL therefore exercise the ColumnStore path in `execute_join`
-//!   (collection/search/query/join.rs:134), which performs the documented
-//!   null-fill on both sides.
-//! - To force the ColumnStore path the base side is joined on a non-`id`
-//!   foreign-key column (`base.fk = joined.id`); the joined side stays on `id`,
-//!   which is the synthesized ColumnStore primary key
-//!   (`build_join_column_store` -> `with_primary_key(.., "id")`).
-//! - Unmatched LEFT rows carry joined columns as JSON `null`
-//!   (`build_null_row_data`); unmatched RIGHT rows are synthetic points whose
-//!   `id` is the right-side primary key and which lack base-only columns.
+//! - `Database::execute_single_join` (database/query_join.rs) takes the id
+//!   lookup or the secondary-index shortcut only for an INNER or LEFT join
+//!   with nothing pushed to the joined side; every other join, RIGHT and FULL
+//!   included, runs `velesql::hash_join` over the joined collection's points.
+//!   The base side joins on a non-`id` foreign-key column
+//!   (`base.fk = joined.id`), so these scenarios run the hash join.
+//! - Unmatched LEFT rows carry the joined collection's columns as JSON
+//!   `null`; unmatched RIGHT rows are the joined point's own row — its id,
+//!   its fields — and lack base-only columns.
 
 use std::collections::HashSet;
 
@@ -328,4 +324,173 @@ fn test_self_join_exact_rows() {
     // Right side (manager Carol) overwrites the colliding emp_name on merge.
     assert_eq!(payload_str(row(&results, 1), "emp_name"), Some("Carol"));
     assert_eq!(payload_str(row(&results, 2), "emp_name"), Some("Carol"));
+}
+
+// =========================================================================
+// The joined row as SQL reads it: each side under its alias, the window
+// after the join, aggregates over the joined rows
+// =========================================================================
+
+/// GIVEN orders joined to customers
+/// WHEN the SELECT projects and orders by qualified columns
+/// THEN each side reads under its alias, sorted after the join.
+#[test]
+fn qualified_columns_read_each_side_after_the_join() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    let rows = execute_sql(
+        &db,
+        "SELECT * FROM orders AS o JOIN customers AS c ON o.customer_id = c.id \
+         ORDER BY c.name DESC",
+    )
+    .expect("JOIN ORDER BY a joined column");
+    let names: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r.point.payload.as_ref()?.get("c")?.get("name")?.as_str())
+        .collect();
+    assert_eq!(names, vec!["Cust-Y", "Cust-X"], "{rows:?}");
+}
+
+/// GIVEN three orders, one whose customer does not exist
+/// WHEN `LIMIT 2` asks for two INNER-joined rows
+/// THEN two come back: the LIMIT windows the joined rows, not the base rows
+///      the join then drops.
+#[test]
+fn the_limit_windows_the_joined_rows() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    let rows = execute_sql(
+        &db,
+        "SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id \
+         ORDER BY orders.id DESC LIMIT 2",
+    )
+    .expect("JOIN LIMIT");
+    let ids: Vec<u64> = rows.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, vec![2, 1], "order 3 has no customer");
+}
+
+/// GIVEN orders joined to customers
+/// WHEN an aggregate without GROUP BY counts the joined rows
+/// THEN it counts them, not the base collection's points.
+#[test]
+fn an_aggregate_counts_the_joined_rows() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    let query = velesdb_core::velesql::Parser::parse(
+        "SELECT COUNT(*) AS n FROM orders JOIN customers ON orders.customer_id = customers.id",
+    )
+    .expect("parse");
+    let result = db
+        .execute_aggregate(&query, &std::collections::HashMap::new())
+        .expect("aggregate over a JOIN");
+    assert_eq!(result, json!({"n": 2}), "orders 1 and 2 have a customer");
+}
+
+/// GIVEN orders LEFT-joined to customers
+/// WHEN the WHERE compares a joined-side column a matched row satisfies
+/// THEN that row comes back: the predicate reads the joined row, not the
+///      base row before the join.
+#[test]
+fn a_left_join_where_on_the_joined_side_keeps_the_matching_rows() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    let rows = execute_sql(
+        &db,
+        "SELECT * FROM orders LEFT JOIN customers ON orders.customer_id = customers.id \
+         WHERE customers.name = 'Cust-X'",
+    )
+    .expect("LEFT JOIN WHERE on the joined side");
+    assert_eq!(result_ids(&rows), HashSet::from([1]), "{rows:?}");
+}
+
+/// GIVEN a category joined to its group and that group's dept (two INNER
+///       joins)
+/// WHEN the WHERE ORs a predicate on each join side, or negates that OR
+/// THEN the row comes back exactly when the condition holds on the joined
+///      row: a predicate spanning two sides is evaluated after the joins.
+#[test]
+fn a_where_spanning_two_join_sides_is_evaluated_on_the_joined_row() {
+    let (_dir, db) = create_test_db();
+    setup_three_way_chain(&db);
+    let ids = |predicate: &str| {
+        let sql = format!(
+            "SELECT * FROM categories \
+             JOIN groups ON categories.parent_fk = groups.id \
+             JOIN depts ON groups.dept_fk = depts.id WHERE {predicate}"
+        );
+        result_ids(&execute_sql(&db, &sql).unwrap_or_else(|e| panic!("{sql}: {e}")))
+    };
+    let neither = "groups.group_name = 'none' OR depts.dept_name = 'none'";
+    let one = "groups.group_name = 'none' OR depts.dept_name = 'Dept-500'";
+    assert_eq!(ids(neither), HashSet::new(), "{neither}");
+    assert_eq!(ids(one), HashSet::from([1]), "{one}");
+    assert_eq!(
+        ids(&format!("NOT ({neither})")),
+        HashSet::from([1]),
+        "NOT ({neither})"
+    );
+}
+
+/// GIVEN orders joined to customers
+/// WHEN the WHERE keeps no joined row
+/// THEN an aggregate without GROUP BY still reports each column over no row
+///      (`COUNT(*)` 0), as an aggregate over a scan does.
+#[test]
+fn an_aggregate_over_no_joined_row_reports_its_empty_values() {
+    let (_dir, db) = create_test_db();
+    setup_orders_customers(&db);
+    for predicate in ["customers.name = 'none'", "orders.title = 'ord-c'"] {
+        let query = velesdb_core::velesql::Parser::parse(&format!(
+            "SELECT COUNT(*) AS n FROM orders JOIN customers ON orders.customer_id = customers.id \
+             WHERE {predicate}"
+        ))
+        .expect("parse");
+        let result = db
+            .execute_aggregate(&query, &std::collections::HashMap::new())
+            .expect("aggregate over an empty JOIN");
+        assert_eq!(result, json!({"n": 0}), "{predicate}");
+    }
+}
+
+/// GIVEN customers whose payloads hold a nested object, an array, and a
+///       field whose type varies from one customer to the next
+/// WHEN orders join them
+/// THEN every joined field reads, as the customer's own payload holds it
+///      (the column-store copy core joined against dropped all three).
+#[test]
+fn every_joined_field_reads_whatever_its_shape() {
+    let (_dir, db) = create_test_db();
+    execute_sql(&db, "CREATE METADATA COLLECTION buyers;").expect("buyers");
+    execute_sql(&db, "CREATE METADATA COLLECTION sales;").expect("sales");
+    db.get_metadata_collection("buyers")
+        .expect("buyers")
+        .upsert(vec![
+            Point::metadata_only(
+                1,
+                json!({"meta": {"tier": "gold"}, "tags": ["a"], "code": 7}),
+            ),
+            Point::metadata_only(
+                2,
+                json!({"meta": {"tier": "free"}, "tags": [], "code": "x"}),
+            ),
+        ])
+        .expect("upsert buyers");
+    db.get_metadata_collection("sales")
+        .expect("sales")
+        .upsert(vec![
+            Point::metadata_only(10, json!({"buyer": 1})),
+            Point::metadata_only(11, json!({"buyer": 2})),
+        ])
+        .expect("upsert sales");
+
+    let rows = execute_sql(
+        &db,
+        "SELECT * FROM sales JOIN buyers ON sales.buyer = buyers.id \
+         WHERE buyers.meta.tier = 'gold' LIMIT 10",
+    )
+    .expect("JOIN reading a nested joined field");
+    assert_eq!(result_ids(&rows), HashSet::from([10]));
+    let payload = rows[0].point.payload.as_ref().expect("payload");
+    assert_eq!(payload["buyers"]["tags"], json!(["a"]));
+    assert_eq!(payload["buyers"]["code"], json!(7));
 }

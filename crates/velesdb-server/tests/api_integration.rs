@@ -2660,6 +2660,40 @@ async fn test_graph_traverse_stream_rejects_unknown_algorithm() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// GIVEN no graph collection under a name
+/// WHEN the SSE traversal endpoint targets it
+/// THEN it answers as `POST /graph/traverse` does — 404 for a missing
+///      collection, 409 for a non-graph one — instead of a 200 stream whose
+///      only event is an `error`, which no status-checking client can see.
+#[tokio::test]
+async fn test_graph_traverse_stream_on_no_graph_collection_answers_like_traverse() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let db = velesdb_core::Database::open(temp_dir.path()).expect("Failed to open db");
+    db.create_collection("vec", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create vector collection");
+    let (app, _state) = create_full_app(db);
+
+    for (name, expected) in [
+        ("missing", StatusCode::NOT_FOUND),
+        ("vec", StatusCode::CONFLICT),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/collections/{name}/graph/traverse/stream?start_node=1"
+                    ))
+                    .body(Body::empty())
+                    .expect("Failed to build request"),
+            )
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), expected, "collection '{name}'");
+    }
+}
+
 #[tokio::test]
 async fn test_graph_node_degree() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");

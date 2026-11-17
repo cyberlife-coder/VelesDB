@@ -145,8 +145,15 @@ export interface VectorDocument {
   vector: number[] | Float32Array;
   /** Optional payload/metadata */
   payload?: Record<string, unknown>;
-  /** Optional sparse vector for hybrid search */
+  /** Optional sparse vector for hybrid search (stored under the default sparse index) */
   sparseVector?: SparseVector;
+  /**
+   * Optional named sparse vectors, one per sparse index
+   * (`PointRequest.sparse_vectors` on the REST wire). Use this when the
+   * collection has several named sparse indexes; `sparseVector` alone only
+   * targets the default one.
+   */
+  sparseVectors?: Record<string, SparseVector>;
 }
 
 /** PQ (Product Quantization) training options */

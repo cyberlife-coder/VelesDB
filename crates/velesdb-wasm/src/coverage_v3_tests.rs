@@ -5,7 +5,7 @@
 //! paths (which panic off-`wasm32`). They target previously-uncovered
 //! branches in `vector_store.rs`, `sparse.rs`, `store_search` delegation,
 //! `database.rs` (`WasmCollectionHandle`), and `velesql_match.rs`
-//! (`enrich_row` skip branches).
+//! (`enriched_payload` skip branches).
 
 use velesdb_core::velesql::{InsertEdgeStatement, InsertNodeStatement, Parser, Query};
 
@@ -200,8 +200,8 @@ fn test_collection_handle_insert_batch_raw_happy_path() {
 }
 
 // =========================================================================
-// enrich_row — cross-collection MATCH enrichment skip branches
-// (velesql_match.rs ~L66-67: payload_for_id missing / non-object → continue)
+// enriched_payload — cross-collection MATCH enrichment skip branches
+// (payload_for_id missing / non-object → the node keeps its own payload)
 // =========================================================================
 
 fn parse_match(sql: &str) -> Query {

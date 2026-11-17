@@ -232,6 +232,11 @@ The same loop is available outside the REPL as
 | `.graph nodes <col> [--page N]` | Paginated node browsing (20 per page) |
 | `.graph help` | Full graph help |
 
+> **Other collection types:** `.graph` commands open graph collections only.
+> Vector and metadata collections hold edges too: use VelesQL there, e.g.
+> `INSERT EDGE INTO docs (source = 1, target = 2, label = 'CITES');`,
+> `SELECT EDGES FROM docs WHERE source = 1;` and `DELETE EDGE 10 FROM docs;`.
+
 > **Naming note:** the REPL uses `.graph edges` while the CLI subcommand uses
 > `graph get-edges`. Both do the same thing.
 

@@ -233,3 +233,34 @@ fn weights_named_for_another_strategy_are_ignored() {
         FusionStrategy::from_name_with_weights("rrf", FusionParams::default(), Some(&[0.5, 0.5]));
     assert_eq!(parsed, Ok(FusionStrategy::rrf_default()));
 }
+
+/// `rsf` reads per-branch weights: one per branch, any branch count.
+#[test]
+fn rsf_reads_one_weight_per_branch() {
+    for name in ["rsf", "relative_score"] {
+        let parsed = FusionStrategy::from_name_with_weights(
+            name,
+            FusionParams::default(),
+            Some(&[0.5, 0.3, 0.2]),
+        );
+        assert_eq!(
+            parsed,
+            FusionStrategy::weighted_relative_score(vec![0.5, 0.3, 0.2]),
+            "{name}"
+        );
+    }
+}
+
+/// Given per-branch weights, `rsf` reads them: a surface that forwards its
+/// dense and sparse weights (defaults included) beside them still fuses by
+/// the per-branch ones.
+#[test]
+fn rsf_per_branch_weights_replace_dense_and_sparse() {
+    let params = FusionParams::default()
+        .with_dense_weight(Some(0.7))
+        .with_sparse_weight(Some(0.3));
+    assert_eq!(
+        FusionStrategy::from_name_with_weights("rsf", params, Some(&[0.5, 0.5])),
+        FusionStrategy::weighted_relative_score(vec![0.5, 0.5])
+    );
+}

@@ -41,6 +41,23 @@ def validate_search_quality(mode: str) -> None:
     core's message for a mode no search would accept."""
     ...
 
+def score_range(metric: str) -> Optional[Tuple[float, float]]:
+    """The ``(min, max)`` score range under ``metric``, or ``None`` when the
+    metric is unbounded (e.g. dot product). Raises ``ValueError`` for an
+    unknown metric."""
+    ...
+
+def hash_edge_id(source: int, target: int, label: str) -> int:
+    """The canonical id an edge gets when none is given: the FNV-1a hash of
+    ``(source, target, label)`` (``velesdb_core::hash_edge_id``)."""
+    ...
+
+# Payload key carrying a point's expiry epoch-seconds
+# (``velesdb_core::collection::EXPIRES_AT_KEY``).
+EXPIRES_AT_KEY: str
+# VelesQL wire/grammar contract version (``velesdb_core::api_types``).
+VELESQL_CONTRACT_VERSION: str
+
 
 # ---------------------------------------------------------------------------
 # Structural return types (TypedDict)
@@ -216,7 +233,8 @@ class FusionStrategy:
         case-insensitive. A parameter left out takes core's default
         (k=60; 0.6/0.3/0.1; 0.5/0.5); a single ``relative_score`` weight
         implies the other. ``weighted_rrf`` requires ``weights`` — one per
-        query vector.
+        query vector; ``relative_score`` reads them too, in place of its
+        dense and sparse weights (summing to 1.0).
 
         Raises:
             ValueError: If the name is unknown, weights are invalid, or a
@@ -528,6 +546,9 @@ class Collection:
         filter: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[int, float]] = None,
         sparse_index_name: Optional[str] = None,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors (dense, sparse, or hybrid).
 
@@ -765,6 +786,14 @@ class Collection:
         """Get all point IDs in the collection."""
         ...
 
+    def all_point_ids(self) -> List[int]:
+        """All point IDs (vector and payload indexes union), ascending.
+
+        Gated like ``all_ids``: raises if the observer denies the read or
+        narrows it with a scope.
+        """
+        ...
+
     def has_secondary_index(self, field: str) -> bool:
         """Check if a secondary index exists on a payload field."""
         ...
@@ -939,7 +968,10 @@ class Collection:
                   flag to distinguish heuristic values from future measured ones.
 
         Raises:
-            RuntimeError: If the query is invalid or execution fails.
+            ValueError: If the query does not parse or is invalid for this
+                database.
+            PermissionError: If the database's observer refuses it.
+            VelesDBError: If execution fails in the engine.
         """
         ...
 
@@ -1096,6 +1128,8 @@ class Database:
         self,
         path: str,
         config: Optional["VelesConfigOptions"] = None,
+        observer: Optional[Any] = None,
+        observer_strict: bool = False,
     ) -> None:
         """Open or create a VelesDB database at the specified path.
 
@@ -1103,6 +1137,17 @@ class Database:
             path: Directory path for database storage
             config: Optional typed configuration (limits, etc.) applied at
                 open time.
+            observer: Optional callable invoked on engine events as
+                ``observer(event, **fields)``. Events: ``collection_created``,
+                ``collection_deleted``, ``upsert`` (also fired by direct SDK
+                writes), ``query``, the read-path veto ``query_request``
+                (``None``/``True`` allow, ``False``/str deny, ``{"filter": ...}``
+                allow-with-scope), and the VelesQL vetoes ``ddl_request`` /
+                ``dml_mutation_request`` (``None``/``True`` allow, ``False``/str
+                deny with a reason).
+            observer_strict: Fail-closed policy for callback errors on veto
+                events (default False = fail-open). Explicit decisions are
+                unaffected.
         """
         ...
 
@@ -1126,15 +1171,18 @@ class Database:
             storage_mode: "full", "sq8", "binary", "pq", or "rabitq"
             hnsw: Optional typed HNSW parameters (replaces the legacy
                 `m` / `ef_construction` / `expected_vectors` kwargs)
-            auto_reindex: Optional auto-reindex policy, attached as a
-                runtime-only hook on the returned collection
+            auto_reindex: Optional auto-reindex policy, attached to the
+                returned collection; persisted in the collection config
+                (schema v2) and restored automatically on open
 
         Returns:
             The created Collection (or a deferred Collection when dimension=None
             that materialises on the first upsert).
 
         Raises:
-            RuntimeError: If collection already exists or creation fails
+            CollectionExistsError: If the collection already exists.
+            ValueError: If the name or a parameter is invalid.
+            VelesDBError: If the engine fails to create it.
         """
         ...
 
@@ -1256,7 +1304,7 @@ class Database:
 
         Args:
             sql: VelesQL query string.
-            params: Optional parameter bindings (e.g., {"$v": [0.1, 0.2]}).
+            params: Optional parameter bindings (bare names, e.g., {"v": [0.1, 0.2]} for the ``$v`` placeholder).
 
         Returns:
             List of result dicts for SELECT queries, empty list for DDL/DML.
@@ -1275,7 +1323,8 @@ class Database:
 
         Raises:
             ValueError: If the collection name fails to parse.
-            RuntimeError: If the collection does not exist or the change fails.
+            CollectionNotFoundError: If the collection does not exist.
+            VelesDBError: If the engine fails to apply the change.
         """
         ...
 
@@ -1303,14 +1352,53 @@ class Database:
         """
         ...
 
-    def agent_memory(self, dimension: Optional[int] = None) -> "AgentMemory":
+    def agent_memory(
+        self,
+        dimension: Optional[int] = None,
+        snapshot_dir: Optional[str] = None,
+        max_snapshots: int = 10,
+    ) -> "AgentMemory":
         """Create an AgentMemory instance for AI agent workflows.
 
         Args:
             dimension: Embedding dimension (default: 384)
+            snapshot_dir: Optional directory to enable versioned snapshots
+            max_snapshots: Number of snapshots to retain (default: 10)
 
         Returns:
             AgentMemory instance with semantic, episodic, and procedural subsystems
+        """
+        ...
+
+    def collection_diagnostics(self, name: str) -> Dict[str, Any]:
+        """Get diagnostic information for a collection.
+
+        Args:
+            name: Collection name
+
+        Returns:
+            Dict with has_vectors, search_ready, dimension_configured,
+            point_count, index_health ("healthy" | "empty" |
+            "needs_rebuild"), and index_health_detail keys
+
+        Raises:
+            CollectionNotFoundError: If the collection does not exist.
+        """
+        ...
+
+    def update_guardrails(self, limits: Dict[str, Any]) -> None:
+        """Replace query guardrail limits for every collection in this database.
+
+        This is a full replacement, not a partial patch: the dict must
+        contain all guardrail fields (``max_depth``, ``max_cardinality``,
+        ``memory_limit_bytes``, ``timeout_ms``, ``rate_limit_qps``,
+        ``circuit_failure_threshold``, ``circuit_recovery_seconds``).
+
+        Args:
+            limits: Complete guardrail dict
+
+        Raises:
+            ValueError: If a field is missing, unknown, or invalid
         """
         ...
 
@@ -1346,7 +1434,8 @@ class Database:
                   (bool or None) — whether the histogram is stale.
 
         Raises:
-            RuntimeError: If the collection does not exist or analysis fails
+            CollectionNotFoundError: If the collection does not exist.
+            VelesDBError: If the analysis fails in the engine.
         """
         ...
 
@@ -1420,6 +1509,8 @@ class ParsedStatement:
     """Parsed VelesQL statement with helper inspectors."""
 
     collection_name: Optional[str]
+    table_alias: Optional[str]
+    table_aliases: List[str]
     columns: List[str]
     limit: Optional[int]
     offset: Optional[int]
@@ -1485,8 +1576,8 @@ class TraversalResult:
 
     Attributes:
         depth: Current depth in the traversal
-        source: Source node ID
-        target: Target node ID
+        source: Node the step leaves from (in every direction)
+        target: Node the step reaches
         label: Edge label
         edge_id: Edge ID
     """
@@ -1518,6 +1609,7 @@ class GraphStore:
 
     def __init__(self) -> None: ...
 
+    @overload
     def add_edge(self, edge: Dict[str, Any]) -> None:
         """Add an edge.
 
@@ -1525,6 +1617,44 @@ class GraphStore:
             edge: Dict with keys: id (int), source (int), target (int),
                   label (str), properties (dict, optional)
         """
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        edge_id: int,
+        *,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add an edge using the explicit-id legacy shape."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+        *,
+        id: int,
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add edge ``id`` from ``source`` to ``target``: the positional is the source."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+    ) -> None:
+        """Add an edge using the legacy no-id positional shape."""
         ...
 
     def get_edges_by_label(self, label: str) -> List[GraphEdgeDict]: ...
@@ -1819,7 +1949,10 @@ class PyGraphCollection:
                   flag to distinguish heuristic values from future measured ones.
 
         Raises:
-            RuntimeError: If the query is invalid or execution fails.
+            ValueError: If the query does not parse or is invalid for this
+                database.
+            PermissionError: If the database's observer refuses it.
+            VelesDBError: If execution fails in the engine.
         """
         ...
 
@@ -1909,13 +2042,15 @@ class PyGraphCollection:
         ...
 
 
-class GraphCollection(PyGraphCollection):
+class GraphCollection:
     """Python compatibility wrapper returned by the graph-collection helpers.
 
     Returned by :meth:`Database.create_graph_collection` and
-    :meth:`Database.get_graph_collection`. Unknown attributes delegate to the
-    underlying :class:`PyGraphCollection`; the members below are the
-    facade-specific overrides and convenience aliases.
+    :meth:`Database.get_graph_collection`. This is a delegating wrapper
+    around :class:`PyGraphCollection` (composition, not inheritance —
+    ``isinstance(g, PyGraphCollection)`` is False at runtime); unknown
+    attributes delegate to the underlying :class:`PyGraphCollection`, and the
+    members below are the facade-specific overrides and convenience aliases.
     """
 
     @overload
@@ -1934,6 +2069,20 @@ class GraphCollection(PyGraphCollection):
         properties: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Add an edge using the explicit-id legacy shape."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+        *,
+        id: int,
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add edge ``id`` from ``source`` to ``target``: the positional is the source."""
         ...
 
     @overload
@@ -2448,10 +2597,11 @@ class MemoryService:
         Set ``VELESDB_MEMORY_QUIET=1`` to suppress it for deliberate offline use.
 
         Raises:
-            ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``, or
+            ValueError: If ``embedder`` is not ``"hash"``, ``"ollama"`` or
+                ``"openai"``, its configuration is invalid (a malformed URL, an
+                ``"openai"`` endpoint missing its URL or model), or
                 ``search_quality`` is not a quality.
-            RuntimeError: If the store cannot be opened or the Ollama embedder
-                cannot be initialised.
+            RuntimeError: If the store cannot be opened.
         """
         ...
 
@@ -2761,8 +2911,13 @@ class MemoryService:
                 ignored by ``"outline"``.
             url: Ollama server URL (default: ``http://localhost:11434``).
             metadata: Optional metadata applied to every extracted fact.
-            extractor: Which backend to use, ``"ollama"`` (default) or
-                ``"outline"``. ``"outline"`` is deterministic and
+            extractor: Which backend to use, ``"ollama"``, ``"openai"`` or
+                ``"outline"``; omitted, ``VELESDB_MEMORY_EXTRACTOR``, else
+                ``"ollama"``. The remote backends read ``url``/``model`` from
+                the arguments, else ``VELESDB_MEMORY_EXTRACTOR_URL`` /
+                ``_MODEL``, and a credential from
+                ``VELESDB_MEMORY_EXTRACTOR_API_TOKEN`` only. A ``text`` over
+                the fact cap raises ``ValueError``. ``"outline"`` is deterministic and
                 network-free — it reads the structure the passage STATES, one
                 directive per line (``edge:``, ``attr:``, ``fact:``) — and
                 stands to ``"ollama"`` exactly as the ``"hash"`` embedder
@@ -3017,6 +3172,31 @@ class MemoryService:
         """
         ...
 
+    def memory_status(self) -> Dict[str, Any]:
+        """The server's health, in the envelope the MCP ``memory_status``
+        tool returns: which embedder runs (``embedder["semantic"] is False``
+        means the offline ``hash`` default), what the store was filled by per
+        its on-disk provenance record, the extraction wiring, and the corpus
+        size (``memory["edges"] == 0`` means :meth:`why` has nothing to
+        walk)."""
+        ...
+
+    def list_memories(
+        self,
+        cursor: Optional[int] = None,
+        limit: int = 50,
+        filter: Optional[Dict[str, Any]] = None,
+        include_internal: bool = False,
+    ) -> Dict[str, Any]:
+        """One page of the store, ids ascending, TTL-expired facts skipped.
+
+        Returns ``{"memories": [{"id", "id_str", "content", "metadata"}],
+        "next_cursor": int | None}``. Pass ``next_cursor`` back as
+        ``cursor`` to read the next page; ``None`` ends the walk. A filtered
+        page may come back sparse — keep following the cursor.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Typed options dataclasses (Wave 3 Commit 10)
@@ -3026,9 +3206,10 @@ class MemoryService:
 class HnswOptions:
     """Typed HNSW parameters for :meth:`Database.create_collection`.
 
-    All fields are optional — unspecified fields fall back to the engine
-    defaults. Replaces the v1.12 flat `m=`, `ef_construction=`,
-    `expected_vectors=` kwargs.
+    All fields are optional — an unspecified one comes from the database's
+    ``[hnsw]`` section (:class:`HnswConfigOptions`), then from the
+    auto-tuning for the collection's dimension. Replaces the v1.12 flat
+    `m=`, `ef_construction=`, `expected_vectors=` kwargs.
 
     Example:
         >>> opts = HnswOptions(m=48, ef_construction=600)

@@ -49,12 +49,35 @@ fn validate_search_quality(mode: &str) -> PyResult<()> {
     crate::collection::parse_search_quality(mode).map(drop)
 }
 
+/// The `(min, max)` score range under `metric`:
+/// [`velesdb_core::DistanceMetric::score_range`] — `None` when the metric is
+/// unbounded (e.g. dot product). Use it to interpret or clamp a raw score.
+#[pyfunction]
+fn score_range(metric: &str) -> PyResult<Option<(f32, f32)>> {
+    Ok(crate::utils::parse_metric(metric)?.score_range())
+}
+
+/// The canonical id an edge gets when none is given:
+/// [`velesdb_core::hash_edge_id`], the FNV-1a hash of `(source, target,
+/// label)`. Use it to look up or pre-compute an auto-generated edge id.
+#[pyfunction]
+fn hash_edge_id(source: u64, target: u64, label: &str) -> u64 {
+    velesdb_core::hash_edge_id(source, target, label)
+}
+
 /// Registers the module-level contract functions on the `velesdb` module.
 pub fn register_contracts(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hash_id, m)?)?;
     m.add_function(wrap_pyfunction!(metric_higher_is_better, m)?)?;
     m.add_function(wrap_pyfunction!(metric_normalize, m)?)?;
     m.add_function(wrap_pyfunction!(validate_search_quality, m)?)?;
+    m.add_function(wrap_pyfunction!(score_range, m)?)?;
+    m.add_function(wrap_pyfunction!(hash_edge_id, m)?)?;
+    m.add("EXPIRES_AT_KEY", velesdb_core::collection::EXPIRES_AT_KEY)?;
+    m.add(
+        "VELESQL_CONTRACT_VERSION",
+        velesdb_core::api_types::VELESQL_CONTRACT_VERSION,
+    )?;
     Ok(())
 }
 

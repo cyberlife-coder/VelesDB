@@ -8,10 +8,12 @@ use velesdb_core::collection::auto_reindex::AutoReindexConfig as CoreAutoReindex
 /// [`velesdb_core::collection::auto_reindex::AutoReindexConfig`].
 ///
 /// Pass an instance to
-/// [`Database.create_collection(..., auto_reindex=...)`] to attach a
-/// runtime-only [`AutoReindexManager`][velesdb_core::collection::auto_reindex::AutoReindexManager]
-/// to the newly-created collection. The manager is **not** persisted —
-/// it must be re-attached after every `Database.__new__`.
+/// [`Database.create_collection(..., auto_reindex=...)`] to attach an
+/// [`AutoReindexManager`][velesdb_core::collection::auto_reindex::AutoReindexManager]
+/// to the newly-created collection. `attach_auto_reindex` mirrors the
+/// policy into the collection's persisted config (schema v2), so the manager
+/// is rebuilt automatically on every `Database.__new__` — no re-attach
+/// needed.
 ///
 /// `cooldown_secs` is exposed as an integer (seconds) rather than a
 /// `Duration` to avoid the Python/Rust serde mismatch.

@@ -31,6 +31,36 @@ export interface SparseSearchNamedOptions {
   vector?: number[] | Float32Array;
   /** Search quality preset */
   quality?: SearchQuality;
+  /** HNSW `ef_search` (REST only). */
+  efSearch?: number;
+  /** Per-request timeout budget in ms (REST only). */
+  timeoutMs?: number;
+}
+
+/**
+ * Fusion options for a single `/search` request
+ * (`SearchRequest.fusion` → `FusionRequest` on the wire).
+ *
+ * Deliberately NOT {@link FusionParams}: `branchWeights` is a multi-query
+ * concept (one weight per query vector, used by `multiQuerySearch`) that the
+ * single-search wire never reads — weighted RRF here takes `denseWeight` /
+ * `sparseWeight` (`dense_w` / `sparse_w` on the wire).
+ */
+export interface SearchFusionOptions {
+  /** Fusion strategy. */
+  strategy: FusionStrategy;
+  /** RRF k parameter (default: 60). */
+  k?: number;
+  /** Weighted fusion: average weight (default: 0.6). */
+  avgWeight?: number;
+  /** Weighted fusion: max weight (default: 0.3). */
+  maxWeight?: number;
+  /** Weighted fusion: hit weight (default: 0.1). */
+  hitWeight?: number;
+  /** Relative score fusion: dense vector weight (default: 0.5). */
+  denseWeight?: number;
+  /** Relative score fusion: sparse vector weight (default: 0.5). */
+  sparseWeight?: number;
 }
 
 /** Search options */
@@ -54,8 +84,86 @@ export interface SearchOptions {
    * (`capabilities().namedSparseIndexes` is `false`).
    */
   sparseIndexName?: string;
+  /**
+   * Named sparse vectors map (`SearchRequest.sparse_vectors`), one entry per
+   * sparse index. Sends several sparse vectors in one request.
+   *
+   * **Backend support:** REST only (same reason as `sparseIndexName`).
+   */
+  sparseVectors?: Record<string, SparseVector>;
   /** Search quality preset (default: 'balanced'). */
   quality?: SearchQuality;
+  /**
+   * HNSW `ef_search`, in `[16, 4096]` — sent as `ef_search` on the wire. It
+   * wins over the `mode` derived from `quality` for a dense search without a
+   * filter. The server refuses an out-of-range value with a `400`.
+   *
+   * **Backend support:** REST only (the WASM binding expresses this through
+   * `quality: 'custom:<ef>'`).
+   */
+  efSearch?: number;
+  /**
+   * Per-request timeout budget in milliseconds, sent as `timeout_ms`. It can
+   * only shorten the server's own limit, never lengthen it; `0` keeps the
+   * server limit. Running out answers `408`/`503`.
+   *
+   * **Backend support:** REST only (there is no server-side budget on WASM).
+   */
+  timeoutMs?: number;
+  /**
+   * Fusion configuration sent as `fusion` on `/search`
+   * (`SearchRequest.fusion`).
+   *
+   * **Backend support:** REST only.
+   */
+  fusion?: SearchFusionOptions;
+}
+
+/**
+ * One entry of `searchBatch`. The wire accepts a full per-entry
+ * `SearchRequest` (`BatchSearchRequest.searches: Vec<SearchRequest>`), but the
+ * server's batch kernel applies only `vector`, `top_k` and `filter` per entry
+ * — the other fields are validated and then ignored, so the client refuses
+ * them with `NOT_SUPPORTED` rather than return dense-only rankings that imply
+ * otherwise. Use `search()` for entries that need them.
+ */
+export interface BatchSearchItem {
+  /** Query vector for this entry. */
+  vector: number[] | Float32Array;
+  /** Number of results to return for this entry (default: 10). */
+  k?: number;
+  /** Filter expression (optional). */
+  filter?: FilterInput;
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
+  quality?: SearchQuality;
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
+  efSearch?: number;
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
+  timeoutMs?: number;
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
+  sparseVector?: SparseVector;
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
+  sparseIndexName?: string;
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
+  sparseVectors?: Record<string, SparseVector>;
+  /** Not applied to batch entries — refused with `NOT_SUPPORTED`. */
+  fusion?: SearchFusionOptions;
+}
+
+/** Options for `hybridSearch` (`/search/hybrid`, `HybridSearchRequestWithRrf`). */
+export interface HybridSearchOptions {
+  /** Number of results to return (default: 10). */
+  k?: number;
+  /** Weight for vector similarity, 0.0-1.0 (text weight = 1 - this; default 0.5). */
+  vectorWeight?: number;
+  /** Filter expression (optional). */
+  filter?: FilterInput;
+  /**
+   * RRF `k` parameter, sent as `rrf_k` (`HybridSearchRequestWithRrf`).
+   *
+   * **Backend support:** REST only.
+   */
+  rrfK?: number;
 }
 
 /** Fusion strategy for multi-query search */

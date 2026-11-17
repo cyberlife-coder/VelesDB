@@ -1,168 +1,34 @@
 //! `similarity()` threshold evaluation for WASM WHERE clauses (S4-13).
 //!
-//! Supports `WHERE similarity(vector, $q) <op> <threshold>` inside a SELECT
-//! when the target is a vector collection. The similarity is computed on
-//! the fly against the row's current vector; non-matching rows are skipped.
+//! Supports `WHERE similarity(field, $q) <op> <threshold>` inside a SELECT,
+//! read as core reads it ([`velesdb_core::velesql::similarity_holds`]).
 //!
 //! This module only decides `is this row's similarity <op> threshold?` —
 //! the actual vector NEAR ranking stays in `velesql_select::vector_path`.
 //!
-//! # Limitations (WASM pre-seed scope)
-//!
-//! - **Single query vector per statement.** [`SimilarityEvaluator`]
-//!   pre-computes scores against one query vector for the whole row scan.
-//!   WHERE clauses that mix `similarity()` predicates against different
-//!   query vectors are rejected via
-//!   [`assert_single_similarity_vector`]. Use the core
-//!   (persistence-enabled) backend for multi-vector queries.
+//! Every leaf is scored on its own ([`SimilarityEvaluator`]): several
+//! `similarity()` under `AND` each filter, a named vector
+//! `similarity(embedding, $v)` reads the payload's `embedding` array, and a
+//! row with no vector a leaf can score makes that leaf UNKNOWN. The shapes no
+//! engine runs (several `similarity()` under one `OR`) are refused upstream by
+//! `velesdb_core::velesql::validate_vector_predicates`, as in core.
 
-use velesdb_core::velesql::{CompareOp, Condition, SimilarityCondition, VectorExpr};
+use velesdb_core::velesql::{
+    payload_vector, CompareOp, Condition, SimilarityCondition, VectorExpr, PRIMARY_VECTOR_FIELD,
+};
 
 use crate::database::DatabaseInner;
-use crate::velesql_logic::push_not_inward;
+use crate::store_state::StoreState;
 use crate::velesql_value::{resolve_vector, Params};
 
-/// Walks the condition tree and returns the first `similarity()` predicate.
+/// The condition with every `similarity()` leaf removed.
 ///
-/// The input is first passed through [`push_not_inward`] so every `NOT`
-/// is pushed all the way down to leaves via De Morgan distribution. As
-/// a result this walker only ever encounters bare `Similarity(_)`
-/// leaves (with the operator already flipped if the original query
-/// wrapped them in one or more `NOT`s) — no special-case handling for
-/// `NOT Similarity(...)` is needed here. This correctly covers all
-/// compound forms such as `NOT (sim > 0.5 AND x = 1)`, which
-/// De-Morgan-rewrites to `sim <= 0.5 OR x != 1` before the walk.
-///
-/// Returns an owned `SimilarityCondition` because [`push_not_inward`]
-/// may have synthesized a flipped-op form that has no home in the
-/// caller's borrowed AST.
-///
-/// Defensive variant kept for callers that have NOT yet De-Morgan-
-/// normalized their condition. The hot SELECT build path uses
-/// [`find_similarity_pre_normalized`] after calling `push_not_inward`
-/// once (Devin Review Finding P). Tests exercise this public entry
-/// point directly.
-#[allow(dead_code)] // Defensive variant — see `find_similarity_pre_normalized`.
-pub(crate) fn find_similarity(cond: Option<&Condition>) -> Option<SimilarityCondition> {
-    cond.cloned()
-        .map(push_not_inward)
-        .as_ref()
-        .and_then(find_similarity_normalized)
-}
-
-/// Same as [`find_similarity`] but skips the internal [`push_not_inward`]
-/// call — caller has already normalized the condition.
-///
-/// Used by `velesql_select`'s `WhereFilters::build` to avoid a
-/// redundant tree walk + clone when both `find_similarity` and
-/// `strip_similarity` would otherwise normalize the same tree twice
-/// (Devin Review Finding P). The public [`find_similarity`] keeps its
-/// defensive normalization for callers that don't pre-normalize.
-pub(crate) fn find_similarity_pre_normalized(
-    cond: Option<&Condition>,
-) -> Option<SimilarityCondition> {
-    cond.and_then(find_similarity_normalized)
-}
-
-/// Recursive walk over a condition that is already De-Morgan-normalized:
-/// every `NOT` wraps a negation-agnostic leaf (`LIKE`, `BETWEEN`, ...),
-/// and no `NOT` wraps a compound or a `Similarity`. See
-/// [`find_similarity`] for the normalization contract.
-fn find_similarity_normalized(cond: &Condition) -> Option<SimilarityCondition> {
-    match cond {
-        Condition::Similarity(s) => Some(s.clone()),
-        Condition::And(l, r) | Condition::Or(l, r) => {
-            find_similarity_normalized(l).or_else(|| find_similarity_normalized(r))
-        }
-        Condition::Not(inner) | Condition::Group(inner) => find_similarity_normalized(inner),
-        _ => None,
-    }
-}
-
-/// Rejects WHERE clauses that contain two `similarity()` predicates
-/// referencing different query vectors (finding H).
-///
-/// [`SimilarityEvaluator`] pre-computes scores against ONE query vector
-/// (the first similarity predicate found). If the WHERE tree contains a
-/// second `similarity()` with a DIFFERENT vector, the evaluator would
-/// silently reuse the first vector's scores for the second threshold —
-/// returning wrong rows.
-///
-/// Rather than extending the evaluator to key scores by vector (more
-/// code for a pre-seed WASM demo surface, plus N× more scorer passes),
-/// we fail loud: the caller gets an explicit error pointing them at the
-/// core (persistence-enabled) backend for multi-vector queries.
-///
-/// Identity is by `VectorExpr` equality, which treats two distinct
-/// parameter names as distinct and two distinct literal vectors as
-/// distinct — the same binding / literal used twice is accepted.
-///
-/// The input is expected to already be De-Morgan-normalized via
-/// [`push_not_inward`] so no `NOT` wraps a `Similarity(_)`.
-pub(crate) fn assert_single_similarity_vector(cond: Option<&Condition>) -> Result<(), String> {
-    let mut first: Option<VectorExpr> = None;
-    if let Some(c) = cond {
-        walk_similarity_vectors(c, &mut |v| match &first {
-            None => {
-                first = Some(v.clone());
-                Ok(())
-            }
-            Some(existing) if existing == v => Ok(()),
-            Some(_) => Err(
-                "Multiple similarity() conditions with different query vectors are not yet \
-                 supported in WASM. Use a single similarity() predicate or use core \
-                 (persistence-enabled) for multi-vector queries."
-                    .to_string(),
-            ),
-        })?;
-    }
-    Ok(())
-}
-
-/// Visits every `SimilarityCondition` in `cond` and calls `visit` with
-/// its `vector` expression. Short-circuits on the first `Err` returned
-/// by the visitor — used by [`assert_single_similarity_vector`] to stop
-/// as soon as a second distinct vector is seen.
-fn walk_similarity_vectors<F>(cond: &Condition, visit: &mut F) -> Result<(), String>
-where
-    F: FnMut(&VectorExpr) -> Result<(), String>,
-{
-    match cond {
-        Condition::Similarity(s) => visit(&s.vector),
-        Condition::And(l, r) | Condition::Or(l, r) => {
-            walk_similarity_vectors(l, visit)?;
-            walk_similarity_vectors(r, visit)
-        }
-        Condition::Not(inner) | Condition::Group(inner) => walk_similarity_vectors(inner, visit),
-        _ => Ok(()),
-    }
-}
-
-/// Returns the condition with every `similarity()` predicate removed.
-///
-/// The input is first passed through [`push_not_inward`] so NOT is
-/// De-Morgan-distributed before stripping. Without this, a compound
-/// NOT like `NOT (sim > 0.5 AND x = 1)` would recurse into the NOT
-/// wrapper, collapse the inner similarity to `None`, and leave
-/// `NOT(x = 1)` as residual — semantically equivalent to
-/// `sim > 0.5 AND NOT(x = 1)` instead of the correct
-/// `sim <= 0.5 OR x != 1`.
-///
-/// Once normalized, the strip pass only sees bare `Similarity(_)`
-/// leaves, which [`strip_condition_if`] removes while preserving the
-/// surrounding And/Or/Not/Group structure.
-#[allow(dead_code)] // Defensive variant — see `strip_similarity_pre_normalized`.
+/// `cond` must already be De-Morgan-normalized ([`push_not_inward`](crate::velesql_logic::push_not_inward)), so the
+/// strip pass only sees bare `Similarity(_)` leaves — a `NOT` wrapping one
+/// has been pushed into its flipped operator. Without that, a compound like
+/// `NOT (sim > 0.5 AND x = 1)` would leave `NOT(x = 1)` behind, i.e.
+/// `sim > 0.5 AND NOT(x = 1)` instead of `sim <= 0.5 OR x != 1`.
 pub(crate) fn strip_similarity(cond: Option<&Condition>) -> Option<Condition> {
-    let normalized = cond.cloned().map(push_not_inward);
-    strip_similarity_pre_normalized(normalized.as_ref())
-}
-
-/// Same as [`strip_similarity`] but skips the internal [`push_not_inward`]
-/// call — caller has already normalized the condition.
-///
-/// Paired with [`find_similarity_pre_normalized`] to avoid a double tree
-/// walk in the hot SELECT build path (Devin Review Finding P).
-pub(crate) fn strip_similarity_pre_normalized(cond: Option<&Condition>) -> Option<Condition> {
     strip_condition_if(cond, &|c| matches!(c, Condition::Similarity(_)))
 }
 
@@ -205,7 +71,7 @@ where
 
 /// Flips a comparison operator to its logical complement.
 ///
-/// Used by [`push_not_inward`]
+/// Used by [`push_not_inward`](crate::velesql_logic::push_not_inward)
 /// and the similarity-specific rewrites to negate a `similarity()`
 /// predicate without rebuilding its surrounding AST. `CompareOp` is
 /// `#[non_exhaustive]`; unknown variants fall back to the input
@@ -281,80 +147,166 @@ fn combine_after_strip(
     }
 }
 
-/// Holds pre-computed similarity scores by row index for fast filtering.
+/// The scores of one `similarity(field, vector)` leaf, by row: `None` where
+/// the row has no vector under `field` the query vector can be scored
+/// against (absent, not numeric, another dimension) — the leaf is then
+/// UNKNOWN for that row, as in core.
+#[derive(Debug)]
+struct LeafScores {
+    field: String,
+    vector: VectorExpr,
+    scores: Vec<Option<f32>>,
+}
+
+/// Every `similarity()` leaf of a WHERE clause, scored once over the whole
+/// collection so a leaf is an O(1) lookup in the row scan.
 ///
-/// Scores are computed once at construction time against the full
-/// collection so [`Self::passes_with_cond`] is an O(1) lookup instead
-/// of re-running the metric kernel for every row in the scan loop.
+/// Each distinct `(field, query vector)` is scored on its own:
+/// `similarity(vector, $v)` against the row's own vector,
+/// `similarity(embedding, $v)` against the numeric array its payload holds
+/// under `embedding` ([`velesdb_core::velesql::payload_vector`]).
 #[derive(Debug)]
 pub(crate) struct SimilarityEvaluator {
-    /// Score at row `i` for the pre-resolved query vector.
-    scores: Vec<f32>,
+    /// One entry per distinct leaf, in the order the clause names them.
+    leaves: Vec<LeafScores>,
+    /// Whether the collection's metric ranks higher scores as more similar
+    /// (`false` for a distance): the direction `similarity() > t` reads in.
+    higher_is_better: bool,
 }
 
 impl SimilarityEvaluator {
-    /// Builds an evaluator for a vector collection, resolving the query
-    /// vector against `$param` bindings and validating dimension.
-    pub(crate) fn new(
+    /// Scores every `similarity()` leaf of `cond` over `collection`; `None`
+    /// when `cond` has none.
+    ///
+    /// # Errors
+    ///
+    /// An unbound or malformed query vector, and a leaf on the row's own
+    /// vector over a metadata-only collection or with another dimension.
+    pub(crate) fn for_condition(
         db: &DatabaseInner,
         collection: &str,
-        cond: &SimilarityCondition,
+        cond: Option<&Condition>,
         params: &Params,
-    ) -> Result<Self, String> {
+    ) -> Result<Option<Self>, String> {
+        let mut sims = Vec::new();
+        if let Some(cond) = cond {
+            collect_similarity_leaves(cond, &mut sims);
+        }
+        if sims.is_empty() {
+            return Ok(None);
+        }
         let store = db.get_shared_store(collection)?;
         let borrowed = store.borrow();
-        if borrowed.dimension() == 0 {
-            return Err(format!(
-                "Collection '{collection}' is metadata-only; similarity() requires a vector collection"
-            ));
+        let mut leaves: Vec<LeafScores> = Vec::new();
+        for sim in sims {
+            if leaves
+                .iter()
+                .any(|l| l.field == sim.field && l.vector == sim.vector)
+            {
+                continue;
+            }
+            let query = resolve_vector(&sim.vector, params)?;
+            let scores = if sim.field == PRIMARY_VECTOR_FIELD {
+                own_vector_scores(&borrowed, collection, &query)?
+            } else {
+                payload_vector_scores(&borrowed, &sim.field, &query)
+            };
+            leaves.push(LeafScores {
+                field: sim.field.clone(),
+                vector: sim.vector.clone(),
+                scores,
+            });
         }
-        let query = resolve_vector(&cond.vector, params)?;
-        if query.len() != borrowed.dimension() {
-            return Err(format!(
-                "similarity() query dimension mismatch: expected {}, got {}",
-                borrowed.dimension(),
-                query.len()
-            ));
-        }
-        let scored = crate::vector_ops::compute_scores(
-            &query,
-            &borrowed.ids,
-            &borrowed.data,
-            borrowed.dimension,
-            borrowed.metric,
-        );
-        let scores = scored.into_iter().map(|(_, s)| s).collect();
-        Ok(Self { scores })
+        Ok(Some(Self {
+            leaves,
+            higher_is_better: borrowed.metric.higher_is_better(),
+        }))
     }
 
-    /// The similarity of row `idx` to the query vector — the score a row the
-    /// threshold let through carries, as in core.
-    pub(crate) fn score_at(&self, idx: usize) -> f32 {
-        self.scores.get(idx).copied().unwrap_or(0.0)
+    /// The score row `idx` carries: its similarity to the clause's first
+    /// `similarity()` leaf, as core reports it; `None` when that leaf cannot
+    /// score the row.
+    pub(crate) fn score_at(&self, idx: usize) -> Option<f32> {
+        self.leaves
+            .first()
+            .and_then(|leaf| leaf.scores.get(idx).copied().flatten())
     }
 
-    /// Returns `true` if the given `sim` predicate passes at row `idx`.
+    /// The three-valued truth of the leaf `cond` at row `idx`: UNKNOWN when
+    /// the row has no vector the leaf can score.
     ///
-    /// Used by [`evaluate_where_with_similarity`] when it encounters a
-    /// `Similarity` leaf. The score cache is reused so we don't recompute
-    /// vectors per row; the operator and threshold come from the AST
-    /// node so rewrites by [`push_not_inward`] (e.g. `>` flipped to `<=`
-    /// under a NOT) surface with the right polarity without mutating
-    /// the evaluator.
-    pub(crate) fn passes_with_cond(&self, cond: &SimilarityCondition, idx: usize) -> bool {
-        let score = self.score_at(idx);
-        #[allow(clippy::cast_possible_truncation)]
-        let threshold = cond.threshold as f32;
-        match cond.operator {
-            CompareOp::Gt => score > threshold,
-            CompareOp::Gte => score >= threshold,
-            CompareOp::Lt => score < threshold,
-            CompareOp::Lte => score <= threshold,
-            CompareOp::Eq => (score - threshold).abs() < f32::EPSILON,
-            CompareOp::NotEq => (score - threshold).abs() >= f32::EPSILON,
-            _ => false,
-        }
+    /// The operator and threshold come from the AST node, so rewrites by
+    /// [`push_not_inward`](crate::velesql_logic::push_not_inward) (`>` flipped to `<=` under a NOT) surface with the
+    /// right polarity.
+    pub(crate) fn truth(&self, cond: &SimilarityCondition, idx: usize) -> Option<bool> {
+        let leaf = self
+            .leaves
+            .iter()
+            .find(|l| l.field == cond.field && l.vector == cond.vector)?;
+        let score = leaf.scores.get(idx).copied().flatten()?;
+        Some(velesdb_core::velesql::similarity_holds(
+            cond.operator,
+            score,
+            cond.threshold,
+            self.higher_is_better,
+        ))
     }
+}
+
+/// Every `similarity()` leaf of `cond`, left to right.
+fn collect_similarity_leaves<'c>(cond: &'c Condition, out: &mut Vec<&'c SimilarityCondition>) {
+    match cond {
+        Condition::Similarity(sim) => out.push(sim),
+        Condition::And(l, r) | Condition::Or(l, r) => {
+            collect_similarity_leaves(l, out);
+            collect_similarity_leaves(r, out);
+        }
+        Condition::Not(inner) | Condition::Group(inner) => collect_similarity_leaves(inner, out),
+        _ => {}
+    }
+}
+
+/// `similarity(vector, $v)`: every row's own vector against `query`.
+fn own_vector_scores(
+    store: &StoreState,
+    collection: &str,
+    query: &[f32],
+) -> Result<Vec<Option<f32>>, String> {
+    if store.dimension == 0 {
+        return Err(format!(
+            "Collection '{collection}' is metadata-only; similarity() requires a vector collection"
+        ));
+    }
+    if query.len() != store.dimension {
+        return Err(format!(
+            "similarity() query dimension mismatch: expected {}, got {}",
+            store.dimension,
+            query.len()
+        ));
+    }
+    Ok(crate::vector_ops::compute_scores(
+        query,
+        &store.ids,
+        &store.data,
+        store.dimension,
+        store.metric,
+    )
+    .into_iter()
+    .map(|(_, score)| Some(score))
+    .collect())
+}
+
+/// `similarity(field, $v)`: the vector each row's payload holds under
+/// `field` against `query`; `None` where it holds none of that dimension.
+fn payload_vector_scores(store: &StoreState, field: &str, query: &[f32]) -> Vec<Option<f32>> {
+    (0..store.ids.len())
+        .map(|idx| {
+            let payload = store.payloads.get(idx).and_then(Option::as_ref)?;
+            let vector = payload_vector(payload, field).ok().flatten()?;
+            (vector.len() == query.len() && !vector.is_empty())
+                .then(|| store.metric.calculate(&vector, query))
+        })
+        .collect()
 }
 
 /// Evaluates a WHERE condition against a row, treating `Similarity`
@@ -366,11 +318,11 @@ impl SimilarityEvaluator {
 /// similarity out + AND with evaluator" composition got wrong (it
 /// always conjoined, so `OR sim` collapsed to `AND sim`).
 ///
-/// Non-similarity leaves delegate to [`crate::velesql_where::matches`]
-/// for identical semantics. The input `cond` is expected to already
-/// be De-Morgan-normalized via [`push_not_inward`]; callers that build
-/// the condition through [`find_similarity`] / [`strip_similarity`]
-/// do this automatically.
+/// Non-similarity leaves delegate to [`crate::velesql_where::truth`] for
+/// identical semantics, and the tree folds in SQL's three-valued logic, as
+/// core's WHERE does: a row is admitted only when the whole condition is
+/// known TRUE, so `NOT (x LIKE 'a%')` excludes a row without `x`. The input `cond` is expected to already
+/// be De-Morgan-normalized via [`push_not_inward`](crate::velesql_logic::push_not_inward).
 pub(crate) fn evaluate_where_with_similarity(
     cond: &Condition,
     id: u64,
@@ -379,23 +331,32 @@ pub(crate) fn evaluate_where_with_similarity(
     eval: Option<&SimilarityEvaluator>,
     params: &Params,
 ) -> Result<bool, String> {
+    Ok(where_truth(cond, id, payload, idx, eval, params)? == Some(true))
+}
+
+/// The three-valued truth behind [`evaluate_where_with_similarity`].
+fn where_truth(
+    cond: &Condition,
+    id: u64,
+    payload: Option<&serde_json::Value>,
+    idx: usize,
+    eval: Option<&SimilarityEvaluator>,
+    params: &Params,
+) -> Result<Option<bool>, String> {
+    use crate::velesql_where::{and, or, truth};
     match cond {
-        Condition::And(l, r) => Ok(evaluate_where_with_similarity(
-            l, id, payload, idx, eval, params,
-        )? && evaluate_where_with_similarity(
-            r, id, payload, idx, eval, params,
-        )?),
-        Condition::Or(l, r) => Ok(evaluate_where_with_similarity(
-            l, id, payload, idx, eval, params,
-        )? || evaluate_where_with_similarity(
-            r, id, payload, idx, eval, params,
-        )?),
-        Condition::Not(inner) => Ok(!evaluate_where_with_similarity(
-            inner, id, payload, idx, eval, params,
-        )?),
-        Condition::Group(inner) => {
-            evaluate_where_with_similarity(inner, id, payload, idx, eval, params)
+        Condition::And(l, r) => Ok(and(
+            where_truth(l, id, payload, idx, eval, params)?,
+            where_truth(r, id, payload, idx, eval, params)?,
+        )),
+        Condition::Or(l, r) => Ok(or(
+            where_truth(l, id, payload, idx, eval, params)?,
+            where_truth(r, id, payload, idx, eval, params)?,
+        )),
+        Condition::Not(inner) => {
+            Ok(where_truth(inner, id, payload, idx, eval, params)?.map(|known| !known))
         }
+        Condition::Group(inner) => where_truth(inner, id, payload, idx, eval, params),
         Condition::Similarity(sim) => {
             // No evaluator => no vector collection context; this should
             // never happen when the query was validated upstream, but we
@@ -404,9 +365,9 @@ pub(crate) fn evaluate_where_with_similarity(
             let evaluator = eval.ok_or_else(|| {
                 "similarity() predicate found without a vector-collection evaluator".to_string()
             })?;
-            Ok(evaluator.passes_with_cond(sim, idx))
+            Ok(evaluator.truth(sim, idx))
         }
-        other => crate::velesql_where::matches(other, id, payload, params),
+        other => truth(other, id, payload, params),
     }
 }
 

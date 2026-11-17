@@ -2,13 +2,12 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::CommandError;
-use crate::events::emit_collection_updated;
-use crate::helpers::{
-    map_core_results, metric_to_string, parse_filter, parse_fusion_strategy, parse_metric,
-    parse_storage_mode, require_collection, storage_mode_to_string, timed_search_response,
-};
 #[cfg(feature = "persistence")]
-use crate::helpers::{parse_search_quality, require_vector_collection};
+use crate::helpers::parse_search_quality;
+use crate::helpers::{
+    map_core_results, parse_filter, parse_fusion_strategy, parse_metric, parse_storage_mode,
+    require_collection, timed_search_response,
+};
 use crate::state::VelesDbState;
 #[path = "commands_batch.rs"]
 mod batch;
@@ -26,30 +25,17 @@ use crate::types::{EnableStreamingRequest, StreamInsertRequest};
 pub use batch::*;
 use tauri::{command, AppHandle, Runtime, State};
 
-/// Builds [`velesdb_core::HnswParams`] from optional request fields, falling
-/// back to dimension-based auto-tuned defaults for any omitted parameter.
-pub(crate) fn build_hnsw_params(
+/// The HNSW parameters the request pins; core resolves the rest (`[hnsw]`,
+/// then the auto-tuning for the collection's dimension) and validates them.
+pub(crate) const fn hnsw_overrides(
     request: &CreateCollectionRequest,
-    storage_mode: velesdb_core::StorageMode,
-) -> velesdb_core::HnswParams {
-    let base = velesdb_core::HnswParams::auto(request.dimension);
-    velesdb_core::HnswParams {
-        max_connections: request.hnsw_m.unwrap_or(base.max_connections),
-        ef_construction: request.hnsw_ef_construction.unwrap_or(base.ef_construction),
-        max_elements: request.hnsw_max_elements.unwrap_or(base.max_elements),
-        storage_mode,
-        alpha: request.hnsw_alpha.unwrap_or(base.alpha),
+) -> velesdb_core::HnswOverrides {
+    velesdb_core::HnswOverrides {
+        m: request.hnsw_m,
+        ef_construction: request.hnsw_ef_construction,
+        max_elements: request.hnsw_max_elements,
+        alpha: request.hnsw_alpha,
     }
-}
-
-/// Returns `true` when the request carries at least one advanced HNSW or PQ
-/// parameter, indicating that [`build_hnsw_params`] should be used.
-pub(crate) const fn has_advanced_params(request: &CreateCollectionRequest) -> bool {
-    request.hnsw_m.is_some()
-        || request.hnsw_ef_construction.is_some()
-        || request.hnsw_alpha.is_some()
-        || request.hnsw_max_elements.is_some()
-        || request.pq_rescore_oversampling.is_some()
 }
 
 /// Creates a new collection.
@@ -64,34 +50,15 @@ pub async fn create_collection<R: Runtime>(
 
     let result = state
         .run_db(move |db| {
-            if has_advanced_params(&request) {
-                let hnsw_params = build_hnsw_params(&request, storage_mode);
-                // Reject out-of-range tunables (e.g. hnsw_alpha < 1.0 or
-                // non-finite) before creating the collection.
-                hnsw_params.validate()?;
-                db.create_vector_collection_with_params(
-                    &request.name,
-                    request.dimension,
-                    metric,
-                    storage_mode,
-                    hnsw_params,
-                    request.pq_rescore_oversampling,
-                )?;
-            } else {
-                db.create_vector_collection_with_options(
-                    &request.name,
-                    request.dimension,
-                    metric,
-                    storage_mode,
-                )?;
-            }
-            Ok(CollectionInfo {
-                name: request.name.clone(),
-                dimension: request.dimension,
-                metric: metric_to_string(metric).to_string(),
-                count: 0,
-                storage_mode: storage_mode_to_string(storage_mode).to_string(),
-            })
+            db.create_vector_collection_with_overrides(
+                &request.name,
+                request.dimension,
+                metric,
+                storage_mode,
+                hnsw_overrides(&request),
+                request.pq_rescore_oversampling,
+            )?;
+            crate::helpers::collection_info_of(&db, &request.name)
         })
         .await
         .map_err(CommandError::from)?;
@@ -109,13 +76,7 @@ pub async fn create_metadata_collection<R: Runtime>(
     let result = state
         .run_db(move |db| {
             db.create_metadata_collection(&request.name)?;
-            Ok(CollectionInfo {
-                name: request.name,
-                dimension: 0,
-                metric: "none".to_string(),
-                count: 0,
-                storage_mode: "metadata_only".to_string(),
-            })
+            crate::helpers::collection_info_of(&db, &request.name)
         })
         .await
         .map_err(CommandError::from)?;
@@ -162,14 +123,7 @@ pub async fn list_collections<R: Runtime>(
                 );
                 if decided.map(|scope| scope.is_none()).unwrap_or(false) {
                     if let Some(coll) = db.get_any_collection(&name) {
-                        let config = coll.config();
-                        collections.push(CollectionInfo {
-                            name,
-                            dimension: config.dimension,
-                            metric: metric_to_string(config.metric).to_string(),
-                            count: config.point_count,
-                            storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
-                        });
+                        collections.push(crate::helpers::collection_info(name, &coll));
                     }
                 }
             }
@@ -194,35 +148,25 @@ pub async fn get_collection<R: Runtime>(
                 velesdb_core::observer::QueryOperationKind::Select,
                 "collection metadata reads",
             )?;
-            let coll = require_collection(&db, &name)?;
-            let config = coll.config();
-            Ok(CollectionInfo {
-                name,
-                dimension: config.dimension,
-                metric: metric_to_string(config.metric).to_string(),
-                count: coll.len(),
-                storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
-            })
+            crate::helpers::collection_info_of(&db, &name)
         })
         .await
         .map_err(CommandError::from)
 }
 
-/// Looks up the collection, builds points via `build`, inserts them via
-/// `insert`, then emits a collection-updated event tagged with `event`.
+/// Looks up the collection, builds points via `build` and inserts them via
+/// `insert`. The `collection-updated` event comes from core, through the
+/// plugin's observer, like every other write's.
 ///
 /// Shared skeleton of [`upsert`] and [`upsert_metadata`]: only the per-point
 /// construction and the core insert method differ between callers.
-async fn upsert_points<R, B, I>(
-    app: &AppHandle<R>,
+async fn upsert_points<B, I>(
     state: &State<'_, VelesDbState>,
     collection: String,
-    event: &str,
     build: B,
     insert: I,
 ) -> std::result::Result<usize, CommandError>
 where
-    R: Runtime,
     B: FnOnce() -> Vec<velesdb_core::Point> + Send + 'static,
     I: FnOnce(
             &velesdb_core::VectorCollection,
@@ -231,10 +175,9 @@ where
         + Send
         + 'static,
 {
-    let coll_name = collection.clone();
-    let count = state
+    state
         .run_db(move |db| {
-            let coll = require_collection(&db, &coll_name)?;
+            let coll = require_collection(&db, &collection)?;
 
             let points = build();
             let count = points.len();
@@ -242,25 +185,20 @@ where
             Ok(count)
         })
         .await
-        .map_err(CommandError::from)?;
-
-    emit_collection_updated(app, &collection, event, count);
-    Ok(count)
+        .map_err(CommandError::from)
 }
 
 /// Upserts points into a collection.
 #[command]
 pub async fn upsert<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: UpsertRequest,
 ) -> std::result::Result<usize, CommandError> {
     let collection_name = request.collection.clone();
     upsert_points(
-        &app,
         &state,
         collection_name,
-        "upsert",
         move || {
             request
                 .points
@@ -276,16 +214,14 @@ pub async fn upsert<R: Runtime>(
 /// Upserts metadata-only points into a collection.
 #[command]
 pub async fn upsert_metadata<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: UpsertMetadataRequest,
 ) -> std::result::Result<usize, CommandError> {
     let collection_name = request.collection.clone();
     upsert_points(
-        &app,
         &state,
         collection_name,
-        "upsert_metadata",
         move || {
             request
                 .points
@@ -363,59 +299,25 @@ type QualityArg<'a> = Option<&'a velesdb_core::SearchQuality>;
 #[cfg(not(feature = "persistence"))]
 type QualityArg<'a> = Option<&'a ()>;
 
-/// Runs a vector search honoring filter precedence then quality, returning full
-/// results. Shared by [`search`] and [`search_ids`]. Filter takes precedence
-/// (known limitation #457: quality ignored when a filter is present).
-fn search_full(
-    coll: &velesdb_core::VectorCollection,
-    request: &SearchRequest,
-    filter: Option<&velesdb_core::Filter>,
-    quality: QualityArg<'_>,
-) -> crate::error::Result<Vec<velesdb_core::SearchResult>> {
-    if let Some(f) = filter {
-        coll.search_with_filter(&request.vector, request.top_k, f)
-            .map_err(crate::error::Error::Database)
-    } else {
-        dispatch_quality_search(coll, &request.vector, request.top_k, quality)
-    }
-}
-
-/// Dispatches a single search with optional quality mode.
-///
-/// When quality is `Some`, delegates to `search_with_quality`;
-/// otherwise falls back to the default `search`.
+/// Core's search quality for a parsed `quality` field (`None` without the
+/// `persistence` feature, where the field is refused before this runs).
 #[cfg(feature = "persistence")]
-fn dispatch_quality_search(
-    coll: &velesdb_core::VectorCollection,
-    query: &[f32],
-    k: usize,
-    quality: Option<&velesdb_core::SearchQuality>,
-) -> crate::error::Result<Vec<velesdb_core::SearchResult>> {
-    if let Some(q) = quality {
-        coll.search_with_quality(query, k, *q)
-            .map_err(crate::error::Error::Database)
-    } else {
-        coll.search(query, k).map_err(crate::error::Error::Database)
-    }
+fn core_quality(quality: QualityArg<'_>) -> Option<velesdb_core::SearchQuality> {
+    quality.copied()
 }
 
-/// Dispatches a single search (no quality support without `persistence`).
+/// Core's search quality for a parsed `quality` field (`None` without the
+/// `persistence` feature, where the field is refused before this runs).
 #[cfg(not(feature = "persistence"))]
-fn dispatch_quality_search(
-    coll: &velesdb_core::VectorCollection,
-    query: &[f32],
-    k: usize,
-    _quality: Option<&()>,
-) -> crate::error::Result<Vec<velesdb_core::SearchResult>> {
-    coll.search(query, k).map_err(crate::error::Error::Database)
+fn core_quality(_quality: QualityArg<'_>) -> Option<velesdb_core::SearchQuality> {
+    None
 }
 
 /// Searches for similar vectors.
 ///
 /// Supports an optional `quality` mode (e.g. "fast", "balanced", "accurate",
-/// "perfect", "auto", "custom:\<ef\>", "adaptive:\<min\>:\<max\>").
-/// Known limitation (#457): when a filter is present, quality is ignored
-/// because `search_with_filter` does not accept a quality parameter yet.
+/// "perfect", "auto", "custom:\<ef\>", "adaptive:\<min\>:\<max\>"),
+/// honoured with or without a filter.
 #[command]
 pub async fn search<R: Runtime>(
     _app: AppHandle<R>,
@@ -470,10 +372,9 @@ fn project_search_ids(results: Vec<velesdb_core::SearchResult>) -> Vec<IdScoreOu
 /// k-NN search returning only IDs and scores (no payloads).
 ///
 /// Uses the optimized core `search_ids` path when neither a filter nor a
-/// `quality` mode is supplied, which skips payload hydration. When a filter is
-/// present (precedence, known limitation #457: quality ignored), or a `quality`
-/// mode is requested, falls back to the corresponding full search and projects
-/// the results to IDs + scores.
+/// `quality` mode is supplied, which skips payload hydration. Otherwise runs
+/// core's `search_dense`, which honours a filter and a quality together, and
+/// projects the results to IDs + scores.
 #[command]
 pub async fn search_ids<R: Runtime>(
     _app: AppHandle<R>,
@@ -493,32 +394,35 @@ pub async fn search_ids<R: Runtime>(
     state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
-            let scope = crate::helpers::authorize_collection_read(
+            crate::helpers::run_gated_search(
                 &db,
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
-            )?;
-            let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
-            // Optimized id-only path only when no filter and no quality; both
-            // require the full search that hydrates results before projecting.
-            let scored: Vec<IdScoreOutput> = if parsed_filter.is_none() && parsed_quality.is_none()
-            {
-                coll.search_ids(&request.vector, request.top_k)?
-                    .into_iter()
-                    .map(|r| IdScoreOutput {
-                        id: r.id,
-                        score: r.score,
-                    })
-                    .collect()
-            } else {
-                project_search_ids(search_full(
-                    &coll,
-                    &request,
-                    parsed_filter.as_ref(),
-                    parsed_quality.as_ref(),
-                )?)
-            };
-            Ok(scored)
+                |scope| {
+                    let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
+                    // Optimized id-only path only when no filter and no quality; both
+                    // require the full search that hydrates results before projecting.
+                    let scored: Vec<IdScoreOutput> =
+                        if parsed_filter.is_none() && parsed_quality.is_none() {
+                            coll.search_ids(&request.vector, request.top_k)?
+                                .into_iter()
+                                .map(|r| IdScoreOutput {
+                                    id: r.id,
+                                    score: r.score,
+                                })
+                                .collect()
+                        } else {
+                            project_search_ids(coll.search_dense(
+                                &request.vector,
+                                request.top_k,
+                                None,
+                                core_quality(parsed_quality.as_ref()),
+                                parsed_filter.as_ref(),
+                            )?)
+                        };
+                    Ok(scored)
+                },
+            )
         })
         .await
         .map_err(CommandError::from)
@@ -533,13 +437,20 @@ pub async fn text_search<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
     let collection = request.collection.clone();
 
-    batch::run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
-        match filter {
-            Some(f) => coll.text_search_with_filter(&request.query, request.top_k, f),
-            None => coll.text_search(&request.query, request.top_k),
-        }
-        .map_err(crate::error::Error::Database)
-    })
+    let operation = velesdb_core::observer::QueryOperationKind::TextSearch;
+    batch::run_filtered_search(
+        &state,
+        collection,
+        operation,
+        parsed_filter,
+        move |coll, filter| {
+            match filter {
+                Some(f) => coll.text_search_with_filter(&request.query, request.top_k, f),
+                None => coll.text_search(&request.query, request.top_k),
+            }
+            .map_err(crate::error::Error::Database)
+        },
+    )
     .await
 }
 
@@ -553,24 +464,31 @@ pub async fn hybrid_search<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
     let collection = request.collection.clone();
 
-    batch::run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
-        match filter {
-            Some(f) => coll.hybrid_search_with_filter(
-                &request.vector,
-                &request.query,
-                request.top_k,
-                Some(request.vector_weight),
-                f,
-            ),
-            None => coll.hybrid_search(
-                &request.vector,
-                &request.query,
-                request.top_k,
-                Some(request.vector_weight),
-            ),
-        }
-        .map_err(crate::error::Error::Database)
-    })
+    let operation = velesdb_core::observer::QueryOperationKind::HybridSearch;
+    batch::run_filtered_search(
+        &state,
+        collection,
+        operation,
+        parsed_filter,
+        move |coll, filter| {
+            match filter {
+                Some(f) => coll.hybrid_search_with_filter(
+                    &request.vector,
+                    &request.query,
+                    request.top_k,
+                    Some(request.vector_weight),
+                    f,
+                ),
+                None => coll.hybrid_search(
+                    &request.vector,
+                    &request.query,
+                    request.top_k,
+                    Some(request.vector_weight),
+                ),
+            }
+            .map_err(crate::error::Error::Database)
+        },
+    )
     .await
 }
 
@@ -724,23 +642,26 @@ pub async fn multi_query_search<R: Runtime>(
     let results = state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
-            let scope = crate::helpers::authorize_collection_read(
+            crate::helpers::run_gated_search(
                 &db,
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
-            )?;
-            let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
+                |scope| {
+                    let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
 
-            let vector_refs: Vec<&[f32]> = request.vectors.iter().map(Vec::as_slice).collect();
+                    let vector_refs: Vec<&[f32]> =
+                        request.vectors.iter().map(Vec::as_slice).collect();
 
-            let search_results = coll.multi_query_search(
-                &vector_refs,
-                request.top_k,
-                fusion_strategy,
-                parsed_filter.as_ref(),
-            )?;
+                    let search_results = coll.multi_query_search(
+                        &vector_refs,
+                        request.top_k,
+                        fusion_strategy,
+                        parsed_filter.as_ref(),
+                    )?;
 
-            Ok(map_core_results(search_results))
+                    Ok(map_core_results(search_results))
+                },
+            )
         })
         .await
         .map_err(CommandError::from)?;
@@ -808,30 +729,28 @@ pub async fn train_pq<R: Runtime>(
 #[cfg(feature = "persistence")]
 #[command]
 pub async fn stream_insert<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: StreamInsertRequest,
 ) -> std::result::Result<usize, CommandError> {
-    let collection_name = request.collection.clone();
-    let count = state
+    state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
 
-            let mut inserted = 0;
-            for p in request.points {
-                let point = velesdb_core::Point::new(p.id, p.vector, p.payload);
-                coll.stream_insert(point).map_err(|e| {
-                    crate::error::Error::InvalidConfig(format!("Stream insert backpressure: {e}"))
-                })?;
-                inserted += 1;
-            }
-            Ok(inserted)
+            let points: Vec<_> = request
+                .points
+                .into_iter()
+                .map(|p| velesdb_core::Point::new(p.id, p.vector, p.payload))
+                .collect();
+            // One batch, checked before anything is queued: a point an upsert
+            // would refuse fails the call with core's code instead of being
+            // dropped later by the drain.
+            coll.validate_points_for_upsert(&points)?;
+            coll.stream_insert_batch(points)
+                .map_err(crate::error::Error::from)
         })
         .await
-        .map_err(CommandError::from)?;
-
-    emit_collection_updated(&app, &collection_name, "stream_insert", count);
-    Ok(count)
+        .map_err(CommandError::from)
 }
 
 /// Builds a core [`StreamingConfig`](velesdb_core::StreamingConfig) from the
@@ -864,14 +783,14 @@ pub async fn enable_streaming<R: Runtime>(
     let config = streaming_config_from_request(&request);
     state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
             coll.enable_streaming(config)?;
             Ok(())
         })
         .await
         .map_err(CommandError::from)?;
 
-    emit_collection_updated(&app, &collection_name, "enable_streaming", 0);
+    crate::events::emit_collection_updated(&app, &collection_name, "enable_streaming", 0);
     Ok(())
 }
 

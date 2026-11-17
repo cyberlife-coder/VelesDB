@@ -11,7 +11,7 @@ use wasm_bindgen::JsValue;
 /// Serializes a search result through [`to_js_value`], rendering a failure
 /// (an id above `Number.MAX_SAFE_INTEGER`) as a JS string error.
 #[inline]
-fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+pub(crate) fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     to_js_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
@@ -39,11 +39,7 @@ pub(crate) fn scored_triples_to_js(
 /// Reuses the same comparison logic as [`vector_ops::sort_results`] but operates
 /// on triples that carry an optional payload reference.
 pub(crate) fn sort_scored_triples<T>(results: &mut [(u64, f32, T)], higher_is_better: bool) {
-    if higher_is_better {
-        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    } else {
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    }
+    results.sort_by(|a, b| velesdb_core::distance::rank_scores(a.1, b.1, higher_is_better));
 }
 
 /// Validates query dimension matches store dimension, returning a structured
@@ -52,18 +48,50 @@ pub(crate) fn sort_scored_triples<T>(results: &mut [(u64, f32, T)], higher_is_be
 /// Single source of truth for the dimension check: delegates to core's
 /// [`velesdb_core::validate_dimension_match`] and preserves the core error's
 /// machine-readable `code` instead of pre-flattening it to a bare string
-/// (backlog #22). The `wasm32` FFI wrapper [`validate_dimension`] renders this
-/// as a structured JS `Error`.
+/// (backlog #22). [`validate_query_vector`] and [`validate_ingest_vector`]
+/// build on it; their callers render the error as a structured JS `Error`.
 #[inline]
 pub fn validate_dimension_structured(query_len: usize, store_dim: usize) -> Result<(), WasmError> {
     velesdb_core::validate_dimension_match(store_dim, query_len).map_err(WasmError::from)
 }
 
-/// FFI wrapper over [`validate_dimension_structured`] that renders the
-/// structured error as a JS `Error` with a non-enumerable `code` property.
-#[inline]
-pub fn validate_dimension(query_len: usize, store_dim: usize) -> Result<(), JsValue> {
-    validate_dimension_structured(query_len, store_dim).map_err(WasmError::into_js_value)
+/// The checks core runs on a query vector before it searches a collection:
+/// the store holds vectors (a metadata-only store refuses with
+/// `SearchNotSupported`, VELES-015), the query has the store's dimension
+/// (VELES-004) and only finite components (`InvalidVector`, VELES-005).
+pub fn validate_query_vector(query: &[f32], store_dim: usize) -> Result<(), WasmError> {
+    refuse_metadata_only(store_dim)?;
+    validate_ingest_vector(query, store_dim)
+}
+
+/// [`validate_query_vector`] for `num_vectors` queries laid out row-major in
+/// one flat buffer.
+pub fn validate_query_vectors(
+    vectors: &[f32],
+    num_vectors: usize,
+    store_dim: usize,
+) -> Result<(), WasmError> {
+    refuse_metadata_only(store_dim)?;
+    validate_multi_vector_len(vectors.len(), num_vectors, store_dim)
+        .map_err(|e| WasmError::from(velesdb_core::Error::InvalidVector(e)))?;
+    velesdb_core::validation::validate_vector_is_finite(vectors).map_err(WasmError::from)
+}
+
+/// The checks core runs on a vector it stores: the store's dimension and
+/// only finite components.
+pub fn validate_ingest_vector(vector: &[f32], store_dim: usize) -> Result<(), WasmError> {
+    validate_dimension_structured(vector.len(), store_dim)?;
+    velesdb_core::validation::validate_vector_is_finite(vector).map_err(WasmError::from)
+}
+
+/// A store of dimension 0 is metadata-only: it holds no vector to search.
+fn refuse_metadata_only(store_dim: usize) -> Result<(), WasmError> {
+    if store_dim == 0 {
+        return Err(WasmError::from(velesdb_core::Error::SearchNotSupported(
+            "vector search needs a vector store; this one is metadata-only".to_string(),
+        )));
+    }
+    Ok(())
 }
 
 /// Validates that a flat multi-vector buffer holds exactly
@@ -102,18 +130,6 @@ pub fn top_k(
     vector_ops::sort_results(&mut results, metric.higher_is_better());
     results.truncate(k);
     results
-}
-
-/// Basic vector search.
-pub fn search(
-    query: &[f32],
-    ids: &[u64],
-    data: &[f32],
-    dimension: usize,
-    metric: DistanceMetric,
-    k: usize,
-) -> Result<JsValue, JsValue> {
-    to_js(&top_k(query, ids, data, dimension, metric, k))
 }
 
 /// Text search in payloads.
@@ -177,6 +193,7 @@ pub fn hybrid_search_scored<'a>(
     let v_weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
     let t_weight = 1.0 - v_weight;
     let text_query_lower = text_query.to_lowercase();
+    let higher_is_better = metric.higher_is_better();
 
     let mut results: Vec<(u64, f32, Option<&serde_json::Value>)> = ids
         .iter()
@@ -184,7 +201,10 @@ pub fn hybrid_search_scored<'a>(
         .filter_map(|(idx, &id)| {
             let start = idx * dimension;
             let v_data = &data[start..start + dimension];
-            let vector_score = metric.calculate(query_vector, v_data);
+            // A distance is negated so the blend is higher-is-better under
+            // every metric, as core's fusion orients a lower-is-better branch.
+            let raw = metric.calculate(query_vector, v_data);
+            let vector_score = if higher_is_better { raw } else { -raw };
 
             let payload = payloads[idx].as_ref();
             let text_score = payload.map_or(0.0, |p| {
@@ -196,7 +216,12 @@ pub fn hybrid_search_scored<'a>(
             });
 
             let combined_score = v_weight * vector_score + t_weight * text_score;
-            if combined_score > 0.0 {
+            // A row needs a weighted branch speaking for it: with the vector
+            // weighted 0 the search is text-only, under every metric. Above
+            // that, the relevance floor is a similarity's: a negated distance
+            // is never above it, so a distance metric keeps every row.
+            let ranked = v_weight > 0.0 || text_score > 0.0;
+            if ranked && (!higher_is_better || combined_score > 0.0) {
                 Some((id, combined_score, payload))
             } else {
                 None
@@ -271,17 +296,21 @@ pub fn multi_query_search_impl(
     validate_multi_vector_len(vectors.len(), num_vectors, dimension)
         .map_err(|e| JsValue::from_str(&e))?;
     // `weights` is strategy-conditional: `"weighted"` reads its
-    // [avg, max, hit] triple, `"weighted_rrf"` reads one weight per
-    // query vector, and every other strategy ignores it.
-    let (weights, branch_weights) = if strategy.eq_ignore_ascii_case("weighted_rrf") {
+    // [avg, max, hit] triple, `"weighted_rrf"` and `"relative_score"` /
+    // `"rsf"` read one weight per query vector, and every other strategy
+    // ignores it.
+    let per_branch = ["weighted_rrf", "relative_score", "rsf"]
+        .iter()
+        .any(|name| strategy.eq_ignore_ascii_case(name));
+    let (weights, branch_weights) = if per_branch {
         let branch_weights = match weights {
             Some(w) if w.len() == num_vectors => Some(w),
             Some(w) => {
                 return Err(JsValue::from_str(&format!(
-                    "weighted_rrf fusion expects one weight per query vector: {} weights for {} vectors",
-                    w.len(),
-                    num_vectors
-                )))
+                "{strategy} fusion expects one weight per query vector: {} weights for {} vectors",
+                w.len(),
+                num_vectors
+            )))
             }
             // `None` reaches core as missing weights — the named refusal,
             // not an invented default.
@@ -312,6 +341,7 @@ pub fn multi_query_search_impl(
         rrf_k.unwrap_or(60),
         weights,
         branch_weights,
+        metric,
     )
     .map_err(|e| JsValue::from_str(&e))?;
     let fused: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
@@ -408,3 +438,7 @@ pub fn batch_search_impl(
         .collect();
     to_js(&all_results)
 }
+
+#[cfg(test)]
+#[path = "store_guards_tests.rs"]
+mod guards_tests;

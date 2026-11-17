@@ -6,8 +6,8 @@ use crate::velesql::{
     AlterCollectionStatement, CompareOp, Comparison, Condition, CreateCollectionKind,
     CreateCollectionStatement, DdlStatement, DeleteEdgeStatement, DeleteStatement, DmlStatement,
     DropCollectionStatement, GraphCollectionParams, GraphSchemaMode, InCondition,
-    InsertEdgeStatement, Query, SchemaDefinition, SelectEdgesStatement, TruncateStatement, Value,
-    VectorCollectionParams,
+    InsertEdgeStatement, InsertStatement, Query, SchemaDefinition, SelectEdgesStatement,
+    TruncateStatement, Value, VectorCollectionParams,
 };
 use crate::wire::hash_edge_id;
 use tempfile::tempdir;
@@ -481,7 +481,7 @@ fn test_delete_edge() {
     assert_eq!(results.len(), 1, "DELETE EDGE should return one result");
     let payload = results[0].point.payload.as_ref().expect("payload");
     assert_eq!(payload["deleted"], true);
-    assert_eq!(payload["edge_id"], 1);
+    assert_eq!(payload["edge_id"], "1");
 
     assert_eq!(gc.edge_count(), 1);
     let remaining = gc.get_edges(None);
@@ -513,7 +513,7 @@ fn test_delete_edge_nonexistent_reports_false() {
     assert_eq!(results.len(), 1);
     let payload = results[0].point.payload.as_ref().expect("payload");
     assert_eq!(payload["deleted"], false);
-    assert_eq!(payload["edge_id"], 999);
+    assert_eq!(payload["edge_id"], "999");
 }
 
 #[test]
@@ -739,15 +739,29 @@ fn test_insert_edge_into_nonexistent_collection() {
 }
 
 #[test]
-fn test_delete_with_unsupported_where_returns_error() {
+fn test_delete_with_a_payload_where_removes_the_matching_points() {
     let dir = tempdir().expect("tempdir");
     let db = Database::open(dir.path()).expect("open");
 
-    db.create_vector_collection("del_bad", 4, crate::DistanceMetric::Cosine)
+    db.create_vector_collection("del_payload", 4, crate::DistanceMetric::Cosine)
         .expect("create");
+    let vc = db.get_vector_collection("del_payload").expect("get");
+    vc.upsert(vec![
+        crate::Point::new(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            Some(serde_json::json!({"name": "test"})),
+        ),
+        crate::Point::new(
+            2,
+            vec![0.0, 1.0, 0.0, 0.0],
+            Some(serde_json::json!({"name": "keep"})),
+        ),
+    ])
+    .expect("upsert");
 
     let dml = DmlStatement::Delete(DeleteStatement {
-        table: "del_bad".to_string(),
+        table: "del_payload".to_string(),
         where_clause: Condition::Comparison(Comparison {
             column: "name".to_string(),
             operator: CompareOp::Eq,
@@ -755,11 +769,9 @@ fn test_delete_with_unsupported_where_returns_error() {
         }),
     });
 
-    let err = execute_dml(&db, dml).expect_err("should fail");
-    assert!(
-        matches!(err, crate::Error::Query(_)),
-        "Expected Query error for unsupported WHERE, got: {err:?}"
-    );
+    execute_dml(&db, dml).expect("DELETE by a payload column");
+    assert!(vc.get(&[1])[0].is_none(), "the matching point is gone");
+    assert!(vc.get(&[2])[0].is_some(), "the other point stays");
 }
 
 #[test]
@@ -953,6 +965,65 @@ fn test_rejecting_observer_blocks_delete() {
     let msg = err.to_string();
     assert!(
         msg.contains("RBAC: DELETE on 'some_coll' denied"),
+        "Unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn test_rejecting_observer_blocks_insert_and_upsert() {
+    let dir = tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open");
+
+    // Create without observer so the collection exists.
+    let create = DdlStatement::CreateCollection(CreateCollectionStatement {
+        name: "points".to_string(),
+        kind: CreateCollectionKind::Metadata,
+    });
+    execute_ddl(&db, create).expect("create");
+    drop(db);
+
+    // Re-open with rejecting observer.
+    let observer: std::sync::Arc<dyn crate::observer::DatabaseObserver> =
+        std::sync::Arc::new(RejectingObserver);
+    let db = Database::open_with_observer(dir.path(), observer).expect("reopen");
+
+    let insert_stmt = || InsertStatement {
+        table: "points".to_string(),
+        columns: vec!["id".to_string()],
+        rows: vec![vec![Value::Integer(1)]],
+    };
+
+    let err = execute_dml(&db, DmlStatement::Insert(insert_stmt()))
+        .expect_err("INSERT should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: INSERT on 'points' denied"),
+        "Unexpected error: {msg}"
+    );
+
+    let err = execute_dml(&db, DmlStatement::Upsert(insert_stmt()))
+        .expect_err("UPSERT should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: UPSERT on 'points' denied"),
+        "Unexpected error: {msg}"
+    );
+
+    let err = execute_dml(
+        &db,
+        DmlStatement::Update(crate::velesql::UpdateStatement {
+            table: "points".to_string(),
+            assignments: vec![crate::velesql::UpdateAssignment {
+                column: "title".to_string(),
+                value: Value::String("x".to_string()),
+            }],
+            where_clause: None,
+        }),
+    )
+    .expect_err("UPDATE should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("RBAC: UPDATE on 'points' denied"),
         "Unexpected error: {msg}"
     );
 }
@@ -1234,5 +1305,5 @@ fn test_select_edges_and_swaps_for_selectivity() {
     // Only edge 1 matches (source=10 AND label=KNOWS); edge 2 is LIKES, edge 3 is source=40.
     assert_eq!(results.len(), 1);
     let payload = results[0].point.payload.as_ref().expect("payload");
-    assert_eq!(payload["edge_id"], 1);
+    assert_eq!(payload["edge_id"], "1");
 }

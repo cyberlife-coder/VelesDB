@@ -9,11 +9,16 @@ use super::Database;
 
 impl Database {
     /// Executes an INSERT or UPSERT statement (single or multi-row).
+    ///
+    /// `operation` is `"INSERT"` or `"UPSERT"`, reported to the observer's
+    /// `on_dml_mutation_request` veto hook before any write.
     pub(super) fn execute_insert(
         &self,
         stmt: &crate::velesql::InsertStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        operation: &str,
     ) -> Result<Vec<SearchResult>> {
+        self.check_dml_mutation(operation, &stmt.table)?;
         let collection = self.resolve_writable_collection(&stmt.table)?;
 
         let mut points = Vec::with_capacity(stmt.rows.len());
@@ -33,13 +38,9 @@ impl Database {
             .iter()
             .map(|p| SearchResult::new(p.clone(), 0.0))
             .collect();
-        let point_count = points.len();
+        // `on_upsert` fires inside `Collection::upsert`, once, as for every
+        // write to a registered collection (`collection::write_telemetry`).
         collection.upsert(points)?;
-        // Requirement 2.1/2.3/2.5: fire `on_upsert` exactly once at the Database
-        // DML use-case entry after the write completes, with the exact affected
-        // point count. Placed here (not inside `Collection::upsert`) so the
-        // programmatic collection API is not double-counted by this path.
-        self.fire_on_upsert(&stmt.table, point_count);
         Ok(results)
     }
 
@@ -109,35 +110,20 @@ impl Database {
         stmt: &crate::velesql::UpdateStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
+        self.check_dml_mutation("UPDATE", &stmt.table)?;
         let collection = self.resolve_writable_collection(&stmt.table)?;
 
         let assignments = Self::resolve_update_assignments(stmt, params)?;
-        let filter = Self::build_update_filter(stmt.where_clause.as_ref(), params)?;
+        let filter = Self::build_dml_filter("UPDATE", stmt.where_clause.as_ref(), params)?;
+        let rows = Self::matching_points(&collection, filter.as_ref());
+        let updated_points = rows
+            .iter()
+            .map(|point| Self::apply_assignments_to_point(&collection, point, &assignments))
+            .collect::<Result<Vec<_>>>()?;
 
-        // `WHERE id = n` / `id IN (...)` name their points, as DELETE's
-        // WHERE does: read those, not the whole collection. `get` reads the
-        // scan universe — in a vector collection a point must carry its
-        // vector — so an UPDATE mutates exactly the rows a SELECT over the
-        // same ids sees; a payload-only id `all_point_ids` lists comes
-        // back `None` and is skipped by `apply_update_assignments`.
-        let ids = filter
-            .as_ref()
-            .and_then(|f| f.condition.point_ids())
-            .unwrap_or_else(|| collection.all_point_ids());
-        let rows = collection.get(&ids);
-        let updated_points =
-            Self::apply_update_assignments(&collection, rows, filter.as_ref(), &assignments)?;
-
-        let point_count = updated_points.len();
-        let results = Self::upsert_and_collect(&collection, updated_points)?;
-        // Requirement 2.1/2.3/2.5: an UPDATE writes via `Collection::upsert`;
-        // fire `on_upsert` exactly once after the write completes, with the
-        // exact affected point count. `upsert_and_collect` no-ops on an empty
-        // set (no write occurred), so only fire when points were written.
-        if point_count > 0 {
-            self.fire_on_upsert(&stmt.table, point_count);
-        }
-        Ok(results)
+        // An UPDATE writes via `Collection::upsert`, which reports the write to
+        // the observer itself (`collection::write_telemetry`).
+        Self::upsert_and_collect(&collection, updated_points)
     }
 
     /// Resolves and validates UPDATE assignment values.
@@ -175,25 +161,25 @@ impl Database {
         Ok(results)
     }
 
-    /// Applies field assignments to matching points, producing updated points.
-    fn apply_update_assignments(
+    /// The points a DML WHERE `filter` selects — the rows UPDATE writes and a
+    /// general DELETE removes. `WHERE id = n` / `id IN (...)` name their
+    /// points: those are read, not the whole collection. `get` reads the scan
+    /// universe — in a vector collection a point must carry its vector — so a
+    /// DML statement touches exactly the rows a SELECT with the same WHERE
+    /// sees.
+    pub(super) fn matching_points(
         collection: &crate::collection::Collection,
-        rows: Vec<Option<crate::Point>>,
         filter: Option<&crate::Filter>,
-        assignments: &[(String, serde_json::Value)],
-    ) -> Result<Vec<crate::Point>> {
-        let mut updated_points = Vec::new();
-        for point in rows.into_iter().flatten() {
-            if !Self::matches_update_filter(&point, filter) {
-                continue;
-            }
-            updated_points.push(Self::apply_assignments_to_point(
-                collection,
-                &point,
-                assignments,
-            )?);
-        }
-        Ok(updated_points)
+    ) -> Vec<crate::Point> {
+        let ids = filter
+            .and_then(|f| f.condition.point_ids())
+            .unwrap_or_else(|| collection.all_point_ids());
+        collection
+            .get(&ids)
+            .into_iter()
+            .flatten()
+            .filter(|point| Self::matches_dml_filter(point, filter))
+            .collect()
     }
 
     /// Applies field assignments to a single point, producing the updated point.

@@ -343,29 +343,42 @@ fn test_match_where_in_combined_with_comparison() {
 }
 
 // ============================================================================
-// `!=` parity with SELECT: a missing or cross-typed property is "not equal"
+// `!=` parity with SELECT: a missing or null property is UNKNOWN, a
+// cross-typed one is "not equal"
 // ============================================================================
 
 #[test]
-fn test_match_where_neq_on_missing_or_null_property_keeps_node() {
+fn test_match_where_neq_on_missing_or_null_property_drops_node() {
     // GIVEN: items where `optional_field` is missing (ids 1, 3), an
     // explicit null (id 5), 'present' (id 2) and 'value' (id 4).
     let (_dir, collection) = setup_collection();
 
     // WHEN: MATCH WHERE n.optional_field != 'present'
-    // THEN: a missing or null property is not equal to 'present', so the
-    // node is kept — the same truth value SELECT's `!=` gives a missing
-    // field. Only node 2 carries 'present' and is excluded.
-    let query =
-        Parser::parse("MATCH (n:Item) WHERE n.optional_field != 'present' RETURN n LIMIT 10")
-            .expect("test: parse");
-    let match_clause = query.match_clause.as_ref().expect("test: match clause");
-    let results = collection
-        .execute_match(match_clause, &HashMap::new())
-        .expect("test: execute match");
-    let mut ids: Vec<u64> = results.iter().map(|r| r.node_id).collect();
-    ids.sort_unstable();
-    assert_eq!(ids, vec![1, 3, 4, 5]);
+    // THEN: on a missing or null property the comparison is UNKNOWN, which
+    // WHERE does not admit — SELECT's `!=` gives the same answer (SQL's
+    // three-valued logic). Only node 4 carries a value other than 'present';
+    // `OR n.optional_field IS NULL` is how a query keeps the others.
+    let run = |sql: &str| {
+        let query = Parser::parse(sql).expect("test: parse");
+        let match_clause = query.match_clause.as_ref().expect("test: match clause");
+        let mut ids: Vec<u64> = collection
+            .execute_match(match_clause, &HashMap::new())
+            .expect("test: execute match")
+            .iter()
+            .map(|r| r.node_id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    };
+    assert_eq!(
+        run("MATCH (n:Item) WHERE n.optional_field != 'present' RETURN n LIMIT 10"),
+        vec![4]
+    );
+    assert_eq!(
+        run("MATCH (n:Item) WHERE n.optional_field != 'present' \
+             OR n.optional_field IS NULL RETURN n LIMIT 10"),
+        vec![1, 3, 4, 5]
+    );
 }
 
 #[test]

@@ -10,6 +10,8 @@ use std::hash::Hasher;
 
 use rustc_hash::FxHasher;
 
+use crate::distance::rank_scores;
+
 use super::aggregator::{AggregateResult, Aggregator};
 use super::ast::{
     AggregateFunction, AggregateType, HavingClause, SelectColumns, SelectStatement, WithClause,
@@ -18,6 +20,7 @@ use super::ast::{
 use super::group_key::{hash_key_value, normalise, same_key};
 use super::grouped_order::vector_group_score_is_average;
 use super::json_order::compare_json_values;
+use super::json_path::payload_path;
 
 /// A row offered to a [`Grouper`].
 #[derive(Debug, Clone, Copy)]
@@ -446,18 +449,6 @@ fn mean(sum: f64, rows: u64) -> f32 {
     (sum / rows as f64) as f32
 }
 
-/// A payload value by dotted path (`meta.lang`), as WHERE reads it.
-pub(crate) fn payload_path<'a>(
-    payload: &'a serde_json::Value,
-    path: &str,
-) -> Option<&'a serde_json::Value> {
-    path.split('.')
-        .try_fold(payload, |current, part| match current {
-            serde_json::Value::Object(map) => map.get(part),
-            _ => None,
-        })
-}
-
 /// A field of an output row: the key itself first — a group row stores a
 /// dotted name such as `first_meta.title` flat — then the dotted path.
 #[must_use]
@@ -476,16 +467,5 @@ fn select_aggregations(columns: &SelectColumns) -> &[AggregateFunction] {
             aggregations
         }
         _ => &[],
-    }
-}
-
-/// Orders scores most similar first, NaN last.
-fn rank_scores(a: f32, b: f32, higher_is_better: bool) -> std::cmp::Ordering {
-    match (a.is_nan(), b.is_nan()) {
-        (true, true) => std::cmp::Ordering::Equal,
-        (true, false) => std::cmp::Ordering::Greater,
-        (false, true) => std::cmp::Ordering::Less,
-        (false, false) if higher_is_better => b.total_cmp(&a),
-        (false, false) => a.total_cmp(&b),
     }
 }

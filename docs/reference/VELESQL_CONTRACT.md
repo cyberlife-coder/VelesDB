@@ -214,8 +214,11 @@ a guard-rail ceiling the query crossed, a `WITH (timeout_ms = N)` budget
 tighter than the server's limit running out, …) and the engine's own status
 otherwise — `500` for a storage, I/O or internal fault, `503` for a timeout
 under the server's limit, the memory budget, an open circuit breaker or a
-locked database — keeping the `VELESQL_*` code. `WITH (timeout_ms = N)` can
-shorten the server's limit, never lengthen it, and `0` keeps it.
+locked database — keeping the `VELESQL_*` code. A statement the database's
+observer refuses (`Error::AccessDenied`, VELES-037) is the exception among
+the client's errors: it is not malformed, so it answers `403`, as on every
+other endpoint. `WITH (timeout_ms = N)` can shorten the server's limit, never
+lengthen it, and `0` keeps it.
 
 `/collections/{name}/match` no longer emits the bespoke `*_ERROR`
 strings (`COLLECTION_NOT_FOUND` / `PARSE_ERROR` / `EXECUTION_ERROR` / …).

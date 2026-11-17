@@ -37,6 +37,7 @@ mod cache;
 mod cache_tests;
 #[cfg(test)]
 mod cbo_tests;
+mod clock;
 #[cfg(test)]
 mod complex_parser_tests;
 mod cost_estimator;
@@ -88,12 +89,40 @@ mod match_planner_tests;
 mod orderby_multi_tests;
 #[cfg(test)]
 mod parallel_aggregation_tests;
+mod param_binding;
+pub use param_binding::{bind_condition, bind_match_clause, bind_value};
+pub(crate) mod condition_tree;
+mod edge_query;
+mod hash_join;
+mod join_row;
+mod pattern_match;
+mod score_context;
+mod set_operation;
+mod similarity_threshold;
+mod vector_predicates;
+#[cfg(feature = "persistence")]
+pub(crate) use edge_query::literal_id;
+pub use edge_query::EdgeQuery;
+pub use hash_join::{hash_join, JoinKeys};
+pub use join_row::{merge_side, scope_base, side_alias};
+pub use pattern_match::{element_property, has_every_label, inline_properties_hold};
+pub use score_context::{
+    evaluate_arithmetic, evaluate_let_bindings, is_builtin_score_variable, ScoreContext,
+};
+pub use set_operation::{
+    compound_window, execute_compound, operand_queries, row_key, CompoundWindow,
+};
+pub use similarity_threshold::{similarity_holds, SIMILARITY_EQ_TOLERANCE};
+pub use vector_predicates::{
+    payload_vector, validate_vector_predicates, METADATA_MATCH_SCORE, PRIMARY_VECTOR_FIELD,
+};
 mod parser;
 #[cfg(test)]
 mod parser_tests;
 mod planner;
 #[cfg(test)]
 mod planner_tests;
+mod projection_item;
 #[cfg(test)]
 mod projection_parser_tests;
 mod query_stats;
@@ -281,6 +310,7 @@ pub use ast::{
     WithValue,
     // Implicit LIMIT contract (every SELECT without LIMIT)
     DEFAULT_SELECT_LIMIT,
+    MAX_SELECT_LIMIT,
 };
 pub use graph_pattern::*;
 // Re-export match_clause parser functions for benchmarks
@@ -308,4 +338,5 @@ pub use parser::Parser;
 pub use planner::{
     Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats, SelectivityMethod,
 };
+pub use projection_item::{parse_projection_item, parse_property_path, ProjectionItem};
 pub use validation::{QueryValidator, ValidationConfig, ValidationError, ValidationErrorKind};

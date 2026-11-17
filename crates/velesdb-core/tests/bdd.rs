@@ -39,6 +39,8 @@ mod ddl_lifecycle;
 mod default_limit;
 #[path = "bdd/dml_enhanced.rs"]
 mod dml_enhanced;
+#[path = "bdd/edge_dml_any_collection.rs"]
+mod edge_dml_any_collection;
 #[path = "bdd/exact_numbers.rs"]
 mod exact_numbers;
 #[path = "bdd/explain_analyze.rs"]
@@ -75,10 +77,16 @@ mod index_management;
 mod introspection;
 #[path = "bdd/join_exact_conformance.rs"]
 mod join_exact_conformance;
+#[path = "bdd/match_cross_collection_properties.rs"]
+mod match_cross_collection_properties;
+#[path = "bdd/match_deep_property_path.rs"]
+mod match_deep_property_path;
 #[path = "bdd/match_graph_first.rs"]
 mod match_graph_first;
 #[path = "bdd/match_id_semantics.rs"]
 mod match_id_semantics;
+#[path = "bdd/match_inline_properties.rs"]
+mod match_inline_properties;
 #[path = "bdd/match_order_by_core.rs"]
 mod match_order_by_core;
 #[path = "bdd/match_order_by_exact.rs"]
@@ -89,10 +97,14 @@ mod match_relationship_semantics;
 mod match_traversal_exact;
 #[path = "bdd/match_vector_first.rs"]
 mod match_vector_first;
+#[path = "bdd/match_where_similarity_score.rs"]
+mod match_where_similarity_score;
 #[path = "bdd/metrics_ranking_conformance.rs"]
 mod metrics_ranking_conformance;
 #[path = "bdd/near_exact_ranking.rs"]
 mod near_exact_ranking;
+#[path = "bdd/near_fused_exactness.rs"]
+mod near_fused_exactness;
 #[path = "bdd/near_fused_parse_only.rs"]
 mod near_fused_parse_only;
 #[path = "bdd/not_filters_exact.rs"]
@@ -115,6 +127,8 @@ mod scalar_subqueries;
 mod secondary_index_bitmap_in;
 #[path = "bdd/set_operations.rs"]
 mod set_operations;
+#[path = "bdd/similarity_threshold_exactness.rs"]
+mod similarity_threshold_exactness;
 #[path = "bdd/sparse_near_conformance.rs"]
 mod sparse_near_conformance;
 #[path = "bdd/temporal_computed_orderby.rs"]
@@ -129,5 +143,7 @@ mod velesql_reject_conformance;
 mod where_filters;
 #[path = "bdd/where_params.rs"]
 mod where_params;
+#[path = "bdd/where_three_valued_logic.rs"]
+mod where_three_valued_logic;
 #[path = "bdd/window_functions.rs"]
 mod window_functions;

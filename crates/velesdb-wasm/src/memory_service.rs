@@ -72,8 +72,8 @@ use dto::{
 };
 use errors::{invalid_input, to_js_err, CODE_INTERNAL};
 use marshal::{
-    id_to_string, parse_fragment_id_strings, parse_id, parse_id_fields, stringify_id_fields,
-    to_filters, to_fusion_options, to_links, to_metadata,
+    id_to_string, parse_id, stringify_id_fields, to_filters, to_fusion_options, to_links,
+    to_metadata,
 };
 
 use serde::Serialize;
@@ -407,9 +407,8 @@ impl WasmMemoryService {
     /// within the current browser session (no persistence in WASM).
     #[wasm_bindgen(js_name = compileContext)]
     pub fn compile_context(&self, request: JsValue) -> Result<JsValue, JsValue> {
-        let mut request: Value = serde_wasm_bindgen::from_value(request)
+        let request: Value = serde_wasm_bindgen::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
-        parse_fragment_id_strings(&mut request)?;
         let request: CompileRequest = serde_json::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
         // Annotated, not inferred: this binding relays the SERVER'S own
@@ -501,9 +500,8 @@ impl WasmMemoryService {
         fragment_id: &str,
         fragment_index: Option<usize>,
     ) -> Result<JsValue, JsValue> {
-        let mut request: Value = serde_wasm_bindgen::from_value(request)
+        let request: Value = serde_wasm_bindgen::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
-        parse_fragment_id_strings(&mut request)?;
         let request: CompileRequest = serde_json::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
         let fragment_id = parse_id(fragment_id)?;
@@ -592,9 +590,8 @@ impl WasmMemoryService {
         session: &str,
         working: JsValue,
     ) -> Result<String, JsValue> {
-        let mut working: Value = serde_wasm_bindgen::from_value(working)
+        let working: Value = serde_wasm_bindgen::from_value(working)
             .map_err(|e| invalid_input(format!("invalid working context: {e}")))?;
-        parse_id_fields(&mut working)?;
         let working: WorkingContext = serde_json::from_value(working)
             .map_err(|e| invalid_input(format!("invalid working context: {e}")))?;
         self.inner

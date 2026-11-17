@@ -5,9 +5,7 @@
 
 use pyo3::prelude::*;
 use std::collections::HashMap;
-use velesdb_core::QueryOperationKind;
 
-use crate::collection::deny_if_scoped;
 use crate::collection::query::{
     build_explain_analyze_dict, build_explain_dict, convert_params, parse_velesql,
     retarget_to_collection, run_velesql_match, run_velesql_select, run_velesql_select_ids,
@@ -93,27 +91,18 @@ impl PyGraphCollection {
         vector: Option<Py<PyAny>>,
         threshold: f32,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        // No gated `Database` twin returns `MatchResult`, so the read gate is
-        // consulted here: deny fails closed, and a scope filter also fails
-        // closed because the MATCH leaf takes no metadata filter and
-        // `MatchResult` carries no payload to post-filter (mirrors
-        // `Collection.match_query`, #1405 / #1392).
-        let scope = self
-            .db
-            .authorize_read(&self.name, QueryOperationKind::GraphTraversal, None, None)
-            .map_err(core_err)?;
-        deny_if_scoped(scope, "match_query")?;
-
-        let inner = &self.inner;
+        // Through the owning database, as REST `/match` runs: the read gate
+        // on this collection and on every `@collection` the clause names
+        // (a scope is refused: a MATCH row carries no payload to narrow),
+        // the annotated nodes' properties, `search.max_results`, and the
+        // observer's `on_query`.
+        let db = &self.db;
+        let name = &self.name;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
-            if let Some(ref qv) = qv {
-                inner.execute_match_with_similarity(&mc, qv, threshold, &p)
-            } else {
-                // Route through the cost-based planner so RETURN ORDER BY,
-                // deterministic tie-break, and post-sort LIMIT match the SQL
-                // /query path exactly (backlog #1).
-                inner.match_query_ordered(&mc, &p)
-            }
+            let scoring = qv
+                .as_deref()
+                .map(|vector| velesdb_core::MatchScoring { vector, threshold });
+            db.match_query(name, &mc, &p, scoring)
         })
     }
 

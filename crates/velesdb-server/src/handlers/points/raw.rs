@@ -79,5 +79,5 @@ pub async fn upsert_points_raw(
     })
     .await;
 
-    upsert_result_to_response(&state, &name, result)
+    upsert_result_to_response(result)
 }

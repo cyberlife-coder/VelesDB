@@ -38,13 +38,19 @@ impl Database {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
-        self.execute_aggregate_gated(query, params, &GateDecisions::default())
+        // Reported like any `execute_query` statement: once, at its boundary,
+        // its scalar subqueries included.
+        self.report_statement(query, params, || {
+            self.execute_aggregate_gated(query, params, &GateDecisions::default())
+        })
     }
 
     /// [`execute_aggregate`](Self::execute_aggregate) sharing the caller's
     /// statement gate memo (issue #2588): a scalar subquery resolving to this
     /// aggregate replays the outer statement's decisions rather than
     /// consulting the observer a second time for the same collection.
+    /// Unreported, like `execute_query_gated`: the statement's entry point
+    /// reports it.
     pub(super) fn execute_aggregate_gated(
         &self,
         query: &crate::velesql::Query,
@@ -60,8 +66,33 @@ impl Database {
         }
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
         let authorized = self.authorize_statement(query, params, decisions)?;
+        if !authorized.query().select.joins.is_empty() {
+            return self.aggregate_joined(authorized.query(), params);
+        }
         let collection = self.resolve_read_target(&authorized, AGGREGATE_TARGET_MISSING)?;
         collection.execute_aggregate(authorized.query(), params)
+    }
+
+    /// An aggregation over a JOIN: the joined rows, WHERE applied and
+    /// unwindowed, grouped as a scan's points are
+    /// ([`crate::collection::Collection::aggregate_rows`]). Before, the JOIN
+    /// was dropped and the base collection aggregated alone.
+    fn aggregate_joined(
+        &self,
+        query: &crate::velesql::Query,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let mut rows_query = query.clone();
+        let select = &mut rows_query.select;
+        select.columns = crate::velesql::SelectColumns::All;
+        select.group_by = None;
+        select.having = None;
+        select.order_by = None;
+        select.offset = None;
+        select.limit = None;
+        let budget = select.clone();
+        let rows = self.joined_rows(rows_query, &budget, params, None)?;
+        crate::collection::Collection::aggregate_rows(query, &rows, params)
     }
 }
 

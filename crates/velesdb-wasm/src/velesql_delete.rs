@@ -32,7 +32,7 @@ fn remove_indices_desc(
     sorted.sort_unstable_by(|a, b| b.cmp(a));
     let mut borrowed = store.borrow_mut();
     for &idx in &sorted {
-        crate::store_insert::remove_at_index(&mut borrowed, idx);
+        crate::store_insert::delete_at_index(&mut borrowed, idx);
     }
 }
 

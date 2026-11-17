@@ -31,11 +31,13 @@ use std::rc::Rc;
 /// `QueryOperationKind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WasmQueryOperationKind {
-    /// Dense vector similarity search (`WasmCollectionHandle::search`).
+    /// Dense vector similarity search: `WasmCollectionHandle::search`, and a
+    /// VelesQL `SELECT` whose WHERE holds a `NEAR`, as core classifies it.
     VectorSearch,
     /// Relational-style VelesQL `SELECT` (incl. JOIN / aggregation / FUSION /
-    /// `NEAR` / `similarity()` / set operations — they all funnel through
-    /// `velesql_select::execute`).
+    /// `similarity()` / set operations — they all funnel through
+    /// `velesql_select::execute`); a JOIN's secondary collection is read as
+    /// one, whatever the source's kind.
     Select,
     /// Graph traversal: VelesQL `MATCH` and `SELECT EDGES`.
     GraphTraversal,

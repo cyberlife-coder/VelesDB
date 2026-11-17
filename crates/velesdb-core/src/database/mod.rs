@@ -17,7 +17,7 @@
 use crate::collection::{GraphCollection, MetadataCollection, VectorCollection};
 use crate::observer::DatabaseObserver;
 use crate::simd_dispatch;
-use crate::{ColumnStore, Error, Result};
+use crate::{Error, Result};
 
 /// Shared out-cell for the executed filter strategy, threaded from the
 /// EXPLAIN ANALYZE counted path down to the base collection's query pipeline.
@@ -25,18 +25,19 @@ pub(crate) type StrategyProbeSlot = std::sync::Arc<crate::guardrails::ExecutedSt
 
 mod admin_executor;
 mod collection_ops;
-mod cross_collection;
 mod ddl_executor;
 mod dml_executor;
 mod gated_search;
 mod graph_ops;
 mod introspection_executor;
 mod join_pushdown;
+mod match_query;
 mod metadata_ops;
 mod persistence;
 mod query_engine;
 mod query_engine_agg;
 mod query_engine_dml;
+mod query_engine_join;
 mod query_join;
 mod read_authorization;
 mod stats;
@@ -75,6 +76,7 @@ mod query_join_tests;
 mod stats_tests;
 
 pub use gated_search::GatedRead;
+pub use match_query::MatchScoring;
 
 /// Database instance managing collections and storage.
 ///
@@ -130,7 +132,7 @@ pub struct Database {
     /// Stores recently compiled `QueryPlan` instances keyed by `PlanKey`.
     /// Default sizing: L1 = 1K hot entries, L2 = 10K LRU entries.
     compiled_plan_cache: crate::cache::CompiledPlanCache,
-    /// JOIN-side `ColumnStore` cache keyed by collection name (CACHE-03).
+    /// JOIN-side points cache keyed by collection name (CACHE-03).
     ///
     /// An entry is valid only while its `(schema_version, write_generation)`
     /// stamp matches the live counters, so any mutation — or a drop/recreate
@@ -355,31 +357,16 @@ impl Database {
     }
 
     // =========================================================================
-    // Observer notification helpers (called by server handlers after operations)
+    // Deprecated observer notification shims
     // =========================================================================
 
-    /// Fires the `on_upsert` telemetry hook once for a completed upsert write.
+    /// Invokes the observer's `on_upsert` directly.
     ///
-    /// Called by the core use-case DML entry points (INSERT/UPSERT and UPDATE
-    /// in [`query_engine_dml`]) after the data-plane write completes, so a
-    /// single completed operation results in exactly one `on_upsert`
-    /// invocation (Requirement 2.1, 2.3, 2.5). This is the internal replacement
-    /// for the deprecated [`Database::notify_upsert`] shim — it is invoked by
-    /// core itself rather than by callers, and is a single pointer check when
-    /// no observer is present (Requirement 2.4).
-    pub(super) fn fire_on_upsert(&self, collection: &str, point_count: usize) {
-        if let Some(ref obs) = self.observer {
-            obs.on_upsert(collection, point_count);
-        }
-    }
-
-    /// Notifies the observer that points were upserted into a collection.
-    ///
-    /// **Caller contract**: this method is NOT called automatically by
-    /// [`Database`] internals. HTTP handlers and SDK bindings are responsible
-    /// for calling it after a successful upsert, passing the number of points
-    /// written. Forgetting to call it means the observer receives no upsert
-    /// events for that operation.
+    /// Core already reports every write to a collection this database
+    /// registered — `VelesQL` DML and the programmatic collection API alike —
+    /// from the collection's storage entry points (see
+    /// `Database::admit_collection`). Calling this after such a write reports
+    /// it a second time.
     ///
     /// No-op when no observer is registered.
     #[deprecated(
@@ -395,12 +382,12 @@ impl Database {
         }
     }
 
-    /// Notifies the observer that a query was executed, with its duration.
+    /// Invokes the observer's `on_query` directly.
     ///
-    /// **Caller contract**: this method is NOT called automatically by
-    /// [`Database::execute_query`]. Callers must measure the wall-clock
-    /// duration themselves (e.g. `std::time::Instant::now()` before the call)
-    /// and invoke this method afterwards with the elapsed microseconds.
+    /// Core already reports every completed read it runs or gates —
+    /// `execute_query`, `execute_aggregate`, `gated_search` and
+    /// `run_gated_read` — once per statement or search. Calling this after
+    /// one reports it a second time.
     ///
     /// No-op when no observer is registered.
     #[deprecated(

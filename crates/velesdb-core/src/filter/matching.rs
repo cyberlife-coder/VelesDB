@@ -88,14 +88,10 @@ fn in_list_matches(field_val: &Value, values: &InValues) -> bool {
     }
 }
 
-/// Evaluates array-level conditions (single, any, all).
-fn match_array_condition(
-    record: Record<'_>,
-    field: &str,
-    values: &[Value],
-    mode: ArrayMode,
-) -> bool {
-    get_field(record, field).is_some_and(|v| match v.as_ref() {
+/// Evaluates array-level conditions (single, any, all) on a known operand:
+/// an array is tested, any other value is known not to contain anything.
+fn match_array_condition(operand: &Value, values: &[Value], mode: ArrayMode) -> bool {
+    match operand {
         Value::Array(arr) => match mode {
             ArrayMode::Single => values
                 .first()
@@ -108,7 +104,7 @@ fn match_array_condition(
                 .all(|val| arr.iter().any(|e| values_equal(e, val))),
         },
         _ => false,
-    })
+    }
 }
 
 /// Array condition matching mode.
@@ -119,36 +115,25 @@ enum ArrayMode {
     All,
 }
 
-/// Evaluates geospatial conditions (distance, bounding box).
+/// Evaluates a geospatial distance on a known operand; a value that is not
+/// a `{lat, lng}` point is known not to satisfy it.
 fn match_geo_distance(
-    record: Record<'_>,
-    field: &str,
+    operand: &Value,
     lat: f64,
     lng: f64,
     operator: crate::velesql::CompareOp,
     threshold: f64,
 ) -> bool {
-    get_field(record, field).is_some_and(|v| {
-        extract_geo_point(&v).is_some_and(|(plat, plng)| {
-            let dist = crate::geo_distance::great_circle_distance_m(plat, plng, lat, lng);
-            crate::geo_distance::distance_satisfies(dist, operator.into(), threshold)
-        })
+    extract_geo_point(operand).is_some_and(|(plat, plng)| {
+        let dist = crate::geo_distance::great_circle_distance_m(plat, plng, lat, lng);
+        crate::geo_distance::distance_satisfies(dist, operator.into(), threshold)
     })
 }
 
-/// Evaluates a geospatial bounding box check.
-fn match_geo_bbox(
-    record: Record<'_>,
-    field: &str,
-    lat_min: f64,
-    lng_min: f64,
-    lat_max: f64,
-    lng_max: f64,
-) -> bool {
-    get_field(record, field).is_some_and(|v| {
-        extract_geo_point(&v).is_some_and(|(plat, plng)| {
-            plat >= lat_min && plat <= lat_max && plng >= lng_min && plng <= lng_max
-        })
+/// Evaluates a geospatial bounding box on a known operand.
+fn match_geo_bbox(operand: &Value, lat_min: f64, lng_min: f64, lat_max: f64, lng_max: f64) -> bool {
+    extract_geo_point(operand).is_some_and(|(plat, plng)| {
+        plat >= lat_min && plat <= lat_max && plng >= lng_min && plng <= lng_max
     })
 }
 
@@ -159,6 +144,34 @@ fn extract_geo_point(v: &Value) -> Option<(f64, f64)> {
     Some((lat, lng))
 }
 
+/// Kleene AND: known false as soon as one operand is, else UNKNOWN as soon
+/// as one is, else true (`AND` of nothing is true).
+fn kleene_all(truths: impl IntoIterator<Item = Option<bool>>) -> Option<bool> {
+    let mut acc = Some(true);
+    for truth in truths {
+        match truth {
+            Some(false) => return Some(false),
+            None => acc = None,
+            Some(true) => {}
+        }
+    }
+    acc
+}
+
+/// Kleene OR: known true as soon as one operand is, else UNKNOWN as soon as
+/// one is, else false (`OR` of nothing is false).
+fn kleene_any(truths: impl IntoIterator<Item = Option<bool>>) -> Option<bool> {
+    let mut acc = Some(false);
+    for truth in truths {
+        match truth {
+            Some(true) => return Some(true),
+            None => acc = None,
+            Some(false) => {}
+        }
+    }
+    acc
+}
+
 impl Condition {
     /// Evaluates the condition against a payload alone: a `VelesQL` `id`
     /// column reads nothing here, no point id being known. Crate tests only:
@@ -166,125 +179,160 @@ impl Condition {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn matches(&self, payload: &Value) -> bool {
-        self.matches_record(Record { id: None, payload })
+        self.eval_record(Record { id: None, payload }) == Some(true)
     }
 
-    /// Evaluates the condition against a point: its payload (`None` reads
-    /// as `null`) and its id, which a `VelesQL` `id` column reads.
+    /// Whether the point is admitted: its condition is known TRUE. Its
+    /// payload (`None` reads as `null`) and its id, which a `VelesQL` `id`
+    /// column reads, are what the condition tests.
     #[must_use]
     pub fn matches_point(&self, id: u64, payload: Option<&Value>) -> bool {
-        self.matches_record(Record {
+        self.evaluate_point(id, payload) == Some(true)
+    }
+
+    /// Evaluates the condition against a point in SQL's three-valued logic:
+    /// `Some(true)`, `Some(false)`, or `None` for UNKNOWN — a comparison
+    /// whose operand is `null` or absent. An enclosing `NOT` keeps UNKNOWN
+    /// unknown, so a caller combining this with other predicates must not
+    /// fold `None` into `false` before it has applied every negation.
+    #[must_use]
+    pub(crate) fn evaluate_point(&self, id: u64, payload: Option<&Value>) -> Option<bool> {
+        self.eval_record(Record {
             id: Some(id),
             payload: payload.unwrap_or(&Value::Null),
         })
     }
 
-    fn matches_record(&self, record: Record<'_>) -> bool {
+    fn eval_record(&self, record: Record<'_>) -> Option<bool> {
         match self {
-            Self::And { conditions } => conditions.iter().all(|c| c.matches_record(record)),
-            Self::Or { conditions } => conditions.iter().any(|c| c.matches_record(record)),
-            Self::Not { condition } => !condition.matches_record(record),
-            Self::Eq { .. }
-            | Self::Neq { .. }
-            | Self::Gt { .. }
-            | Self::Gte { .. }
-            | Self::Lt { .. }
-            | Self::Lte { .. }
-            | Self::In { .. }
-            | Self::IsNull { .. }
-            | Self::IsNotNull { .. } => self.matches_scalar(record),
-            _ => self.matches_text_array_geo(record),
+            Self::And { conditions } => {
+                kleene_all(conditions.iter().map(|c| c.eval_record(record)))
+            }
+            Self::Or { conditions } => kleene_any(conditions.iter().map(|c| c.eval_record(record))),
+            Self::Not { condition } => condition.eval_record(record).map(|known| !known),
+            Self::IsNull { field } => Some(operand(record, field).is_none()),
+            Self::IsNotNull { field } => Some(operand(record, field).is_some()),
+            // An empty disjunction is false whatever the field holds: no
+            // comparison with it is made, so `null` cannot make it UNKNOWN.
+            Self::In { values, .. } if values.is_empty() => Some(false),
+            Self::ArrayContainsAny { values, .. } if values.is_empty() => Some(false),
+            leaf => {
+                let field = leaf.leaf_field()?;
+                let value = operand(record, field)?;
+                leaf.eval_known(&value)
+            }
         }
     }
 
-    /// Comparison, `IN` and null leaves.
-    fn matches_scalar(&self, record: Record<'_>) -> bool {
+    /// The field a comparison, text, array or geospatial leaf reads.
+    fn leaf_field(&self) -> Option<&str> {
         match self {
-            Self::Eq { field, value } => {
-                get_field(record, field).is_some_and(|v| values_equal(&v, value))
-            }
-            Self::Neq { field, value } => {
-                get_field(record, field).is_none_or(|v| !values_equal(&v, value))
-            }
-            Self::Gt { .. } | Self::Gte { .. } | Self::Lt { .. } | Self::Lte { .. } => {
-                self.matches_ordering(record)
-            }
-            Self::In { field, values } => {
-                get_field(record, field).is_some_and(|v| in_list_matches(&v, values))
-            }
-            Self::IsNull { field } => get_field(record, field).is_none_or(|v| v.is_null()),
-            Self::IsNotNull { field } => get_field(record, field).is_some_and(|v| !v.is_null()),
-            _ => false,
+            Self::Eq { field, .. }
+            | Self::Neq { field, .. }
+            | Self::Gt { field, .. }
+            | Self::Gte { field, .. }
+            | Self::Lt { field, .. }
+            | Self::Lte { field, .. }
+            | Self::In { field, .. }
+            | Self::Contains { field, .. }
+            | Self::Like { field, .. }
+            | Self::ILike { field, .. }
+            | Self::ArrayContains { field, .. }
+            | Self::ArrayContainsAny { field, .. }
+            | Self::ArrayContainsAll { field, .. }
+            | Self::GeoDistance { field, .. }
+            | Self::GeoBbox { field, .. } => Some(field),
+            _ => None,
         }
     }
 
-    /// `>`, `>=`, `<` and `<=` leaves.
-    fn matches_ordering(&self, record: Record<'_>) -> bool {
+    /// Evaluates a leaf on a known (present, non-`null`) operand. A `NULL`
+    /// literal still makes a comparison UNKNOWN, as in SQL (`x = NULL`); a
+    /// value of another type than the one tested is known not to satisfy it.
+    fn eval_known(&self, operand: &Value) -> Option<bool> {
         use std::cmp::Ordering;
-        let (field, value, holds): (&str, &Value, fn(Ordering) -> bool) = match self {
-            Self::Gt { field, value } => (field, value, Ordering::is_gt),
-            Self::Gte { field, value } => (field, value, Ordering::is_ge),
-            Self::Lt { field, value } => (field, value, Ordering::is_lt),
-            Self::Lte { field, value } => (field, value, Ordering::is_le),
-            _ => return false,
+        let ordering = |value: &Value, holds: fn(Ordering) -> bool| {
+            known_literal(value)?;
+            Some(compare_values(operand, value).is_some_and(holds))
         };
-        get_field(record, field).is_some_and(|v| compare_values(&v, value).is_some_and(holds))
-    }
-
-    /// Text, array and geospatial leaves.
-    fn matches_text_array_geo(&self, record: Record<'_>) -> bool {
         match self {
-            Self::Contains { field, value } => get_field(record, field)
-                .is_some_and(|v| v.as_str().is_some_and(|s| s.contains(value.as_str()))),
-            Self::Like { field, pattern } => get_field(record, field)
-                .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, false))),
-            Self::ILike { field, pattern } => get_field(record, field)
-                .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, true))),
-            Self::ArrayContains { .. }
-            | Self::ArrayContainsAny { .. }
-            | Self::ArrayContainsAll { .. } => self.matches_array(record),
-            _ => self.matches_geo(record),
-        }
-    }
-
-    /// Array leaves.
-    fn matches_array(&self, record: Record<'_>) -> bool {
-        match self {
-            Self::ArrayContains { field, value } => match_array_condition(
-                record,
-                field,
+            Self::Eq { value, .. } => known_literal(value).map(|v| values_equal(operand, v)),
+            Self::Neq { value, .. } => known_literal(value).map(|v| !values_equal(operand, v)),
+            Self::Gt { value, .. } => ordering(value, Ordering::is_gt),
+            Self::Gte { value, .. } => ordering(value, Ordering::is_ge),
+            Self::Lt { value, .. } => ordering(value, Ordering::is_lt),
+            Self::Lte { value, .. } => ordering(value, Ordering::is_le),
+            Self::In { values, .. } => in_list_truth(operand, values),
+            Self::Contains { value, .. } => {
+                Some(operand.as_str().is_some_and(|s| s.contains(value.as_str())))
+            }
+            Self::Like { pattern, .. } => like_truth(operand, pattern, false),
+            Self::ILike { pattern, .. } => like_truth(operand, pattern, true),
+            Self::ArrayContains { value, .. } => Some(match_array_condition(
+                operand,
                 std::slice::from_ref(value),
                 ArrayMode::Single,
-            ),
-            Self::ArrayContainsAny { field, values } => {
-                match_array_condition(record, field, values, ArrayMode::Any)
+            )),
+            Self::ArrayContainsAny { values, .. } => {
+                Some(match_array_condition(operand, values, ArrayMode::Any))
             }
-            Self::ArrayContainsAll { field, values } => {
-                match_array_condition(record, field, values, ArrayMode::All)
+            Self::ArrayContainsAll { values, .. } => {
+                Some(match_array_condition(operand, values, ArrayMode::All))
             }
-            _ => false,
-        }
-    }
-
-    /// Geospatial leaves.
-    fn matches_geo(&self, record: Record<'_>) -> bool {
-        match self {
             Self::GeoDistance {
-                field,
                 lat,
                 lng,
                 operator,
                 threshold,
-            } => match_geo_distance(record, field, *lat, *lng, *operator, *threshold),
+                ..
+            } => Some(match_geo_distance(
+                operand, *lat, *lng, *operator, *threshold,
+            )),
             Self::GeoBbox {
-                field,
                 lat_min,
                 lng_min,
                 lat_max,
                 lng_max,
-            } => match_geo_bbox(record, field, *lat_min, *lng_min, *lat_max, *lng_max),
-            _ => false,
+                ..
+            } => Some(match_geo_bbox(
+                operand, *lat_min, *lng_min, *lat_max, *lng_max,
+            )),
+            _ => None,
         }
+    }
+}
+
+/// A record's field as a comparison operand: `None` when it is absent or
+/// `null` — SQL's `NULL`, which no comparison decides.
+fn operand<'a>(record: Record<'a>, field: &str) -> Option<Cow<'a, Value>> {
+    get_field(record, field).filter(|v| !v.is_null())
+}
+
+/// A comparison literal, or `None` for `NULL`, which makes it UNKNOWN.
+fn known_literal(value: &Value) -> Option<&Value> {
+    (!value.is_null()).then_some(value)
+}
+
+/// `operand IN (values)`: true on a member, else UNKNOWN when the list holds
+/// a `NULL` (the operand might be it), else false. [`InValues`] sorts `null`
+/// first ([`json_value_cmp`] ranks it lowest), so the check is O(1).
+fn in_list_truth(operand: &Value, values: &InValues) -> Option<bool> {
+    if in_list_matches(operand, values) {
+        Some(true)
+    } else if values.first().is_some_and(Value::is_null) {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+/// LIKE / ILIKE on a known operand: a non-string is known not to match; a
+/// pattern the guardrails refuse to run leaves the predicate UNKNOWN, so an
+/// enclosing `NOT` cannot admit a row nothing was matched against.
+fn like_truth(operand: &Value, pattern: &str, case_insensitive: bool) -> Option<bool> {
+    match operand.as_str() {
+        Some(text) => like_match(text, pattern, case_insensitive),
+        None => Some(false),
     }
 }
 
@@ -294,11 +342,15 @@ fn get_field<'a>(record: Record<'a>, field: &str) -> Option<Cow<'a, Value>> {
     if field == POINT_ID_FIELD {
         return record.id.map(|id| Cow::Owned(Value::from(id)));
     }
-    let mut current = record.payload;
-    for part in field.split('.') {
-        current = current.get(part)?;
-    }
-    Some(Cow::Borrowed(current))
+    crate::velesql::json_path::payload_path(record.payload, field).map(Cow::Borrowed)
+}
+
+/// The three-valued truth of `operand = literal`, as a WHERE `=` decides
+/// it: UNKNOWN (`None`) when the operand is absent or `null`, or the literal
+/// is `NULL`; else whether they are equal ([`values_equal`]).
+pub(crate) fn equality_truth(operand: Option<&Value>, literal: &Value) -> Option<bool> {
+    let operand = operand.filter(|v| !v.is_null())?;
+    known_literal(literal).map(|literal| values_equal(operand, literal))
 }
 
 /// Compares two JSON values for equality; numbers by exact value, as
@@ -319,10 +371,9 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 
 /// Compares two JSON values.
 ///
-/// Returns `None` if the types are incompatible (e.g. Number vs String,
-/// any type vs Null) or if either number is NaN. Callers must treat `None`
-/// as "not comparable" and return `false` for all ordering predicates — this
-/// matches SQL three-valued logic where `NULL op X` yields `UNKNOWN` (false).
+/// Returns `None` if the types are incompatible (e.g. Number vs String):
+/// such values are known not to satisfy any ordering. `NULL` operands never
+/// reach it — [`operand`] and [`known_literal`] make those UNKNOWN first.
 fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
         // Exactly, an integer and a float included (`2^53 + 1 > 2^53.0`).
@@ -357,15 +408,15 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 /// * `text` - The string to match against
 /// * `pattern` - The SQL LIKE pattern
 /// * `case_insensitive` - If true, performs case-insensitive matching (ILIKE)
-fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
+fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> Option<bool> {
     if pattern.len() > LIKE_MAX_PATTERN_BYTES {
         global_guardrails_metrics().record_like_guardrail_rejected();
-        return false;
+        return None;
     }
 
     if text.len().saturating_mul(pattern.len().max(1)) > LIKE_MAX_DYN_OPS {
         global_guardrails_metrics().record_like_guardrail_rejected();
-        return false;
+        return None;
     }
 
     LIKE_COMPILE_CACHE.with(|cell| {
@@ -378,45 +429,68 @@ fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> bool {
         if stale {
             *slot = Some(CompiledLikePattern::compile(pattern, case_insensitive));
         }
-        match slot.as_mut() {
+        Some(match slot.as_mut() {
             Some(compiled) => compiled.run(text),
             // Unreachable in practice (populated above when stale); recompile as
             // a fail-safe rather than unwrap, keeping production code panic-free.
             None => CompiledLikePattern::compile(pattern, case_insensitive).run(text),
-        }
+        })
     })
 }
 
+/// One element of a compiled LIKE pattern. Patterns and texts are matched
+/// character by character (Unicode scalar values), so `_` is one character
+/// and never one byte of a multi-byte UTF-8 character.
 #[derive(Clone, Copy)]
 enum Token {
     AnySeq,
     AnyOne,
-    Literal(u8),
+    Literal(CharKey),
 }
 
-fn tokenize_like_pattern(pattern: &[u8]) -> Vec<Token> {
-    let mut out = Vec::with_capacity(pattern.len());
-    let mut i = 0;
-    while i < pattern.len() {
-        match pattern[i] {
-            b'\\' if i + 1 < pattern.len() => {
-                out.push(Token::Literal(pattern[i + 1]));
-                i += 2;
+/// What a LIKE literal compares a text character by: the character itself,
+/// or for ILIKE its full lowercase mapping — at most three scalars in
+/// Unicode, `\0`-padded (only `\0` lowercases to `\0`, so the padding is
+/// unambiguous). One key per *original* character: lowercasing a whole
+/// string first would turn `İ` into two scalars (`i` + U+0307) and let it
+/// fill two `_`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CharKey([char; 3]);
+
+impl CharKey {
+    fn of(c: char, case_insensitive: bool) -> Self {
+        let mut key = ['\0'; 3];
+        if !case_insensitive {
+            key[0] = c;
+        } else if c.is_ascii() {
+            key[0] = c.to_ascii_lowercase();
+        } else {
+            for (slot, lower) in key.iter_mut().zip(c.to_lowercase()) {
+                *slot = lower;
             }
-            b'%' => {
+        }
+        Self(key)
+    }
+}
+
+fn tokenize_like_pattern(pattern: &str, case_insensitive: bool) -> Vec<Token> {
+    let literal = |c| Token::Literal(CharKey::of(c, case_insensitive));
+    let mut out = Vec::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some(escaped) => out.push(literal(escaped)),
+                // A trailing backslash escapes nothing: it is itself.
+                None => out.push(literal('\\')),
+            },
+            '%' => {
                 if !matches!(out.last(), Some(Token::AnySeq)) {
                     out.push(Token::AnySeq);
                 }
-                i += 1;
             }
-            b'_' => {
-                out.push(Token::AnyOne);
-                i += 1;
-            }
-            c => {
-                out.push(Token::Literal(c));
-                i += 1;
-            }
+            '_' => out.push(Token::AnyOne),
+            c => out.push(literal(c)),
         }
     }
     out
@@ -432,12 +506,12 @@ thread_local! {
 
 /// A LIKE pattern compiled once and reused across candidate rows.
 ///
-/// Holds the tokenized pattern (already lowercased for ILIKE) plus two DP
+/// Holds the tokenized pattern (literals keyed for ILIKE) plus two DP
 /// buffers that are resized/reset in place on each [`Self::run`] call rather
 /// than reallocated. `source` keeps the *original* pattern bytes so the cache
 /// can verify identity by content.
 struct CompiledLikePattern {
-    /// Original (pre-lowercasing) pattern bytes — the cache identity key.
+    /// Original pattern bytes — the cache identity key.
     source: Vec<u8>,
     case_insensitive: bool,
     tokens: Vec<Token>,
@@ -446,20 +520,13 @@ struct CompiledLikePattern {
 }
 
 impl CompiledLikePattern {
-    /// Tokenizes `pattern`, lowercasing it first for the case-insensitive path
-    /// so the (identical-per-row) pattern lowercase happens exactly once.
+    /// Tokenizes `pattern`, keying its literals once (lowercased for ILIKE),
+    /// so the identical-per-row pattern work happens exactly once.
     fn compile(pattern: &str, case_insensitive: bool) -> Self {
-        let lowered;
-        let pattern_bytes = if case_insensitive {
-            lowered = pattern.to_lowercase();
-            lowered.as_bytes()
-        } else {
-            pattern.as_bytes()
-        };
         Self {
             source: pattern.as_bytes().to_vec(),
             case_insensitive,
-            tokens: tokenize_like_pattern(pattern_bytes),
+            tokens: tokenize_like_pattern(pattern, case_insensitive),
             dp_prev: Vec::new(),
             dp_curr: Vec::new(),
         }
@@ -473,20 +540,13 @@ impl CompiledLikePattern {
 
     /// Runs the rolling-DP match of `text` against the compiled tokens,
     /// reusing the DP buffers (`O(text_len * token_len)` time, `O(token_len)`
-    /// memory). For ILIKE the text is lowercased per row (unavoidable, as it
-    /// differs across candidates); the pattern lowercase is already amortized.
+    /// memory). Each text character is keyed once (lowercased for ILIKE),
+    /// so it fills exactly one `_` whatever its lowercase expands to.
     fn run(&mut self, text: &str) -> bool {
-        let lowered;
-        let text_bytes = if self.case_insensitive {
-            lowered = text.to_lowercase();
-            lowered.as_bytes()
-        } else {
-            text.as_bytes()
-        };
-
         // Disjoint field borrows so tokens can be read while the DP buffers are
         // mutated.
         let Self {
+            case_insensitive,
             tokens,
             dp_prev,
             dp_curr,
@@ -507,13 +567,14 @@ impl CompiledLikePattern {
 
         dp_curr.clear();
         dp_curr.resize(n + 1, false);
-        for &ch in text_bytes {
+        for ch in text.chars() {
+            let key = CharKey::of(ch, *case_insensitive);
             dp_curr.fill(false);
             for (j, tok) in tokens.iter().enumerate() {
                 dp_curr[j + 1] = match tok {
                     Token::AnySeq => dp_curr[j] || dp_prev[j + 1],
                     Token::AnyOne => dp_prev[j],
-                    Token::Literal(c) => dp_prev[j] && ch == *c,
+                    Token::Literal(c) => dp_prev[j] && key == *c,
                 };
             }
             std::mem::swap(dp_prev, dp_curr);

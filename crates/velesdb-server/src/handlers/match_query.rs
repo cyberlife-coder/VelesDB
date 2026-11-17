@@ -151,34 +151,39 @@ fn run_match(
 ) -> Result<MatchQueryResponse, Error> {
     let start = std::time::Instant::now();
 
-    let collection = resolve_match_collection(state, collection_name)
-        .ok_or_else(|| Error::CollectionNotFound(collection_name.to_string()))?;
+    if !is_match_target(state, collection_name) {
+        return Err(Error::CollectionNotFound(collection_name.to_string()));
+    }
 
     let match_clause = parse_match_clause(&request.query)?;
     validate_threshold(request.threshold)?;
 
-    // Gate the read (CORE-2). MATCH is a graph-traversal read; a `?`-propagated
-    // Deny refuses it, and a scope narrowing (no filter channel here) fails
-    // closed.
-    if state
+    // Core gates the read (CORE-2) — the target and every `@collection` the
+    // pattern names, each a graph-traversal read allowed unscoped — before
+    // anything is traversed, then runs the MATCH as `/query` runs it.
+    let scoring = request
+        .vector
+        .as_deref()
+        .map(|vector| velesdb_core::MatchScoring {
+            vector,
+            threshold: request.threshold.unwrap_or(0.0),
+        });
+    let rows = state
         .db
-        .authorize_read(
-            collection_name,
-            velesdb_core::observer::QueryOperationKind::GraphTraversal,
-            None,
-            None,
-        )?
-        .is_some()
-    {
-        return Err(Error::Config(
-            "scope narrowing is not supported for MATCH queries".to_string(),
-        ));
-    }
-    // Counted once the read is admitted (parsed, validated, authorized), as
-    // on the traversal handlers.
+        .match_query(collection_name, &match_clause, &request.params, scoring)?;
+    // Counted once the read is admitted and run, as on the traversal
+    // handlers.
     state.operational_metrics.record_graph_query();
 
-    let results = execute_match(&collection, &match_clause, request)?;
+    let results: Vec<MatchQueryResultItem> = rows
+        .into_iter()
+        .map(|r| MatchQueryResultItem {
+            bindings: r.bindings,
+            score: r.score,
+            depth: r.depth,
+            projected: r.projected,
+        })
+        .collect();
 
     let count = results.len();
     #[allow(clippy::cast_possible_truncation)]
@@ -221,57 +226,10 @@ fn validate_threshold(threshold: Option<f32>) -> Result<(), Error> {
     Ok(())
 }
 
-enum MatchCollection {
-    Vector(velesdb_core::collection::VectorCollection),
-    Graph(velesdb_core::collection::GraphCollection),
-}
-
-fn resolve_match_collection(state: &AppState, name: &str) -> Option<MatchCollection> {
-    state
-        .db
-        .get_vector_collection(name)
-        .map(MatchCollection::Vector)
-        .or_else(|| {
-            state
-                .db
-                .get_graph_collection(name)
-                .map(MatchCollection::Graph)
-        })
-}
-
-fn execute_match(
-    collection: &MatchCollection,
-    match_clause: &velesdb_core::velesql::MatchClause,
-    request: &MatchQueryRequest,
-) -> Result<Vec<MatchQueryResultItem>, Error> {
-    let raw_results = if let Some(ref vector) = request.vector {
-        let threshold = request.threshold.unwrap_or(0.0);
-        match collection {
-            MatchCollection::Vector(coll) => {
-                coll.execute_match_with_similarity(match_clause, vector, threshold, &request.params)
-            }
-            MatchCollection::Graph(coll) => {
-                coll.execute_match_with_similarity(match_clause, vector, threshold, &request.params)
-            }
-        }
-    } else {
-        match collection {
-            MatchCollection::Vector(coll) => coll.execute_match(match_clause, &request.params),
-            MatchCollection::Graph(coll) => coll.execute_match(match_clause, &request.params),
-        }
-    };
-
-    raw_results.map(|results| {
-        results
-            .into_iter()
-            .map(|r| MatchQueryResultItem {
-                bindings: r.bindings,
-                score: r.score,
-                depth: r.depth,
-                projected: r.projected,
-            })
-            .collect()
-    })
+/// Whether `name` is a collection MATCH can target: a vector or a graph
+/// collection (a metadata collection has no graph to traverse).
+fn is_match_target(state: &AppState, name: &str) -> bool {
+    state.db.get_vector_collection(name).is_some() || state.db.get_graph_collection(name).is_some()
 }
 
 #[cfg(test)]

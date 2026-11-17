@@ -150,12 +150,12 @@ Run this sequence **before every push** (CI runs on every PR — running it loca
 # 1. Format
 cargo fmt --all
 
-# 2. Lint (strict — CI runs both workspace passes; node and python are linted separately, see AGENTS.md)
+# 2. Lint (strict — CI runs both workspace passes; python is linted separately, see AGENTS.md)
 cargo clippy --workspace --all-targets --features persistence,gpu,update-check,openapi,test-fault-injection \
-  --exclude velesdb-python --exclude velesdb-node \
+  --exclude velesdb-python \
   -- -D warnings -D clippy::pedantic -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 cargo clippy --workspace --all-targets --features persistence,update-check,internal-bench \
-  --exclude velesdb-python --exclude velesdb-node \
+  --exclude velesdb-python \
   -- -D warnings -D clippy::pedantic -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
 # 3. Tests
@@ -235,12 +235,12 @@ cargo check --workspace --exclude tauri-plugin-velesdb --exclude tauri-rag-app
 cargo test --workspace --features persistence,gpu,update-check \
   --exclude velesdb-python -- --test-threads=1
 
-# Lint (strict — CI runs both workspace passes; node and python are linted separately, see AGENTS.md)
+# Lint (strict — CI runs both workspace passes; python is linted separately, see AGENTS.md)
 cargo clippy --workspace --all-targets --features persistence,gpu,update-check,openapi,test-fault-injection \
-  --exclude velesdb-python --exclude velesdb-node \
+  --exclude velesdb-python \
   -- -D warnings -D clippy::pedantic -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 cargo clippy --workspace --all-targets --features persistence,update-check,internal-bench \
-  --exclude velesdb-python --exclude velesdb-node \
+  --exclude velesdb-python \
   -- -D warnings -D clippy::pedantic -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
 # Run the server locally

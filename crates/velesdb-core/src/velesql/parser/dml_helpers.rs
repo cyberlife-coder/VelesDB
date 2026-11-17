@@ -189,7 +189,7 @@ pub(super) fn build_insert_edge(
     let source = extract_required_u64(fields, "source", "INSERT EDGE")?;
     let target = extract_required_u64(fields, "target", "INSERT EDGE")?;
     let label = extract_required_string(fields, "label", "INSERT EDGE")?;
-    let edge_id = extract_optional_u64(fields, "id");
+    let edge_id = extract_optional_edge_id(fields)?;
 
     Ok(Query::new_dml(DmlStatement::InsertEdge(
         InsertEdgeStatement {
@@ -238,16 +238,21 @@ fn extract_required_string(
     }
 }
 
-/// Extracts an optional `u64` field from edge field pairs.
-fn extract_optional_u64(fields: &[(String, Value)], key: &str) -> Option<u64> {
-    fields
-        .iter()
-        .find(|(k, _)| k == key)
-        .and_then(|(_, v)| match v {
-            Value::Integer(i) => u64::try_from(*i).ok(),
-            Value::UnsignedInteger(u) => Some(*u),
-            _ => None,
-        })
+/// The optional `id` of an INSERT EDGE: an integer, or the decimal string
+/// every edge read answers (edge ids leave rows as strings, being routinely
+/// above 2^53). Absent, the engine derives one; anything else is refused
+/// rather than silently replaced by a derived id.
+fn extract_optional_edge_id(fields: &[(String, Value)]) -> Result<Option<u64>, ParseError> {
+    let Some((_, value)) = fields.iter().find(|(k, _)| k == "id") else {
+        return Ok(None);
+    };
+    match value {
+        Value::String(s) => s
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| ParseError::syntax(0, "", format!("Edge ID '{s}' is not a decimal u64"))),
+        other => extract_edge_id(other).map(Some),
+    }
 }
 
 /// Converts a `Value` reference to a `u64` edge ID.

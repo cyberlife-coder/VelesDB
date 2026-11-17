@@ -16,7 +16,7 @@ impl Database {
         let path = self.collection_dir(name)?;
         let coll = MetadataCollection::create(path, name)?;
         // Parity item E: thread the live LimitsConfig caps into the collection.
-        self.admit_collection(&coll.inner, || {
+        self.admit_collection(name, &coll.inner, || {
             self.metadata_colls
                 .write()
                 .insert(name.to_string(), coll.clone());
@@ -58,7 +58,7 @@ impl Database {
         }
         let coll = MetadataCollection::open(self.collection_dir(name).ok()?).ok()?;
         // Parity item E: re-push runtime limits on disk-open (not persisted).
-        self.admit_collection(&coll.inner, || {
+        self.admit_collection(name, &coll.inner, || {
             self.metadata_colls
                 .write()
                 .insert(name.to_string(), coll.clone());

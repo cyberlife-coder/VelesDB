@@ -190,27 +190,29 @@ fn numeric_ordering_same_type() {
 /// Independent oracle: greedy backtracking wildcard matcher, deliberately a
 /// *different* algorithm from the production rolling-DP so it cross-checks
 /// results rather than re-deriving them the same way.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RTok {
     AnySeq,
     AnyOne,
-    Lit(u8),
+    Lit(char),
 }
 
-fn ref_tokenize(pattern: &[u8]) -> Vec<RTok> {
+/// Independent oracle tokenizer: one token per pattern *character*.
+fn ref_tokenize(pattern: &str) -> Vec<RTok> {
+    let chars: Vec<char> = pattern.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
-    while i < pattern.len() {
-        match pattern[i] {
-            b'\\' if i + 1 < pattern.len() => {
-                out.push(RTok::Lit(pattern[i + 1]));
+    while i < chars.len() {
+        match chars[i] {
+            '\\' if i + 1 < chars.len() => {
+                out.push(RTok::Lit(chars[i + 1]));
                 i += 2;
             }
-            b'%' => {
+            '%' => {
                 out.push(RTok::AnySeq);
                 i += 1;
             }
-            b'_' => {
+            '_' => {
                 out.push(RTok::AnyOne);
                 i += 1;
             }
@@ -223,18 +225,30 @@ fn ref_tokenize(pattern: &[u8]) -> Vec<RTok> {
     out
 }
 
+/// Independent oracle: backtracking over the text's *characters*. ILIKE
+/// compares two characters by their full lowercase mappings, one original
+/// character against one, so a character whose lowercase is two scalars
+/// (`İ` → `i̇`) still fills a single `_`.
 fn ref_like(text: &str, pattern: &str, case_insensitive: bool) -> bool {
-    let (t, p) = if case_insensitive {
-        (text.to_lowercase(), pattern.to_lowercase())
-    } else {
-        (text.to_string(), pattern.to_string())
+    let same = |a: char, b: char| {
+        if case_insensitive {
+            a.to_lowercase().eq(b.to_lowercase())
+        } else {
+            a == b
+        }
     };
-    let text = t.as_bytes();
-    let toks = ref_tokenize(p.as_bytes());
+    let text: Vec<char> = text.chars().collect();
+    let toks = ref_tokenize(pattern);
     let (mut i, mut j) = (0usize, 0usize);
     let (mut star_j, mut star_i): (Option<usize>, usize) = (None, 0);
     while i < text.len() {
-        if j < toks.len() && (toks[j] == RTok::AnyOne || toks[j] == RTok::Lit(text[i])) {
+        let step = j < toks.len()
+            && match toks[j] {
+                RTok::AnyOne => true,
+                RTok::Lit(c) => same(text[i], c),
+                RTok::AnySeq => false,
+            };
+        if step {
             i += 1;
             j += 1;
         } else if j < toks.len() && toks[j] == RTok::AnySeq {
@@ -273,13 +287,18 @@ fn like_precompiled_matches_reference_over_batch() {
         ("caf%", true),   // ILIKE over non-ASCII text
         ("_bc", false),
         ("%%%%a", false), // collapsed consecutive %
+        ("caf_", false),  // `_` over a two-byte character
+        ("__", true),     // ILIKE: `İ` lowercases to two scalars
+        ("_", true),
+        ("i%", true),
         ("hello", false), // repeat first pattern (pure cache hit)
     ];
     // A batch of candidate texts covering matches, non-matches, casing,
     // literal wildcards, and unicode.
     let candidates = [
         "hello", "Hello", "HELLO", "hallo", "h_llo", "foobar", "xxfooxx", "abc", "aXbYc", "50%",
-        "50x", "a_b", "aXb", "paris", "PARIS", "Paris", "café", "CAFÉ", "", "bc", "zbc",
+        "50x", "a_b", "aXb", "paris", "PARIS", "Paris", "café", "CAFÉ", "", "bc", "zbc", "İ", "é",
+        "日本",
     ];
 
     for &(pattern, ci) in patterns {
@@ -291,7 +310,8 @@ fn like_precompiled_matches_reference_over_batch() {
             let via_cache = like_match(text, pattern, ci);
             let expected = ref_like(text, pattern, ci);
             assert_eq!(
-                via_cache, expected,
+                via_cache,
+                Some(expected),
                 "cache path diverged from reference: pattern={pattern:?} ci={ci} text={text:?}"
             );
 
@@ -310,10 +330,10 @@ fn like_cache_switches_case_flag_for_same_pattern() {
     // Same pattern bytes, different case-sensitivity, alternated: the cache
     // key includes the case flag, so results must never bleed across.
     for _ in 0..8 {
-        assert!(!like_match("PARIS", "paris", false)); // LIKE: case matters
-        assert!(like_match("PARIS", "paris", true)); // ILIKE: case ignored
-        assert!(like_match("paris", "paris", false));
-        assert!(like_match("PaRiS", "paris", true));
+        assert_eq!(like_match("PARIS", "paris", false), Some(false)); // LIKE: case matters
+        assert_eq!(like_match("PARIS", "paris", true), Some(true)); // ILIKE: case ignored
+        assert_eq!(like_match("paris", "paris", false), Some(true));
+        assert_eq!(like_match("PaRiS", "paris", true), Some(true));
     }
 }
 
@@ -450,4 +470,62 @@ fn test_point_ids_accepts_an_integer_valued_float() {
         };
         assert_eq!(cond.point_ids(), None);
     }
+}
+
+/// An empty `IN` / `CONTAINS ANY` list is an empty disjunction: false for
+/// every row, a `null` or absent field included, so its negation admits
+/// that row — it is not UNKNOWN, no comparison with the field being made.
+#[test]
+fn an_empty_disjunction_is_false_even_on_a_null_field() {
+    let empty_in = Condition::is_in("x", vec![]);
+    let empty_any = Condition::ArrayContainsAny {
+        field: "x".to_string(),
+        values: vec![],
+    };
+    for leaf in [empty_in, empty_any] {
+        let negated = Condition::Not {
+            condition: Box::new(leaf.clone()),
+        };
+        for row in [json!({"x": null}), json!({}), json!({"x": ["a"]})] {
+            assert!(!leaf.matches(&row), "{leaf:?} on {row}");
+            assert!(negated.matches(&row), "NOT {leaf:?} on {row}");
+        }
+    }
+}
+
+// `_` is one character, not one byte (UTF-8 text).
+
+#[test]
+fn like_underscore_matches_one_multibyte_character() {
+    assert_eq!(like_match("café", "caf_", false), Some(true));
+    assert_eq!(like_match("日本語", "日_語", false), Some(true));
+    assert_eq!(like_match("日本", "日_語", false), Some(false));
+}
+
+#[test]
+fn like_underscore_never_splits_a_character() {
+    // "é" is two bytes: two `_` used to match it, one byte each.
+    assert_eq!(like_match("é", "__", false), Some(false));
+    assert_eq!(like_match("é", "_", false), Some(true));
+}
+
+/// `İ` lowercases to two scalars (`i` + U+0307): ILIKE must still read it
+/// as the one character it is, so `__` does not match it and `_` does.
+#[test]
+fn ilike_reads_a_character_whose_lowercase_expands_as_one() {
+    assert_eq!(like_match("İ", "__", true), Some(false));
+    assert_eq!(like_match("İ", "_", true), Some(true));
+    assert_eq!(like_match("İstanbul", "İSTANBUL", true), Some(true));
+}
+
+#[test]
+fn ilike_underscore_matches_one_multibyte_character() {
+    assert_eq!(like_match("CAFÉ", "caf_", true), Some(true));
+    assert_eq!(like_match("Ÿes", "_ES", true), Some(true));
+}
+
+#[test]
+fn like_escape_takes_a_whole_multibyte_character() {
+    assert_eq!(like_match("aé", "a\\é", false), Some(true));
+    assert_eq!(like_match("ax", "a\\é", false), Some(false));
 }

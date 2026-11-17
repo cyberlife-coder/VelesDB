@@ -1,2 +1,47 @@
 # Deliberate public-API removals, one `path kind name` per line.
 # Regenerate the snapshot with: python3 scripts/check-pub-parity.py --write-snapshot
+# Moved to velesdb-core/src/velesql/projection_item.rs (VelesQL language,
+# needed without `persistence` by the WASM executor) and re-exported from
+# match_exec by `pub use`: the public path is unchanged, not a removal.
+crates/velesdb-core/src/collection/search/query/match_exec/mod.rs enum ProjectionItem
+crates/velesdb-core/src/collection/search/query/match_exec/mod.rs fn parse_projection_item
+crates/velesdb-core/src/collection/search/query/match_exec/mod.rs fn parse_property_path
+# Dead converters removed by the python SDK parity audit: `graph` is a private
+# module and lib.rs's re-export was dangling, so they were unreachable from the
+# published cdylib; nothing in the crate or tests called them.
+crates/velesdb-python/src/graph.rs fn dict_to_node
+crates/velesdb-python/src/graph.rs fn node_to_dict
+# Moved to velesdb-node/src/factory.rs when lib.rs crossed the file budget
+# and re-exported from lib.rs by `pub use`: the public path is unchanged,
+# not a removal.
+crates/velesdb-node/src/lib.rs struct NodeMemoryService
+# Duplicate dotted-path reader removed: `filter` is a private module of the
+# cdylib, so it was unreachable from the published package. Every caller now
+# reads paths through velesdb-core's velesql::json_path::payload_path.
+crates/velesdb-wasm/src/filter.rs fn get_nested_field
+# The JsValue round-trip SemanticMemory.query() could not survive: `store_search`
+# is a private module of the cdylib, so it was unreachable from the published
+# package; StoreState::search renders its typed top_k for JavaScript instead.
+crates/velesdb-wasm/src/store_search.rs fn search
+# Superseded by validate_query_vector / validate_ingest_vector, which add the
+# metadata-only and finite-component checks core runs: `store_search` is a
+# private module of the cdylib, so it was unreachable from the published package.
+crates/velesdb-wasm/src/store_search.rs fn validate_dimension
+# Renamed to the infallible `shared()`: `Database::open_shared` returned a
+# Result it could never fail with. It is a Rust method of the PyO3 cdylib,
+# not exposed to Python (#[pymethods] does not list it), so no published
+# surface loses it.
+crates/velesdb-python/src/database.rs fn open_shared
+
+# The Node wrappers of velesdb-memory's (now deprecated) string-to-number id
+# walks: every id the binding reads back deserializes from a decimal string,
+# and `convert` is a private module of the cdylib, so they were unreachable
+# from the published package.
+crates/velesdb-node/src/convert.rs fn parse_fragment_id_strings
+crates/velesdb-node/src/convert.rs fn parse_id_fields
+# Collection's streaming entry points moved, unchanged, from types.rs into
+# collection/core/streaming_ops.rs (types.rs crossed its file budget): same
+# inherent impl, same public path, not a removal.
+crates/velesdb-core/src/collection/types.rs fn stream_insert
+crates/velesdb-core/src/collection/types.rs fn stream_insert_batch
+crates/velesdb-core/src/collection/types.rs fn enable_streaming

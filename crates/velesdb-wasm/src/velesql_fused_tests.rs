@@ -2,10 +2,6 @@ use super::*;
 use crate::velesql_value::parse_params;
 use velesdb_core::velesql::Parser;
 
-fn parse_where(sql: &str) -> Option<Condition> {
-    Parser::parse(sql).expect("test: parse").select.where_clause
-}
-
 fn seed(db: &mut DatabaseInner) {
     db.create_collection("vecs", 4, "cosine")
         .expect("test: create");
@@ -78,50 +74,68 @@ fn test_fused_with_metadata_filter() {
     assert!(ids.contains(&10) && ids.contains(&11));
 }
 
-#[test]
-fn test_fused_rejects_under_or() {
+/// The isolation contract is the one core enforces, applied before any scan
+/// (`velesdb_core::velesql::validate_vector_predicates`).
+fn refusal(sql: &str) -> String {
     let mut db = DatabaseInner::new();
     seed(&mut db);
-    let q = Parser::parse("SELECT * FROM vecs WHERE vector NEAR_FUSED [$a, $b] OR cat = 'b'")
-        .expect("test: parse");
-    let params = parse_params(Some(
-        r#"{"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0, 0.0]}"#,
-    ))
-    .expect("test: params");
-    let fused = find_fused_search(q.select.where_clause.as_ref()).expect("test: fused");
-    let err = execute_fused_search(&db, &q.select, fused, &params);
-    assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("NEAR_FUSED"));
+    crate::velesql_exec::execute(
+        &mut db,
+        sql,
+        Some(
+            r#"{"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0, 0.0], "c": [0.0, 0.0, 1.0, 0.0]}"#,
+        ),
+    )
+    .map(|_| ())
+    .expect_err("test: refused")
+}
+
+#[test]
+fn test_fused_rejects_under_or() {
+    let err = refusal("SELECT * FROM vecs WHERE vector NEAR_FUSED [$a, $b] OR cat = 'b'");
+    assert!(err.contains("NEAR_FUSED"), "{err}");
 }
 
 #[test]
 fn test_fused_rejects_mixed_with_near() {
-    let cond =
-        parse_where("SELECT * FROM vecs WHERE vector NEAR_FUSED [$a, $b] AND vector NEAR $c");
-    let err = validate_fused_structure(cond.as_ref());
-    assert!(err.is_err());
+    let err = refusal("SELECT * FROM vecs WHERE vector NEAR_FUSED [$a, $b] AND vector NEAR $c");
+    assert!(err.contains("NEAR_FUSED"), "{err}");
 }
 
+/// The `count` an aggregate SELECT reports.
+fn count(db: &mut DatabaseInner, sql: &str) -> u64 {
+    let result = crate::velesql_exec::execute(
+        db,
+        sql,
+        Some(r#"{"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0, 0.0]}"#),
+    )
+    .expect("test: aggregate");
+    let rows: serde_json::Value =
+        serde_json::from_str(&result.rows_json()).expect("test: rows json");
+    rows[0]["count"].as_u64().expect("test: count")
+}
+
+/// An aggregate reads the whole collection, as core's `execute_aggregate`
+/// does: a `NEAR_FUSED` leaf filters no point there, so neither the output
+/// LIMIT nor the default window may bound what COUNT sees.
 #[test]
-fn test_config_to_strategy_maps_like_core() {
-    let mk = |s: &str| FusionConfig {
-        strategy: s.to_string(),
-        params: std::collections::HashMap::new(),
-    };
-    assert!(matches!(
-        config_to_strategy(&mk("average")),
-        FusionStrategy::Average
-    ));
-    assert!(matches!(
-        config_to_strategy(&mk("maximum")),
-        FusionStrategy::Maximum
-    ));
-    assert!(matches!(
-        config_to_strategy(&mk("weighted")),
-        FusionStrategy::RRF { .. }
-    ));
-    assert!(matches!(
-        config_to_strategy(&mk("rrf")),
-        FusionStrategy::RRF { .. }
-    ));
+fn test_fused_aggregate_counts_every_point_whatever_the_limit() {
+    let mut db = DatabaseInner::new();
+    seed(&mut db);
+    let store = db.get_shared_store("vecs").expect("test: store");
+    for id in 100u64..130 {
+        crate::store_insert::insert_with_payload(
+            &mut store.borrow_mut(),
+            id,
+            &[0.5, 0.5, 0.5, 0.5],
+            Some(serde_json::json!({ "cat": "c" })),
+        );
+    }
+    let fused = "SELECT COUNT(*) FROM vecs WHERE vector NEAR_FUSED [$a, $b]";
+    assert_eq!(count(&mut db, fused), 34);
+    assert_eq!(count(&mut db, &format!("{fused} LIMIT 1")), 34);
+    assert_eq!(
+        count(&mut db, &format!("{fused} AND cat = 'c' LIMIT 1")),
+        30
+    );
 }

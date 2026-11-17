@@ -88,7 +88,7 @@ describe('streamInsert', () => {
     );
   });
 
-  it('includes sparse_vector in body when doc.sparseVector is provided', async () => {
+  it('does NOT send sparse_vector: the /stream/insert DTO has no such field and would ignore it', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -101,10 +101,12 @@ describe('streamInsert', () => {
     ]);
 
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(opts.body as string) as {
-      sparse_vector: Record<number, number>;
-    };
-    expect(body.sparse_vector).toEqual({ 5: 0.8, 10: 0.3 });
+    const body = JSON.parse(opts.body as string) as Record<string, unknown>;
+    // StreamInsertRequest = {id, vector, payload} only: sending sparse_vector
+    // would be silently dropped by serde, so the SDK does not send it. Sparse
+    // vectors go through upsert/upsertBatch or the NDJSON streamUpsertPoints.
+    expect(body.sparse_vector).toBeUndefined();
+    expect(body).toEqual({ id: 1, vector: [0.1], payload: null });
   });
 
   it('converts Float32Array input to a plain number array', async () => {

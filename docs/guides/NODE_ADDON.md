@@ -9,10 +9,11 @@ and a 60-second first success. This guide is the reference behind it.
 
 ## Contents
 
-- [The 21-method surface](#the-21-method-surface)
+- [The 23-method surface](#the-23-method-surface)
 - [Three contracts that apply to every method](#three-contracts-that-apply-to-every-method)
 - [Choosing an embedder](#choosing-an-embedder)
 - [Auto-extraction (`rememberExtracted`)](#auto-extraction-rememberextracted)
+- [File anchors (`remember`/`recall`)](#file-anchors-rememberrecall)
 - [Context compilation (`compileContext`)](#context-compilation-compilecontext)
 - [Media fragments and `retrieveContextSource`](#media-fragments-and-retrievecontextsource)
 - [Transcripts and working contexts](#transcripts-and-working-contexts)
@@ -20,17 +21,18 @@ and a 60-second first success. This guide is the reference behind it.
 - [Need the full engine?](#need-the-full-engine)
 - [Resource caps](#resource-caps)
 
-## The 21-method surface
+## The 23-method surface
 
-`MemoryService.open(path, embedder?, ollamaUrl?, ollamaModel?)` is the only
-constructor (a static factory). Everything else is an instance method, and
-every instance method returns a `Promise`.
+`MemoryService.open(path, embedder?, ollamaUrl?, ollamaModel?, searchQuality?)`
+is the only constructor (a static factory). Everything else is an instance
+method, and every instance method returns a `Promise`.
 
 | Family | Methods |
 |---|---|
 | Durable memory | `remember`, `recall`, `recallWhere`, `recallFused`, `recallFusedDated`, `relate`, `unrelate`, `forget`, `entity`, `why`, `feedback`, `rememberExtracted` |
 | Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource`, `suggestBudget` |
 | Session resumption | `saveWorkingContext`, `loadWorkingContext`, `listWorkingContexts` |
+| Introspection | `memoryStatus`, `listMemories` |
 
 That list is pinned by a test — `__test__/index.spec.mjs` asserts the exact
 prototype allowlist and asserts that `query`, `upsert`, `createCollection`
@@ -68,7 +70,7 @@ category travels as a token at the front of the message:
 
 | Code | Meaning | Typical trigger |
 |---|---|---|
-| `[INVALID_INPUT]` | Bad caller input | empty fact, oversized metadata, unknown filter operator, malformed id |
+| `[INVALID_INPUT]` | Bad caller input | empty fact, oversized metadata, unknown filter operator, malformed id, a count (`k`, `ttlSeconds`, `maxHops`, `limit`, …) that is not a whole number in `0..=2^32-1` |
 | `[NOT_FOUND]` | A referenced id or handle does not exist | `feedback` on an unknown id, `relate` to a missing endpoint, an expired `ctx://source/` handle |
 | `[INTERNAL]` | Storage, embedding or extraction failure | store locked by another process, Ollama unreachable |
 
@@ -104,16 +106,51 @@ and let it split the text into atomic facts *and* wire the fact↔topic graph
 that `why()` later walks:
 
 ```js
-const ids = await store.rememberExtracted(
+const outcome = await store.rememberExtracted(
   longText,
   'qwen3',                   // the Ollama model doing the extraction
   'http://localhost:11434',  // optional; this is the default
 )
+// outcome.ids — the stored fact ids; outcome.skippedOverCap — how many were dropped
 ```
 
-This is the only method that always needs a running Ollama, whatever embedder
-the store uses. Without one it rejects with an `[INTERNAL]` error rather than
-crashing the process.
+The extractor is chosen per call with the `extractor` argument
+(`'ollama'` default, or `VELESDB_MEMORY_EXTRACTOR` when set):
+
+- `extractor: 'outline'` is deterministic and network-free — it reads the
+  structure the passage states (`fact:` / `edge:` / `attr:` directives), so
+  the whole contract is reachable with no model running.
+- `extractor: 'openai'` speaks the OpenAI chat-completions protocol; URL and
+  model come from the arguments or `VELESDB_MEMORY_EXTRACTOR_URL` /
+  `VELESDB_MEMORY_EXTRACTOR_MODEL` (both required), and the credential from
+  `VELESDB_MEMORY_EXTRACTOR_API_TOKEN` only — never from an argument.
+
+Without a reachable backend it rejects with an `[INVALID_INPUT]` error rather
+than crashing the process, and `skippedOverCap` tells you how many extracted
+facts were dropped for exceeding the embeddable cap.
+
+## File anchors (`remember`/`recall`)
+
+With `VELESDB_MEMORY_INGEST_ROOTS` set at `open()` (a path-list of
+allowlisted directories), a fact can be tied to the files it is about:
+
+```js
+const outcome = await store.remember(
+  'the deploy broke after the cache change',
+  [], null, null,
+  ['notes/runbook.md'],   // anchors: repo-relative paths, at most 8
+  checkoutRoot,           // anchorRoot: absolute, must sit inside an ingest root
+)
+const id = outcome.id
+const hits = await store.recall('deploy broke', 5, null, checkoutRoot)
+// each anchored hit carries freshness: { state: 'fresh' | 'stale' | 'unverified', changed: [...] }
+```
+
+The file digests are read under the allowlist at store time (a refused anchor
+stores nothing); at recall time a changed or deleted file makes the fact
+`stale` and ranks it lower — `score` stays the raw similarity. With no ingest
+roots configured, anchors and `path` fragments are refused with
+`[INVALID_INPUT]`, fail-closed.
 
 ## Context compilation (`compileContext`)
 
@@ -210,9 +247,12 @@ result. It resolves to `{context, segmentation}`, where `segmentation` audits
 every cut (turn, role, kind, byte range, `fragment_id`) so you can see how the
 transcript was split before trusting the output.
 
-Unlike the MCP tool, this binding does not resolve the tool's `path` field:
-there is no `VELESDB_MEMORY_INGEST_ROOTS`-style allowlist here. Read the file
-yourself and pass its content as `transcript`.
+Like the MCP tool, the request takes `transcript` (inline) OR `path` (an
+absolute file). `path` is resolved under the `VELESDB_MEMORY_INGEST_ROOTS`
+allowlist read at `open()` — with no roots configured it is refused with
+`[INVALID_INPUT]`, fail-closed. The same allowlist gates `path` fragments in
+`compileContext`/`explainCompilation` and the file anchors of
+`remember`/`recall` (see below).
 
 Working contexts survive between sessions:
 
@@ -319,6 +359,38 @@ silently reduced instead.
 | `why` hops | 10 (default 2) | clamped |
 | Fragments per compile request | 1024 | rejects |
 | Fragment `content` size | 1 MiB | rejects |
+
+### JSON arguments: metadata, filters, requests, working contexts
+
+These arguments must be JSON data, what `JSON.parse` can produce: `null`,
+booleans, finite numbers, strings, arrays and plain objects (an object
+literal, or `Object.create(null)`). Anything else rejects with
+`INVALID_INPUT`, naming where it sits (`metadata.when is a Date, not a plain
+object`): a `Date`, a `Map`, a `Set`, a class instance, a typed array, a
+function, a symbol, a `bigint`, `NaN` or an infinity. They used to be stored
+as `{}` (or `null`) without a word; convert them first (`date.toISOString()`,
+`Object.fromEntries(map)`, a decimal string for a `bigint`). As with
+`JSON.stringify`, a property set to `undefined` is left out.
+
+### Numbers in metadata and filters
+
+A JS `number` that holds a whole value — up to `Number.MAX_SAFE_INTEGER`
+(2^53 − 1) — is stored as an integer, whatever its size: `{ ts: 5000000000 }`
+reads back as the integer `5000000000` from Python or Rust, and an exact
+metadata filter on it matches what the other bindings stored. Fractions, and
+whole numbers past 2^53 − 1 (which JS cannot hold exactly), stay floats.
+
+### Argument errors
+
+A value the binding refuses — a JSON argument that is not JSON data, a count
+out of range, a malformed id — rejects the returned `Promise` with an
+`[INVALID_INPUT]` error. An argument of the wrong JS type for a typed
+parameter (a number where a string is expected) is refused by napi before the
+method runs: that call throws synchronously, with napi's own `code`
+(`StringExpected`, `NumberExpected`, …) and no `[CODE]` prefix.
+The same holds for a JSON argument whose getter or `Proxy` trap throws while
+the binding reads it: napi offers no safe way to take that pending JS
+exception back, so it surfaces synchronously, as the getter's own error.
 
 ---
 

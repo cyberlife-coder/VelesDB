@@ -94,8 +94,44 @@ def test_match_query_result_structure(graph_db):
     results = graph_db.match_query("MATCH (a)-[:KNOWS]->(b) RETURN a, b LIMIT 1")
     assert len(results) > 0
     r = results[0]
-    for key in ("node_id", "depth", "path", "bindings", "score", "projected"):
+    for key in (
+        "node_id",
+        "depth",
+        "path",
+        "bindings",
+        "edge_bindings",
+        "edge_paths",
+        "score",
+        "projected",
+    ):
         assert key in r, f"Missing key '{key}' in match result"
+
+
+def test_match_query_variable_length_edge_paths(graph_db):
+    """Variable-length `-[r*1..2]->` must bind `r` to the ordered edge-id list.
+
+    Core's `MatchResult` carries fixed-length aliases in `edge_bindings` and
+    variable-length ones in `edge_paths` (openCypher list semantics); the
+    Python converter used to drop both.
+    """
+    results = graph_db.match_query("MATCH (a)-[r*1..2]->(b) RETURN a, b, r LIMIT 10")
+    assert len(results) > 0
+    one_hop = [r for r in results if r["depth"] == 1]
+    two_hop = [r for r in results if r["depth"] == 2]
+    assert one_hop and two_hop, "seeded graph has 1-hop and 2-hop matches"
+    # Variable-length alias: ordered edge-id list in edge_paths
+    # (Alice -KNOWS(1)-> Bob, then Bob -WORKS_AT(2)-> Acme).
+    assert any(r["edge_paths"].get("r") == [1] for r in one_hop)
+    assert any(
+        r["edge_paths"].get("r") == [1, 2] for r in two_hop
+    ), f"expected edge_paths['r'] == [1, 2] on a 2-hop match, got {two_hop}"
+
+
+def test_match_query_fixed_length_edge_bindings(graph_db):
+    """A fixed-length `-[r]->` binds `r` to a scalar edge id in edge_bindings."""
+    results = graph_db.match_query("MATCH (a)-[r:KNOWS]->(b) RETURN a, b, r LIMIT 10")
+    assert len(results) > 0
+    assert all(r["edge_bindings"].get("r") == 1 for r in results)
 
 
 def test_explain_on_graph_collection(graph_db):

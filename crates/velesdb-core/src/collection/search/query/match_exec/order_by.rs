@@ -4,11 +4,11 @@
 //! house the arithmetic / `similarity(field, $v)` evaluators, which reuse the
 //! SELECT-side scoring helpers instead of re-implementing them.
 
-use super::super::ordering::{evaluate_arithmetic, ScoreContext};
 use super::{parse_property_path, MatchResult};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::{PayloadStorage, VectorStorage};
+use crate::velesql::{evaluate_arithmetic, ScoreContext};
 use crate::velesql::{ArithmeticExpr, OrderByExpr, SimilarityOrderBy};
 use std::collections::HashMap;
 
@@ -36,17 +36,21 @@ impl Collection {
         expr: &OrderByExpr,
         descending: bool,
         params: &HashMap<String, serde_json::Value>,
+        sources: &super::MatchSources,
     ) -> Result<()> {
         match expr {
             OrderByExpr::SimilarityBare => {
-                Self::sort_match_by_score(results, descending);
+                let higher_is_better = self.storage.config.read().metric.higher_is_better();
+                Self::sort_match_by_score(results, descending, higher_is_better);
                 Ok(())
             }
             OrderByExpr::Field(f) if f == "depth" => {
                 Self::sort_match_by_depth(results, descending);
                 Ok(())
             }
-            OrderByExpr::Field(f) => self.order_match_results_by_property(results, f, descending),
+            OrderByExpr::Field(f) => {
+                self.order_match_results_by_property(results, f, descending, sources)
+            }
             OrderByExpr::Similarity(sim) => {
                 self.sort_match_by_similarity(results, sim, descending, params)
             }
@@ -63,11 +67,19 @@ impl Collection {
     }
 
     /// Sorts by the pre-computed match score (zero-arg `similarity()`).
-    fn sort_match_by_score(results: &mut [MatchResult], descending: bool) {
-        results.sort_by(|a, b| {
-            let cmp = a.score.unwrap_or(0.0).total_cmp(&b.score.unwrap_or(0.0));
-            Self::apply_direction(cmp, descending)
-        });
+    ///
+    /// The score is the metric's raw value, so a distance (lower = closer,
+    /// `!higher_is_better`) is negated: a LARGER key always means "more
+    /// similar" and `DESC` is most-similar-first under every metric, as for
+    /// [`Self::sort_match_by_similarity`] and the SELECT-side
+    /// `ORDER BY similarity()`. An unscored row sorts as least similar.
+    fn sort_match_by_score(results: &mut [MatchResult], descending: bool, higher_is_better: bool) {
+        let key = |r: &MatchResult| match r.score {
+            Some(score) if higher_is_better => score,
+            Some(distance) => -distance,
+            None => f32::NEG_INFINITY,
+        };
+        results.sort_by(|a, b| Self::apply_direction(key(a).total_cmp(&key(b)), descending));
     }
 
     /// Sorts by traversal depth.

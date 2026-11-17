@@ -44,7 +44,7 @@ pub fn parse_storage_mode(mode: &str) -> Result<StorageMode, JsValue> {
 
 /// Delegates to the `FromStr` impl of [`velesdb_core::StorageMode`] (single source of truth)
 /// and maps to the local WASM `StorageMode` enum.
-fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
+pub(crate) fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
     let core: velesdb_core::StorageMode = mode.parse()?;
     Ok(core_to_wasm_storage_mode(core))
 }
@@ -77,6 +77,18 @@ pub fn parse_search_quality(quality: &str) -> Result<(), JsValue> {
 /// Returns `Ok(())` when the quality string is valid.
 fn parse_search_quality_inner(mode: &str) -> Result<(), String> {
     velesdb_core::api_types::parse_search_mode(mode).map(drop)
+}
+
+/// Maps the local WASM `StorageMode` to core's: exhaustive, since every
+/// WASM mode is one of core's.
+pub(crate) fn wasm_to_core_storage_mode(mode: StorageMode) -> velesdb_core::StorageMode {
+    match mode {
+        StorageMode::Full => velesdb_core::StorageMode::Full,
+        StorageMode::SQ8 => velesdb_core::StorageMode::SQ8,
+        StorageMode::Binary => velesdb_core::StorageMode::Binary,
+        StorageMode::ProductQuantization => velesdb_core::StorageMode::ProductQuantization,
+        StorageMode::RaBitQ => velesdb_core::StorageMode::RaBitQ,
+    }
 }
 
 /// Maps a `velesdb_core::StorageMode` to the local WASM `StorageMode`.

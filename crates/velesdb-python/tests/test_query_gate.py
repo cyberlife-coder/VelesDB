@@ -213,6 +213,22 @@ def test_all_ids_deny_fails_closed():
             collection.all_ids()
 
 
+def test_all_point_ids_deny_fails_closed():
+    """``all_point_ids`` lists the same ids as ``all_ids`` (and more): it
+    used to skip the gate and hand a denied caller every id."""
+    with _Db(observer=_deny_reads) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.all_point_ids()
+
+
+def test_all_point_ids_scope_fails_closed():
+    with _Db(observer=_scope_to_acme) as db:
+        collection = _seed(db)
+        with pytest.raises(Exception):
+            collection.all_point_ids()
+
+
 def test_contains_deny_fails_closed():
     with _Db(observer=_deny_reads) as db:
         collection = _seed(db)

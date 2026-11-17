@@ -4,6 +4,8 @@ Tests for VelesDB Graph operations (EPIC-016/US-030, US-032).
 Run with: pytest tests/test_graph.py -v
 """
 
+import pytest
+
 from conftest import _SKIP_NO_BINDINGS
 
 pytestmark = _SKIP_NO_BINDINGS
@@ -119,6 +121,20 @@ class TestGraphStore:
         assert outgoing[0]["target"] == 200
         assert outgoing[0]["label"] == "KNOWS"
         assert outgoing[0]["properties"]["weight"] == 0.7
+
+    def test_add_edge_with_an_id_keeps_the_positional_source(self):
+        """add_edge(source, target, label, id=n): the positional value is the
+        source — it used to be dropped and the edge stored from node 0."""
+        store = GraphStore()
+        store.add_edge(1, 2, "KNOWS", id=99)
+        edge = store.get_edge(99)
+        assert (edge["source"], edge["target"], edge["label"]) == (1, 2, "KNOWS")
+
+    def test_add_edge_with_both_an_id_and_a_source_keyword_is_refused(self):
+        """add_edge(x, source=s, target=t, id=n) names the id twice; refused."""
+        store = GraphStore()
+        with pytest.raises(ValueError):
+            store.add_edge(5, source=1, target=2, id=99)
 
     def test_get_outgoing_by_label(self):
         """Test getting outgoing edges filtered by label."""
@@ -322,3 +338,14 @@ class TestDfsTraversal:
         bfs = store.traverse_bfs(source=0, max_depth=3, relationship_types=[])
 
         assert sorted(r.target for r in dfs) == sorted(r.target for r in bfs) == [1, 2]
+
+
+@pytest.mark.skipif(GraphStore is None, reason="bindings not built")
+def test_graph_store_refuses_bad_arguments_with_value_error():
+    """A bad argument is the caller's to fix: ValueError, as everywhere else
+    in this binding — these raised RuntimeError."""
+    store = GraphStore()
+    with pytest.raises(ValueError, match="direction"):
+        store.traverse_bfs(source=1, direction="sideways")
+    with pytest.raises(ValueError, match="max_depth"):
+        store.traverse_bfs(source=1, max_depth=2**40)

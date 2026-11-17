@@ -15,12 +15,14 @@
 //! A counting spy observer, installed at open time via
 //! `Database::open_with_observer`, tallies every `on_query` / `on_upsert`
 //! invocation with the `(collection, value)` it observed. Because the
-//! telemetry hook fires at the `Database` facade (`execute_query` wraps a
-//! single top-level `execute_query_inner`, DML fires once at the DML entry),
-//! compound and JOIN sub-executions that re-enter the collection executor must
-//! NOT re-fire — so the exactly-once tally is the real guard against a
-//! double-fire regression. A fresh temp-dir `Database` is built per case so
-//! the tallies never bleed across iterations.
+//! read hook fires at the `Database` facade (`execute_query` wraps a single
+//! top-level `execute_query_inner`) and the write hook at the collection's
+//! storage entry (`collection::write_telemetry`), compound and JOIN
+//! sub-executions that re-enter the collection executor must NOT re-fire — so
+//! the exactly-once tally is the real guard against a double-fire regression.
+//! A fresh temp-dir `Database` is built per case so the tallies never bleed
+//! across iterations; seeding writes are reported too, so each case resets
+//! the spy before the operation it measures.
 
 #![cfg(feature = "persistence")]
 
@@ -56,6 +58,12 @@ impl CountingSpy {
 
     fn upsert_calls(&self) -> Vec<(String, usize)> {
         self.upserts.lock().clone()
+    }
+
+    /// Forgets the seeding writes, so a case tallies only what it measures.
+    fn reset(&self) {
+        self.queries.lock().clear();
+        self.upserts.lock().clear();
     }
 }
 
@@ -229,6 +237,7 @@ proptest! {
             5 => {
                 // ---- Read path: JOIN across two collections ----
                 seed_join(&db);
+                spy.reset();
                 let sql = String::from(
                     "SELECT * FROM products JOIN inventory ON products.id = inventory.id LIMIT 10",
                 );
@@ -240,6 +249,7 @@ proptest! {
             other => {
                 // ---- Read path: plain SELECT or compound set operation ----
                 seed_items(&db);
+                spy.reset();
                 let sql = build_read_sql(other, threshold, limit);
                 let query = Parser::parse(&sql).expect("test: parse read query");
                 db.execute_query(&query, &HashMap::new())
@@ -313,6 +323,7 @@ fn run_items_read(sql: &str) -> Vec<(String, u64)> {
     let spy = Arc::new(CountingSpy::new());
     let (_dir, db) = open_db(spy.clone());
     seed_items(&db);
+    spy.reset();
     let query = Parser::parse(sql).expect("test: parse read query");
     db.execute_query(&query, &HashMap::new())
         .expect("test: execute read query");
@@ -351,6 +362,7 @@ fn join_fires_on_query_exactly_once() {
     let spy = Arc::new(CountingSpy::new());
     let (_dir, db) = open_db(spy.clone());
     seed_join(&db);
+    spy.reset();
     let query = Parser::parse(
         "SELECT * FROM products JOIN inventory ON products.id = inventory.id LIMIT 10",
     )
@@ -365,4 +377,23 @@ fn join_fires_on_query_exactly_once() {
         spy.upsert_calls().is_empty(),
         "a JOIN read must not fire on_upsert"
     );
+}
+
+/// `Database::match_query` — REST `/match` and the SDKs' `match_query` — is a
+/// read like any other, reported once on the collection it runs on. It ran
+/// gated but unreported, so a MATCH through those surfaces never reached a
+/// host's read telemetry.
+#[test]
+fn database_match_query_fires_on_query_exactly_once() {
+    let spy = Arc::new(CountingSpy::new());
+    let (_dir, db) = open_db(spy.clone());
+    seed_items(&db);
+    spy.reset();
+    let query = Parser::parse("MATCH (n:Item) RETURN n").expect("test: parse");
+    let clause = query.match_clause.as_ref().expect("test: match clause");
+    db.match_query("items", clause, &HashMap::new(), None)
+        .expect("test: match_query");
+    let calls = spy.query_calls();
+    assert_eq!(calls.len(), 1, "match_query must fire on_query once");
+    assert_eq!(calls[0].0, "items");
 }

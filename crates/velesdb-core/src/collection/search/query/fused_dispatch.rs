@@ -3,10 +3,9 @@
 //! Routes a SELECT whose WHERE is a top-level `NEAR_FUSED` through the engine's
 //! [`Collection::multi_query_search`](Collection::multi_query_search) — the same
 //! fusion the multi-query engine API performs — then applies the standard
-//! DISTINCT / ORDER BY / OFFSET / LIMIT finalize.
+//! SELECT post-processing (`finalize_ranked_results`).
 
 use super::{Collection, ExtractedComponents, Result, SearchResult};
-use crate::velesql::FusionConfig;
 
 impl Collection {
     /// Dispatches a `NEAR_FUSED` query through real multi-vector fusion.
@@ -32,7 +31,7 @@ impl Collection {
             return Ok(Vec::new());
         };
         let slices: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-        let strategy = Self::fused_config_to_strategy(config);
+        let strategy = config.near_fused_strategy();
         // Residual metadata predicate (the fused leaf is dropped by
         // extract_metadata_filter) becomes the pre-fusion filter.
         let filter = extracted
@@ -42,24 +41,9 @@ impl Collection {
             .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
         let results = self.multi_query_search(&slices, limit, strategy, filter.as_ref())?;
         self.check_guardrails_and_record(ctx, results.len())?;
-        self.finalize_sparse_results(stmt, params, results)
-    }
-
-    /// Maps a `NEAR_FUSED` [`FusionConfig`] (string strategy + numeric params) to
-    /// a [`FusionStrategy`](crate::fusion::FusionStrategy).
-    ///
-    /// `rrf` (default), `average`, and `maximum` map directly. `weighted` / `rsf`
-    /// take per-branch dense/sparse weights that are ill-defined for N homogeneous
-    /// query vectors, so they — and any unknown strategy — fall back to RRF
-    /// (matching the parser's default strategy).
-    fn fused_config_to_strategy(config: &FusionConfig) -> crate::fusion::FusionStrategy {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let k = config.params.get("k").map_or(60, |v| *v as u32);
-        match config.strategy.to_lowercase().as_str() {
-            "average" => crate::fusion::FusionStrategy::Average,
-            "maximum" => crate::fusion::FusionStrategy::Maximum,
-            _ => crate::fusion::FusionStrategy::RRF { k },
-        }
+        let results = self.finalize_ranked_results(stmt, params, results)?;
+        self.runtime.guard_rails.circuit_breaker.record_success();
+        Ok(results)
     }
 }
 

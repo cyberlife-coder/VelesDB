@@ -1,7 +1,7 @@
 //! Vector collection creation and retrieval operations.
 
 use crate::collection::VectorCollection;
-use crate::index::hnsw::HnswParams;
+use crate::index::hnsw::{HnswOverrides, HnswParams};
 use crate::{CollectionType, DistanceMetric, Result, StorageMode};
 
 use super::Database;
@@ -71,14 +71,12 @@ impl Database {
 
         // Level 2 first, then level 1 on top of it, so a per-field argument
         // overrides only the field it names.
-        let mut params = HnswParams::from_config(dimension, &self.config.hnsw);
-        if let Some(m) = m {
-            params.max_connections = m;
-        }
-        if let Some(ef) = ef_construction {
-            params.ef_construction = ef;
-        }
-        Some(params)
+        let pinned = HnswOverrides {
+            m,
+            ef_construction,
+            ..HnswOverrides::default()
+        };
+        Some(pinned.apply_to(HnswParams::from_config(dimension, &self.config.hnsw)))
     }
 
     /// Creates a new vector collection.
@@ -179,6 +177,54 @@ impl Database {
         Ok(())
     }
 
+    /// Creates a new vector collection with the HNSW parameters the caller
+    /// pins, core resolving every unpinned one.
+    ///
+    /// Each field of `overrides` left `None` is resolved as
+    /// [`Self::create_vector_collection_with_hnsw`] resolves `m` and
+    /// `ef_construction` (#2087): from the `[hnsw]` section, then from the
+    /// auto-tuning for `dimension`. This is the constructor for a surface that
+    /// takes optional tuning fields (REST, Python, Tauri): none of them merges
+    /// over a base of its own any more.
+    ///
+    /// With nothing pinned and no `pq_rescore_oversampling`, it is
+    /// [`Self::create_vector_collection_with_options`], which persists "nobody
+    /// chose" rather than a snapshot of today's defaults.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::Config`] for an out-of-range parameter
+    /// (e.g. `alpha < 1.0`) before anything is created, or any error of
+    /// [`Self::create_vector_collection_with_params`].
+    pub fn create_vector_collection_with_overrides(
+        &self,
+        name: &str,
+        dimension: usize,
+        metric: DistanceMetric,
+        storage_mode: StorageMode,
+        overrides: HnswOverrides,
+        pq_rescore_oversampling: Option<u32>,
+    ) -> Result<()> {
+        if overrides.is_empty() && pq_rescore_oversampling.is_none() {
+            return self.create_vector_collection_with_options(
+                name,
+                dimension,
+                metric,
+                storage_mode,
+            );
+        }
+        let params = overrides.apply_to(HnswParams::from_config(dimension, &self.config.hnsw));
+        params.validate()?;
+        self.create_vector_collection_with_params(
+            name,
+            dimension,
+            metric,
+            storage_mode,
+            params,
+            pq_rescore_oversampling,
+        )
+    }
+
     /// Creates a new vector collection with a fully specified
     /// [`HnswParams`] and an explicit `pq_rescore_oversampling` override.
     ///
@@ -242,7 +288,7 @@ impl Database {
         // Parity item E: thread the live LimitsConfig caps and guard-rails
         // into the collection as it is shared, so direct Collection::upsert /
         // search paths (used by every SDK/REST handler) enforce them.
-        self.admit_collection(&coll.inner, || {
+        self.admit_collection(name, &coll.inner, || {
             self.vector_colls
                 .write()
                 .insert(name.to_string(), coll.clone());
@@ -291,7 +337,7 @@ impl Database {
         }
         let coll = VectorCollection::open(self.collection_dir(name).ok()?).ok()?;
         // Parity item E: re-push runtime limits on disk-open (not persisted).
-        self.admit_collection(&coll.inner, || {
+        self.admit_collection(name, &coll.inner, || {
             self.vector_colls
                 .write()
                 .insert(name.to_string(), coll.clone());

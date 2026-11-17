@@ -158,15 +158,7 @@ impl Collection {
         let metric = self.storage.config.read().metric;
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
-        let match_guards = MatchStorageGuards {
-            metric,
-            vector_guard: &vector_storage,
-            payload_guard: &payload_storage,
-            payload_memo: crate::collection::search::query::match_exec::PayloadMemo::new(
-                &payload_storage,
-            ),
-            where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
-        };
+        let match_guards = MatchStorageGuards::single(metric, &vector_storage, &payload_storage);
         // Id order, so a float SUM or AVG is the same on every run, whatever
         // the storage order: the parallel path sums fixed chunks of this
         // order and merges them in order.

@@ -2,7 +2,9 @@
 //!
 //! Extracted from collection.rs to reduce file size and improve maintainability.
 
-use pyo3::exceptions::{PyKeyError, PyMemoryError, PyOverflowError, PyValueError};
+use pyo3::exceptions::{
+    PyKeyError, PyMemoryError, PyOverflowError, PyPermissionError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
@@ -62,6 +64,7 @@ use velesdb_core::{Filter, Point, SearchResult};
 /// | VELES-034  | `InvalidCollectionName`   | `ValueError`                  |
 /// | VELES-035  | `SnapshotBuildFailed`     | `VelesDBError`                |
 /// | VELES-036  | `IncompatibleSchemaVersion` | `VelesDBError`              |
+/// | VELES-037  | `AccessDenied`            | `PermissionError`             |
 ///
 /// The wildcard arm at the bottom handles future variants added under
 /// the `#[non_exhaustive]` attribute on `velesdb_core::Error`. New
@@ -105,6 +108,8 @@ pub fn core_err(e: velesdb_core::Error) -> PyErr {
         | E::InvalidCollectionName { .. } => PyValueError::new_err(e.to_string()),
 
         // Numeric overflow / allocation failure — specific Python builtins
+        // An observer turned the request down: not a malformed request.
+        E::AccessDenied(_) => PyPermissionError::new_err(e.to_string()),
         E::Overflow(_) => PyOverflowError::new_err(e.to_string()),
         E::AllocationFailed(_) => PyMemoryError::new_err(e.to_string()),
 
@@ -204,6 +209,15 @@ pub fn search_result_to_dict(
             result.point.vector.as_slice(),
         );
     }
+    // Per-component score breakdown (vector_score / bm25_score / ...) when the
+    // engine tagged it — hybrid and fused searches carry it, plain dense does not.
+    if let Some(components) = &result.component_scores {
+        let comp = PyDict::new(py);
+        for (name, value) in components.iter() {
+            let _ = comp.set_item(*name, *value);
+        }
+        let _ = dict.set_item(PyString::intern(py, "component_scores"), comp);
+    }
     dict.into_any().unbind()
 }
 
@@ -283,11 +297,41 @@ pub fn id_score_pairs_to_dicts(py: Python<'_>, results: Vec<(u64, f32)>) -> Vec<
         .collect()
 }
 
+/// The `SparseVector` of a one-row scipy sparse matrix: its stored column
+/// indices and weights. A matrix of several rows holds several queries and
+/// is refused rather than flattened into one.
+fn scipy_sparse_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<SparseVector> {
+    let coo = obj
+        .call_method0(py, "tocoo")
+        .map_err(|e| PyValueError::new_err(format!("scipy tocoo() failed: {e}")))?;
+    let (rows, _cols): (usize, usize) = coo.getattr(py, "shape")?.extract(py)?;
+    if rows != 1 {
+        return Err(PyValueError::new_err(format!(
+            "a scipy sparse query must have exactly one row, got {rows}"
+        )));
+    }
+    let columns: Vec<i64> = coo
+        .getattr(py, "col")?
+        .call_method0(py, "tolist")?
+        .extract(py)?;
+    let weights: Vec<f32> = coo
+        .getattr(py, "data")?
+        .call_method0(py, "tolist")?
+        .extract(py)?;
+    let pairs = columns
+        .into_iter()
+        .zip(weights)
+        .map(|(column, weight)| u32::try_from(column).map(|index| (index, weight)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| PyValueError::new_err("a sparse column index must fit in u32"))?;
+    Ok(SparseVector::new(pairs))
+}
+
 /// Parse a Python object into a `SparseVector`.
 ///
 /// Accepts:
 /// - A Python `dict[int, float]` mapping dimension indices to weights.
-/// - A scipy sparse object with a `.toarray()` method (COO/CSR/CSC).
+/// - A one-row scipy sparse matrix (COO/CSR/CSC), read through `tocoo()`.
 ///
 /// Returns `PyValueError` if the object is neither format.
 pub fn parse_sparse_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<SparseVector> {
@@ -297,35 +341,16 @@ pub fn parse_sparse_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<SparseVe
         return Ok(SparseVector::new(pairs));
     }
 
-    // Try scipy.sparse via duck typing: check for `.toarray()` method.
-    // First confirm the attribute exists without calling it, so we can distinguish
-    // "not a scipy object" (AttributeError → try next format) from runtime errors.
-    let has_toarray_attr = obj
-        .getattr(py, "toarray")
+    // A scipy sparse matrix (COO/CSR/CSC), by duck typing on `tocoo`: read
+    // its one row's column indices and weights as stored — no densifying (a
+    // hashed vocabulary is 2^31 wide) and no epsilon filter (core keeps any
+    // non-zero weight, as the dict path does).
+    let has_tocoo = obj
+        .getattr(py, "tocoo")
         .map(|attr| !attr.is_none(py))
         .unwrap_or(false);
-
-    if has_toarray_attr {
-        // `.toarray()` returns a dense numpy 2D array; flatten to 1D.
-        let array = obj
-            .call_method0(py, "toarray")
-            .map_err(|e| PyValueError::new_err(format!("scipy toarray() failed: {e}")))?;
-        let flat = array
-            .call_method0(py, "flatten")
-            .map_err(|e| PyValueError::new_err(format!("scipy flatten() failed: {e}")))?;
-        let values: Vec<f32> = flat.extract(py).map_err(|e| {
-            PyValueError::new_err(format!("Failed to extract floats from scipy array: {e}"))
-        })?;
-        let pairs: Vec<(u32, f32)> = values
-            .into_iter()
-            .enumerate()
-            .filter(|(_, v)| v.abs() > f32::EPSILON)
-            .map(|(i, v)| u32::try_from(i).map(|idx| (idx, v)))
-            .collect::<Result<_, _>>()
-            .map_err(|_| {
-                PyValueError::new_err("Sparse vector has more than u32::MAX dimensions")
-            })?;
-        return Ok(SparseVector::new(pairs));
+    if has_tocoo {
+        return scipy_sparse_vector(py, obj);
     }
 
     Err(PyValueError::new_err(

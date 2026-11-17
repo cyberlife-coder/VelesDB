@@ -28,8 +28,8 @@ equivalent. Identifiers (collection names, column names) are case-sensitive.
 | ORDER BY | Stable | 2.0 |
 | GROUP BY, HAVING | Stable | 2.0 |
 | JOIN (INNER ... ON) | Stable | 2.0 |
-| JOIN (LEFT, RIGHT, FULL OUTER) | Stable (column-store, primary-key join only — see `crates/velesdb-core/src/collection/search/query/join.rs:155-171`) | 2.0 |
-| JOIN USING | Stable (single-column only; multi-column `USING (a, b, …)` parses but is rejected at execution by `validate_join_condition`) | 2.0 |
+| JOIN (LEFT, RIGHT, FULL OUTER) | Stable (any column, indexed or not — `velesql::hash_join`) | 2.0 |
+| JOIN USING | Stable (single-column only; multi-column `USING (a, b, …)` parses but is rejected at execution) | 2.0 |
 | Set Operations (UNION, INTERSECT, EXCEPT) | Stable | 2.0 |
 | USING FUSION | Stable | 2.0 |
 | NOW() / INTERVAL temporal | Stable | 2.1 |
@@ -151,6 +151,13 @@ Access nested JSON fields using dot notation at any depth:
 SELECT payload.metadata.author FROM articles;
 SELECT payload.stats.views, payload.stats.likes FROM posts;
 ```
+
+Every clause reads a dotted path the same way: WHERE, ORDER BY, GROUP BY,
+DISTINCT, projection, window functions, set operations, subqueries, and
+MATCH `WHERE` / `RETURN`, in the server and in the browser. Each segment
+names an object key. A segment never indexes an array nor reads through a
+scalar, so `tags.0` on `{"tags": ["a"]}` is absent (`NULL`). `id` is the
+point id, even when the payload has its own `id` field.
 
 ### Column Aliases
 
@@ -311,20 +318,53 @@ FROM <table1> [[AS] <alias1>]
 | Type | Keyword | Description | Runtime |
 |------|---------|-------------|---------|
 | Inner | `JOIN` or `INNER JOIN` | Only matching rows from both sides | Fully executed |
-| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left rows; unmatched right side gets `NULL`s for joined columns | Fully executed (column-store; primary key or a secondary-indexed field — see the constraint below) |
-| Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right rows; unmatched left side gets `NULL`s | Fully executed (`join.rs:155-162`) |
-| Full | `FULL JOIN` or `FULL OUTER JOIN` | All rows from both sides with `NULL`s on the unmatched side | Fully executed (`join.rs:155-171`) |
+| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left rows; unmatched right side gets `NULL`s for joined columns | Fully executed |
+| Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right rows; unmatched left side gets `NULL`s | Fully executed |
+| Full | `FULL JOIN` or `FULL OUTER JOIN` | All rows from both sides with `NULL`s on the unmatched side | Fully executed |
 
-> **Constraint:** the join column must be either the right-side
-> collection's column-store **primary key**, or — for **INNER** and
-> **LEFT** joins only — a payload field covered by a **secondary index**
-> (`create_index`; string, number or boolean keys). An indexed non-PK key
-> may match several right-side points: one merged row is emitted per
-> match. RIGHT and FULL joins, and any non-PK column without a secondary
-> index, are rejected at runtime with
-> `"JOIN on table 'T' requires primary key 'PK', got 'other_col'"`
-> (see `validate_join_condition` in `join.rs` and
-> `Database::try_indexed_join` in `database/query_join.rs`).
+> **Join column:** any column of either side, indexed or not, of any JSON
+> type; `id` reads the point id. Two values match when a WHERE `=` finds
+> them equal (`1` and `1.0` are one number, `"1"` is not); `NULL` or an
+> absent value matches nothing. Every engine runs one algorithm,
+> `velesql::hash_join`, core and WASM alike. An INNER or LEFT join on `id`
+> or on a column with a secondary index takes a shortcut (see *JOIN
+> Optimizations*) that returns the same rows.
+>
+> A JOIN's `ON` is oriented by which side names the joined collection: its
+> alias first, then its table name, so a self-join written
+> `FROM t JOIN t AS m ON t.boss = m.id` reads `m` as the joined side. When
+> neither side names it, `ON base = joined` is read in the order written.
+
+### Joined rows
+
+One definition serves every engine (`velesql::scope_base` / `merge_side`,
+core and WASM). A joined row is the base point — its id and score — whose
+payload carries each side twice:
+
+- **under its alias** (the table name when it has none), with that side's
+  `id`: `o.amount`, `c.name`, `c.id` read that side in WHERE, ORDER BY,
+  GROUP BY, DISTINCT and the projection, so a self-join's `e.name` and
+  `m.name` stay apart;
+- **flat**, every field at the root, a later side overwriting an earlier one
+  of the same name, so a bare `amount` still reads.
+
+A LEFT or FULL row without a match carries every column of the joined
+collection as `null`, flat and under the alias, the alias's `id` included. A
+RIGHT or FULL row for a joined point no base row matched is that point's own
+row: its id, score `0`, its fields flat and under its alias, and every
+earlier side's alias with a `null` id, so `WHERE o.id IS NULL` finds it.
+
+As in SQL, WHERE filters the joined rows, then DISTINCT, ORDER BY, OFFSET and
+LIMIT (10 by default) apply to them, and an aggregate groups them. Only a
+predicate on the base collection alone filters the base rows before the
+join, and only when no join of the query is RIGHT or FULL (there it would
+hide the base row a joined point matches, so the whole WHERE holds on the
+joined rows); every predicate that reads a join side — an OR across two sides, a
+`NOT`, a predicate on a LEFT join's outer side — holds or fails on the joined
+row. A predicate on one INNER join side is also pushed below the join, to
+that side only, as an optimization. So `LEFT JOIN c ... WHERE c.id IS NULL`
+finds the rows without a match, `WHERE c.name = 'x'` keeps the rows whose
+match is named `x`, and `WHERE c.price > 10` drops the unmatched rows.
 
 ### ON Condition
 
@@ -348,8 +388,7 @@ JOIN customers AS c USING (customer_id)
 
 > **Limitation:** `USING` currently supports a single column only.
 > Multi-column `USING (a, b, …)` parses successfully but is rejected at
-> execution by `validate_join_condition`
-> (`collection/search/query/join.rs:177`) with the error
+> execution with the error
 > `"JOIN on table 'T' must use ON condition or USING(single_column)"`.
 
 ### Self-Join
@@ -387,7 +426,7 @@ LIMIT 20
 
 The query engine automatically applies two optimizations to cross-collection JOINs:
 
-**Filter Pushdown**: WHERE conditions that reference the joined table (using qualified column names like `inventory.price > 100`) are automatically pushed down and evaluated before loading points into the ColumnStore. This reduces memory usage and I/O for large joined collections.
+**Filter Pushdown**: WHERE conditions that reference only one INNER-joined table (using qualified column names like `inventory.price > 100`) are also pushed down and evaluated before the joined collection's points are read into the join. This reduces memory usage and I/O for large joined collections; the condition is still evaluated on the joined row.
 
 ```sql
 -- inventory.stock > 0 is pushed down to filter inventory before JOIN
@@ -396,9 +435,9 @@ JOIN inventory ON products.id = inventory.id
 WHERE inventory.stock > 0
 ```
 
-**Lookup Join**: When the JOIN condition references the primary key (`id`) on both sides and no pushdown filters apply, the engine uses direct `collection.get()` lookups instead of building a full ColumnStore, achieving O(K) instead of O(N) retrieval.
+**Lookup Join**: When an INNER or LEFT JOIN condition references the primary key (`id`) on both sides, the base side's `id` being the FROM row's own, and no pushdown filters apply, the engine uses direct `collection.get()` lookups instead of reading the whole joined collection, achieving O(K) instead of O(N) retrieval.
 
-**Indexed Join**: When the join-side column carries a secondary index (and the join is INNER or LEFT, with no pushdown filters), the engine resolves matches through the index — `secondary_index_lookup` per left row — instead of materializing the ColumnStore, and emits one merged row per indexed match.
+**Indexed Join**: When the join-side column carries a secondary index (and the join is INNER or LEFT, with no pushdown filters), the engine resolves matches through the index — `secondary_index_lookup` per distinct key — instead of reading the whole joined collection, and emits one merged row per indexed match. Every other join reads the joined collection's points (cached while the collection is unchanged) into `velesql::hash_join`.
 
 ```sql
 -- Uses optimized lookup path (both sides reference id)
@@ -511,10 +550,31 @@ LIMIT 10
 #### Three-valued logic
 
 WHERE evaluates in SQL's three-valued logic: a predicate is true, false, or
-**unknown**. A `similarity()` predicate is unknown for a row whose vector
-cannot be scored against the query vector — different lengths, an empty
-vector, or no vector on that field. Unknown is not false, and the difference
-is only visible under negation:
+**unknown**, and WHERE admits only the rows whose condition is known true —
+on every path: a payload scan, an indexed field, the columnar mirror, a
+filtered vector search, a graph-predicate WHERE and a MATCH return the same
+rows.
+
+A comparison is unknown when either side is `NULL`: a field that is `null` or
+absent from the payload, or a `NULL` literal (`x = NULL` and `x != NULL` are
+unknown for every row; test with `IS [NOT] NULL`, which is never unknown).
+The same holds for `IN`, `BETWEEN`, `LIKE` / `ILIKE`, `CONTAINS` and the
+geospatial predicates, and `x IN ('a', NULL)` is unknown for any `x` other
+than `'a'`. A value of another type than the one compared is known
+different: `x != 'a'` holds, and `x = 'a'` fails, for `x = 5`. A
+`similarity()` predicate is unknown for a row whose vector cannot be scored
+against the query vector — different lengths, an empty vector, or no vector
+on that field. Unknown is not false, and the difference is only visible under
+negation:
+
+| Expression, for a row without `x` | Result |
+|---|---|
+| `x = 'a'` | unknown: row excluded |
+| `x != 'a'`, `NOT (x = 'a')`, `x NOT IN ('a')` | unknown: row excluded |
+| `NOT (x = 'a') OR x IS NULL` | true: row admitted |
+| `x = 'a' OR x != 'a'` | unknown: row excluded |
+
+The same rules, for `similarity()` and for any unknown predicate:
 
 | Expression | Result |
 |---|---|
@@ -557,7 +617,8 @@ transparently. Results are identical in both paths.
 
 ### BETWEEN
 
-Test if a value falls within a range (inclusive):
+Test if a value falls within a range (inclusive). `x BETWEEN a AND b` is
+exactly `x >= a AND x <= b`, for number, string and date bounds alike:
 
 ```sql
 SELECT * FROM docs WHERE price BETWEEN 10 AND 100;
@@ -572,7 +633,7 @@ Case-sensitive pattern matching with wildcards:
 | Wildcard | Meaning |
 |----------|---------|
 | `%` | Any sequence of characters (including empty) |
-| `_` | Exactly one character |
+| `_` | Exactly one character (a Unicode character, not a byte: `'caf_'` matches `café`) |
 
 ```sql
 -- Suffix match
@@ -838,8 +899,8 @@ LIMIT 5
 
 Every row carries its `NEAR` score. This differs from a `similarity()`
 threshold under `OR`, which is a real predicate: `similarity(...) > 0.8 OR
-category = 'other'` returns the union of both sides, the metadata-only rows
-scored 1.0.
+category = 'other'` returns the rows either side holds for, each scored by its
+real similarity and ranked by it (see `similarity()` semantics below).
 
 ### Sparse Vector Search (SPARSE_NEAR, v2.2+)
 
@@ -935,10 +996,41 @@ similarity(field, vector_expr) <operator> threshold
 
 | Parameter | Description |
 |-----------|-------------|
-| `field` | The vector field name (e.g., `vector`, `embedding`) |
+| `field` | `vector` for the point's own vector, or the payload field holding a named vector (e.g. `embedding`) |
 | `vector_expr` | A parameter (`$v`) or literal vector (`[0.1, 0.2, ...]`) |
-| `operator` | Comparison: `>`, `>=`, `<`, `<=`, `=` |
-| `threshold` | Similarity score (0.0 to 1.0 for cosine/dot) |
+| `operator` | Comparison: `>`, `>=`, `<`, `<=`, `=`, `!=` |
+| `threshold` | The metric's score: a similarity (cosine, dot) or a distance (euclidean, hamming) |
+
+#### Semantics
+
+One definition serves every engine (`velesql::similarity_holds`, core and
+WASM):
+
+- **Direction.** `>` means *more similar than*. Under a distance metric that
+  is *closer than*: `similarity(vector, $v) > 1.5` keeps the points at a
+  distance below 1.5.
+- **Equality** `=` / `!=` allows a tolerance of `0.001`
+  (`velesql::SIMILARITY_EQ_TOLERANCE`); scores compare in `f64`.
+- **Named vectors.** `similarity(embedding, $v)` scores the numeric array the
+  payload holds under `embedding`. A point with no such array, or one of
+  another dimension, cannot be scored: the predicate is UNKNOWN for it (see
+  three-valued logic above), so neither `similarity(...) > t` nor its `NOT`
+  keeps it.
+- **Several thresholds.** Under `AND` each `similarity()` filters with its
+  own field and query vector. Several under one `OR` are refused (V001): that
+  would be a union of vector searches.
+- **Score.** Without a `NEAR`, a row carries its similarity to the first
+  `similarity()` of the `WHERE`, and rows come back most similar first; a row
+  that leaf cannot score (one that passed through an `OR`) comes after them
+  with the metadata score `1.0`. With a `NEAR`, the `NEAR` ranks the rows and
+  gives their score; the threshold only filters.
+- **Completeness.** A threshold filters the whole collection: `LIMIT n`
+  returns the `n` best rows the `WHERE` holds for, however selective its other
+  predicates. A threshold of the form `similarity(vector, $v) > t` (or `>=`),
+  or any threshold beside a `NEAR`, is served by the vector index, searched
+  until it has `n` passing rows or no closer point remains. Every other shape —
+  a negated threshold, one under `OR`, one on a named vector, `<` / `<=` /
+  `=` / `!=` — is an exhaustive scan, refused above 5 000 000 vectors.
 
 #### Examples
 
@@ -1128,6 +1220,11 @@ any other scalar conditions.
 
 `NOT MATCH` applies the same rule uniformly (exact dual of the positive case).
 
+**No `@collection` in a predicate (V011).** A predicate tests the FROM
+collection's own graph; it reads no other collection, so a `@collection`
+annotation on any of its nodes is refused rather than ignored. Read an
+annotated collection's properties with a standalone `MATCH` statement.
+
 > **Note.** Implicit binding is *not* Cypher's existential MATCH semantics:
 > the leftmost node always binds to the candidate row. `MATCH (ctx)-[:R]->(f)`
 > keeps the rows that have an outgoing `R` edge — it does not test whether the
@@ -1164,7 +1261,7 @@ matter how it ranks globally. This covers `vector NEAR` (anchor sets up to
 10 000 ids are scored exactly; larger ones go through the bitmap-filtered
 HNSW path), metadata-only fetches (the anchors are hydrated directly),
 sparse-only fetches (anchors feed the sparse index's per-id filter), and
-`NOT similarity()` scans (restricted to the anchors).
+exhaustive `similarity()` scans (restricted to the anchors).
 
 **Execution note (over-fetch window, residual shapes).** Query shapes that
 cannot use the anchored fetch keep the windowed execution: graph predicates
@@ -1647,8 +1744,7 @@ take a dedicated early-return execution path bypass that stage, so the engine
 | Graph pattern | `MATCH (...) RETURN ...` | `LET bindings are not supported with MATCH queries in this version` |
 | Sparse vector | `WHERE vector SPARSE_NEAR ...` | `LET bindings are not supported with SPARSE_NEAR queries in this version` |
 | Multi-vector fusion | `WHERE vector NEAR_FUSED ...` | `LET bindings are not supported with NEAR_FUSED queries in this version` |
-| Negated similarity | `WHERE NOT similarity(...) ...` | `LET bindings are not supported with NOT similarity() queries in this version` |
-| OR / union | `WHERE similarity(...) OR ...` | `LET bindings are not supported with OR/union queries in this version` |
+| Exhaustive similarity scan | `WHERE NOT similarity(...)`, `similarity(...) OR ...`, or, without `NEAR`, a first `similarity()` on a named vector or not of the form `> t` / `>= t` | `LET bindings are not supported with exhaustive similarity() scan queries in this version` |
 
 LET **is** supported on dense `NEAR`, text `MATCH '...'`, hybrid `NEAR + MATCH`
 text, and scalar-filter SELECTs.
@@ -1869,6 +1965,43 @@ Combine results from multiple SELECT queries. N-ary chaining is supported.
 > unlike standard SQL where `INTERSECT` binds tighter than `UNION`. Use
 > parenthesized subqueries if different evaluation order is needed.
 
+#### Semantics
+
+One definition serves every engine (`velesql::execute_compound`, core and
+WASM):
+
+- **Window.** As in SQL, the `ORDER BY`, `LIMIT` and `OFFSET` written after the
+  last operand apply to the combined rows. A compound has no implicit
+  `LIMIT 10` (see the defaults table): without a `LIMIT`, every combined row
+  up to the 100 000-row ceiling. An operand other than the last keeps its own
+  clauses, and without a `LIMIT` it is not capped. A written `LIMIT` above the
+  ceiling is held to it.
+- **Columns.** Positional, named by the first operand: a later operand's
+  column `i` comes back under the first operand's column `i`, so
+  `SELECT year FROM a UNION ALL SELECT age FROM b` returns `b`'s ages under
+  `year`, and the window's `ORDER BY year` reads them.
+- **Rows.** Two rows are the same row when their projected values are: the
+  listed columns (window outputs included), compared by position, or the id
+  and payload for `*`. So
+  `SELECT id FROM a INTERSECT SELECT id FROM b` intersects ids, while
+  `SELECT * FROM a INTERSECT SELECT * FROM b` keeps only points whose id and
+  payload both agree. `UNION`, `INTERSECT` and `EXCEPT` return distinct rows;
+  `UNION ALL` keeps every row. A row met twice keeps its first position and
+  its better score, with that score's breakdown (`vector_score`, ...).
+- **Order.** The window's `ORDER BY` when there is one; otherwise the rows rank
+  by score in the first operand's metric direction (most similar first,
+  closest first under a distance), ties in the order they were met. A NaN
+  score ranks last, and a duplicate's number always beats its twin's NaN.
+- The combined rows are projected by the first operand's column list.
+
+```sql
+-- The 3 latest documents of either category, by year:
+SELECT id, year FROM docs WHERE category = 'tech'
+UNION
+SELECT id, year FROM docs WHERE category = 'science'
+ORDER BY year DESC LIMIT 3
+```
+
 ### UNION
 
 Combine results, removing duplicates:
@@ -1961,25 +2094,41 @@ A node is enclosed in parentheses with optional alias, labels, and properties:
 (alias:Label@collection)         -- Node resolved from a specific collection (cross-collection)
 ```
 
+A node matches a pattern node when it carries **every** listed label. A
+relationship matches when its type is **one of** the listed types
+(`-[:A|B]->`). Inline properties `(n {k: v})` and `-[r {k: v}]->` mean `n.k = v`
+/ `r.k = v` for each pair, evaluated as WHERE evaluates `=`: in three-valued
+logic (`{k: NULL}`, or a `null` or absent `k`, matches nothing), numbers by
+exact value, `{id: 3}` reading the element's id, and `{k: $name}` taking the
+caller's parameter (an unbound one refuses the query). An alias repeated in
+the pattern names one node, so `(a)-[:R]->(b)-[:R]->(a)` requires a cycle; an
+unnamed node is walked but binds no name, and a query returns one row per
+distinct binding of its named nodes and relationships.
+
 #### Cross-Collection Annotation (`@collection`)
 
-The `@collection` suffix on a node pattern specifies which collection the node's data
-should be resolved from. This enables cross-collection MATCH queries where the graph
-traversal runs on one collection (the primary/edge collection) and node payloads are
-enriched from other collections.
+The `@collection` suffix on a node pattern gives the node the properties of the
+point with the same id in another collection. The graph traversal runs on one
+collection (the primary/edge collection); the annotated node's properties are the
+union of its own payload and that point's.
 
 ```sql
--- Products in 'catalog' graph, enriched with pricing from 'inventory' collection
-MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@inventory)
-RETURN p.name, w.price, w.stock
+-- Products in the 'catalog' graph, priced and stocked in 'inventory'
+MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@inventory {stock: 0})
+WHERE w.price < 100
+RETURN p.name, w.name, w.price
+ORDER BY w.price DESC
 LIMIT 20
 ```
 
 When using `@collection`:
-- The graph traversal (edges) runs on the primary collection specified via `_collection` param or `FROM` clause
-- Node payloads are looked up from the annotated collection after traversal
-- Enriched fields are prefixed with the node alias (e.g., `w.price`, `w.stock`)
-- If the annotated collection doesn't exist, the enrichment is silently skipped
+- The graph traversal (edges) runs on the primary collection specified via the `_collection` param or the `FROM` clause.
+- **WHERE, ORDER BY, RETURN and the pattern's inline properties** all read the union, during the walk: `WHERE w.price < 100` filters on the annotated collection, and three-valued logic applies to it as to any property.
+- **The node's own fields win a collision**, so an annotation adds properties and never overwrites the node's identity. Labels are always the graph's own: `(w:Product@inventory)` matches only nodes labelled `Product` in the graph.
+- A column without an alias (`WHERE price < 100`) reads the traversal target's own payload; qualify it (`w.price`) to read the annotation.
+- RETURN projects with the alias prefix (`w.price`); `RETURN w` projects every property of the union.
+- An annotation naming no collection refuses the query (`VELES-002`), and the read gate decides every annotated collection as a graph-traversal read of its own. A denied one refuses the query.
+- REST `/collections/{name}/match` runs a bare clause the same way: the same gate, the same properties, the same ordering.
 
 #### Relationship Patterns
 
@@ -2040,6 +2189,13 @@ RETURN *                           -- All bound variables
 RETURN similarity()                -- Pre-computed similarity score
 RETURN a.name, similarity() AS score
 ```
+
+`similarity()` (in `RETURN` and in `ORDER BY`) and each row's score are the
+similarity of the node targeted by the first `similarity()` leaf of `WHERE`:
+`d` in `WHERE similarity(d.embedding, $v) > 0.8`, the traversal target for a
+bare field. This holds on every alias of the pattern, whichever execution
+strategy the planner picks. Without a similarity leaf, a row's score falls
+back to its depth, `1 / (depth + 1)`.
 
 ### Full Examples
 
@@ -2105,11 +2261,18 @@ The query planner automatically chooses the optimal strategy:
 
 | Strategy | When Used | Description |
 |----------|-----------|-------------|
-| **GraphFirst** | No similarity condition | Traverse graph, then filter |
-| **VectorFirst** | Similarity on start node | Vector search, then validate graph |
+| **GraphFirst** | Every other MATCH | Walk the pattern from every node its first node matches |
+| **VectorFirst** | `LIMIT`, and a `similarity(start.field, $v) >`/`>=` threshold joined to WHERE by `AND` | Walk the pattern from the nodes nearest `$v`, nearest first |
 
-No strategy runs both: GraphFirst enumerates every row a VectorFirst search
-could return, so a union would add nothing and cost both.
+Both strategies run the same walk: the whole pattern (labels, inline
+properties, every hop), the whole WHERE (the `similarity()` leaf included),
+each path its own row. VectorFirst only chooses where the walk starts, so it
+returns the rows GraphFirst returns: it applies only when the nearest start
+nodes are the ones the rows come from — one pattern, an explicit `LIMIT`, the
+first `similarity()` leaf scoring the start node towards "closer", and any
+`ORDER BY` being `similarity() DESC`. Its seeds grow until the walk has its
+`LIMIT` of rows, the collection is exhausted, or the farthest seed fails the
+threshold. No strategy runs both.
 
 ### REST API
 
@@ -2296,10 +2459,8 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 > **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
 > lower bound** on the graph traversal across all MATCH strategies — not exact
 > figures. For **GraphFirst** they are the start nodes examined plus the
-> edges/nodes reached; for the similarity-anchored **VectorFirst** strategy (a
-> `similarity()` predicate on the start node) they are the candidate nodes
-> evaluated plus the per-candidate existence-BFS edges/nodes — each BFS uses
-> `limit(1)` and so undercounts the true frontier.
+> edges/nodes reached; for the similarity-anchored **VectorFirst** strategy
+> they are the same counts over the seeded walk (its seeds as start nodes).
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 
@@ -2770,7 +2931,10 @@ DELETE FROM events WHERE status = 'expired' AND created_at < 1000
 
 ### INSERT EDGE (v3.3+)
 
-Insert a labeled edge between two nodes in a graph collection.
+Insert a labeled edge between two nodes of a collection. Vector, graph and
+metadata collections share one edge store, so every collection type accepts
+`INSERT EDGE`, `DELETE EDGE` and `SELECT EDGES`; in a vector or metadata
+collection the nodes are its points.
 
 ```sql
 -- Basic edge insertion
@@ -2807,7 +2971,7 @@ WITH PROPERTIES accepts key-value pairs (strings, integers, or floats).
 
 ### DELETE EDGE (v3.3+)
 
-Remove an edge by its ID from a graph collection.
+Remove an edge by its ID from a collection of any type.
 
 ```sql
 DELETE EDGE 123 FROM knowledge;
@@ -2816,7 +2980,7 @@ DELETE EDGE 10 FROM kg;
 
 ### SELECT EDGES (v3.5+)
 
-Query edges from a graph collection with optional filtering by source node,
+Query edges from a collection of any type with optional filtering by source node,
 target node, or edge label.
 
 ```sql
@@ -2845,7 +3009,10 @@ and `properties` fields.
 
 ### INSERT NODE (v3.5+)
 
-Insert or update a node's payload in a graph collection.
+Insert or update a node's payload in a graph collection. `INSERT NODE` is
+graph-only: in a vector or metadata collection a node is a point, written with
+`INSERT INTO`/`UPSERT`; there it fails with `VELES-018` (graph not supported),
+naming the collection's type.
 
 ```sql
 -- With JSON payload
@@ -3355,6 +3522,11 @@ SELECT * FROM places WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4);
 | Parameter | `$name` | `$query_vector` |
 | Temporal | `NOW()`, `INTERVAL` | `NOW() - INTERVAL '7 days'` |
 
+An integer literal is an `i64`, or a `u64` above `i64::MAX`; past `u64::MAX`
+it reads as a float. A numeric literal too large for an `f64` (past about
+309 digits) is refused at parse time with "Numeric literal out of range":
+an infinity has no JSON form, so no literal stands for one.
+
 ### Score Variables (for ORDER BY and LET)
 
 | Variable | Source | When Populated |
@@ -3365,6 +3537,12 @@ SELECT * FROM places WHERE GEO_BBOX(location, 48.8, 2.3, 48.9, 2.4);
 | `graph_score` | Graph traversal | MATCH graph pattern present |
 | `fused_score` | After fusion | USING FUSION applied |
 | `similarity()` | Primary search score | Any search clause |
+
+Wherever results are ranked by score without an `ORDER BY` (search, the
+exhaustive `similarity()` scan, MATCH, set operations), the best score comes
+first in the metric's direction and a NaN score ranks after every number,
+whatever its sign and on every architecture. `-0.0` and `0.0` are one score.
+Fusion keeps its own documented order.
 
 ---
 

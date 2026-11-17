@@ -1,6 +1,7 @@
 pub fn velesdb_core::DatabaseObserver::on_collection_created(&self, &str, &velesdb_core::CollectionType)
 pub fn velesdb_core::DatabaseObserver::on_collection_deleted(&self, &str)
 pub fn velesdb_core::DatabaseObserver::on_ddl_request(&self, &str, &str) -> velesdb_core::error::Result<()>
+pub fn velesdb_core::DatabaseObserver::on_delete(&self, &str, usize)
 pub fn velesdb_core::DatabaseObserver::on_dml_mutation_request(&self, &str, &str) -> velesdb_core::error::Result<()>
 pub fn velesdb_core::DatabaseObserver::on_query(&self, &str, u64)
 pub fn velesdb_core::DatabaseObserver::on_query_request(&self, &velesdb_core::observer::context::QueryAccessContext<'_>) -> velesdb_core::error::Result<velesdb_core::observer::context::AccessDecision>
@@ -49,6 +50,7 @@ pub fn velesdb_core::index::hnsw::native::TraversalCodec::train(&[alloc::vec::Ve
 pub fn velesdb_core::observer::DatabaseObserver::on_collection_created(&self, &str, &velesdb_core::CollectionType)
 pub fn velesdb_core::observer::DatabaseObserver::on_collection_deleted(&self, &str)
 pub fn velesdb_core::observer::DatabaseObserver::on_ddl_request(&self, &str, &str) -> velesdb_core::error::Result<()>
+pub fn velesdb_core::observer::DatabaseObserver::on_delete(&self, &str, usize)
 pub fn velesdb_core::observer::DatabaseObserver::on_dml_mutation_request(&self, &str, &str) -> velesdb_core::error::Result<()>
 pub fn velesdb_core::observer::DatabaseObserver::on_query(&self, &str, u64)
 pub fn velesdb_core::observer::DatabaseObserver::on_query_request(&self, &velesdb_core::observer::context::QueryAccessContext<'_>) -> velesdb_core::error::Result<velesdb_core::observer::context::AccessDecision>

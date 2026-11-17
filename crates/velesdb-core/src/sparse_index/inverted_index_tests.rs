@@ -339,3 +339,49 @@ fn test_dedup_last_write_wins_across_multiple_frozen_segments() {
         entry.weight
     );
 }
+
+#[test]
+fn test_reinsert_replaces_the_previous_terms() {
+    let index = SparseInvertedIndex::new();
+    index.insert(1, &make_vector(vec![(7, 1.0), (8, 2.0)]));
+    index.insert(1, &make_vector(vec![(9, 1.0)]));
+
+    assert_eq!(index.doc_count(), 1);
+    assert!(index.get_all_postings(7).is_empty(), "term 7 was dropped");
+    assert!(index.get_all_postings(8).is_empty(), "term 8 was dropped");
+    assert_eq!(index.get_all_postings(9).len(), 1);
+}
+
+#[test]
+fn test_reinsert_after_freeze_holds_the_document_once() {
+    let index = SparseInvertedIndex::new();
+    let filler = make_vector(vec![(1, 1.0)]);
+    for id in 0..FREEZE_THRESHOLD as u64 {
+        index.insert(id, &filler);
+    }
+    assert!(index.contains(0), "doc 0 sits in a frozen segment");
+
+    index.insert(0, &make_vector(vec![(1, 5.0)]));
+
+    assert_eq!(index.doc_count(), FREEZE_THRESHOLD as u64);
+    let doc0: Vec<f32> = index
+        .get_all_postings(1)
+        .into_iter()
+        .filter(|e| e.doc_id == 0)
+        .map(|e| e.weight)
+        .collect();
+    assert_eq!(doc0, vec![5.0], "one live posting, the new weight");
+}
+
+#[test]
+fn test_delete_finds_a_document_indexed_with_an_empty_vector() {
+    let index = SparseInvertedIndex::new();
+    index.insert(1, &make_vector(vec![]));
+    assert_eq!(index.doc_count(), 1);
+    assert!(index.contains(1));
+
+    index.delete(1);
+
+    assert_eq!(index.doc_count(), 0);
+    assert!(!index.contains(1));
+}

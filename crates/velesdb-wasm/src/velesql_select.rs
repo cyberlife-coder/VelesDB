@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use velesdb_core::point::SearchResult;
 use velesdb_core::velesql::distinct_evaluator::apply_distinct;
 use velesdb_core::velesql::{Condition, DistinctMode, Query, SelectStatement, VectorSearch};
 
@@ -49,24 +50,96 @@ pub(crate) fn execute(
         return Err("LET bindings are not supported in WASM".to_string());
     }
     if !query.select.joins.is_empty() {
-        return crate::velesql_join::execute(db, &query.select, params);
+        let rows = crate::velesql_join::joined_rows(db, &query.select, params)?;
+        return finalize(db, &query.select, rows, params);
     }
 
     let rows = scan(db, &query.select, params)?;
-    let higher_is_better = db
-        .get_shared_store(&query.select.from)?
-        .borrow()
-        .metric
-        .higher_is_better();
-    finalize(&query.select, rows, params, higher_is_better)
+    finalize(db, &query.select, rows, params)
 }
 
-/// The rows a SELECT keeps, by a fused, a vector or a plain scan.
+/// Runs a compound operand: the rows its SELECT keeps, windowed by its own
+/// DISTINCT / ORDER BY / OFFSET / LIMIT but not projected, so the compound
+/// keys and combines them (`velesdb_core::velesql::execute_compound`).
+///
+/// # Errors
+///
+/// What [`execute`] refuses, and an operand that joins or aggregates: its
+/// rows are not points a set operation can combine here.
+pub(crate) fn execute_operand(
+    db: &mut DatabaseInner,
+    query: &Query,
+    params: &Params,
+) -> Result<Vec<SearchResult>, String> {
+    check_select_access(db, &query.select)?;
+    if !query.let_bindings.is_empty() {
+        return Err("LET bindings are not supported in WASM".to_string());
+    }
+    if !query.select.joins.is_empty()
+        || velesql_aggregate::needs_aggregation_pipeline(&query.select)
+    {
+        return Err(
+            "a JOIN or an aggregation in a UNION / INTERSECT / EXCEPT operand is not \
+             supported in WASM"
+                .to_string(),
+        );
+    }
+    let rows = scan(db, &query.select, params)?;
+    let store = db.get_shared_store(&query.select.from)?;
+    let borrowed = store.borrow();
+    let mut rows = window_plain(&query.select, rows, &order_context(&borrowed, params))?;
+    carry_own_vectors(&mut rows, &borrowed);
+    Ok(rows)
+}
+
+/// Gives each row its own vector, as core's search results carry theirs: a
+/// compound's rows come from several collections, whose ids are local, so the
+/// window's `similarity(vector, $v)` reads the vector on the row.
+fn carry_own_vectors(rows: &mut [SearchResult], store: &crate::store_state::StoreState) {
+    let dim = store.dimension;
+    if dim == 0 {
+        return;
+    }
+    let index = build_id_to_idx(store);
+    for row in rows {
+        if let Some(&at) = index.get(&row.point.id) {
+            row.point.vector = store.data[at * dim..(at + 1) * dim].to_vec();
+        }
+    }
+}
+
+/// What the ORDER BY of rows from `store` reads: its metric's direction, and
+/// its vectors for `similarity(field, $v)`.
+fn order_context<'a>(
+    store: &'a crate::store_state::StoreState,
+    params: &'a Params,
+) -> velesql_orderby::OrderContext<'a> {
+    velesql_orderby::OrderContext {
+        higher_is_better: store.metric.higher_is_better(),
+        vectors: Some(velesql_orderby::OrderVectors::of(params, store)),
+    }
+}
+
+/// Whether the metric of `stmt`'s collection ranks higher scores first.
+pub(crate) fn metric_direction(db: &DatabaseInner, stmt: &SelectStatement) -> Result<bool, String> {
+    Ok(db
+        .get_shared_store(&stmt.from)?
+        .borrow()
+        .metric
+        .higher_is_better())
+}
+
+/// The rows a SELECT keeps, by a fused, a vector or a plain scan, once its
+/// vector predicates pass the validation core applies
+/// ([`velesdb_core::velesql::validate_vector_predicates`]).
 fn scan(
     db: &mut DatabaseInner,
     stmt: &SelectStatement,
     params: &Params,
 ) -> Result<Vec<OwnedScanRow>, String> {
+    if let Some(cond) = stmt.where_clause.as_ref() {
+        velesdb_core::velesql::validate_vector_predicates(cond).map_err(|e| e.to_string())?;
+    }
     if let Some(vfs) = crate::velesql_fused::find_fused_search(stmt.where_clause.as_ref()) {
         crate::velesql_fused::execute_fused_search(db, stmt, vfs, params)
     } else if let Some(vs) = find_vector_search(stmt.where_clause.as_ref()) {
@@ -79,8 +152,22 @@ fn scan(
 /// Consults the read gate for every collection a SELECT reads: its source,
 /// and each JOIN's secondary collection, whose rows the join merges into the
 /// result. Zero-overhead when no observer is registered.
+///
+/// The source is asked as core classifies the statement: a `NEAR` in the
+/// WHERE makes it a vector search — the kind `WasmCollectionHandle.search`
+/// asks with — so a policy refusing vector search is not bypassed through
+/// VelesQL.
 fn check_select_access(db: &DatabaseInner, select: &SelectStatement) -> Result<(), String> {
-    db.check_query_access(&select.from, WasmQueryOperationKind::Select)?;
+    let kind = if select
+        .where_clause
+        .as_ref()
+        .is_some_and(velesdb_core::velesql::Condition::has_vector_search)
+    {
+        WasmQueryOperationKind::VectorSearch
+    } else {
+        WasmQueryOperationKind::Select
+    };
+    db.check_query_access(&select.from, kind)?;
     for join in &select.joins {
         db.check_query_access(&join.table, WasmQueryOperationKind::Select)?;
     }
@@ -92,9 +179,13 @@ fn check_select_access(db: &DatabaseInner, select: &SelectStatement) -> Result<(
 /// Runs a non-vector SELECT (optionally with a similarity() threshold in
 /// the WHERE clause).
 ///
-/// With a threshold, each row carries its similarity as its score and the
-/// rows come back best first, as core's `dispatch_similarity_query` returns
-/// them; otherwise rows keep insertion order with score 0.0.
+/// With a threshold, each row carries its similarity to the first
+/// `similarity()` leaf as its score and the rows come back best first, as
+/// core's `dispatch_similarity_query` returns them; a row that leaf cannot
+/// score comes last. Otherwise rows keep insertion order.
+///
+/// A row no vector predicate scored carries
+/// [`velesdb_core::velesql::METADATA_MATCH_SCORE`], as in core.
 fn execute_plain(
     db: &DatabaseInner,
     stmt: &SelectStatement,
@@ -117,25 +208,41 @@ fn execute_plain(
         if !filters.passes(id, payload, idx, &borrowed, params)? {
             continue;
         }
-        let score = filters.eval.as_ref().map_or(0.0, |e| e.score_at(idx));
+        let score = filters.eval.as_ref().and_then(|e| e.score_at(idx));
         out.push((id, score, payload.cloned()));
         crate::guardrails::check_cardinality(out.len())?;
     }
     if filters.eval.is_some() {
         rank_by_score(&mut out, borrowed.metric.higher_is_better());
     }
-    Ok(out)
+    Ok(out
+        .into_iter()
+        .map(|(id, score, payload)| {
+            let score = score.unwrap_or(velesdb_core::velesql::METADATA_MATCH_SCORE);
+            (id, score, payload)
+        })
+        .collect())
 }
 
-/// Stable sort of scored rows in the metric's direction (best first).
-fn rank_by_score(rows: &mut [OwnedScanRow], higher_is_better: bool) {
-    rows.sort_by(|a, b| {
-        let ascending = a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal);
-        if higher_is_better {
-            ascending.reverse()
-        } else {
-            ascending
+/// Stable sort of rows in the metric's direction (best first), the rows
+/// without a score last.
+fn rank_by_score(
+    rows: &mut [(u64, Option<f32>, Option<serde_json::Value>)],
+    higher_is_better: bool,
+) {
+    use std::cmp::Ordering;
+    rows.sort_by(|a, b| match (a.1, b.1) {
+        (Some(x), Some(y)) => {
+            let ascending = x.partial_cmp(&y).unwrap_or(Ordering::Equal);
+            if higher_is_better {
+                ascending.reverse()
+            } else {
+                ascending
+            }
         }
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
     });
 }
 
@@ -177,21 +284,8 @@ impl WhereFilters {
             None => stmt.where_clause.clone(),
         };
         let normalized = base.map(crate::velesql_logic::push_not_inward);
-        // Finding H: reject WHERE clauses that mix similarity() predicates
-        // against distinct query vectors — SimilarityEvaluator pre-computes
-        // scores for a single vector and would otherwise silently return
-        // wrong rows for the second threshold.
-        velesql_similarity::assert_single_similarity_vector(normalized.as_ref())?;
-        // Finding P: `normalized` is already push_not_inward-ed above;
-        // use the pre-normalized variants to skip redundant clones + tree
-        // walks inside `find_similarity` / `strip_similarity`.
-        let similarity_cond =
-            velesql_similarity::find_similarity_pre_normalized(normalized.as_ref());
-        let residual = velesql_similarity::strip_similarity_pre_normalized(normalized.as_ref());
-        let eval = similarity_cond
-            .as_ref()
-            .map(|c| SimilarityEvaluator::new(db, &stmt.from, c, params))
-            .transpose()?;
+        let residual = velesql_similarity::strip_similarity(normalized.as_ref());
+        let eval = SimilarityEvaluator::for_condition(db, &stmt.from, normalized.as_ref(), params)?;
         Ok(Self {
             normalized,
             residual,
@@ -337,10 +431,7 @@ fn apply_fusion(
 ) -> Result<Vec<(u64, f32)>, String> {
     let rrf_branch = scored.to_vec();
     let payload_branch = fusion_branch_from_residual(store, residual, params)?;
-    Ok(velesql_fusion::apply(
-        clause,
-        vec![rrf_branch, payload_branch],
-    ))
+    velesql_fusion::apply(clause, vec![rrf_branch, payload_branch])
 }
 
 /// Builds an `id -> index` lookup map so the vector-row collectors can
@@ -425,10 +516,11 @@ fn fusion_branch_from_residual(
     let Some(cond) = cond else {
         return Ok(Vec::new());
     };
+    let filter = velesql_where::WhereFilter::compile(cond, params)?;
     let mut out = Vec::new();
     for (idx, &id) in store.ids.iter().enumerate() {
         let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
-        if velesql_where::matches(cond, id, payload, params)? {
+        if filter.matches(id, payload) {
             out.push((id, 1.0));
         }
     }
@@ -441,15 +533,18 @@ fn fusion_branch_from_residual(
 /// raw row set has been materialised by either the plain or vector path.
 /// `higher_is_better` is the collection metric's direction.
 fn finalize(
+    db: &DatabaseInner,
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
     params: &Params,
-    higher_is_better: bool,
 ) -> Result<Vec<QueryResultRow>, String> {
+    let store = db.get_shared_store(&stmt.from)?;
+    let borrowed = store.borrow();
     if velesql_aggregate::needs_aggregation_pipeline(stmt) {
-        return finalize_aggregated(stmt, rows, params, higher_is_better);
+        return finalize_aggregated(stmt, rows, params, borrowed.metric.higher_is_better());
     }
-    finalize_plain(stmt, rows, higher_is_better)
+    let results = window_plain(stmt, rows, &order_context(&borrowed, params))?;
+    velesql_project::project(stmt, &results)
 }
 
 fn finalize_aggregated(
@@ -474,32 +569,38 @@ fn finalize_aggregated(
     Ok(apply_limit_offset(stmt, out, default_limit))
 }
 
-/// Finalizes a non-aggregated SELECT: DISTINCT, window functions, ORDER BY,
-/// column projection (including `AS` aliases), then OFFSET/LIMIT — core's
-/// order (`apply_select_postprocessing`).
+/// The non-aggregated rows of a SELECT in their final order and window,
+/// before projection: DISTINCT, window functions, ORDER BY, OFFSET / LIMIT.
 ///
-/// Routed through velesdb-core's single source of truth — `apply_distinct`
-/// keys DISTINCT exactly as core does, `window_evaluator`
-/// injects window aliases into the payload, `velesql_orderby::sort_rows`
-/// evaluates arithmetic / rejects unevaluable ORDER BY forms, and
-/// `projection::project_results` materializes exactly the SELECT columns. This
-/// replaced the old path that always emitted `id + score + full payload`,
-/// dropping projection, aliases, and window functions (#3b).
-fn finalize_plain(
+/// Routed through velesdb-core's single source of truth: `apply_distinct`
+/// keys DISTINCT as core does, `window_evaluator` injects window aliases,
+/// `velesql_orderby::sort_rows` orders as core's ORDER BY does, and the caller
+/// projects with core's projection (`velesql_project::project`).
+fn window_plain(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
-    higher_is_better: bool,
-) -> Result<Vec<QueryResultRow>, String> {
+    order: &velesql_orderby::OrderContext<'_>,
+) -> Result<Vec<SearchResult>, String> {
     let mut results = velesql_project::to_search_results(rows);
+    if find_vector_search(stmt.where_clause.as_ref()).is_some()
+        && crate::velesql_fused::find_fused_search(stmt.where_clause.as_ref()).is_none()
+    {
+        // A NEAR row's score is its vector component, as core tags its
+        // search results (`tag_vector_component_scores`): `vector_score` then
+        // reads it and `bm25_score` reads 0.0.
+        for result in &mut results {
+            result.component_scores =
+                Some(std::iter::once(("vector_score", result.score)).collect());
+        }
+    }
     if stmt.distinct == DistinctMode::All {
         results = apply_distinct(results, &stmt.columns);
     }
     velesql_project::inject_window_functions(stmt, &mut results)?;
-    velesql_orderby::sort_rows(stmt, &mut results, higher_is_better)?;
-    let projected = velesql_project::project(stmt, &results)?;
+    velesql_orderby::sort_rows(stmt, &mut results, order)?;
     Ok(apply_limit_offset(
         stmt,
-        projected,
+        results,
         velesdb_core::velesql::DEFAULT_SELECT_LIMIT,
     ))
 }
@@ -510,13 +611,14 @@ fn finalize_plain(
 /// `DEFAULT_SELECT_LIMIT` (10), not "every row" — previously WASM used
 /// `u64::MAX`, diverging from every other surface (#8b). Aggregation passes
 /// `u64::MAX` so a LIMIT-less GROUP BY still returns every group.
-fn apply_limit_offset(
-    stmt: &SelectStatement,
-    rows: Vec<QueryResultRow>,
-    default_limit: u64,
-) -> Vec<QueryResultRow> {
+fn apply_limit_offset<T>(stmt: &SelectStatement, rows: Vec<T>, default_limit: u64) -> Vec<T> {
     let offset = usize::try_from(stmt.offset.unwrap_or(0)).unwrap_or(usize::MAX);
-    let limit = usize::try_from(stmt.limit.unwrap_or(default_limit)).unwrap_or(usize::MAX);
+    // A LIMIT past the ceiling is capped to it, as core caps it.
+    let limit = stmt
+        .limit
+        .unwrap_or(default_limit)
+        .min(velesdb_core::velesql::MAX_SELECT_LIMIT);
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     rows.into_iter().skip(offset).take(limit).collect()
 }
 

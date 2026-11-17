@@ -384,26 +384,22 @@ fn build_null_row_data(column_store: &ColumnStore) -> HashMap<String, serde_json
 /// Converts JoinedResults back to SearchResults with merged payload.
 ///
 /// This is useful when the query expects SearchResult format but
-/// we want to include joined column data in the payload.
+/// we want to include joined column data in the payload. Each joined column
+/// is merged flat, at the payload's root. The query engine joins through
+/// [`crate::velesql::hash_join`] instead.
 #[must_use]
 pub fn joined_to_search_results(joined: Vec<JoinedResult>) -> Vec<SearchResult> {
     joined
         .into_iter()
         .map(|jr| {
             let mut result = jr.search_result;
-
-            // Merge column data into payload
             let mut payload = result
                 .point
                 .payload
                 .take()
                 .and_then(|p| p.as_object().cloned())
                 .unwrap_or_default();
-
-            for (key, value) in jr.column_data {
-                payload.insert(key, value);
-            }
-
+            payload.extend(jr.column_data);
             result.point.payload = Some(serde_json::Value::Object(payload));
             result
         })

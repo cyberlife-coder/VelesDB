@@ -187,3 +187,55 @@ export interface StreamUpsertResponse {
   /** Number of HTTP body stream read errors (non-zero means truncated transfer). */
   networkErrors: number;
 }
+
+// ============================================================================
+// Maintenance, diagnostics and health endpoints (parity audit)
+// ============================================================================
+
+/** Liveness/readiness probe body (`GET /health`, `GET /ready`). */
+export interface HealthStatus {
+  /** Server-reported status string (`"ok"`, `"ready"`, `"not_ready"`). */
+  status: string;
+  /** Server version (`CARGO_PKG_VERSION` of velesdb-server). */
+  version: string;
+}
+
+/** Result of `POST /collections/{name}/vacuum`. */
+export interface VacuumResult {
+  /** Informational message from the server. */
+  message: string;
+  /** Collection name. */
+  collection: string;
+  /** Number of tombstoned index entries compacted. */
+  compactedEntries: number;
+}
+
+/** Result of `POST /collections/{name}/compact`. */
+export interface CompactResult {
+  /** Informational message from the server. */
+  message: string;
+  /** Collection name. */
+  collection: string;
+  /** Bytes reclaimed by rewriting the vector storage. */
+  bytesReclaimed: number;
+}
+
+/** Result of `POST /collections/{name}/locality/reorder`. */
+export interface ReorderResult {
+  /** Informational message from the server. */
+  message: string;
+  /** Collection name. */
+  collection: string;
+}
+
+/** Result of `GET /collections/{name}/diagnostics` (`CollectionDiagnosticsResponse`). */
+export interface CollectionDiagnostics {
+  hasVectors: boolean;
+  searchReady: boolean;
+  dimensionConfigured: boolean;
+  pointCount: number;
+  /** Index health: `"healthy"` | `"empty"` | `"needs_rebuild"` | `"unknown"`. */
+  indexHealth: string;
+  /** Rebuild reason when `indexHealth` is `"needs_rebuild"`. */
+  indexHealthDetail?: string;
+}

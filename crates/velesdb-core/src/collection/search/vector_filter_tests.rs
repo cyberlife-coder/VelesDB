@@ -12,20 +12,23 @@ fn eq_filter() -> Filter {
 }
 
 /// Regression: with `k >= 10_000` the lower bound `(k + 10)` used to exceed
-/// the `10_000` upper cap and `f64::clamp` panicked with `min > max`.
-/// The candidate budget must instead saturate at the cap.
+/// the `10_000` upper cap and `f64::clamp` panicked with `min > max`; then the
+/// budget saturated at the cap, below `k`, so a search for more than 10 000
+/// points returned 10 000. The ceiling bounds the oversampling, not `k`.
 #[test]
-fn test_compute_oversampled_k_never_panics_at_max_limit() {
-    let k = 100_000;
-    let candidates = compute_oversampled_k(k, &eq_filter(), None);
-    assert_eq!(candidates, 10_000, "budget saturates at the 10_000 cap");
+fn test_compute_oversampled_k_never_below_k() {
+    assert_eq!(compute_oversampled_k(100_000, &eq_filter(), None), 100_010);
+    assert_eq!(
+        compute_oversampled_k(usize::MAX, &eq_filter(), None),
+        usize::MAX
+    );
 }
 
 /// Exact boundary: at k = 9_990 the lower bound (k + 10) equals the cap.
 #[test]
 fn test_compute_oversampled_k_boundary_at_cap() {
     assert_eq!(compute_oversampled_k(9_990, &eq_filter(), None), 10_000);
-    assert_eq!(compute_oversampled_k(10_000, &eq_filter(), None), 10_000);
+    assert_eq!(compute_oversampled_k(10_000, &eq_filter(), None), 10_010);
 }
 
 /// Nominal: small k keeps the selectivity-driven oversampling

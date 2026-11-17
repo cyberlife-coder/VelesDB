@@ -10,15 +10,15 @@
 //! each file stays within the project's 500-NLOC ceiling.
 
 use velesdb_core::velesql::{
-    CompareOp, Comparison, Condition, DeleteEdgeStatement, InsertEdgeStatement,
-    InsertNodeStatement, Query, SelectEdgesStatement,
+    DeleteEdgeStatement, EdgeQuery, InsertEdgeStatement, InsertNodeStatement, Query,
+    SelectEdgesStatement,
 };
 
 use crate::database::DatabaseInner;
 use crate::graph_store::WasmEdge;
 use crate::observer::WasmQueryOperationKind;
 use crate::velesql_result::QueryResultRow;
-use crate::velesql_value::{resolve_value, Params};
+use crate::velesql_value::Params;
 
 /// Delegates MATCH execution to the dedicated module.
 pub(crate) fn execute_match(
@@ -26,23 +26,52 @@ pub(crate) fn execute_match(
     query: &Query,
     params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
-    // Read-path gate (audit F-5.4, #1392). The graph store is inferred from
-    // the pattern, so the collection hint is best-effort: the first annotated
-    // pattern node's collection, else empty. Zero-overhead without an observer.
-    let collection = match_collection_hint(query);
-    db.check_query_access(collection, WasmQueryOperationKind::GraphTraversal)?;
-    crate::velesql_match::execute_match(db, query, params)
+    Ok(match_candidates_gated(db, query, params, None)?
+        .into_iter()
+        .map(|c| c.row)
+        .collect())
 }
 
-/// Best-effort collection name for a MATCH read gate: the first pattern node
-/// carrying an `@collection` annotation, or `""` when none is present.
-fn match_collection_hint(query: &Query) -> &str {
-    query
-        .match_clause
-        .as_ref()
-        .and_then(|clause| clause.patterns.first())
-        .and_then(|pattern| pattern.nodes.iter().find_map(|n| n.collection.as_deref()))
-        .unwrap_or("")
+/// Runs a MATCH behind its read gate and returns the ordered, limited
+/// candidates. Both `executeQuery` and `executeMatch` read through here, so
+/// one gate covers every MATCH surface.
+pub(crate) fn match_candidates_gated(
+    db: &mut DatabaseInner,
+    query: &Query,
+    params: &Params,
+    scoring: Option<&crate::velesql_match_score::MatchScoring>,
+) -> Result<Vec<crate::velesql_match_orderby::MatchCandidate>, String> {
+    // Read-path gate (audit F-5.4, #1392), asked about every collection the
+    // MATCH reads. Zero-overhead without an observer.
+    for collection in match_gate_collections(query, params)? {
+        db.check_query_access(&collection, WasmQueryOperationKind::GraphTraversal)?;
+    }
+    crate::velesql_match::match_candidates(db, query, params, scoring)
+}
+
+/// Every collection a MATCH reads, for its read gate, in first-read order:
+/// the graph it walks ([`crate::velesql_match::match_target`], the rule the
+/// executor uses), then each `@collection` a node reads properties from.
+/// A MATCH without patterns reads nothing and is asked about `""`.
+fn match_gate_collections(query: &Query, params: &Params) -> Result<Vec<String>, String> {
+    let Some(clause) = query.match_clause.as_ref() else {
+        return Ok(vec![String::new()]);
+    };
+    if clause.patterns.is_empty() {
+        return Ok(vec![String::new()]);
+    }
+    let mut collections = vec![crate::velesql_match::match_target(params)?];
+    for name in clause
+        .patterns
+        .iter()
+        .flat_map(|p| p.nodes.iter())
+        .filter_map(|n| n.collection.as_deref())
+    {
+        if !collections.iter().any(|c| c == name) {
+            collections.push(name.to_string());
+        }
+    }
+    Ok(collections)
 }
 
 // ---------------------------------------------------------------------------
@@ -64,9 +93,13 @@ pub(crate) fn insert_node(
 
 /// Splits a user-supplied node payload into `(value_payload, labels)`.
 ///
-/// When the payload is a JSON object with a `labels` array, those strings
-/// are extracted and the remaining fields form the value payload. Any
-/// other shape is stored verbatim with no labels.
+/// When the payload is a JSON object with a `_labels` array (core's key) or
+/// a `labels` array (accepted for payloads written before), those strings
+/// become the node's labels. `_labels` also stays in the payload, as it does
+/// on a collection point and in core, so `RETURN n._labels` and `IS NULL`
+/// read it; the legacy `labels` key is dropped, `labels` being the reserved
+/// key a MATCH row writes the node's labels under. Any other shape is stored
+/// verbatim with no labels.
 fn split_node_payload_and_labels(
     payload: &serde_json::Value,
 ) -> (Option<serde_json::Value>, Vec<String>) {
@@ -76,9 +109,11 @@ fn split_node_payload_and_labels(
     let mut labels = Vec::new();
     let mut remainder = serde_json::Map::new();
     for (k, v) in obj {
-        if k == "labels" {
+        if k == "labels" || k == crate::velesql_match_nodes::LABELS_KEY {
             extend_labels_from_value(v, &mut labels);
-            continue;
+            if k == "labels" {
+                continue;
+            }
         }
         remainder.insert(k.clone(), v.clone());
     }
@@ -110,10 +145,16 @@ fn extend_labels_from_value(v: &serde_json::Value, labels: &mut Vec<String>) {
 pub(crate) fn insert_edge(
     db: &mut DatabaseInner,
     stmt: &InsertEdgeStatement,
-    params: &Params,
+    _params: &Params,
 ) -> Result<(), String> {
     let store = db.graph_store(&stmt.collection);
-    let payload = build_edge_payload(&stmt.properties, params)?;
+    let payload = if stmt.properties.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(
+            EdgeQuery::literal_properties(&stmt.properties).map_err(|e| e.to_string())?,
+        ))
+    };
     store.borrow_mut().insert_edge(
         stmt.edge_id,
         stmt.source,
@@ -122,20 +163,6 @@ pub(crate) fn insert_edge(
         payload,
     )?;
     Ok(())
-}
-
-fn build_edge_payload(
-    properties: &[(String, velesdb_core::velesql::Value)],
-    params: &Params,
-) -> Result<Option<serde_json::Value>, String> {
-    if properties.is_empty() {
-        return Ok(None);
-    }
-    let mut map = serde_json::Map::new();
-    for (k, v) in properties {
-        map.insert(k.clone(), resolve_value(v, params)?);
-    }
-    Ok(Some(serde_json::Value::Object(map)))
 }
 
 /// Executes `DELETE EDGE <id> FROM g`.
@@ -150,7 +177,9 @@ pub(crate) fn delete_edge(
     Ok(u32::from(removed))
 }
 
-/// Executes `SELECT EDGES FROM g [WHERE source=N | target=N | label='L']`.
+/// Executes `SELECT EDGES FROM g [WHERE …]` as core does: the WHERE is read
+/// by core's [`EdgeQuery`] (an unsupported shape is refused, never ignored)
+/// and each edge answers core's row shape.
 pub(crate) fn select_edges(
     db: &DatabaseInner,
     stmt: &SelectEdgesStatement,
@@ -161,84 +190,27 @@ pub(crate) fn select_edges(
     let store = db
         .get_graph_store(&stmt.collection)
         .ok_or_else(|| format!("Graph '{}' not found", stmt.collection))?;
+    let query = EdgeQuery::from_where(stmt.where_clause.as_ref()).map_err(|e| e.to_string())?;
     let borrowed = store.borrow();
-    let filter = extract_edge_filter(stmt.where_clause.as_ref());
 
-    let mut out = Vec::new();
-    let limit = stmt.limit.unwrap_or(u64::MAX);
-    for edge in borrowed.filter_edges(filter.source, filter.target, filter.label.as_deref()) {
-        if (out.len() as u64) >= limit {
-            break;
-        }
-        out.push(edge_to_row(edge)?);
-    }
-    Ok(out)
-}
-
-/// Simple edge filter extracted from a flat WHERE clause (AND chain only).
-#[derive(Default)]
-struct EdgeFilter {
-    source: Option<u64>,
-    target: Option<u64>,
-    label: Option<String>,
-}
-
-fn extract_edge_filter(cond: Option<&Condition>) -> EdgeFilter {
-    let mut f = EdgeFilter::default();
-    if let Some(c) = cond {
-        fill_filter_from_condition(c, &mut f);
-    }
-    f
-}
-
-fn fill_filter_from_condition(cond: &Condition, f: &mut EdgeFilter) {
-    match cond {
-        Condition::Comparison(c) => apply_comparison_to_filter(c, f),
-        Condition::And(l, r) => {
-            fill_filter_from_condition(l, f);
-            fill_filter_from_condition(r, f);
-        }
-        Condition::Group(inner) => fill_filter_from_condition(inner, f),
-        _ => {}
-    }
-}
-
-fn apply_comparison_to_filter(c: &Comparison, f: &mut EdgeFilter) {
-    if !matches!(c.operator, CompareOp::Eq) {
-        return;
-    }
-    match c.column.as_str() {
-        "source" => f.source = value_to_u64(&c.value),
-        "target" => f.target = value_to_u64(&c.value),
-        "label" => {
-            if let velesdb_core::velesql::Value::String(s) = &c.value {
-                f.label = Some(s.clone());
-            }
-        }
-        _ => {}
-    }
-}
-
-fn value_to_u64(v: &velesdb_core::velesql::Value) -> Option<u64> {
-    match v {
-        velesdb_core::velesql::Value::Integer(i) => u64::try_from(*i).ok(),
-        velesdb_core::velesql::Value::UnsignedInteger(u) => Some(*u),
-        _ => None,
-    }
+    let limit = usize::try_from(stmt.limit.unwrap_or(u64::MAX)).unwrap_or(usize::MAX);
+    borrowed
+        .filter_edges(query.source, query.target, query.label.as_deref())
+        .filter(|edge| query.matches(edge.source, edge.target, &edge.label))
+        .take(limit)
+        .map(edge_to_row)
+        .collect()
 }
 
 fn edge_to_row(edge: &WasmEdge) -> Result<QueryResultRow, String> {
-    let mut map = serde_json::Map::new();
-    map.insert("id".to_string(), serde_json::json!(edge.id));
-    map.insert("source".to_string(), serde_json::json!(edge.source));
-    map.insert("target".to_string(), serde_json::json!(edge.target));
-    map.insert("label".to_string(), serde_json::json!(edge.label.clone()));
-    if let Some(serde_json::Value::Object(obj)) = &edge.payload {
-        for (k, v) in obj {
-            map.insert(k.clone(), v.clone());
-        }
-    }
-    QueryResultRow::synthetic(serde_json::Value::Object(map))
+    let no_properties = serde_json::Value::Object(serde_json::Map::new());
+    QueryResultRow::synthetic(EdgeQuery::row(
+        edge.id,
+        edge.source,
+        edge.target,
+        &edge.label,
+        edge.payload.as_ref().unwrap_or(&no_properties),
+    ))
 }
 
 #[cfg(test)]

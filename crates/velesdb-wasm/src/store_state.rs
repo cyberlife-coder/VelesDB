@@ -9,6 +9,7 @@ use crate::store_get;
 use crate::store_insert;
 use crate::store_new;
 use crate::store_search;
+use crate::wasm_error::WasmError;
 use crate::{DistanceMetric, QueryResult, StorageMode};
 
 /// The data behind a JS [`crate::VectorStore`] handle, shared with any
@@ -31,10 +32,10 @@ pub struct StoreState {
 }
 
 impl StoreState {
-    /// Returns the JSON payload stored for `id`, if the id exists and carries one.
-    ///
-    /// Used by cross-collection MATCH enrichment to merge a referenced
-    /// collection's metadata into graph results by node id.
+    /// Returns the JSON payload stored for `id`, if the id exists and carries
+    /// one. A linear scan: tests only (`MATCH` indexes rows once per query,
+    /// see `velesql_match_sources`).
+    #[cfg(test)]
     pub(crate) fn payload_for_id(&self, id: u64) -> Option<&serde_json::Value> {
         let idx = self.ids.iter().position(|&x| x == id)?;
         self.payloads.get(idx).and_then(Option::as_ref)
@@ -80,13 +81,10 @@ impl StoreState {
     /// Returns the storage mode.
     #[must_use]
     pub fn storage_mode(&self) -> String {
-        match self.storage_mode {
-            StorageMode::Full => "full".to_string(),
-            StorageMode::SQ8 => "sq8".to_string(),
-            StorageMode::Binary => "binary".to_string(),
-            StorageMode::ProductQuantization => "pq".to_string(),
-            StorageMode::RaBitQ => "rabitq".to_string(),
-        }
+        // Core names its modes once (`StorageMode::canonical_name`).
+        parsing::wasm_to_core_storage_mode(self.storage_mode)
+            .canonical_name()
+            .to_string()
     }
 
     /// Returns the number of vectors in the store.
@@ -109,7 +107,8 @@ impl StoreState {
 
     /// Inserts a vector with the given ID.
     pub fn insert(&mut self, id: u64, vector: &[f32]) -> Result<(), JsValue> {
-        store_search::validate_dimension(vector.len(), self.dimension)?;
+        store_search::validate_ingest_vector(vector, self.dimension)
+            .map_err(WasmError::into_js_value)?;
         store_insert::insert_vector(self, id, vector);
         Ok(())
     }
@@ -121,7 +120,8 @@ impl StoreState {
         vector: &[f32],
         payload: JsValue,
     ) -> Result<(), JsValue> {
-        store_search::validate_dimension(vector.len(), self.dimension)?;
+        store_search::validate_ingest_vector(vector, self.dimension)
+            .map_err(WasmError::into_js_value)?;
         let parsed_payload: Option<serde_json::Value> =
             if payload.is_null() || payload.is_undefined() {
                 None
@@ -147,7 +147,8 @@ impl StoreState {
         k: usize,
         filter: JsValue,
     ) -> Result<JsValue, JsValue> {
-        store_search::validate_dimension(query.len(), self.dimension)?;
+        store_search::validate_query_vector(query, self.dimension)
+            .map_err(WasmError::into_js_value)?;
         let filter_obj: serde_json::Value = serde_wasm_bindgen::from_value(filter)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
         let filter = filter::parse_filter(filter_obj).map_err(|e| JsValue::from_str(&e))?;
@@ -170,8 +171,22 @@ impl StoreState {
 
     /// k-NN search. Returns [[id, score], ...].
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
-        store_search::validate_dimension(query.len(), self.dimension)?;
-        store_search::search(query, &self.ids, &self.data, self.dimension, self.metric, k)
+        store_search::to_js(&self.top_k(query, k)?)
+    }
+
+    /// [`search_scored`](Self::search_scored) for a caller-supplied query:
+    /// the `k` `(id, score)` pairs nearest `query`, best first, once the
+    /// query passes core's checks ([`store_search::validate_query_vector`]) —
+    /// the typed search [`Self::search`] renders for JavaScript.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store is metadata-only, or `query` does not
+    /// have the store's dimension or has a non-finite component.
+    pub(crate) fn top_k(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>, JsValue> {
+        store_search::validate_query_vector(query, self.dimension)
+            .map_err(WasmError::into_js_value)?;
+        Ok(self.search_scored(query, k))
     }
 
     /// k-NN search with a named quality mode (API parity with Server/Python/Mobile).
@@ -192,11 +207,10 @@ impl StoreState {
         k: usize,
         quality: &str,
     ) -> Result<JsValue, JsValue> {
-        store_search::validate_dimension(query.len(), self.dimension)?;
         // Validate the quality string for API parity. The value is unused
         // because WASM search is brute-force (no HNSW graph).
         parsing::parse_search_quality(quality)?;
-        store_search::search(query, &self.ids, &self.data, self.dimension, self.metric, k)
+        self.search(query, k)
     }
 
     /// Similarity search with threshold. Operators: >, >=, <, <=, =, !=.
@@ -207,7 +221,8 @@ impl StoreState {
         operator: &str,
         k: usize,
     ) -> Result<JsValue, JsValue> {
-        store_search::validate_dimension(query.len(), self.dimension)?;
+        store_search::validate_query_vector(query, self.dimension)
+            .map_err(WasmError::into_js_value)?;
         store_search::similarity_search_impl(
             query,
             &self.ids,
@@ -247,7 +262,8 @@ impl StoreState {
         k: usize,
         vector_weight: Option<f32>,
     ) -> Result<JsValue, JsValue> {
-        store_search::validate_dimension(query_vector.len(), self.dimension)?;
+        store_search::validate_query_vector(query_vector, self.dimension)
+            .map_err(WasmError::into_js_value)?;
         store_search::hybrid_search_impl(
             query_vector,
             text_query,
@@ -297,7 +313,8 @@ impl StoreState {
     /// # Returns
     /// Array of `{nodeId, vectorScore, graphScore, fusedScore, bindings, columnData}`
     pub fn query(&self, query_vector: &[f32], k: usize) -> Result<JsValue, JsValue> {
-        store_search::validate_dimension(query_vector.len(), self.dimension)?;
+        store_search::validate_query_vector(query_vector, self.dimension)
+            .map_err(WasmError::into_js_value)?;
 
         let scores = self.search_scored(query_vector, k);
 
@@ -352,6 +369,8 @@ impl StoreState {
                 "multi_query_search requires at least one vector",
             ));
         }
+        store_search::validate_query_vectors(vectors, num_vectors, self.dimension)
+            .map_err(WasmError::into_js_value)?;
         store_search::multi_query_search_impl(
             vectors,
             num_vectors,
@@ -377,8 +396,8 @@ impl StoreState {
             return crate::js_value::to_js_value::<Vec<Vec<(u64, f32)>>>(&vec![])
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         }
-        store_search::validate_multi_vector_len(vectors.len(), num_vectors, self.dimension)
-            .map_err(|e| JsValue::from_str(&e))?;
+        store_search::validate_query_vectors(vectors, num_vectors, self.dimension)
+            .map_err(WasmError::into_js_value)?;
         store_search::batch_search_impl(
             vectors,
             num_vectors,
@@ -393,7 +412,7 @@ impl StoreState {
     /// Removes a vector by ID.
     pub fn remove(&mut self, id: u64) -> bool {
         if let Some(idx) = self.ids.iter().position(|&x| x == id) {
-            self.remove_at_index(idx);
+            store_insert::delete_at_index(self, idx);
             true
         } else {
             false
@@ -454,13 +473,12 @@ impl StoreState {
         let batch: Vec<(u64, Vec<f32>)> = serde_wasm_bindgen::from_value(batch)
             .map_err(|e| JsValue::from_str(&format!("Invalid batch format: {e}")))?;
         for (id, vector) in &batch {
-            if vector.len() != self.dimension {
-                return Err(JsValue::from_str(&format!(
-                    "Vector {id} dimension mismatch: expected {}, got {}",
-                    self.dimension,
-                    vector.len()
-                )));
-            }
+            store_search::validate_ingest_vector(vector, self.dimension).map_err(|e| {
+                crate::wasm_error::structured_js_error(
+                    e.code(),
+                    &format!("Vector {id}: {}", e.message()),
+                )
+            })?;
         }
         self.ids.reserve(batch.len());
         self.data
@@ -486,7 +504,7 @@ impl StoreState {
         dimension: usize,
     ) -> Result<(), JsValue> {
         store_insert::insert_batch_raw(self, ids, vectors, dimension)
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(WasmError::into_js_value)
     }
 }
 

@@ -79,3 +79,16 @@ fn test_insert_batch_chunk_keeps_search_results_equivalent() {
         sparse_search(&sequential, &query, 3)
     );
 }
+
+#[test]
+fn test_insert_batch_chunk_replaces_a_documents_previous_terms() {
+    let index = SparseInvertedIndex::new();
+    index.insert(42, &make_vector(&[(1, 0.5), (2, 0.1)]));
+
+    index.insert_batch_chunk(&[(42_u64, make_vector(&[(3, 0.9)]))]);
+
+    assert_eq!(index.doc_count(), 1);
+    assert!(index.get_all_postings(1).is_empty(), "term 1 was dropped");
+    assert!(index.get_all_postings(2).is_empty(), "term 2 was dropped");
+    assert_eq!(index.get_all_postings(3).len(), 1);
+}

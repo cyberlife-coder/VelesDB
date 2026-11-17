@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -1649,4 +1649,389 @@ test('listMemories walks the store exhaustively through the cursor', async (t) =
 
   const filtered = await svc.listMemories(null, 50, { project: 'globex' }, null)
   assert.deepEqual(filtered.memories, [], 'a filter miss is empty, not an error')
+})
+
+// --- audit 2026-11: coverage gaps found by the parity review -----------------
+
+test('ttlSeconds: an explicit 0 is refused; a positive TTL expires durably across reopen', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-ttl-'))
+  t.after(() => rmStoreDir(dir))
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(
+      store.remember('never stored', [], null, 0),
+      /INVALID_INPUT/,
+      'explicit 0 means expire-now and is refused, not "permanent"',
+    )
+    const ok = await store.remember('a fact with a ttl', [], null, 60)
+    assert.match(ok.id, /^\d+$/)
+  } finally {
+    cleanup()
+  }
+  // Written by a child (deterministic lock release), then expired: reopen and recall.
+  inChildProcess(
+    dir,
+    `store.remember('ephemeral fact', [], null, 1).then((o) => process.stdout.write(o.id))`,
+  )
+  await sleep(2100)
+  const out = inChildProcess(
+    dir,
+    `store.recall('ephemeral', 10).then((hits) => process.stdout.write(JSON.stringify(hits.map((h) => h.content))))`,
+  )
+  assert.deepEqual(JSON.parse(out), [], 'the TTL fact is not recalled after expiry, across a reopen')
+})
+
+test('reserved metadata keys (_veles_*, content) are refused with INVALID_INPUT', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(store.remember('fact', [], { _veles_internal: 1 }), /INVALID_INPUT/)
+    await assert.rejects(store.remember('fact', [], { content: 'shadow' }), /INVALID_INPUT/)
+  } finally {
+    cleanup()
+  }
+})
+
+test('oversized facts are refused: >1 MiB at the guard, >2048 bytes at the embeddable cap', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(store.remember('x'.repeat(2 * 1024 * 1024), [], null), /INVALID_INPUT/)
+    await assert.rejects(store.remember('x'.repeat(3000), [], null), /INVALID_INPUT/)
+  } finally {
+    cleanup()
+  }
+})
+
+test('relate refuses a self-loop, an empty label and a non-decimal id', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const { id } = await store.remember('anchor fact for relate guards', [], null)
+    await assert.rejects(store.relate(id, id, 'self'), /INVALID_INPUT/, 'self-loop refused')
+    await assert.rejects(store.relate(id, id, ''), /INVALID_INPUT/, 'empty label refused')
+    await assert.rejects(store.relate('abc', id, 'x'), /INVALID_INPUT/, 'non-decimal id refused')
+    // An id past 2^53 parses fine (decimal string) and reaches the domain as NOT_FOUND.
+    await assert.rejects(store.relate('9007199254740993', id, 'x'), /NOT_FOUND/)
+  } finally {
+    cleanup()
+  }
+})
+
+test('recall takes the filter argument; k and maxHops clamp instead of erroring', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    const { id: a } = await store.remember('auth bug in login', [], { project: 'veles' })
+    await store.remember('auth bug elsewhere', [], { project: 'acme' })
+    const filtered = await store.recall('auth bug', 5, { project: 'veles' })
+    assert.ok(filtered.some((h) => h.id === a), 'the filter argument narrows recall')
+    assert.ok(filtered.every((h) => h.metadata?.project === 'veles'))
+    const clamped = await store.recall('auth', 1_000_000)
+    assert.ok(Array.isArray(clamped), 'k past the cap is clamped, not an error')
+    const why = await store.why('auth bug', 999)
+    assert.ok(Array.isArray(why.nodes), 'maxHops past the cap is clamped, not an error')
+  } finally {
+    cleanup()
+  }
+})
+
+test('listMemories rejects a non-decimal cursor and accepts includeInternal', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await store.remember('listed fact', [], null)
+    await assert.rejects(store.listMemories('abc', 50, null, null), /INVALID_INPUT/)
+    await assert.rejects(store.listMemories(' 7 ', 50, null, null), /INVALID_INPUT/, 'whitespace is not trimmed: one strict id grammar')
+    const all = await store.listMemories(null, 50, null, true)
+    assert.ok(Array.isArray(all.memories))
+  } finally {
+    cleanup()
+  }
+})
+
+// --- anchors + ingest roots (MCP parity, gated on VELESDB_MEMORY_INGEST_ROOTS) --
+
+test('anchored remember + recall(anchorRoot) reports fresh, then stale with the changed path', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'velesdb-roots-'))
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-anchor-'))
+  t.after(() => {
+    rmStoreDir(root)
+    rmStoreDir(dir)
+  })
+  writeFileSync(join(root, 'notes.md'), 'v1 of the runbook\n')
+  process.env.VELESDB_MEMORY_INGEST_ROOTS = root
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    const { id } = await store.remember(
+      'the deploy broke after the cache change',
+      [],
+      null,
+      null,
+      ['notes.md'],
+      root,
+    )
+    const fresh = await store.recall('deploy broke', 5, null, root)
+    const hit = fresh.find((h) => h.id === id)
+    assert.ok(hit, 'the anchored fact is recalled with anchorRoot')
+    assert.equal(hit.freshness?.state, 'fresh')
+
+    writeFileSync(join(root, 'notes.md'), 'v2 — completely rewritten content\n')
+    const stale = await store.recall('deploy broke', 5, null, root)
+    const staleHit = stale.find((h) => h.id === id)
+    assert.equal(staleHit?.freshness?.state, 'stale')
+    assert.deepEqual(staleHit.freshness.changed, ['notes.md'])
+
+    const plain = await store.recall('deploy broke', 5, null, null)
+    const plainHit = plain.find((h) => h.id === id)
+    assert.ok(plainHit, 'the fact is recalled')
+    assert.ok(
+      !('freshness' in plainHit),
+      'no anchorRoot: the freshness field is absent, as documented (not null)',
+    )
+  } finally {
+    delete process.env.VELESDB_MEMORY_INGEST_ROOTS
+  }
+})
+
+test('anchors fail closed: missing root, root outside the allowlist, ingestion disabled', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'velesdb-roots-'))
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-anchor-'))
+  t.after(() => {
+    rmStoreDir(root)
+    rmStoreDir(dir)
+  })
+  writeFileSync(join(root, 'notes.md'), 'runbook\n')
+  process.env.VELESDB_MEMORY_INGEST_ROOTS = root
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    await assert.rejects(
+      store.remember('anchored but rootless', [], null, null, ['notes.md'], null),
+      /INVALID_INPUT/,
+      'anchors without anchorRoot are refused',
+    )
+    await assert.rejects(
+      store.remember('anchored outside', [], null, null, ['notes.md'], dir),
+      /INVALID_INPUT/,
+      'a root outside the allowlist is refused (containment at the sink)',
+    )
+  } finally {
+    delete process.env.VELESDB_MEMORY_INGEST_ROOTS
+  }
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(
+      store.remember('anchored with ingestion disabled', [], null, null, ['notes.md'], root),
+      /INVALID_INPUT/,
+      'no VELESDB_MEMORY_INGEST_ROOTS at open: anchoring is disabled, fail-closed',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('an open refused for its ingest roots leaves no store behind', (t) => {
+  // The roots were read after the store was opened, so a bad
+  // VELESDB_MEMORY_INGEST_ROOTS threw only once the store directory, its
+  // lock and its files existed on disk.
+  const parent = mkdtempSync(join(tmpdir(), 'velesdb-refused-'))
+  t.after(() => rmStoreDir(parent))
+  const dir = join(parent, 'store')
+  process.env.VELESDB_MEMORY_INGEST_ROOTS = join(parent, 'no-such-root')
+  try {
+    assert.throws(() => MemoryService.open(dir, 'hash'), /INVALID_INPUT/)
+  } finally {
+    delete process.env.VELESDB_MEMORY_INGEST_ROOTS
+  }
+  assert.ok(!existsSync(dir), 'a refused open creates nothing')
+})
+
+test('compileContext resolves a path fragment under the ingest roots; refuses it when disabled', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'velesdb-roots-'))
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-ingest-'))
+  t.after(() => {
+    rmStoreDir(root)
+    rmStoreDir(dir)
+  })
+  const file = join(root, 'runbook.md')
+  writeFileSync(file, 'the deploy runbook: roll back the cache change first\n')
+  process.env.VELESDB_MEMORY_INGEST_ROOTS = root
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    const compiled = await store.compileContext({
+      query: 'deploy runbook',
+      fragments: [{ path: file }],
+      token_budget: 5000,
+    })
+    assert.ok(
+      compiled.content.includes('roll back the cache change'),
+      'the path fragment was read from disk and compiled into the context',
+    )
+  } finally {
+    delete process.env.VELESDB_MEMORY_INGEST_ROOTS
+  }
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(
+      store.compileContext({
+        query: 'deploy runbook',
+        fragments: [{ path: file }],
+        token_budget: 5000,
+      }),
+      /INVALID_INPUT/,
+      'with no ingest roots configured a path fragment is refused, never silently dropped',
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test('compileTranscript accepts path, refuses transcript+path, and returns the typed context envelope', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'velesdb-roots-'))
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-transcript-'))
+  t.after(() => {
+    rmStoreDir(root)
+    rmStoreDir(dir)
+  })
+  const file = join(root, 'session.txt')
+  writeFileSync(file, 'User: what broke the deploy?\nAssistant: the cache change\n')
+  process.env.VELESDB_MEMORY_INGEST_ROOTS = root
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    const result = await store.compileTranscript({ query: 'deploy', path: file, token_budget: 5000 })
+    assert.equal(result.segmentation.format_detected, 'plain')
+    assert.ok(result.context.content.includes('the cache change'))
+    assert.ok(
+      'retrievalHandles' in result.context,
+      'context is the same typed envelope as compileContext (camelCase top level)',
+    )
+    await assert.rejects(
+      store.compileTranscript({ query: 'deploy', transcript: 'User: hi\n', path: file, token_budget: 5000 }),
+      /INVALID_INPUT/,
+      'transcript and path are exclusive',
+    )
+  } finally {
+    delete process.env.VELESDB_MEMORY_INGEST_ROOTS
+  }
+})
+
+test('rememberExtracted: openai without env config is INVALID_INPUT; unknown extractor names all backends; VELESDB_MEMORY_EXTRACTOR is the default', async () => {
+  const { store, cleanup } = freshStore()
+  try {
+    await assert.rejects(
+      store.rememberExtracted('fact: Alpha ships the parser. | alpha', null, null, null, 'openai'),
+      /INVALID_INPUT/,
+    )
+    await assert.rejects(
+      store.rememberExtracted('fact: Alpha ships the parser. | alpha', null, null, null, 'openai'),
+      /VELESDB_MEMORY_EXTRACTOR/,
+      'the missing piece is named (URL/model env), not a generic failure',
+    )
+    await assert.rejects(
+      store.rememberExtracted('text', null, null, null, 'bogus'),
+      /unknown extractor 'bogus'.*openai/,
+      'the error lists every accepted backend',
+    )
+    // env default: with VELESDB_MEMORY_EXTRACTOR=outline the extractor arg can be omitted
+    process.env.VELESDB_MEMORY_EXTRACTOR = 'outline'
+    try {
+      const outcome = await store.rememberExtracted('fact: Alpha ships the parser. | alpha')
+      assert.equal(outcome.ids.length, 1, 'the env-selected offline backend ran')
+    } finally {
+      delete process.env.VELESDB_MEMORY_EXTRACTOR
+    }
+  } finally {
+    cleanup()
+  }
+})
+
+test('a count argument outside 0..=2^32-1, fractional or non-finite is refused, never wrapped', async () => {
+  // napi reads a `u32` with JS ToUint32, which wraps: recall(q, Infinity)
+  // became k = 0, remember(..., -1) a 136-year TTL, 2**32 + 60 a 60 s TTL.
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    await store.remember('a fact to recall', [])
+    const invalid = (err) => err instanceof Error && err.message.includes('INVALID_INPUT')
+    for (const bad of [Infinity, NaN, -1, 2 ** 32, 1.5]) {
+      await assert.rejects(store.recall('fact', bad), invalid, `recall k=${bad}`)
+      await assert.rejects(store.remember('f', [], null, bad), invalid, `remember ttl=${bad}`)
+      await assert.rejects(store.why('fact', bad), invalid, `why hops=${bad}`)
+      await assert.rejects(store.listMemories(null, bad), invalid, `listMemories limit=${bad}`)
+      await assert.rejects(
+        store.recallFused('fact', 3, null, { hops: bad }),
+        invalid,
+        `recallFused hops=${bad}`,
+      )
+    }
+    assert.equal((await store.recall('fact', 5)).length, 1, 'a valid count still works')
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('metadata and filters that are not JSON data are refused, never stored as {}', async () => {
+  // napi read any object's own enumerable properties: a Date, a Map, a Set or
+  // a class instance became `{}` and was stored so, silently.
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    class Tag {
+      constructor() {
+        this.name = 'x'
+      }
+    }
+    const invalid = (err) => err instanceof Error && err.message.includes('INVALID_INPUT')
+    const notJson = [
+      ['a Date', { when: new Date(0) }],
+      ['a Map', { tags: new Map([['a', 1]]) }],
+      ['a Set', { tags: new Set([1]) }],
+      ['a class instance', { tag: new Tag() }],
+      ['a function', { f: () => 1 }],
+      ['a symbol', { s: Symbol('s') }],
+      ['a bigint', { n: 10n }],
+      ['NaN', { n: NaN }],
+      ['Infinity', { list: [1, Infinity] }],
+    ]
+    for (const [what, metadata] of notJson) {
+      await assert.rejects(store.remember('a fact', [], metadata), invalid, `remember with ${what}`)
+      await assert.rejects(store.recall('a fact', 5, metadata), invalid, `recall filter with ${what}`)
+    }
+    await assert.rejects(store.recall('a fact', 5, new Date(0)), invalid, 'a Date as the filter itself')
+    assert.equal((await store.listMemories(null, 50, null, null)).memories.length, 0, 'a refused remember stores nothing')
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('a JSON argument the binding refuses rejects the Promise, it does not throw', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    let pending
+    assert.doesNotThrow(() => {
+      pending = store.remember('a fact', [], { when: new Date(0) })
+    })
+    assert.ok(pending instanceof Promise)
+    await assert.rejects(pending, (err) => err.message.includes('INVALID_INPUT'))
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('plain JSON metadata is kept as JSON.stringify would keep it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    const bare = Object.create(null)
+    bare.kind = 'note'
+    const { id } = await store.remember('a fact with metadata', [], {
+      bare,
+      nested: { list: [1, 2.5, 'x', null, true] },
+      dropped: undefined,
+      ts: 5_000_000_000,
+    })
+    const [hit] = await store.recall('a fact with metadata', 1, { ts: 5_000_000_000 })
+    assert.equal(hit.id, id, 'an integer past u32 still matches by equality')
+    assert.deepEqual(hit.metadata.bare, { kind: 'note' }, 'a null-prototype object is plain data')
+    assert.deepEqual(hit.metadata.nested, { list: [1, 2.5, 'x', null, true] })
+    assert.ok(!('dropped' in hit.metadata), 'an undefined property is left out')
+  } finally {
+    rmStoreDir(dir)
+  }
 })

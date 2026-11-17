@@ -273,3 +273,110 @@ fn join_secondary_collection_is_gated() {
         .expect_err("test: a JOIN on a denied collection must be refused");
     assert!(err.contains("secret"), "carries the denial: {err}");
 }
+
+// --- MATCH gate names the collection the MATCH reads ---------------------
+
+/// Observer that records the collection of every governed read.
+struct RecordingObserver {
+    seen: std::cell::RefCell<Vec<String>>,
+}
+
+impl WasmObserver for RecordingObserver {
+    fn on_query_request(&self, ctx: &WasmQueryAccessContext<'_>) -> WasmAccessDecision {
+        self.seen.borrow_mut().push(ctx.collection.to_string());
+        WasmAccessDecision::Allow
+    }
+}
+
+/// GIVEN a MATCH that targets `kg` through the `_collection` param
+/// WHEN it runs under an observer
+/// THEN the gate is asked about `kg` — the graph the MATCH reads — not `""`,
+///      which a per-collection policy would not recognise.
+#[test]
+fn match_gate_names_the_collection_param_target() {
+    let mut inner = DatabaseInner::new();
+    crate::velesql_exec::execute(
+        &mut inner,
+        "INSERT EDGE INTO kg (source = 1, target = 2, label = 'R')",
+        None,
+    )
+    .expect("test: seed kg");
+    let observer = Rc::new(RecordingObserver {
+        seen: std::cell::RefCell::new(Vec::new()),
+    });
+    inner.register_observer(observer.clone());
+
+    let _ = crate::velesql_exec::execute(
+        &mut inner,
+        "MATCH (a)-[:R]->(b) RETURN a, b",
+        Some(r#"{"_collection": "kg"}"#),
+    );
+    assert_eq!(*observer.seen.borrow(), ["kg"]);
+}
+
+/// GIVEN a MATCH naming no collection
+/// THEN the gate is asked about `graph`, the store it reads.
+#[test]
+fn match_gate_names_the_default_graph() {
+    let mut inner = DatabaseInner::new();
+    let observer = Rc::new(RecordingObserver {
+        seen: std::cell::RefCell::new(Vec::new()),
+    });
+    inner.register_observer(observer.clone());
+
+    let _ = crate::velesql_exec::execute(&mut inner, "MATCH (a)-[:R]->(b) RETURN a, b", None);
+    assert_eq!(*observer.seen.borrow(), ["graph"]);
+}
+
+/// GIVEN a MATCH whose second node is annotated `@docs` (its payload is
+///       merged from that collection)
+/// WHEN it runs under an observer
+/// THEN the gate is asked about both collections it reads: the graph and
+///      `docs`. Asking only about the graph would let `docs` payloads through
+///      a policy that denies `docs`.
+#[test]
+fn match_gate_names_every_collection_the_match_reads() {
+    let mut inner = seeded_metadata_db();
+    crate::velesql_exec::execute(
+        &mut inner,
+        "INSERT EDGE INTO graph (source = 1, target = 2, label = 'R')",
+        None,
+    )
+    .expect("test: seed graph");
+    let observer = Rc::new(RecordingObserver {
+        seen: std::cell::RefCell::new(Vec::new()),
+    });
+    inner.register_observer(observer.clone());
+
+    let _ = crate::velesql_exec::execute(&mut inner, "MATCH (a)-[:R]->(b@docs) RETURN a, b", None);
+    assert_eq!(*observer.seen.borrow(), ["graph", "docs"]);
+}
+
+/// A VelesQL `NEAR` is a vector search, as core classifies it: a policy that
+/// refuses vector search refuses it through `executeQuery` too, where it used
+/// to be asked as a plain `Select` and pass.
+#[test]
+fn a_velesql_near_is_gated_as_a_vector_search() {
+    let mut inner = DatabaseInner::new();
+    inner
+        .create_collection("vecs", 2, "cosine")
+        .expect("test: create");
+    crate::velesql_exec::execute(
+        &mut inner,
+        "INSERT INTO vecs (id, vector) VALUES (1, $v)",
+        Some(r#"{"v": [1.0, 0.0]}"#),
+    )
+    .expect("test: insert");
+    inner.register_observer(DenyObserver::new(vec![
+        WasmQueryOperationKind::VectorSearch,
+    ]));
+    let err = crate::velesql_exec::execute(
+        &mut inner,
+        "SELECT * FROM vecs WHERE vector NEAR $v LIMIT 1",
+        Some(r#"{"v": [1.0, 0.0]}"#),
+    )
+    .expect_err("test: a NEAR query is a vector search");
+    assert!(err.contains("denied"), "{err}");
+    crate::velesql_exec::execute(&mut inner, "SELECT * FROM vecs", None)
+        .expect("test: a plain SELECT is still a Select");
+}

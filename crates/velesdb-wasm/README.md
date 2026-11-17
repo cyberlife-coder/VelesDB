@@ -163,9 +163,15 @@ before 8.0.0, records carrying a payload were ES2015 `Map`s (#2332).
   parity.
 - **~100 K vectors is the practical ceiling**, set by browser RAM. Beyond that,
   move to the REST server.
-- **Single collection per query.** Cross-collection `MATCH` (`@collection`)
-  needs Database-level routing and is server-only. `MATCH` is limited to 1–2
-  hops.
+- **One fixed-length pattern per `MATCH`.** A `MATCH` reads the graph named
+  by the `_collection` param (as in core and on the server), else the default
+  `graph`; a node's `@collection` annotation adds that collection's properties
+  to the node and never selects the graph. As in core, the points of the
+  collection with that name are its nodes (payload as properties, `_labels` as
+  labels); a node written with `INSERT NODE` overrides the point with the same
+  id. Patterns of any fixed length run with core's semantics, `similarity()`
+  and `ORDER BY` included; variable-length relationships (`[*1..3]`) and
+  multi-pattern `MATCH` are server-only.
 - **No filesystem.** The agent-memory wedge (`MemoryService`) is in-memory
   only; nothing persists unless you persist it yourself.
 - **Storage modes save no memory.** `sq8`, `binary`, `pq` and `rabitq` return
@@ -179,10 +185,6 @@ before 8.0.0, records carrying a payload were ES2015 `Map`s (#2332).
 - **No quantizer training.** `TRAIN QUANTIZER` needs
   `rayon`/`ndarray`/`persistence`, which are compiled out for
   `wasm32-unknown-unknown`.
-- **`SemanticMemory.query()` has been broken since 4.0.0 (still present)** — it throws
-  `Invalid search results` on every call (`src/agent.rs` calls `as_string()` on
-  an array-valued `JsValue`). Use `MemoryService`, or a `VectorStore` with
-  `insert_with_payload` + `search_with_filter`.
 - **Errors are not uniformly structured.** Some paths throw a real `Error` with
   a machine-readable `code` (`VELES-004` on a dimension mismatch); others still
   throw a bare string. Always coerce with `String(e)` before displaying.
@@ -218,7 +220,6 @@ to instantiate the module.
 | `Error: [VELES-004] Vector dimension mismatch: expected N, got M` | The query length differs from `store.dimension`. | Embed the query with the same model and dimension used at index time. |
 | `Unknown metric. Use: cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard` | Unsupported metric string in the constructor. | Use one of the listed names; they are case-insensitive. |
 | `Invalid data: wrong magic number` on `import_from_bytes` | The buffer is not a `VELS` export (truncated, or another format). | Re-export from a `VectorStore`; see the [binary format](../../docs/guides/WASM_PERSISTENCE.md#binary-format-vels-v3). |
-| `Invalid search results` | `SemanticMemory.query()` — a known defect since 4.0.0, still present. | Use `MemoryService` instead. |
 | Console warning about `application/wasm` MIME type | The static server does not label `.wasm`. | Harmless: the loader falls back to `WebAssembly.instantiate`. Configure the MIME type to keep `WebAssembly.instantiateStreaming` on the fast path. |
 
 ## License

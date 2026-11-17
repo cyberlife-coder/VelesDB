@@ -461,7 +461,7 @@ jobs:
         run: |
           cargo clippy --workspace --all-targets \
             --features persistence,gpu,update-check,openapi,test-fault-injection,serve \
-            --exclude velesdb-python --exclude velesdb-node \
+            --exclude velesdb-python \
             -- -D warnings -D clippy::pedantic \
                -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
@@ -494,21 +494,18 @@ jobs:
         run: |
           cargo clippy --workspace --all-targets \
             --features persistence,update-check,internal-bench \
-            --exclude velesdb-python --exclude velesdb-node \
+            --exclude velesdb-python \
             -- -D warnings -D clippy::pedantic \
                -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
-      # velesdb-node is a cdylib: `--all-targets` would build a test harness that
-      # links N-API symbols and fail (same reason velesdb-python is excluded
-      # above). Lint just its library target, which links cleanly. The crate's
-      # [lints] table already enables clippy::pedantic with the workspace allows.
-      - name: Run Clippy (velesdb-node cdylib)
-        if: needs.code-changed.outputs.relevant == 'true'
-        run: cargo clippy -p velesdb-node --lib -- -D warnings
+      # velesdb-node needs no step of its own: napi's `dyn-symbols` feature
+      # resolves Node-API at runtime, so its test harness builds like any
+      # other and the two workspace sweeps above lint every target of it,
+      # tests included.
 
-      # velesdb-python was excluded from the workspace clippy for the same
-      # cdylib reason as velesdb-node — but unlike node it never got the
-      # dedicated `--lib` step, so it was linted by NOTHING: not this
+      # velesdb-python is excluded from the workspace clippy because its test
+      # harness links libpython symbols. It once had no dedicated `--lib`
+      # step either, so it was linted by NOTHING: not this
       # workflow, not compat-matrix (which excludes it too), not the git
       # hooks. `cargo check` in propagation-guard compiled it; nothing
       # linted it. That gap is what let a type change land green locally
@@ -1149,7 +1146,7 @@ jobs:
 
       - name: Install cargo-semver-checks (prebuilt)
         if: needs.code-changed.outputs.relevant == 'true'
-        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           # 0.46.0 is the last release whose own `rust_version` is 1.90, this
           # workspace's MSRV — 0.47.0 already requires 1.91. That matters for a
@@ -1243,7 +1240,7 @@ jobs:
         uses: ./.github/actions/fast-rust-tools
 
       - name: Install hygiene tools (prebuilt)
-        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: typos@1.42.3,taplo-cli@0.10.0,cargo-machete@0.9.2
 
@@ -1558,7 +1555,7 @@ jobs:
       # cargo check above — without this step they never run in CI at all.
       - name: Install wasm-pack
         if: needs.code-changed.outputs.relevant == 'true'
-        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: wasm-pack
 
@@ -2233,6 +2230,13 @@ jobs:
       # `npm test` (not a hardcoded filename) so every __test__/*.spec.mjs file —
       # including new ones like skills-sync.spec.mjs — is picked up automatically;
       # see package.json's "test" script for the single source of truth on the glob.
+      - name: Run the crate's own Rust unit tests (error mapping, task trampoline)
+        # The cdylib is outside `cargo test --workspace`'s default members.
+        # napi's `dyn-symbols` feature lets its test binary link on every
+        # platform (Node-API resolves at runtime), so these run here.
+        if: needs.code-changed.outputs.relevant == 'true'
+        run: cargo test -p velesdb-node --lib -- --test-threads=1
+
       - name: Build napi addon + run Node tests
         if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/run-node-binding-tests.py --root .
@@ -2450,7 +2454,7 @@ jobs:
       # `cargo install` from source — faster and avoids the compile/network
       # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-llvm-cov
 
@@ -2682,13 +2686,13 @@ jobs:
         continue-on-error: true
 
       - name: Set up JDK 17
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: 'zulu'
           java-version: '17'
 
       - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
+        uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io

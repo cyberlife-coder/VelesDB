@@ -28,13 +28,11 @@ pub(crate) struct WasmError {
 
 impl WasmError {
     /// The machine-readable `VELES-XXX` error code (single-sourced from core).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn code(&self) -> &'static str {
         self.code
     }
 
     /// The human-readable error message.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn message(&self) -> &str {
         &self.message
     }

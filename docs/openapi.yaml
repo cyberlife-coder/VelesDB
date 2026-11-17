@@ -910,7 +910,7 @@ paths:
       tags:
       - graph
       summary: Stream graph traversal results via SSE.
-      description: "The traversal runs to completion first, then its events are sent:\n- `node`: each node reached\n- `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event\n- `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last\n- `error`: sent alone instead, when the traversal cannot run"
+      description: "The traversal runs to completion first, then its events are sent:\n- `node`: each node reached\n- `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event\n- `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last\n- `error`: sent alone instead, when the traversal worker fails"
       operationId: stream_traverse
       parameters:
       - name: name
@@ -964,7 +964,19 @@ paths:
         "200":
           description: SSE stream of traversal events (node, stats, done, error)
         "400":
-          description: Invalid algorithm (use 'bfs' or 'dfs')
+          description: Invalid algorithm (use 'bfs' or 'dfs'), a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Collection exists but is not a graph collection
           content:
             application/json:
               schema:
@@ -2225,6 +2237,12 @@ paths:
       responses:
         "202":
           description: Point accepted into streaming buffer
+        "400":
+          description: "A point the collection refuses: wrong dimension (VELES-004), a non-finite component (VELES-005) or a vector on a metadata-only collection (VELES-014); nothing is queued"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Collection not found
           content:
@@ -3739,8 +3757,8 @@ components:
             items:
               type: number
               format: float
-            description: "`weighted_rrf` only: one weight per query vector, in vector order —\nthe parameter the strategy cannot default. Ignored by every other\nstrategy, like the scalar weight fields."
-      description: "`/search/multi`'s request: core's `MultiQuerySearchRequest`\nplus the `branch_weights` `weighted_rrf` reads.\n\nKept server-side on purpose: the core DTO is a published,\nexternally-constructible struct, so a new pub field would break\ndownstream struct literals — the semver gate refuses it\n(`constructible_struct_adds_field`). `#[serde(flatten)]` keeps the wire\nbody byte-identical."
+            description: "One weight per query vector, in vector order: `weighted_rrf`'s, the\nparameter it cannot default, and `relative_score` / `rsf`'s, which\nthen replace its `dense_weight` / `sparse_weight`. Ignored by every\nother strategy, like the scalar weight fields."
+      description: "`/search/multi`'s request: core's `MultiQuerySearchRequest`\nplus the `branch_weights` `weighted_rrf` and `relative_score` read.\n\nKept server-side on purpose: the core DTO is a published,\nexternally-constructible struct, so a new pub field would break\ndownstream struct literals — the semver gate refuses it\n(`constructible_struct_adds_field`). `#[serde(flatten)]` keeps the wire\nbody byte-identical."
     NodeListResponse:
       type: object
       description: Response containing all node IDs in the graph.
@@ -3929,7 +3947,7 @@ components:
           description: The `VelesQL` query string.
     QueryResponse:
       type: object
-      description: "Response from `VelesQL` query execution.\n\nResults are projected rows: the shape depends on the SELECT clause.\n- `SELECT *` → `{id, field1, field2, ...}` (no vector)\n- `SELECT col1, col2` → `{col1, col2}`\n- `SELECT similarity() AS score, title` → `{score, title}`\n\n## MATCH-query extra fields\n\nWhen the query contains a `MATCH` clause, each row may carry additional\ngraph-specific fields:\n- `_edge_bindings` — map of alias → edge (id, source, target, label, properties)\n  for every named relationship in the pattern.\n- `_edge_paths` — array of edge-ID arrays, one per matched path variable.\n  Only present when the `MATCH` clause binds a path variable (`p = (…)-[…]->(…)`)."
+      description: "Response from `VelesQL` query execution.\n\nResults are projected rows: the shape depends on the SELECT clause.\n- `SELECT *` → `{id, field1, field2, ...}` (no vector)\n- `SELECT col1, col2` → `{col1, col2}`\n- `SELECT similarity() AS score, title` → `{score, title}`\n\n## MATCH-query extra fields\n\nWhen the query contains a `MATCH` clause, each row may carry additional\ngraph-specific fields:\n- `_edge_bindings` — map of alias → edge id (a decimal string) for every\n  fixed-length named relationship in the pattern.\n- `_edge_paths` — map of alias → edge ids (decimal strings, in path order)\n  for every variable-length named relationship (`-[r*1..3]->`).\n\nEdge ids are strings wherever a row carries one (`edge_id`, `r.id`, and\nthe two maps above): a derived edge id is hashed and routinely above\n2^53, which a JSON number would round in JavaScript."
       required:
       - results
       - timing_ms

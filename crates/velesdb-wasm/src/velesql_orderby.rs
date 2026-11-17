@@ -6,27 +6,30 @@
 //! expressions over the per-row score + payload.
 //!
 //! Sorting operates on core [`SearchResult`] values so the same rows can be
-//! projected through velesdb-core's projection engine afterwards (#3b). The
-//! arithmetic evaluator mirrors core's `ordering::evaluate_arithmetic`: score
-//! variables resolve to the row's search score, payload variables to their
-//! numeric value (0.0 when missing/non-numeric), and division by zero yields
-//! 0.0.
+//! projected through velesdb-core's projection engine afterwards (#3b). A
+//! score variable (`score`, `vector_score`, ...) and an arithmetic key resolve
+//! through core's own [`velesdb_core::velesql::ScoreContext`] — the same
+//! resolution order (LET, search score, component scores, `id`, payload) as
+//! core's ORDER BY, so no name reads differently in the browser.
 //!
-//! Genuinely unevaluable forms — `similarity(field, $v)` against a named
-//! vector, which WASM does not store, and aggregate ORDER BY outside an
-//! aggregation pipeline — are **rejected loudly** rather than silently
-//! degrading to scan order, matching the MATCH path (#8a).
+//! `similarity(field, $v)` scores each row as core's ordering does: `vector`
+//! the row's own vector, another field the payload's named vector
+//! ([`velesdb_core::velesql::payload_vector`]), a row without one taking the
+//! worst key so it sorts last under `DESC`. It needs the rows' collection
+//! ([`OrderVectors`]); where the rows are no collection's points (groups) it
+//! is refused, as is an aggregate ORDER BY outside an aggregation.
 
 use std::cmp::Ordering;
 
 use velesdb_core::point::SearchResult;
-use velesdb_core::velesql::{
-    ArithmeticExpr, ArithmeticOp, OrderByExpr, SelectOrderBy, SelectStatement,
-};
+use velesdb_core::DistanceMetric;
 
-/// Maximum recursion depth for arithmetic evaluation (mirrors core's
-/// `MAX_ARITHMETIC_DEPTH`).
-const MAX_ARITHMETIC_DEPTH: u8 = 64;
+use crate::store_state::StoreState;
+use crate::velesql_value::Params;
+use velesdb_core::velesql::{
+    evaluate_arithmetic, is_builtin_score_variable, ArithmeticExpr, OrderByExpr, ScoreContext,
+    SelectOrderBy, SelectStatement,
+};
 
 /// Sorts a result set in place according to the SELECT's ORDER BY clause.
 ///
@@ -36,10 +39,49 @@ const MAX_ARITHMETIC_DEPTH: u8 = 64;
 /// `higher_is_better` is the collection metric's direction: `similarity()`
 /// sorts most similar first under `DESC` whatever the metric, as in core
 /// (`SelectOrderBy::directed`).
+/// What `ORDER BY similarity(field, $v)` scores rows against: the query's
+/// parameters, the metric, and where a row's own vector is read.
+pub(crate) struct OrderVectors<'a> {
+    pub(crate) params: &'a Params,
+    pub(crate) metric: DistanceMetric,
+    /// The collection the rows are points of, its vector read by row id; or
+    /// `None` when each row carries its own (`point.vector`), as a compound's
+    /// rows from several collections do (ids are collection-local).
+    pub(crate) store: Option<&'a StoreState>,
+}
+
+impl<'a> OrderVectors<'a> {
+    /// The rows of one collection, `store`.
+    pub(crate) fn of(params: &'a Params, store: &'a StoreState) -> Self {
+        Self {
+            params,
+            metric: store.metric,
+            store: Some(store),
+        }
+    }
+}
+
+/// What an ORDER BY reads besides the rows: the metric's direction, and the
+/// rows' collection where they are its points (`None`: groups).
+pub(crate) struct OrderContext<'a> {
+    pub(crate) higher_is_better: bool,
+    pub(crate) vectors: Option<OrderVectors<'a>>,
+}
+
+impl OrderContext<'_> {
+    /// An ordering over rows that are no collection's points.
+    pub(crate) const fn without_vectors(higher_is_better: bool) -> Self {
+        Self {
+            higher_is_better,
+            vectors: None,
+        }
+    }
+}
+
 pub(crate) fn sort_rows(
     stmt: &SelectStatement,
     rows: &mut [SearchResult],
-    higher_is_better: bool,
+    ctx: &OrderContext<'_>,
 ) -> Result<(), String> {
     let Some(specs) = stmt.order_by.as_ref() else {
         return Ok(());
@@ -47,23 +89,121 @@ pub(crate) fn sort_rows(
     if specs.is_empty() {
         return Ok(());
     }
-    validate_order_by(specs)?;
-    rows.sort_by(|a, b| compare_rows(a, b, specs, higher_is_better));
+    validate_order_by(specs, ctx.vectors.is_some())?;
+    let keys = similarity_keys(specs, rows, ctx)?;
+    if keys.iter().all(Option::is_none) {
+        rows.sort_by(|a, b| compare_rows(a, b, specs, ctx.higher_is_better, &[], 0, 0));
+        return Ok(());
+    }
+    // Decorate-sort-undecorate: the precomputed keys follow their row.
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by(|&i, &j| {
+        compare_rows(&rows[i], &rows[j], specs, ctx.higher_is_better, &keys, i, j)
+    });
+    let sorted: Vec<SearchResult> = order.iter().map(|&i| rows[i].clone()).collect();
+    rows.clone_from_slice(&sorted);
     Ok(())
 }
 
+/// The `similarity(field, $v)` key of every row, per ORDER BY item (`None`
+/// for the other items).
+fn similarity_keys(
+    specs: &[SelectOrderBy],
+    rows: &[SearchResult],
+    ctx: &OrderContext<'_>,
+) -> Result<Vec<Option<Vec<f32>>>, String> {
+    specs
+        .iter()
+        .map(|spec| match (&spec.expr, &ctx.vectors) {
+            (OrderByExpr::Similarity(sim), Some(vectors)) => {
+                let query = crate::velesql_value::resolve_vector(&sim.vector, vectors.params)?;
+                let worst = if ctx.higher_is_better {
+                    f32::NEG_INFINITY
+                } else {
+                    f32::INFINITY
+                };
+                let own = OwnVectors::new(vectors.store);
+                Ok(Some(
+                    rows.iter()
+                        .map(|row| {
+                            field_similarity(row, &sim.field, &query, &own, vectors.metric)
+                                .unwrap_or(worst)
+                        })
+                        .collect(),
+                ))
+            }
+            _ => Ok(None),
+        })
+        .collect()
+}
+
+/// Where a row's own vector is read: its collection's store by id, or the
+/// row itself when the rows carry their vectors.
+struct OwnVectors<'a> {
+    store: Option<(&'a StoreState, std::collections::HashMap<u64, usize>)>,
+}
+
+impl<'a> OwnVectors<'a> {
+    fn new(store: Option<&'a StoreState>) -> Self {
+        let store = store.map(|store| {
+            let rows = store
+                .ids
+                .iter()
+                .enumerate()
+                .map(|(row, &id)| (id, row))
+                .collect();
+            (store, rows)
+        });
+        Self { store }
+    }
+
+    fn get<'r>(&self, row: &'r SearchResult) -> Option<&'r [f32]>
+    where
+        'a: 'r,
+    {
+        let Some((store, rows)) = &self.store else {
+            return (!row.point.vector.is_empty()).then_some(row.point.vector.as_slice());
+        };
+        let at = *rows.get(&row.point.id)?;
+        let dim = store.dimension;
+        (dim > 0).then(|| &store.data[at * dim..(at + 1) * dim])
+    }
+}
+
+/// A row's similarity to `query` by the vector `field` names: its own for
+/// `vector`, else the payload's named vector; `None` without one of the
+/// query's dimension.
+fn field_similarity(
+    row: &SearchResult,
+    field: &str,
+    query: &[f32],
+    own: &OwnVectors<'_>,
+    metric: DistanceMetric,
+) -> Option<f32> {
+    let named;
+    let vector: &[f32] = if field == velesdb_core::velesql::PRIMARY_VECTOR_FIELD {
+        own.get(row)?
+    } else {
+        named =
+            velesdb_core::velesql::payload_vector(row.point.payload.as_ref()?, field).ok()??;
+        &named
+    };
+    (vector.len() == query.len() && !vector.is_empty()).then(|| metric.calculate(vector, query))
+}
+
 /// Rejects ORDER BY expressions WASM cannot evaluate before sorting begins.
-fn validate_order_by(specs: &[SelectOrderBy]) -> Result<(), String> {
+fn validate_order_by(specs: &[SelectOrderBy], has_vectors: bool) -> Result<(), String> {
     for spec in specs {
         match &spec.expr {
-            OrderByExpr::Similarity(_) => {
+            OrderByExpr::Similarity(_) if !has_vectors => {
                 return Err(
-                    "ORDER BY similarity(field, $vec) is not supported in WASM: named/secondary \
-                     vectors are not stored. Use ORDER BY similarity() (the search score) or a \
-                     payload column."
+                    "ORDER BY similarity(field, $vec) needs the rows of a collection: it is not \
+                     supported over grouped rows. Use ORDER BY similarity() (the search score) \
+                     or a column."
                         .to_string(),
                 );
             }
+            OrderByExpr::Similarity(_) => {}
             OrderByExpr::Aggregate(_) => {
                 return Err(
                     "ORDER BY aggregate is only valid in an aggregation (GROUP BY) query"
@@ -79,15 +219,24 @@ fn validate_order_by(specs: &[SelectOrderBy]) -> Result<(), String> {
     Ok(())
 }
 
-/// Strict total order used by `sort_by` over a multi-key ORDER BY.
+/// Strict total order used by `sort_by` over a multi-key ORDER BY. `keys`
+/// holds the precomputed `similarity(field, $v)` keys, indexed by row
+/// (`ia`, `ib` for `a`, `b`).
 fn compare_rows(
     a: &SearchResult,
     b: &SearchResult,
     specs: &[SelectOrderBy],
     higher_is_better: bool,
+    keys: &[Option<Vec<f32>>],
+    ia: usize,
+    ib: usize,
 ) -> Ordering {
-    for spec in specs {
-        let ord = spec.directed(compare_with_spec(a, b, spec), higher_is_better);
+    for (idx, spec) in specs.iter().enumerate() {
+        let ascending = match keys.get(idx).and_then(Option::as_ref) {
+            Some(scores) => scores[ia].total_cmp(&scores[ib]),
+            None => compare_with_spec(a, b, spec),
+        };
+        let ord = spec.directed(ascending, higher_is_better);
         if ord != Ordering::Equal {
             return ord;
         }
@@ -112,14 +261,18 @@ fn compare_with_spec(a: &SearchResult, b: &SearchResult, spec: &SelectOrderBy) -
     }
 }
 
-/// Compares a pair of rows by the given column. `id` and `score` are
-/// resolved from their dedicated fields; everything else from the payload.
+/// Compares a pair of rows by the given column: `id` is the point id, a
+/// score variable resolves as core resolves it, any other name is a payload
+/// field.
 fn compare_field(a: &SearchResult, b: &SearchResult, name: &str) -> Ordering {
     if name == "id" {
         return a.point.id.cmp(&b.point.id);
     }
-    if name == "score" {
-        return compare_scores(a, b);
+    if is_builtin_score_variable(name) {
+        return compare_f32(
+            score_context(a).resolve_variable(name),
+            score_context(b).resolve_variable(name),
+        );
     }
     let va = extract_payload_field(a, name);
     let vb = extract_payload_field(b, name);
@@ -151,73 +304,22 @@ fn extract_payload_field(result: &SearchResult, column: &str) -> Option<serde_js
         .and_then(|p| velesdb_core::velesql::row_field(p, column).cloned())
 }
 
-/// Evaluates an arithmetic ORDER BY expression for a single row, mirroring
-/// core's `ordering::evaluate_arithmetic` semantics.
+/// Evaluates an arithmetic ORDER BY expression for a single row through
+/// core's evaluator.
 fn eval_arithmetic(expr: &ArithmeticExpr, result: &SearchResult) -> f32 {
-    eval_arithmetic_inner(expr, result, 0)
+    evaluate_arithmetic(expr, &score_context(result))
 }
 
-fn eval_arithmetic_inner(expr: &ArithmeticExpr, result: &SearchResult, depth: u8) -> f32 {
-    if depth >= MAX_ARITHMETIC_DEPTH {
-        return 0.0;
-    }
-    match expr {
-        #[allow(clippy::cast_possible_truncation)]
-        ArithmeticExpr::Literal(v) => *v as f32,
-        ArithmeticExpr::Variable(name) => resolve_variable(name, result),
-        // Only bare similarity() reaches arithmetic (validation rejects the
-        // named form); it resolves to the row search score.
-        ArithmeticExpr::Similarity(_) => result.score,
-        ArithmeticExpr::BinaryOp { left, op, right } => {
-            let l = eval_arithmetic_inner(left, result, depth + 1);
-            let r = eval_arithmetic_inner(right, result, depth + 1);
-            apply_op(*op, l, r)
-        }
-        // `ArithmeticExpr` is non_exhaustive; an unknown future variant has no
-        // defined WASM semantics, so contribute a neutral 0.0 to the sort key.
-        _ => 0.0,
-    }
-}
-
-/// Applies a binary arithmetic operator; division by zero yields 0.0.
-fn apply_op(op: ArithmeticOp, l: f32, r: f32) -> f32 {
-    match op {
-        ArithmeticOp::Add => l + r,
-        ArithmeticOp::Sub => l - r,
-        ArithmeticOp::Mul => l * r,
-        ArithmeticOp::Div => {
-            if r == 0.0 {
-                0.0
-            } else {
-                l / r
-            }
-        }
-        // `ArithmeticOp` is non_exhaustive; a future operator has no defined
-        // WASM semantics, so fall back to the left operand rather than guess.
-        _ => l,
-    }
-}
-
-/// Resolves a variable name to a numeric value for arithmetic ORDER BY.
-///
-/// Score built-ins (`score`, `similarity`, `vector_score`, …) resolve to the
-/// row search score — WASM scores only the primary vector, so absent
-/// component scores fall back to the search score (core's legacy/untagged
-/// path). Any other name is a payload field (0.0 when missing/non-numeric).
-fn resolve_variable(name: &str, result: &SearchResult) -> f32 {
-    match name {
-        "score" | "similarity" | "fused_score" | "vector_score" | "graph_score" | "bm25_score"
-        | "sparse_score" => result.score,
-        _ => extract_payload_field(result, name)
-            .as_ref()
-            .and_then(serde_json::Value::as_f64)
-            .map_or(0.0, |v| {
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    v as f32
-                }
-            }),
-    }
+/// What a row's score variables read: its search score, its component
+/// breakdown (a NEAR row carries `vector_score`, as in core) and its id.
+fn score_context(result: &SearchResult) -> ScoreContext<'_> {
+    ScoreContext::with_let_bindings(
+        result.score,
+        result.point.payload.as_ref(),
+        result.component_scores.as_deref(),
+        None,
+    )
+    .for_point(result.point.id)
 }
 
 #[cfg(test)]

@@ -211,7 +211,7 @@ pub use update_check::{
 };
 
 #[cfg(feature = "persistence")]
-pub use index::{HnswIndex, HnswParams, VectorIndex};
+pub use index::{HnswIndex, HnswOverrides, HnswParams, VectorIndex};
 pub use search_quality::SearchQuality;
 
 #[cfg(feature = "persistence")]
@@ -310,7 +310,7 @@ mod database;
 pub mod observer;
 
 #[cfg(feature = "persistence")]
-pub use database::{Database, GatedRead};
+pub use database::{Database, GatedRead, MatchScoring};
 #[cfg(feature = "persistence")]
 pub use observer::DatabaseObserver;
 #[cfg(feature = "persistence")]

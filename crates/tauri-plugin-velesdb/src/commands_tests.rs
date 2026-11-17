@@ -167,52 +167,30 @@ fn test_create_collection_request_with_partial_hnsw_params() {
 }
 
 #[test]
-fn test_build_hnsw_params_uses_auto_defaults() {
-    use crate::commands::build_hnsw_params;
+fn test_hnsw_overrides_pins_nothing_by_default() {
+    use crate::commands::hnsw_overrides;
 
     let json = r#"{"name": "test", "dimension": 768}"#;
     let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    let params = build_hnsw_params(&request, velesdb_core::StorageMode::Full);
-
-    let auto = velesdb_core::HnswParams::auto(768);
-    assert_eq!(params.max_connections, auto.max_connections);
-    assert_eq!(params.ef_construction, auto.ef_construction);
-    assert_eq!(params.max_elements, auto.max_elements);
-    assert!((params.alpha - auto.alpha).abs() < f32::EPSILON);
+    assert!(hnsw_overrides(&request).is_empty());
 }
 
 #[test]
-fn test_build_hnsw_params_overrides_selectively() {
-    use crate::commands::build_hnsw_params;
+fn test_hnsw_overrides_carries_each_field_it_was_given() {
+    use crate::commands::hnsw_overrides;
 
-    let json = r#"{"name": "test", "dimension": 128, "hnswM": 64, "hnswAlpha": 1.0}"#;
+    let json = r#"{"name": "test", "dimension": 128, "hnswM": 64, "hnswEfConstruction": 300,
+        "hnswMaxElements": 5000, "hnswAlpha": 1.0}"#;
     let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    let params = build_hnsw_params(&request, velesdb_core::StorageMode::SQ8);
-
-    let auto = velesdb_core::HnswParams::auto(128);
-    assert_eq!(params.max_connections, 64);
-    assert_eq!(params.ef_construction, auto.ef_construction);
-    assert_eq!(params.max_elements, auto.max_elements);
-    assert!((params.alpha - 1.0).abs() < f32::EPSILON);
-    assert_eq!(params.storage_mode, velesdb_core::StorageMode::SQ8);
-}
-
-#[test]
-fn test_has_advanced_params_false_when_all_none() {
-    use crate::commands::has_advanced_params;
-
-    let json = r#"{"name": "test", "dimension": 768}"#;
-    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    assert!(!has_advanced_params(&request));
-}
-
-#[test]
-fn test_has_advanced_params_true_when_any_set() {
-    use crate::commands::has_advanced_params;
-
-    let json = r#"{"name": "test", "dimension": 768, "pqRescoreOversampling": 4}"#;
-    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    assert!(has_advanced_params(&request));
+    assert_eq!(
+        hnsw_overrides(&request),
+        velesdb_core::HnswOverrides {
+            m: Some(64),
+            ef_construction: Some(300),
+            max_elements: Some(5000),
+            alpha: Some(1.0),
+        }
+    );
 }
 
 #[test]
@@ -671,6 +649,44 @@ fn test_build_rs_commands_match_lib_rs_registration() {
     );
 }
 
+/// Extracts the command names the guest-js bindings invoke: every
+/// `'plugin:velesdb|<name>'` literal in `guest-js/index.ts`.
+fn commands_invoked_by_guest_js() -> Vec<String> {
+    const PREFIX: &str = "'plugin:velesdb|";
+    include_str!("../guest-js/index.ts")
+        .split(PREFIX)
+        .skip(1)
+        .filter_map(|rest| rest.split_once('\''))
+        .map(|(cmd, _)| cmd.to_string())
+        .collect()
+}
+
+/// Drift gate: the guest-js surface must mirror the `invoke_handler`
+/// registration in `lib.rs` 1:1. A registered command with no binding is
+/// reachable from the webview only through a raw, untyped `invoke`; a
+/// binding for an unregistered command fails at runtime on every call.
+#[test]
+fn test_guest_js_bindings_match_lib_rs_registration() {
+    let registered: std::collections::BTreeSet<String> =
+        commands_registered_in_lib_rs().into_iter().collect();
+    let invoked: std::collections::BTreeSet<String> =
+        commands_invoked_by_guest_js().into_iter().collect();
+    let missing: Vec<&String> = registered.difference(&invoked).collect();
+    let orphaned: Vec<&String> = invoked.difference(&registered).collect();
+    assert!(
+        missing.is_empty(),
+        "Commands registered in lib.rs invoke_handler but with no binding in \
+         guest-js/index.ts: {missing:?}.\n\
+         Add an exported function invoking 'plugin:velesdb|<name>' for each."
+    );
+    assert!(
+        orphaned.is_empty(),
+        "guest-js/index.ts invokes commands not registered in lib.rs invoke_handler: \
+         {orphaned:?}.\n\
+         Remove the stale bindings or register the commands."
+    );
+}
+
 /// Parses `permissions/default.toml` and returns the `[default]` permission
 /// strings.
 fn default_permission_strings() -> Vec<String> {
@@ -942,4 +958,200 @@ fn test_guardrail_limits_deserialize_camel_case() {
     assert_eq!(g.max_depth, 3);
     assert_eq!(g.timeout_ms, 5);
     assert_eq!(g.circuit_recovery_seconds, 9);
+}
+
+/// Text and hybrid searches reach the observer once per completed search,
+/// under their own operation kind, and never for a refusal or a failure.
+mod filtered_search_telemetry {
+    use std::sync::{Arc, Mutex};
+
+    use velesdb_core::observer::QueryOperationKind;
+    use velesdb_core::{
+        AccessDecision, Database, DatabaseObserver, DistanceMetric, Error, Point,
+        QueryAccessContext,
+    };
+
+    use super::super::batch::filtered_search;
+
+    #[derive(Default)]
+    struct Spy {
+        requests: Mutex<Vec<QueryOperationKind>>,
+        queries: Mutex<Vec<String>>,
+    }
+
+    impl DatabaseObserver for Spy {
+        fn on_query_request(
+            &self,
+            ctx: &QueryAccessContext,
+        ) -> velesdb_core::Result<AccessDecision> {
+            self.requests.lock().unwrap().push(ctx.operation);
+            if ctx.collection == "secret" {
+                return Ok(AccessDecision::Deny(Error::Config("denied".into())));
+            }
+            Ok(AccessDecision::Allow)
+        }
+
+        fn on_query(&self, collection: &str, _duration_us: u64) {
+            self.queries.lock().unwrap().push(collection.to_string());
+        }
+    }
+
+    fn seeded() -> (tempfile::TempDir, Database, Arc<Spy>) {
+        let spy = Arc::new(Spy::default());
+        let dir = tempfile::TempDir::new().expect("test: tempdir");
+        let db = Database::open_with_observer(dir.path(), spy.clone() as Arc<dyn DatabaseObserver>)
+            .expect("test: open");
+        for name in ["docs", "secret"] {
+            db.create_vector_collection(name, 2, DistanceMetric::Cosine)
+                .expect("test: create");
+            db.get_vector_collection(name)
+                .expect("test: collection")
+                .upsert([Point::new(
+                    1,
+                    vec![1.0, 0.0],
+                    Some(serde_json::json!({"body": "rust database"})),
+                )])
+                .expect("test: seed");
+        }
+        (dir, db, spy)
+    }
+
+    #[test]
+    fn a_completed_text_or_hybrid_search_is_reported_once() {
+        let (_dir, db, spy) = seeded();
+        let text = filtered_search(&db, "docs", QueryOperationKind::TextSearch, None, |c, _| {
+            c.text_search("rust", 5)
+                .map_err(crate::error::Error::Database)
+        })
+        .expect("test: text search");
+        assert_eq!(text.len(), 1);
+        filtered_search(
+            &db,
+            "docs",
+            QueryOperationKind::HybridSearch,
+            None,
+            |c, _| {
+                c.hybrid_search(&[1.0, 0.0], "rust", 5, Some(0.5))
+                    .map_err(crate::error::Error::Database)
+            },
+        )
+        .expect("test: hybrid search");
+
+        assert_eq!(*spy.queries.lock().unwrap(), vec!["docs", "docs"]);
+        assert_eq!(
+            *spy.requests.lock().unwrap(),
+            vec![
+                QueryOperationKind::TextSearch,
+                QueryOperationKind::HybridSearch
+            ]
+        );
+    }
+
+    #[test]
+    fn a_refused_or_failed_search_is_not_reported() {
+        let (_dir, db, spy) = seeded();
+        let refused = filtered_search(
+            &db,
+            "secret",
+            QueryOperationKind::TextSearch,
+            None,
+            |_, _| panic!("a refused search never runs"),
+        );
+        assert!(refused.is_err());
+        let failed = filtered_search(&db, "docs", QueryOperationKind::TextSearch, None, |_, _| {
+            Err(crate::error::Error::InvalidConfig("boom".into()))
+        });
+        assert!(failed.is_err());
+        assert!(spy.queries.lock().unwrap().is_empty());
+    }
+}
+
+/// The permissions of a named `[set]` in `permissions/default.toml`.
+fn permission_set(name: &str) -> Vec<String> {
+    let parsed: toml::Value = toml::from_str(include_str!("../permissions/default.toml"))
+        .expect("Failed to parse default.toml as valid TOML");
+    parsed[name]["permissions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("Missing permissions array in [{name}]"))
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+/// A command that changes the database: `query` (every `VelesQL` statement,
+/// DDL and DML included) or one named by a write verb.
+fn command_writes(command: &str) -> bool {
+    const WRITE_VERBS: &[&str] = &[
+        "create",
+        "delete",
+        "drop",
+        "truncate",
+        "upsert",
+        "insert",
+        "update",
+        "add",
+        "stream",
+        "enable",
+        "compact",
+        "flush",
+        "rebuild",
+        "reorder",
+        "store",
+        "record",
+        "learn",
+        "reinforce",
+        "deserialize",
+        "remember",
+        "forget",
+        "relate",
+        "unrelate",
+        "import",
+    ];
+    command == "query" || command.split('_').any(|word| WRITE_VERBS.contains(&word))
+}
+
+/// A webview granted `velesdb:read-only` or `velesdb:search-only` must not be
+/// able to change anything — before, `read-only` granted `query`, which runs
+/// `DROP COLLECTION` like any other statement.
+#[test]
+fn test_read_only_and_search_only_sets_grant_no_write() {
+    for set in ["read-only", "search-only"] {
+        for permission in permission_set(set) {
+            let command = permission.trim_start_matches("allow-").replace('-', "_");
+            assert!(
+                !command_writes(&command),
+                "[{set}] grants '{permission}', which can change the database"
+            );
+        }
+    }
+    assert!(
+        command_writes("query"),
+        "the classifier knows `query` writes"
+    );
+    assert!(command_writes("delete_points") && !command_writes("read_query"));
+}
+
+/// `read_query` runs a statement only when it changes nothing.
+#[test]
+fn test_read_query_refuses_every_statement_that_writes() {
+    let parse = |sql: &str| velesdb_core::velesql::Parser::parse(sql).expect("test: parse");
+    for read in [
+        "SELECT * FROM docs",
+        "MATCH (a)-[:R]->(b) RETURN b",
+        "SHOW COLLECTIONS",
+    ] {
+        assert!(
+            crate::commands_query::ensure_read_only(&parse(read)).is_ok(),
+            "{read}"
+        );
+    }
+    for write in [
+        "DROP COLLECTION docs",
+        "DELETE FROM docs WHERE id = 1",
+        "INSERT INTO docs (id, x) VALUES (1, 2)",
+        "FLUSH",
+    ] {
+        let refused = crate::commands_query::ensure_read_only(&parse(write)).expect_err(write);
+        assert!(refused.to_string().contains("read_query"), "{refused}");
+    }
 }

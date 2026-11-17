@@ -75,19 +75,25 @@ impl Database {
     }
 
     /// Admits a collection into a typed registry: pushes the live runtime
-    /// limits and guard-rails into it, then runs `insert`.
+    /// limits and guard-rails into it, wires its writes to the observer, then
+    /// runs `insert`.
     ///
     /// The single path every create, startup-load and disk-open registration
     /// goes through, so no collection reaches a registry without the limits
-    /// of [`Database::update_guardrails`]. `insert` runs under the
-    /// `guardrail_limits` read lock — see that field for why the lock spans
-    /// the insert.
+    /// of [`Database::update_guardrails`], and no write to a registered
+    /// collection escapes `DatabaseObserver::on_upsert`, whatever surface
+    /// makes it. `insert` runs under the `guardrail_limits` read lock — see
+    /// that field for why the lock spans the insert.
     pub(super) fn admit_collection(
         &self,
+        name: &str,
         coll: &crate::collection::Collection,
         insert: impl FnOnce(),
     ) {
         self.push_runtime_limits(coll);
+        if let Some(observer) = &self.observer {
+            coll.attach_upsert_observer(name, std::sync::Arc::clone(observer));
+        }
         let limits = self.guardrail_limits.read();
         coll.guard_rails().update_limits(&limits);
         insert();
@@ -192,6 +198,21 @@ impl Database {
             return Some(AnyCollection::Metadata(c));
         }
         None
+    }
+
+    /// Any collection as a [`VectorCollection`](crate::VectorCollection) view: a vector collection as
+    /// is, a graph or metadata collection through its structural
+    /// `into_vector_view`. Gated reads resolve through it, so a graph
+    /// collection's node embeddings answer a dense search, and a metadata
+    /// collection refuses one on its dimension — never "not found" for a
+    /// collection that exists.
+    #[must_use]
+    pub fn get_collection_view(&self, name: &str) -> Option<crate::VectorCollection> {
+        Some(match self.get_any_collection(name)? {
+            AnyCollection::Vector(c) => c,
+            AnyCollection::Graph(g) => g.into_vector_view(),
+            AnyCollection::Metadata(m) => m.into_vector_view(),
+        })
     }
 
     /// Returns the write generation for a named collection, if it exists.

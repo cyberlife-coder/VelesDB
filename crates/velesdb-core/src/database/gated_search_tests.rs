@@ -1,4 +1,4 @@
-//! `run_dense` tuning tests (#2302): a caller or scope filter must not make
+//! Dense tuning tests (#2302, `VectorCollection::search_dense`): a caller or scope filter must not make
 //! the read gate drop `ef` / `quality`.
 //!
 //! Which quality a filtered search runs at is made observable by capping
@@ -132,4 +132,59 @@ fn test_gated_dense_filtered_search_with_ef_returns_filtered_results() {
         .expect("filtered search with ef override");
     assert_eq!(results.len(), 3, "lang=en docs are ids 0, 2, 4");
     assert!(results.iter().all(|r| r.point.id % 2 == 0));
+}
+
+/// A graph collection with node embeddings answers a gated dense search, as
+/// its `search_by_embedding` does: it used to be "not found", the gated path
+/// resolving vector collections only.
+#[test]
+fn a_gated_dense_search_reaches_a_graph_collections_embeddings() {
+    let dir = tempdir().expect("test: tempdir");
+    let db = Database::open(dir.path()).expect("test: open");
+    db.create_graph_collection_with_embeddings(
+        "kg",
+        crate::collection::graph::GraphSchema::schemaless(),
+        4,
+        DistanceMetric::Cosine,
+    )
+    .expect("test: create graph");
+    db.get_graph_collection("kg")
+        .expect("test: kg")
+        .upsert_node(
+            10,
+            &serde_json::json!({"name": "Alice"}),
+            Some(vec![1.0, 0.0, 0.0, 0.0]),
+        )
+        .expect("test: node");
+
+    let q = [1.0, 0.0, 0.0, 0.0];
+    let hits = db
+        .gated_search(
+            "kg",
+            None,
+            None,
+            GatedRead::Dense {
+                query: &q,
+                k: 1,
+                ef: None,
+                quality: None,
+                filter: None,
+            },
+        )
+        .expect("test: a graph collection is searchable");
+    assert_eq!(hits[0].point.id, 10);
+
+    let missing = db.gated_search(
+        "nope",
+        None,
+        None,
+        GatedRead::Dense {
+            query: &q,
+            k: 1,
+            ef: None,
+            quality: None,
+            filter: None,
+        },
+    );
+    assert!(matches!(missing, Err(crate::Error::CollectionNotFound(_))));
 }

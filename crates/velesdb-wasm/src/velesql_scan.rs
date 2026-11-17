@@ -37,12 +37,13 @@ pub(crate) fn scan_all(
             .len()
             .min(crate::guardrails::MAX_INTERMEDIATE_CARDINALITY),
     );
+    let filter = where_clause
+        .map(|cond| velesql_where::WhereFilter::compile(cond, params))
+        .transpose()?;
     for (idx, &id) in borrowed.ids.iter().enumerate() {
         let payload = borrowed.payloads.get(idx).and_then(|p| p.as_ref());
-        if let Some(cond) = where_clause {
-            if !velesql_where::matches(cond, id, payload, params)? {
-                continue;
-            }
+        if filter.as_ref().is_some_and(|f| !f.matches(id, payload)) {
+            continue;
         }
         out.push((id, 0.0, payload.cloned()));
         crate::guardrails::check_cardinality(out.len())?;
