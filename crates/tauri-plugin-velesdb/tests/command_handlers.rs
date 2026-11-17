@@ -1145,3 +1145,325 @@ fn semantic_query_quality_reaches_core() {
         err.message
     );
 }
+
+/// What a create command answers is what `get_collection` and
+/// `list_collections` answer afterwards, for every collection kind: one
+/// shape, read from the persisted configuration. The create commands built
+/// theirs by hand — a metadata collection reported metric `none` and storage
+/// `metadata_only` once, then something else forever after; a graph one
+/// echoed the request's metric spelling.
+#[test]
+fn create_answers_what_get_and_list_answer_afterwards() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+
+    let created = vec![
+        run(create_collection(
+            handle(&app),
+            st(&app),
+            vector_collection_request("vectors"),
+        ))
+        .expect("create vector"),
+        run(create_metadata_collection(
+            handle(&app),
+            st(&app),
+            serde_json::from_value::<CreateMetadataCollectionRequest>(
+                serde_json::json!({ "name": "notes" }),
+            )
+            .expect("deserialize"),
+        ))
+        .expect("create metadata"),
+        run(create_graph_collection(
+            handle(&app),
+            st(&app),
+            serde_json::from_value::<CreateGraphCollectionRequest>(
+                serde_json::json!({ "name": "kg", "dimension": DIM, "metric": "COSINE" }),
+            )
+            .expect("deserialize"),
+        ))
+        .expect("create graph"),
+        run(create_graph_collection(
+            handle(&app),
+            st(&app),
+            serde_json::from_value::<CreateGraphCollectionRequest>(
+                serde_json::json!({ "name": "plain_kg" }),
+            )
+            .expect("deserialize"),
+        ))
+        .expect("create plain graph"),
+    ];
+
+    let listed = run(list_collections(handle(&app), st(&app))).expect("list");
+    for info in created {
+        let created_json = serde_json::to_value(&info).expect("serialize");
+        let got = run(get_collection(handle(&app), st(&app), info.name.clone())).expect("get");
+        assert_eq!(
+            serde_json::to_value(&got).expect("serialize"),
+            created_json,
+            "get_collection disagrees with create for {}",
+            info.name
+        );
+        let in_list = listed
+            .iter()
+            .find(|l| l.name == info.name)
+            .map(|l| serde_json::to_value(l).expect("serialize"));
+        assert_eq!(
+            in_list,
+            Some(created_json),
+            "list_collections disagrees with create for {}",
+            info.name
+        );
+    }
+}
+
+/// Every write and delete reaches the frontend as one `collection-updated`
+/// event, from core through the observer, whatever made it. The commands
+/// emitted by hand: `delete_points` never did, `VelesQL` `DELETE` / `INSERT`
+/// through `query` never did, and the streaming drain was announced at
+/// enqueue time rather than when the points landed.
+#[test]
+fn every_write_and_delete_emits_one_collection_updated() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_builder()
+        .build(mock_context(noop_assets()))
+        .expect("build app");
+    let updates: Arc<parking_lot::Mutex<Vec<serde_json::Value>>> = Arc::default();
+    let sink = Arc::clone(&updates);
+    app.handle().listen(
+        tauri_plugin_velesdb::events::event_names::COLLECTION_UPDATED,
+        move |event| {
+            sink.lock()
+                .push(serde_json::from_str(event.payload()).expect("payload"));
+        },
+    );
+    let observer = Arc::new(TauriObserver::new(app.handle().clone()));
+    app.manage(VelesDbState::new_with_observer(
+        dir.path().to_path_buf(),
+        observer,
+    ));
+    run(create_collection(
+        handle(&app),
+        st(&app),
+        vector_collection_request("docs"),
+    ))
+    .expect("create");
+
+    let points = vec![
+        point(1, vec![1.0, 0.0, 0.0, 0.0], serde_json::json!({})),
+        point(2, vec![0.0, 1.0, 0.0, 0.0], serde_json::json!({})),
+    ];
+    run(upsert(
+        handle(&app),
+        st(&app),
+        UpsertRequest {
+            collection: "docs".to_string(),
+            points,
+        },
+    ))
+    .expect("upsert");
+    run(delete_points(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<DeletePointsRequest>(
+            serde_json::json!({ "collection": "docs", "ids": [1] }),
+        )
+        .expect("deserialize"),
+    ))
+    .expect("delete_points");
+    run(query(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<QueryRequest>(
+            serde_json::json!({ "query": "DELETE FROM docs WHERE id = 2" }),
+        )
+        .expect("deserialize"),
+    ))
+    .expect("VelesQL delete");
+
+    let seen: Vec<(String, u64)> = updates
+        .lock()
+        .iter()
+        .map(|p| {
+            (
+                p["operation"].as_str().unwrap_or_default().to_owned(),
+                p["count"].as_u64().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("upsert".to_owned(), 2),
+            ("delete".to_owned(), 1),
+            ("delete".to_owned(), 1)
+        ]
+    );
+}
+
+/// Scopes reads to `tenant = 'a'`, the way a tenancy policy would, once
+/// switched on.
+#[derive(Default)]
+struct TenantScope {
+    on: std::sync::atomic::AtomicBool,
+}
+
+impl velesdb_core::DatabaseObserver for TenantScope {
+    fn on_query_request(
+        &self,
+        _ctx: &velesdb_core::QueryAccessContext,
+    ) -> velesdb_core::Result<velesdb_core::AccessDecision> {
+        if !self.on.load(Ordering::SeqCst) {
+            return Ok(velesdb_core::AccessDecision::Allow);
+        }
+        let condition = velesdb_core::velesql::Parser::parse("SELECT * FROM c WHERE tenant = 'a'")
+            .expect("test: parse")
+            .select
+            .where_clause
+            .expect("test: where");
+        #[allow(clippy::field_reassign_with_default)] // `AccessScope` is non_exhaustive
+        let mut scope = velesdb_core::AccessScope::default();
+        scope.filter = Some(condition);
+        Ok(velesdb_core::AccessDecision::AllowWithScope(scope))
+    }
+}
+
+/// A scoped hybrid search draws its top-k from in-scope points only; a
+/// scoped sparse-only search, which has no filter leaf, is refused. Both
+/// used to narrow the top-k after it was cut, so a search could answer
+/// fewer than `top_k` hits while in-scope points existed.
+#[test]
+fn a_scoped_sparse_search_fills_its_top_k_or_refuses() {
+    use tauri_plugin_velesdb::commands_sparse::{
+        hybrid_sparse_search, sparse_search, sparse_upsert,
+    };
+    use tauri_plugin_velesdb::types::{
+        HybridSparseSearchRequest, SparseSearchRequest, SparseUpsertRequest,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_builder()
+        .build(mock_context(noop_assets()))
+        .expect("build app");
+    let policy = Arc::new(TenantScope::default());
+    app.manage(VelesDbState::new_with_observer(
+        dir.path().to_path_buf(),
+        policy.clone(),
+    ));
+    run(create_collection(
+        handle(&app),
+        st(&app),
+        vector_collection_request("docs"),
+    ))
+    .expect("create");
+    // Ids 1-4 are tenant b and nearest the query; 5-8 are tenant a.
+    let points: Vec<serde_json::Value> = (1..=8)
+        .map(|id| {
+            let tenant = if id <= 4 { "b" } else { "a" };
+            let weight = 10.0 - f64::from(id);
+            serde_json::json!({
+                "id": id,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "payload": { "tenant": tenant },
+                "sparseVector": { "7": weight },
+            })
+        })
+        .collect();
+    run(sparse_upsert(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<SparseUpsertRequest>(
+            serde_json::json!({ "collection": "docs", "points": points }),
+        )
+        .expect("deserialize"),
+    ))
+    .expect("upsert");
+    policy.on.store(true, Ordering::SeqCst);
+
+    let hybrid = run(hybrid_sparse_search(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<HybridSparseSearchRequest>(serde_json::json!({
+            "collection": "docs",
+            "vector": [1.0, 0.0, 0.0, 0.0],
+            "sparseVector": { "7": 1.0 },
+            "topK": 3,
+        }))
+        .expect("deserialize"),
+    ))
+    .expect("scoped hybrid search");
+    let tenants: Vec<String> = hybrid
+        .results
+        .iter()
+        .map(|r| {
+            r.payload
+                .as_ref()
+                .and_then(|p| p["tenant"].as_str())
+                .unwrap_or("")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(tenants, vec!["a"; 3], "three in-scope hits, not fewer");
+
+    let sparse_only = run(sparse_search(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<SparseSearchRequest>(serde_json::json!({
+            "collection": "docs",
+            "sparseVector": { "7": 1.0 },
+            "topK": 3,
+        }))
+        .expect("deserialize"),
+    ));
+    assert!(
+        sparse_only.is_err(),
+        "a scope a sparse-only search cannot carry is refused"
+    );
+}
+
+/// `search` reaches a graph collection's node embeddings, as `searchIds`,
+/// `batchSearch` and the text and hybrid searches already did: it answered
+/// "Collection 'kg' not found", core's gated read resolving vector
+/// collections only.
+#[test]
+fn search_reaches_a_graph_collections_embeddings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    run(create_graph_collection(
+        handle(&app),
+        st(&app),
+        CreateGraphCollectionRequest {
+            name: "kg".to_string(),
+            dimension: Some(4),
+            metric: "cosine".to_string(),
+            graph_schema: None,
+        },
+    ))
+    .expect("create graph collection");
+    run(upsert(
+        handle(&app),
+        st(&app),
+        UpsertRequest {
+            collection: "kg".to_string(),
+            points: vec![point(
+                10,
+                vec![1.0, 0.0, 0.0, 0.0],
+                serde_json::json!({"name": "Alice"}),
+            )],
+        },
+    ))
+    .expect("upsert a node embedding");
+
+    let found = run(search(
+        handle(&app),
+        st(&app),
+        SearchRequest {
+            collection: "kg".to_string(),
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            top_k: 1,
+            filter: None,
+            quality: None,
+        },
+    ))
+    .expect("a graph collection is searchable");
+    assert_eq!(found.results[0].id, 10);
+}

@@ -258,7 +258,7 @@ impl Database {
             principal,
             tenant_hint,
             |scope_filter| {
-                self.get_vector_collection(collection)
+                self.get_collection_view(collection)
                     .ok_or_else(|| Error::CollectionNotFound(collection.to_string()))
                     .and_then(|coll| dispatch_gated_read(&coll, read, scope_filter, rrf_k))
             },

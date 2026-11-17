@@ -354,6 +354,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - An edge label is trimmed and never empty, as core's `GraphEdge::new`
     makes it, so `' KNOWS'` is found by `label = 'KNOWS'`.
 
+- **Tauri: a scoped sparse search fills its top-k or refuses** (Tauri,
+  2026-11-17). `sparse_search` and `hybrid_sparse_search` narrowed their
+  top-k to the observer's scope after cutting it, so a scoped search could
+  answer fewer than `topK` hits — none at all — while in-scope points
+  existed. The hybrid search hands the scope to core as its filter, which
+  narrows both branches before fusion; a sparse-only search, which has no
+  filter leaf, refuses a scope, as REST does.
+
+- **Tauri example and RAG demo run core calls off the async runtime**
+  (Tauri, 2026-11-16). `examples/graph-and-memory` and
+  `demos/tauri-rag-app` called `VelesDbState::with_db` from `async`
+  commands, running synchronous, fsync-ing core calls on a runtime worker —
+  the pattern `with_db`'s own documentation warns against. They use
+  `run_db`, which moves the call to the blocking pool; the demo now times
+  only the search itself, inside the blocking task.
+
+- **Tauri: every write and delete emits `collection-updated`** (core, Tauri,
+  2026-11-16). The plugin emitted the event by hand from a few commands:
+  `delete_points` never did although documented, `VelesQL` `INSERT` /
+  `DELETE` through `query` and agent-memory writes never did, and a streamed
+  point was announced when queued, not when stored. Core's observer port
+  gains `on_delete`, reported once per completed delete from every surface
+  like `on_upsert`, and the plugin's observer emits the event from both:
+  `operation` is now `"upsert"` or `"delete"` (`"enable_streaming"` stays).
+
+- **Tauri: a collection has one `CollectionInfo`, whichever command reports
+  it** (Tauri, 2026-11-16). The create commands built their answer by hand
+  and `get_collection` / `list_collections` read the configuration, so the
+  two disagreed: a metadata collection was created as metric `none`, storage
+  `metadata_only`, then read back as `cosine` / `full`; a graph collection
+  echoed the request's metric spelling (`COSINE`) and was then reported as a
+  vector one. Every command now answers the same shape, read from the
+  persisted configuration: `storageMode` is `graph` or `metadata_only` for
+  those kinds (metric `none` and dimension 0 for the latter), as the guest
+  bindings document.
+
 - **Node: `freshness` is documented as it is sent** (Node, 2026-11-17). The
   `recall` hit type said `freshness` is `null` without `anchorRoot`; the
   binding leaves the field out (`undefined`), as the method's own doc said.
@@ -489,6 +525,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edges matching all of them. `add_edge` and `create_index` reported core
   errors as VELES-009 (a caller configuration error); they keep core's code
   (an invalid edge label is VELES-021).
+
+- **The Tauri plugin's TypeScript bindings cover every command**
+  (tauri-plugin-velesdb, 2026-11-16). `guest-js/index.ts` wrapped 38 of the
+  69 registered commands: `search_ids`, `compact_storage`, the guardrail
+  pair, `enable_streaming`, `add_edges_batch` and 25 agent-memory commands
+  (semantic TTL store and dimension; delete and serialize/deserialize for
+  all three stores; episodic recall and age queries; procedural reinforce
+  and listing; TTL, eviction, snapshot versioning and the VelesQL bridge)
+  were reachable only through a raw,
+  untyped `invoke`. Each now has a typed function whose request and result
+  interfaces mirror the Rust DTOs field for field, passing the argument name
+  the command reads (`request`, `name`, `limits` or `data`). A test beside
+  the permission drift gates parses the `invoke_handler` registration and
+  the bindings and fails on a command missing from either side. The plugin
+  reference no longer claims every command takes `request` but
+  `delete_collection`.
 
 - **Browser memory keeps real time: TTLs extend, facts are dated**
   (velesdb-memory, WASM, 2026-11-17). On `wasm32` `velesdb-memory` read the

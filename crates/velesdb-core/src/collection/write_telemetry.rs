@@ -1,5 +1,8 @@
-//! Upsert telemetry: how a collection reports its completed writes to the
-//! [`DatabaseObserver`] of the database that registered it.
+//! Write telemetry: how a collection reports its completed writes and
+//! deletes to the [`DatabaseObserver`] of the database that registered it.
+//!
+//! Deletes all funnel through `Collection::delete`, which reports them with
+//! `on_delete` the same way.
 //!
 //! Core fires `on_upsert` itself, from the storage entry points every write
 //! funnels through — `Collection::upsert` (vector path), `upsert_metadata`,
@@ -60,6 +63,20 @@ impl Collection {
             reporter
                 .observer
                 .on_upsert(&reporter.collection, point_count);
+        }
+    }
+
+    /// Reports a completed delete of `point_count` ids, under the same rules
+    /// as [`Self::report_upsert`]: after success, with no lock held, never
+    /// for an empty delete.
+    pub(crate) fn report_delete(&self, point_count: usize) {
+        if point_count == 0 {
+            return;
+        }
+        if let Some(reporter) = self.runtime.upsert_reporter.get() {
+            reporter
+                .observer
+                .on_delete(&reporter.collection, point_count);
         }
     }
 }
