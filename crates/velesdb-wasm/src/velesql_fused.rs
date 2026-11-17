@@ -142,9 +142,15 @@ fn branch_depth(stmt: &SelectStatement) -> usize {
     }
 }
 
-/// The rows a SELECT window needs: `LIMIT` (core's default when absent) plus
-/// `OFFSET` (core's `compute_fetch_limit`).
+/// The rows a search must fetch for a SELECT: `LIMIT` (core's default when
+/// absent) plus `OFFSET` (core's `compute_fetch_limit`), or core's ceiling
+/// when DISTINCT or a vector GROUP BY reshapes the rows before that window
+/// ([`SelectStatement::reshapes_rows_before_window`]), as core's pipeline
+/// sizes it.
 pub(crate) fn fetch_limit(stmt: &SelectStatement) -> usize {
+    if stmt.reshapes_rows_before_window() {
+        return usize::try_from(velesdb_core::velesql::MAX_SELECT_LIMIT).unwrap_or(usize::MAX);
+    }
     let limit = stmt
         .limit
         .unwrap_or(velesdb_core::velesql::DEFAULT_SELECT_LIMIT);

@@ -256,10 +256,17 @@ impl Collection {
             return Ok(results);
         }
 
-        // When vector GROUP BY is active, fetch more results from vector search
-        // so grouping has enough chunks to work with.
+        // DISTINCT and a vector GROUP BY reshape the fetched rows before the
+        // window, so the window bounds what they return, never what they read:
+        // a fetch cut at LIMIT + OFFSET deduplicated or grouped only the top
+        // of the ranking (`SELECT DISTINCT cat … LIMIT 2` returned one row
+        // when the two best hits shared a category).
         let is_vgb = stmt.is_vector_group_by();
-        let effective_fetch_limit = if is_vgb { MAX_LIMIT } else { fetch_limit };
+        let effective_fetch_limit = if stmt.reshapes_rows_before_window() {
+            MAX_LIMIT
+        } else {
+            fetch_limit
+        };
 
         // Early-return paths or LET-binding guard for special query shapes.
         if let Some(results) = self.try_early_return_or_guard_let(

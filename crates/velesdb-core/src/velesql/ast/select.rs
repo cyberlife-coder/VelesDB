@@ -437,6 +437,17 @@ impl SelectStatement {
         has_aggs || self.group_by.is_some()
     }
 
+    /// Returns `true` when this SELECT reshapes its ranked rows before its
+    /// `LIMIT` / `OFFSET` window — `DISTINCT` deduplicates them, a vector
+    /// `GROUP BY` ([`Self::is_vector_group_by`]) groups them — so the window
+    /// bounds the rows it returns, never the candidates it reads. The single
+    /// test core's query pipeline and the WASM executor size a search's fetch
+    /// by.
+    #[must_use]
+    pub fn reshapes_rows_before_window(&self) -> bool {
+        self.distinct == DistinctMode::All || self.is_vector_group_by()
+    }
+
     /// Returns `true` for a vector `GROUP BY`: `GROUP BY` over the results of
     /// a vector `NEAR` search, which groups search results (one per group,
     /// scored) rather than aggregating rows. The single test every surface

@@ -11,7 +11,7 @@
 //! linear-scan path, which sums `query_weight * doc_weight` per overlapping term
 //! and applies NO `score > 0` filter — negative scores are kept.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::json;
 use velesdb_core::sparse_index::SparseVector;
@@ -234,4 +234,86 @@ fn test_sparse_near_keeps_negative_scores() {
         !result_ids(&results).contains(&3) && !result_ids(&results).contains(&4),
         "id3/id4 do not contain term 10 → never scored"
     );
+}
+
+/// GIVEN three points whose sparse scores rank 3 > 2 > 1, categories A, A, B
+/// (dense vectors: 1 is the query's own, 2 close to it, 3 orthogonal).
+fn setup_categories(db: &Database) {
+    db.create_vector_collection("cats", 2, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create cats collection");
+    let point = |id: u64, vector: Vec<f32>, cat: &str, weight: f32| Point {
+        id,
+        vector,
+        payload: Some(json!({ "cat": cat })),
+        sparse_vectors: Some(sparse_default(vec![(7, weight)])),
+    };
+    db.get_vector_collection("cats")
+        .expect("test: get cats")
+        .upsert(vec![
+            point(1, vec![1.0, 0.0], "A", 3.0),
+            point(2, vec![0.8, 0.6], "A", 2.0),
+            point(3, vec![0.0, 1.0], "B", 1.0),
+        ])
+        .expect("test: upsert cats");
+}
+
+fn categories(results: &[SearchResult]) -> Vec<(String, Option<i64>)> {
+    results
+        .iter()
+        .map(|r| {
+            let payload = r.point.payload.as_ref().expect("test: payload");
+            (
+                payload["cat"].as_str().expect("test: cat").to_string(),
+                payload.get("count").and_then(serde_json::Value::as_i64),
+            )
+        })
+        .collect()
+}
+
+/// WHEN `SELECT DISTINCT cat … SPARSE_NEAR … LIMIT 2` THEN both categories
+/// come back: LIMIT bounds the distinct rows, not the hits DISTINCT reads
+/// (the fetch was cut at the two A hits, and one row came back). The same
+/// for a hybrid NEAR + SPARSE_NEAR and for a NEAR alone.
+#[test]
+fn test_distinct_over_sparse_near_reads_past_the_window() {
+    let (_dir, db) = create_test_db();
+    setup_categories(&db);
+    let params = HashMap::from([("q".to_string(), json!([1.0, 0.0]))]);
+    for near in ["", "vector NEAR $q AND "] {
+        let sql = format!(
+            "SELECT DISTINCT cat FROM cats WHERE {near}vector SPARSE_NEAR {{7: 1.0}} LIMIT 2"
+        );
+        let rows = execute_sql_with_params(&db, &sql, &params).expect("test: distinct");
+        let cats: Vec<String> = categories(&rows).into_iter().map(|(c, _)| c).collect();
+        assert_eq!(cats, vec!["A".to_string(), "B".to_string()], "{sql}");
+    }
+    let rows = execute_sql_with_params(
+        &db,
+        "SELECT DISTINCT cat FROM cats WHERE vector NEAR $q LIMIT 2",
+        &params,
+    )
+    .expect("test: distinct near");
+    assert_eq!(rows.len(), 2);
+}
+
+/// WHEN a vector `GROUP BY` sits beside `SPARSE_NEAR` THEN the hits are
+/// grouped, as beside a `NEAR`: the sparse path returned them ungrouped.
+#[test]
+fn test_vector_group_by_over_sparse_near_groups_the_hits() {
+    let (_dir, db) = create_test_db();
+    setup_categories(&db);
+    let params = HashMap::from([("q".to_string(), json!([1.0, 0.0]))]);
+    for near in ["", "vector NEAR $q AND "] {
+        let sql = format!(
+            "SELECT cat, COUNT(*) FROM cats WHERE {near}vector SPARSE_NEAR {{7: 1.0}} GROUP BY cat LIMIT 2"
+        );
+        let rows = execute_sql_with_params(&db, &sql, &params).expect("test: group by");
+        let mut groups = categories(&rows);
+        groups.sort();
+        assert_eq!(
+            groups,
+            vec![("A".to_string(), Some(2)), ("B".to_string(), Some(1))],
+            "{sql}"
+        );
+    }
 }

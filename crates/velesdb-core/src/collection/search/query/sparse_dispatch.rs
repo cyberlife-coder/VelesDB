@@ -158,11 +158,30 @@ impl Collection {
 
     /// The SELECT post-processing of a path that ranks its own rows (the
     /// sparse/hybrid search, the `NEAR_FUSED` fusion, the exact
-    /// `similarity()` scan): the main pipeline's
-    /// ([`Self::apply_select_postprocessing`]: DISTINCT, window functions,
-    /// ORDER BY, OFFSET), at the statement's own `LIMIT`. LET bindings never
-    /// reach these paths (`validate_let_binding_support`).
+    /// `similarity()` scan): a vector `GROUP BY` groups the ranked rows, as
+    /// the main pipeline's `dispatch_and_finalize` does, then the main
+    /// pipeline's post-processing ([`Self::apply_select_postprocessing`]:
+    /// DISTINCT, window functions, ORDER BY, OFFSET) runs at the statement's
+    /// own `LIMIT`. LET bindings never reach these paths
+    /// (`validate_let_binding_support`).
     pub(super) fn finalize_ranked_results(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        results: Vec<SearchResult>,
+    ) -> Result<Vec<SearchResult>> {
+        if !stmt.is_vector_group_by() {
+            return self.postprocess_ranked_results(stmt, params, results);
+        }
+        let groups = self.apply_vector_group_by(stmt, &results, params)?;
+        let stmt = stmt
+            .order_by_aggregates_as_fields()
+            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        self.postprocess_ranked_results(&stmt, params, groups)
+    }
+
+    /// [`Self::apply_select_postprocessing`] at the statement's own `LIMIT`.
+    fn postprocess_ranked_results(
         &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,

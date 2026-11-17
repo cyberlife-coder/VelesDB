@@ -64,3 +64,37 @@ fn a_selective_filter_still_fills_the_limit() {
         assert!(rows.iter().all(|r| r.point.id > 100), "{metric:?}");
     }
 }
+
+/// GIVEN the 100 `near` and 5 `far` points
+/// WHEN a vector `GROUP BY kind` sits beside `NEAR_FUSED`
+/// THEN the fused hits are grouped, one row per kind with its count, as
+///      beside a `NEAR`: they came back ungrouped, cut at the LIMIT.
+#[test]
+fn a_vector_group_by_groups_the_fused_hits() {
+    let (_dir, db) = create_test_db();
+    setup(&db, DistanceMetric::Cosine);
+    let rows = execute_sql_with_params(
+        &db,
+        "SELECT kind, COUNT(*) FROM c WHERE vector NEAR_FUSED [$a, $b] GROUP BY kind LIMIT 2",
+        &params(),
+    )
+    .expect("test: NEAR_FUSED GROUP BY");
+    let mut groups: Vec<(String, Option<i64>)> = rows
+        .iter()
+        .map(|r| {
+            let payload = r.point.payload.as_ref().expect("test: payload");
+            (
+                payload["kind"].as_str().expect("test: kind").to_string(),
+                payload.get("count").and_then(serde_json::Value::as_i64),
+            )
+        })
+        .collect();
+    groups.sort();
+    assert_eq!(groups.len(), 2, "{groups:?}");
+    assert_eq!(groups[0].0, "far");
+    assert_eq!(groups[1].0, "near");
+    assert!(
+        groups.iter().all(|(_, count)| count.is_some_and(|n| n > 0)),
+        "{groups:?}"
+    );
+}

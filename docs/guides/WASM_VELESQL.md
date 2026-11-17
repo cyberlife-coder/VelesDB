@@ -274,7 +274,11 @@ One case deserves more than a one-liner:
   run, with a distance metric read closest-first. A lone `SPARSE_NEAR` ranks
   by the sparse score. The store's one sparse index is the default index: a
   store without sparse vectors, or a named index (`USING 'name'`), is refused
-  as core refuses a missing index.
+  as core refuses a missing index, with core's error.
+- `DISTINCT` and a vector `GROUP BY` beside a `SPARSE_NEAR` or a
+  `NEAR_FUSED` read every candidate core reads before `LIMIT` / `OFFSET`
+  apply (`SelectStatement::reshapes_rows_before_window`), so the window bounds
+  the distinct rows or groups, not the hits.
 - The vector-predicate shapes core refuses (`NEAR_FUSED` under `OR` / `NOT` or
   beside another vector predicate, several `SPARSE_NEAR`, several
   `similarity()` under one `OR`) are refused by the same check

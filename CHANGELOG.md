@@ -458,6 +458,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Core and WASM: `DISTINCT` and a vector `GROUP BY` read every candidate;
+  beside `SPARSE_NEAR` or `NEAR_FUSED` a vector `GROUP BY` groups** (core,
+  WASM, 2026-11-17). A search's fetch was cut at `LIMIT` + `OFFSET` before
+  `DISTINCT` deduplicated it, so `SELECT DISTINCT cat … WHERE vector NEAR $q
+  LIMIT 2` (or `SPARSE_NEAR`, or both) returned one row when the two best hits
+  shared a category. The fetch is now sized as a vector `GROUP BY`'s already
+  was, at core's ceiling, on both engines; `SelectStatement::reshapes_rows_before_window`
+  is the test both size it by. In core, a vector `GROUP BY` beside
+  `SPARSE_NEAR` or `NEAR_FUSED` returned the hits ungrouped, cut at the
+  `LIMIT`; the paths that rank their own rows now group them as the `NEAR`
+  path does. WASM grouped only the hits inside the window.
+
 - **WASM: VelesQL runs `SPARSE_NEAR`, alone or fused with a `NEAR`, as core
   does** (core, WASM, 2026-11-17). Beside a `NEAR` the sparse leaf was
   dropped without a word, so `vector NEAR $d AND vector SPARSE_NEAR {…}`

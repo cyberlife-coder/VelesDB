@@ -205,11 +205,99 @@ fn a_missing_sparse_index_fails_with_cores_message() {
 
     let default = "SELECT * FROM d WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 5";
     let mut wasm = DatabaseInner::new();
-    wasm.create_collection("d", 4, "cosine").expect("test: create");
+    wasm.create_collection("d", 4, "cosine")
+        .expect("test: create");
     let dir = tempfile::TempDir::new().expect("test: temp dir");
     let core = Database::open(dir.path()).expect("test: open");
     core.create_vector_collection("d", 4, CoreMetric::Cosine)
         .expect("test: create");
     let wasm_default = execute(&mut wasm, default, None).expect_err("wasm: default");
     assert_eq!(wasm_default, core_err(&core, default));
+}
+
+/// Rows `(id, score, payload)` of `sql` on both engines over `metric`,
+/// the payload as each engine projects it (core's `point.payload`, WASM's
+/// row object).
+fn assert_row_parity(metric: (&str, CoreMetric), sql: &str) -> Vec<serde_json::Value> {
+    let params: HashMap<String, serde_json::Value> =
+        serde_json::from_str(PARAMS).expect("test: params");
+    let query = Parser::parse(sql).expect("test: parse");
+    let core: Vec<(u64, f32, serde_json::Value)> = core_db(metric.1)
+        .1
+        .execute_query(&query, &params)
+        .unwrap_or_else(|e| panic!("core: {sql}: {e}"))
+        .iter()
+        .map(|r| {
+            (
+                r.point.id,
+                r.score,
+                r.point.payload.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let result = execute(&mut wasm_db(metric.0), sql, Some(PARAMS))
+        .unwrap_or_else(|e| panic!("wasm: {sql}: {e}"));
+    let wasm: Vec<(u64, f32, serde_json::Value)> = (0..result.row_count() as usize)
+        .map(|i| {
+            let row = result.row(i).expect("test: row");
+            let data = serde_json::from_str(&row.data_json()).expect("test: row json");
+            (row.id(), row.score(), data)
+        })
+        .collect();
+    assert_eq!(
+        wasm.len(),
+        core.len(),
+        "rows for {sql}: wasm {wasm:?}, core {core:?}"
+    );
+    for ((wid, ws, wp), (cid, cs, cp)) in wasm.iter().zip(&core) {
+        assert_eq!(wid, cid, "ids for {sql}");
+        assert!(
+            (ws - cs).abs() < 1e-5,
+            "score of {cid} for {sql}: wasm {ws}, core {cs}"
+        );
+        assert_eq!(wp, cp, "row {cid} for {sql}");
+    }
+    core.into_iter().map(|(_, _, payload)| payload).collect()
+}
+
+/// DISTINCT and a vector GROUP BY reshape the ranked rows, so LIMIT bounds
+/// what they return, not the candidates they read: `{1: 1.0}` ranks 4, 3
+/// and 5 (all `b`) above the `a` points, which a fetch cut at `LIMIT 2`
+/// never saw.
+#[test]
+fn distinct_and_vector_group_by_read_every_candidate_not_the_window() {
+    let terms = "{1: 1.0, 2: 0.1}";
+    for near in ["", "vector NEAR $q AND "] {
+        let distinct = assert_row_parity(
+            COSINE,
+            &format!("SELECT DISTINCT cat FROM c WHERE {near}vector SPARSE_NEAR {terms} LIMIT 2"),
+        );
+        assert_eq!(distinct.len(), 2, "{near}DISTINCT: {distinct:?}");
+        let grouped = assert_row_parity(
+            COSINE,
+            &format!(
+                "SELECT cat, COUNT(*) FROM c WHERE {near}vector SPARSE_NEAR {terms} \
+                 GROUP BY cat LIMIT 2"
+            ),
+        );
+        let counts: Vec<_> = grouped
+            .iter()
+            .map(|g| (g["cat"].clone(), g["count"].clone()))
+            .collect();
+        assert!(
+            counts.contains(&(json!("a"), json!(if near.is_empty() { 1 } else { 2 }))),
+            "{near}{counts:?}"
+        );
+        assert!(
+            counts.contains(&(json!("b"), json!(3))),
+            "{near}GROUP BY: {counts:?}"
+        );
+    }
+    // The same window over a NEAR alone, whose ranking puts 1 and 2 (`a`)
+    // first: core deduplicated those two and returned one row.
+    let distinct = assert_row_parity(
+        COSINE,
+        "SELECT DISTINCT cat FROM c WHERE vector NEAR $q LIMIT 2",
+    );
+    assert_eq!(distinct, vec![json!({"cat": "a"}), json!({"cat": "b"})]);
 }
