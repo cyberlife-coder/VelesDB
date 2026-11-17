@@ -26,6 +26,7 @@ fn test_error_codes_are_unique() {
         Error::Io(std::io::Error::other("test")),
         Error::Serialization("test".into()),
         Error::Internal("test".into()),
+        Error::AccessDenied("test".into()),
     ];
 
     // Act - collect all codes
@@ -244,4 +245,16 @@ fn test_engine_failures_and_load_guard_rails_are_not_caller_errors() {
     for err in &engine {
         assert!(!err.is_caller_error(), "{err} must count as the engine's");
     }
+}
+
+#[test]
+fn test_access_denied_is_its_own_caller_error() {
+    // An observer's refusal is not a malformed query (VELES-010): it has its
+    // own code, so a surface can answer "forbidden", and it never counts
+    // toward a circuit breaker.
+    let err = Error::AccessDenied("read denied by policy".into());
+    assert_eq!(err.code(), "VELES-037");
+    assert!(err.is_caller_error());
+    assert!(err.is_recoverable());
+    assert!(err.to_string().starts_with("[VELES-037] Access denied"));
 }

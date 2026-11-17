@@ -449,6 +449,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (every collection Full) and an unknown mode accepted; it is now read by
   core's parser, which refuses unknown names.
 
+- **An access denial is `AccessDenied` (VELES-037), not a query error**
+  (core, server, Python, mobile, 2026-11-17). Every observer refusal — a
+  denied read, a vetoed DDL statement or DML mutation, a strict-mode
+  fail-closed answer — travelled as `Error::Query` (VELES-010), so REST
+  answered 400 and Python raised `ValueError`, indistinguishable from a
+  malformed query. Core gains `Error::AccessDenied`, a caller error that
+  never counts toward a circuit breaker; REST answers it `403 Forbidden`,
+  Python raises `PermissionError`, and the Python and mobile observers
+  refuse with it. Core's own refusal of a scope it cannot apply stays
+  `VELES-009`.
+
 - **Python: the facade forwards `principal` / `tenant`, and a scipy sparse
   query reads like its dict** (Python, 2026-11-16). The `Collection` every
   `Database` call returns defined `search`, `batch_search`,

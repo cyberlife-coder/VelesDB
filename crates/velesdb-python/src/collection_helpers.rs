@@ -2,7 +2,9 @@
 //!
 //! Extracted from collection.rs to reduce file size and improve maintainability.
 
-use pyo3::exceptions::{PyKeyError, PyMemoryError, PyOverflowError, PyValueError};
+use pyo3::exceptions::{
+    PyKeyError, PyMemoryError, PyOverflowError, PyPermissionError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
@@ -62,6 +64,7 @@ use velesdb_core::{Filter, Point, SearchResult};
 /// | VELES-034  | `InvalidCollectionName`   | `ValueError`                  |
 /// | VELES-035  | `SnapshotBuildFailed`     | `VelesDBError`                |
 /// | VELES-036  | `IncompatibleSchemaVersion` | `VelesDBError`              |
+/// | VELES-037  | `AccessDenied`            | `PermissionError`             |
 ///
 /// The wildcard arm at the bottom handles future variants added under
 /// the `#[non_exhaustive]` attribute on `velesdb_core::Error`. New
@@ -105,6 +108,8 @@ pub fn core_err(e: velesdb_core::Error) -> PyErr {
         | E::InvalidCollectionName { .. } => PyValueError::new_err(e.to_string()),
 
         // Numeric overflow / allocation failure — specific Python builtins
+        // An observer turned the request down: not a malformed request.
+        E::AccessDenied(_) => PyPermissionError::new_err(e.to_string()),
         E::Overflow(_) => PyOverflowError::new_err(e.to_string()),
         E::AllocationFailed(_) => PyMemoryError::new_err(e.to_string()),
 

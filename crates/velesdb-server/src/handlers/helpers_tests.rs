@@ -77,6 +77,7 @@ fn status_cases() -> Vec<(velesdb_core::Error, StatusCode)> {
     vec![
         (Error::CollectionNotFound("c".into()), StatusCode::NOT_FOUND),
         (Error::EdgeExists(1), StatusCode::CONFLICT),
+        (Error::AccessDenied("policy".into()), StatusCode::FORBIDDEN),
         (Error::Query("[V015]".into()), StatusCode::BAD_REQUEST),
         (
             Error::GraphNotSupported("ORDER BY d".into()),

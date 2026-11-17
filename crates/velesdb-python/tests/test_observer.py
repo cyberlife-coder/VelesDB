@@ -411,3 +411,29 @@ def test_match_query_reports_one_query_event(observed_db):
         recorder.events.clear()
         assert run(), "the MATCH finds its node"
         assert [e["collection"] for e in recorder.events_of("query")] == [collection]
+
+
+def test_an_observer_refusal_raises_permission_error_with_cores_code():
+    """A deny or a veto is "not allowed", not "malformed": PermissionError.
+
+    Every refusal used to travel as a query error (VELES-010) and surface as
+    ValueError, indistinguishable from a typo in the query.
+    """
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def policy(event, **fields):
+            if event == "query_request":
+                return "reads are closed"
+            if event == "ddl_request":
+                return False
+            return None
+
+        db = Database(temp_dir, observer=policy)
+        db.create_collection("docs", dimension=DIM)
+        with pytest.raises(PermissionError, match="VELES-037"):
+            db.execute_query("SELECT * FROM docs")
+        with pytest.raises(PermissionError, match="VELES-037"):
+            db.execute_query("DROP COLLECTION docs")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
