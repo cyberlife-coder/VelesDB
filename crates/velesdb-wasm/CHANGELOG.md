@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`GraphPersistence.load` no longer drops a row it cannot read.** A node
   or edge row that did not deserialize was skipped, so the load resolved with
   a graph silently missing what was saved. The load now rejects, naming the
-  graph and the row kind. Edge rows are written with their id as a decimal
-  string (a hashed id above 2^53 made the save throw) and rows saved with a
-  numeric id still load.
+  graph and the row kind. Rows write every id as a decimal string (an id
+  above 2^53 made the save throw) and rows saved with numeric ids still
+  load.
 
 - **The `MATCH` read gate asks about every collection the query reads.** The
   observer (`WasmObserver::on_query_request`) was asked about the first

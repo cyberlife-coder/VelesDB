@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Node ids, `source` and `target` stay numbers.
   - WASM `WasmDatabase`: `getEdges` lists `id` as a string, `addEdge`
     returns a string and accepts `id` as a string or a number, `removeEdge`
-    takes the string; `GraphEdge.to_json` and IndexedDB rows write the id as
-    a string (it threw above 2^53) and still load a numeric one.
+    takes the string. `GraphNode.to_json`, `GraphEdge.to_json` and
+    `GraphPersistence` rows write every id (`id`, `source`, `target`) as a
+    string — a node or edge id above 2^53 made them throw — and rows saved
+    with numeric ids still load.
   - Tauri: `EdgeOutput.id` and `TraversalOutput.path` (edge ids — it was
     documented as node ids) are strings; `add_edge` / `add_edges_batch`
     accept a string or a number.

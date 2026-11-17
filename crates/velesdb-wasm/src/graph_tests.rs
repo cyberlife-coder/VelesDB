@@ -355,3 +355,30 @@ fn a_graph_edge_writes_its_id_as_a_string_and_reads_either_form() {
         "a row saved with a numeric id still loads"
     );
 }
+
+#[test]
+fn a_graph_node_and_its_edge_ends_write_ids_above_2_pow_53_exactly() {
+    let big = (1_u64 << 53) + 1;
+    let node = GraphNode::new(big, "N");
+    let json = serde_json::to_value(&node).unwrap();
+    assert_eq!(
+        json["id"], "9007199254740993",
+        "a JSON number threw in to_json and IndexedDB"
+    );
+    let back: GraphNode = serde_json::from_value(json).unwrap();
+    assert_eq!(back.id(), big);
+
+    let edge = GraphEdge::new(1, big, big + 2, "E").unwrap();
+    let json = serde_json::to_value(&edge).unwrap();
+    assert_eq!(json["source"], "9007199254740993");
+    assert_eq!(json["target"], "9007199254740995");
+    let saved_before: GraphNode = serde_json::from_value(serde_json::json!({
+        "id": 3, "label": "N", "properties": {}, "vector": null
+    }))
+    .unwrap();
+    assert_eq!(
+        saved_before.id(),
+        3,
+        "a row saved with a numeric id still loads"
+    );
+}

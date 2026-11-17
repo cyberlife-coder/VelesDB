@@ -73,8 +73,8 @@ impl GraphPersistence {
     pub async fn save(&self, graph_name: &str, store: &GraphStore) -> Result<(), JsValue> {
         let db = self.require_db()?;
 
-        // Serialized first: a value JS cannot hold (an id past 2^53) fails
-        // here, before the previous rows are touched.
+        // Serialized first: a value JS cannot hold fails here, before the
+        // previous rows are touched.
         let node_rows = store
             .get_all_nodes_internal()
             .into_iter()
