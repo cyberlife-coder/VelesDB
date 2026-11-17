@@ -200,6 +200,21 @@ impl Database {
         None
     }
 
+    /// Any collection as a [`VectorCollection`](crate::VectorCollection) view: a vector collection as
+    /// is, a graph or metadata collection through its structural
+    /// `into_vector_view`. Gated reads resolve through it, so a graph
+    /// collection's node embeddings answer a dense search, and a metadata
+    /// collection refuses one on its dimension — never "not found" for a
+    /// collection that exists.
+    #[must_use]
+    pub fn get_collection_view(&self, name: &str) -> Option<crate::VectorCollection> {
+        Some(match self.get_any_collection(name)? {
+            AnyCollection::Vector(c) => c,
+            AnyCollection::Graph(g) => g.into_vector_view(),
+            AnyCollection::Metadata(m) => m.into_vector_view(),
+        })
+    }
+
     /// Returns the write generation for a named collection, if it exists.
     #[must_use]
     pub fn collection_write_generation(&self, name: &str) -> Option<u64> {

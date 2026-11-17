@@ -80,9 +80,9 @@ fn chunk_text(text: &str, chunk_size: usize) -> Vec<String> {
 ///
 /// When the collection already exists, the ID counter is seeded from the persisted
 /// max ID so that new chunks never overwrite existing ones across restarts.
-fn ensure_collection(state: &VelesDbState) -> Result<(), String> {
+async fn ensure_collection(state: &VelesDbState) -> Result<(), String> {
     state
-        .with_db(|db: Arc<Database>| {
+        .run_db(|db: Arc<Database>| {
             if let Some(coll) = db.get_vector_collection(COLLECTION) {
                 // Advance counter past any IDs already on disk to prevent overwrites.
                 let persisted_max = coll.all_ids().into_iter().max().unwrap_or(0);
@@ -101,6 +101,7 @@ fn ensure_collection(state: &VelesDbState) -> Result<(), String> {
             }
             Ok(())
         })
+        .await
         .map_err(|e| format!("DB error: {e}"))
 }
 
@@ -127,7 +128,7 @@ pub async fn ingest_text(
     let embeddings = embeddings::embed_batch(chunk_texts.clone()).await?;
 
     let state = app.state::<VelesDbState>();
-    ensure_collection(&state)?;
+    ensure_collection(&state).await?;
 
     // Build IDs and Points together so we can return the Chunk list after insertion.
     let mut ids = Vec::with_capacity(chunk_texts.len());
@@ -143,7 +144,7 @@ pub async fn ingest_text(
         .collect();
 
     state
-        .with_db(|db: Arc<Database>| {
+        .run_db(move |db: Arc<Database>| {
             let coll = db
                 .get_vector_collection(COLLECTION)
                 .ok_or_else(|| PluginError::CollectionNotFound(COLLECTION.to_string()))?;
@@ -151,6 +152,7 @@ pub async fn ingest_text(
                 .map(|_| ())
                 .map_err(PluginError::Database)
         })
+        .await
         .map_err(|e| format!("Insert error: {e}"))?;
 
     let result = chunk_texts
@@ -178,19 +180,21 @@ pub async fn search(
     let query_embedding = embeddings::embed_text(&query).await?;
 
     let state = app.state::<VelesDbState>();
-    ensure_collection(&state)?;
+    ensure_collection(&state).await?;
 
-    // Time only the vector search itself.
-    let search_start = std::time::Instant::now();
-    let raw = state
-        .with_db(|db: Arc<Database>| {
+    // Time only the vector search itself, inside the blocking task, so the
+    // hop to the blocking pool is not counted as VelesDB latency.
+    let (raw, search_ms) = state
+        .run_db(move |db: Arc<Database>| {
             let coll = db
                 .get_vector_collection(COLLECTION)
                 .ok_or_else(|| PluginError::CollectionNotFound(COLLECTION.to_string()))?;
-            coll.search(&query_embedding, k).map_err(PluginError::Database)
+            let search_start = std::time::Instant::now();
+            let raw = coll.search(&query_embedding, k).map_err(PluginError::Database)?;
+            Ok((raw, search_start.elapsed().as_secs_f64() * 1000.0))
         })
+        .await
         .map_err(|e| format!("Search error: {e}"))?;
-    let search_ms = search_start.elapsed().as_secs_f64() * 1000.0;
 
     let chunks = raw
         .into_iter()
@@ -224,11 +228,12 @@ pub async fn search(
 pub async fn get_stats(app: AppHandle) -> Result<IndexStats, String> {
     let state = app.state::<VelesDbState>();
     let total_chunks = state
-        .with_db(|db: Arc<Database>| {
+        .run_db(|db: Arc<Database>| {
             Ok(db
                 .get_vector_collection(COLLECTION)
                 .map_or(0, |c| c.len()))
         })
+        .await
         .map_err(|e| format!("Stats error: {e}"))?;
 
     Ok(IndexStats {
@@ -242,7 +247,7 @@ pub async fn get_stats(app: AppHandle) -> Result<IndexStats, String> {
 pub async fn clear_index(app: AppHandle) -> Result<(), String> {
     let state = app.state::<VelesDbState>();
     state
-        .with_db(|db: Arc<Database>| {
+        .run_db(|db: Arc<Database>| {
             if db.get_vector_collection(COLLECTION).is_some() {
                 db.delete_collection(COLLECTION)
                     .map_err(PluginError::Database)?;
@@ -254,6 +259,7 @@ pub async fn clear_index(app: AppHandle) -> Result<(), String> {
             )
             .map_err(PluginError::Database)
         })
+        .await
         .map_err(|e| format!("Clear error: {e}"))?;
 
     NEXT_CHUNK_ID.store(0, Ordering::Relaxed);

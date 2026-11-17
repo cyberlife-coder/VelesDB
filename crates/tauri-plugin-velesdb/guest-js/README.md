@@ -48,7 +48,8 @@ or `TASK_JOIN` when the plugin's task could not be joined), a `message` and a
 
 The exported functions and request types are declared in
 [`index.ts`](https://github.com/cyberlife-coder/VelesDB/blob/main/crates/tauri-plugin-velesdb/guest-js/index.ts),
-one per plugin command. The
+one per plugin command, named in camelCase (`search_ids` → `searchIds`); a
+test in the crate fails if a registered command has no function here. The
 [plugin reference](https://github.com/cyberlife-coder/VelesDB/blob/main/docs/guides/TAURI_PLUGIN_REFERENCE.md)
 documents every command.
 
