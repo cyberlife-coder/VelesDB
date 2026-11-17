@@ -420,6 +420,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python: `Collection.batch_search` reads a 2-D numpy array** (Python,
+  2026-11-17). It tested `queries` for truth, which a numpy matrix refuses
+  with "truth value of an array is ambiguous", where `multi_query_search` and
+  `search_batch_parallel` read the same matrix; it now checks the length.
+
 - **Python: the observer receives point deletes** (Python, 2026-11-17).
   Core reports every completed delete with `on_delete`, but the binding's
   observer adapter did not implement it, so `Collection.delete` and VelesQL
