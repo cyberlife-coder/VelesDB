@@ -16,54 +16,30 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 /// Wall-clock nanos since the Unix epoch, stamped on savings events only —
-/// never in the compile pipeline. On `wasm32-unknown-unknown`
-/// `SystemTime::now()` aborts (`std` has no clock there), so events carry 0:
-/// the per-process sequence alone uniquifies their ids, and wasm stats are
-/// per-session by design (in-memory store).
+/// never in the compile pipeline. A real clock on every target: `web-time`
+/// reads `Date.now()` on `wasm32-unknown-unknown`, where `std`'s
+/// `SystemTime::now()` aborts.
 fn now_nanos() -> u128 {
-    #[cfg(target_arch = "wasm32")]
-    {
-        0
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or(0)
-    }
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0)
 }
 
-/// Current Unix time in seconds. TWO call sites, not one — this comment used
-/// to name only the first, which is how the second went unexamined:
-///
-/// - [`MemoryService::should_upgrade_ttl`]'s extension-only comparison (the
-///   storage/expiry layer; the `compile` pipeline itself stays clock-free).
-///   On `wasm32-unknown-unknown` this is 0 (no clock, mirrors [`now_nanos`]);
-///   the wasm `MemoryStore` is in-memory only, so a stored durable expiry (a
-///   real epoch second count) never actually exists there for 0 to be
-///   compared against.
-/// - [`MemoryService::save_working_context`]'s `saved_at` stamp, written on
-///   the session's own fact and handed to `update_working_index` for the
-///   index entry. On `wasm32` every stamp is 0, so every entry ties; the
-///   listing's sort is stable, and the index's stored order — maintained as
-///   recency by `update_working_index` — decides instead of the clock.
+/// Current Unix time in seconds, real on every target (see [`now_nanos`]).
+/// Read by [`MemoryService::should_upgrade_ttl`]'s extension-only comparison
+/// (the storage/expiry layer; the `compile` pipeline stays clock-free) and by
+/// [`MemoryService::save_working_context`]'s `saved_at` stamp. Both used to
+/// read 0 on `wasm32`: a re-stored source never had its TTL extended there,
+/// and every working-context stamp tied.
 fn now_unix_secs() -> u64 {
-    #[cfg(target_arch = "wasm32")]
-    {
-        0
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_secs())
-            .unwrap_or(0)
-    }
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }
 
 use serde_json::{Map, Number, Value};
