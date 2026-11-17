@@ -331,6 +331,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Node: an open refused for its ingest roots leaves no store behind**
+  (Node, 2026-11-17). `MemoryService.open` read `VELESDB_MEMORY_INGEST_ROOTS`
+  after opening the store, so a bad value threw only once the store
+  directory, its lock and its files existed. Every setting is now checked
+  before the store is opened.
 - **Node: `compileTranscript` reads a `null` field as absent, like the MCP
   tool** (Node, velesdb-memory, 2026-11-17). `{ transcript, path: null }`
   was refused as "both", `{ transcript: null, path }` never read the path,

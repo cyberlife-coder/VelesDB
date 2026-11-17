@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -1822,6 +1822,22 @@ test('anchors fail closed: missing root, root outside the allowlist, ingestion d
   } finally {
     cleanup()
   }
+})
+
+test('an open refused for its ingest roots leaves no store behind', (t) => {
+  // The roots were read after the store was opened, so a bad
+  // VELESDB_MEMORY_INGEST_ROOTS threw only once the store directory, its
+  // lock and its files existed on disk.
+  const parent = mkdtempSync(join(tmpdir(), 'velesdb-refused-'))
+  t.after(() => rmStoreDir(parent))
+  const dir = join(parent, 'store')
+  process.env.VELESDB_MEMORY_INGEST_ROOTS = join(parent, 'no-such-root')
+  try {
+    assert.throws(() => MemoryService.open(dir, 'hash'), /INVALID_INPUT/)
+  } finally {
+    delete process.env.VELESDB_MEMORY_INGEST_ROOTS
+  }
+  assert.ok(!existsSync(dir), 'a refused open creates nothing')
 })
 
 test('compileContext resolves a path fragment under the ingest roots; refuses it when disabled', async (t) => {

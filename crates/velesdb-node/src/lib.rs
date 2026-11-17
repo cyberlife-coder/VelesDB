@@ -122,8 +122,11 @@ impl NodeMemoryService {
         ollama_model: Option<String>,
         search_quality: Option<String>,
     ) -> napi::Result<Self> {
+        // Every setting is read and checked before the store is opened: an
+        // open refused for its configuration must leave nothing on disk.
         let quality = velesdb_memory::resolve_search_quality(search_quality.as_deref())
             .map_err(setting_error)?;
+        let ingest_roots = ingest_roots_from_env()?;
         let (emb, embedder_model, embedder_semantic) =
             build_embedder(embedder.as_deref(), ollama_url, ollama_model)?;
         let embedder_dimension = emb.dimension();
@@ -133,7 +136,6 @@ impl NodeMemoryService {
             Some(quality) => svc.with_search_quality(quality),
             None => svc,
         };
-        let ingest_roots = ingest_roots_from_env()?;
         warn_hash_embedder_not_semantic(embedder_semantic);
         Ok(Self {
             inner: Arc::new(svc),
