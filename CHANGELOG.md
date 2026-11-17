@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     documented as node ids) are strings; `add_edge` / `add_edges_batch`
     accept a string or a number.
   - TypeScript SDK: `removeEdge` takes a `GraphNodeId` (`number | string`).
+  - VelesQL `INSERT EDGE (id = …)` takes the id back as an integer or as
+    that decimal string. It silently dropped a string (or a negative or
+    fractional) id and stored the edge under a derived one; such an id is
+    now refused.
 
   Migration: read edge ids as strings (`BigInt(id)` for arithmetic). In
   Python, `SELECT EDGES` rows and a MATCH row's projected `r.id` now hold a
