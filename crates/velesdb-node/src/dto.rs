@@ -41,11 +41,11 @@ pub struct ColumnFilterJs {
 #[napi(object)]
 pub struct FusionOptionsJs {
     /// Hops the graph traversal walks from the top vector seed.
-    pub hops: Option<u32>,
+    pub hops: Option<f64>,
     /// Weight added to a graph-reached fact's normalised vector score.
     pub graph_boost: Option<f64>,
     /// Depth of the oversampled vector pool fusion re-ranks.
-    pub pool: Option<u32>,
+    pub pool: Option<f64>,
 }
 
 /// One recalled memory (output of `recall` / `recallWhere`).
@@ -110,7 +110,7 @@ impl From<&Freshness> for FreshnessJs {
 }
 
 /// One hit of `recall` — same fields as [`RecollectionJs`], plus `freshness`
-/// when the call passed `anchorRoot` (`null` otherwise). Anchored hits are
+/// when the call passed `anchorRoot` (absent — `undefined` — otherwise). Anchored hits are
 /// ranked lower when stale, but the `score` stays the raw similarity.
 #[napi(object)]
 pub struct AnchoredRecollectionJs {
@@ -123,7 +123,8 @@ pub struct AnchoredRecollectionJs {
     /// Caller-supplied structured metadata stored with the fact, or
     /// `undefined` when the fact carries none.
     pub metadata: Option<Value>,
-    /// Freshness verdict when recalled with `anchorRoot`; `null` otherwise.
+    /// Freshness verdict when recalled with `anchorRoot`; absent
+    /// (`undefined`) otherwise.
     pub freshness: Option<FreshnessJs>,
 }
 
