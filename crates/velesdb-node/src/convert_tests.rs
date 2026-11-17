@@ -2,7 +2,7 @@
 //! through `ok()`.
 use serde_json::json;
 
-use super::{integral_numbers, to_metadata};
+use super::{integral_numbers, resolve_transcript_input, to_metadata};
 
 /// What napi hands over for a JS whole number past `u32::MAX`: a float.
 fn napi_float(n: f64) -> serde_json::Value {
@@ -44,4 +44,47 @@ fn metadata_and_filters_carry_the_integer() {
         metadata.and_then(|m| m.get("ts").cloned()),
         Some(json!(5_000_000_000_i64))
     );
+}
+
+#[test]
+fn a_null_transcript_or_path_is_absent_as_on_the_mcp_tool() {
+    // `{ transcript: "...", path: null }` was refused as "both", and
+    // `{ transcript: null, path: ... }` reached the path branch never.
+    let resolved =
+        resolve_transcript_input(json!({ "transcript": "User: hi", "path": null }), None)
+            .ok()
+            .and_then(|request| request.get("transcript").cloned());
+    assert_eq!(resolved, Some(json!("User: hi")));
+
+    // A `null` transcript with a path reads the path: with ingestion
+    // disabled that is the ingest refusal, not "pass either, not both".
+    let reason = resolve_transcript_input(json!({ "transcript": null, "path": "/t.md" }), None)
+        .err()
+        .map(|e| e.reason);
+    assert!(
+        reason
+            .as_deref()
+            .is_some_and(|r| !r.contains("not both") && !r.contains("exactly one")),
+        "{reason:?}"
+    );
+}
+
+#[test]
+fn neither_both_nor_an_empty_transcript_is_accepted() {
+    for request in [
+        json!({ "query": "q" }),
+        json!({ "transcript": "x", "path": "/t.md" }),
+        json!({ "transcript": "" }),
+        json!({ "transcript": 3 }),
+    ] {
+        let reason = resolve_transcript_input(request.clone(), None)
+            .err()
+            .map(|e| e.reason);
+        assert!(
+            reason
+                .as_deref()
+                .is_some_and(|r| r.contains("INVALID_INPUT")),
+            "{request}: {reason:?}"
+        );
+    }
 }

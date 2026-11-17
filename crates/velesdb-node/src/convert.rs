@@ -198,11 +198,12 @@ pub fn build_transcript_compile_request(
 
 /// Transcript-or-path resolution for `compileTranscript`: `path` is a
 /// transcript-level field, not part of the bridge's input struct, so it is
-/// pulled out here, resolved under the ingest allowlist, and fed back as
-/// `transcript` — exactly the MCP tool's resolution. Both fields at once, or
-/// a non-string `path`, is `INVALID_INPUT`; a `path` with ingestion disabled
-/// fails closed (`IngestDisabled`, mapped by [`to_napi_err`]). The
-/// containment check itself runs at the sink
+/// pulled out here and the text fed back as `transcript`, by the rule the
+/// MCP tool applies ([`velesdb_memory::context::resolve_transcript_source`]):
+/// exactly one of the two, never empty. A field set to `null` is absent, as
+/// it is on the MCP tool; a field of another type is `INVALID_INPUT`. A
+/// `path` with ingestion disabled fails closed (`IngestDisabled`, mapped by
+/// [`to_napi_err`]); the containment check runs at the sink
 /// ([`velesdb_memory::context::ingest`]), never here.
 pub fn resolve_transcript_input(
     request: Value,
@@ -214,19 +215,27 @@ pub fn resolve_transcript_input(
         Value::Object(map) => map,
         other => return Ok(other),
     };
-    let has_transcript = map.contains_key("transcript");
-    match (has_transcript, map.remove("path")) {
-        (true, Some(_)) => Err(invalid_input(
-            "pass either `transcript` or `path`, not both",
-        )),
-        (false, Some(Value::String(path))) => {
-            let roots = roots.ok_or_else(|| to_napi_err(MemoryError::IngestDisabled))?;
-            let text = resolve_transcript_path(&path, roots).map_err(to_napi_err)?;
-            map.insert("transcript".to_owned(), Value::String(text));
-            Ok(Value::Object(map))
-        }
-        (false, Some(_)) => Err(invalid_input("`path` must be a string")),
-        (_, None) => Ok(Value::Object(map)),
+    let transcript = optional_string(map.remove("transcript"), "transcript")?;
+    let path = optional_string(map.remove("path"), "path")?;
+    let text =
+        velesdb_memory::context::resolve_transcript_source(transcript, path.as_deref(), |path| {
+            let roots = roots
+                .filter(|roots| roots.is_enabled())
+                .ok_or(MemoryError::IngestDisabled)?;
+            resolve_transcript_path(path, roots)
+        })
+        .map_err(to_napi_err)?;
+    map.insert("transcript".to_owned(), Value::String(text));
+    Ok(Value::Object(map))
+}
+
+/// A request field read as JS gives it: absent or `null` is `None`, a string
+/// is `Some`, anything else is `INVALID_INPUT` naming the field.
+fn optional_string(value: Option<Value>, field: &str) -> napi::Result<Option<String>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text)),
+        Some(_) => Err(invalid_input(format!("`{field}` must be a string"))),
     }
 }
 

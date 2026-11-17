@@ -128,3 +128,45 @@ fn test_the_report_serializes_to_the_shape_every_binding_publishes() {
     assert!(!wire["merged_segments"].is_null());
     assert!(!wire["format_detected"].is_null());
 }
+
+fn no_file(_: &str) -> Result<String, MemoryError> {
+    panic!("no path was given, so nothing is read")
+}
+
+#[test]
+fn test_transcript_source_is_exactly_one_of_transcript_or_path() {
+    assert_eq!(
+        resolve_transcript_source(Some("hi".to_owned()), None, no_file).ok(),
+        Some("hi".to_owned())
+    );
+    assert_eq!(
+        resolve_transcript_source(None, Some("/t.md"), |p| Ok(format!("read {p}"))).ok(),
+        Some("read /t.md".to_owned())
+    );
+    for (transcript, path) in [(None, None), (Some("hi".to_owned()), Some("/t.md"))] {
+        assert!(matches!(
+            resolve_transcript_source(transcript, path, |_| Ok("x".to_owned())),
+            Err(MemoryError::SegmentationError(_))
+        ));
+    }
+}
+
+#[test]
+fn test_an_empty_transcript_is_refused_whatever_its_source() {
+    assert!(matches!(
+        resolve_transcript_source(Some(String::new()), None, no_file),
+        Err(MemoryError::SegmentationError(_))
+    ));
+    assert!(matches!(
+        resolve_transcript_source(None, Some("/empty.md"), |_| Ok(String::new())),
+        Err(MemoryError::SegmentationError(_))
+    ));
+}
+
+#[test]
+fn test_a_path_read_failure_is_the_readers_error() {
+    assert!(matches!(
+        resolve_transcript_source(None, Some("/t.md"), |_| Err(MemoryError::IngestDisabled)),
+        Err(MemoryError::IngestDisabled)
+    ));
+}

@@ -331,6 +331,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Node: `compileTranscript` reads a `null` field as absent, like the MCP
+  tool** (Node, velesdb-memory, 2026-11-17). `{ transcript, path: null }`
+  was refused as "both", `{ transcript: null, path }` never read the path,
+  and a `path` resolving to an empty file slipped past the emptiness check.
+  The transcript-or-path rule — exactly one, never empty — now lives once in
+  `velesdb_memory::context::resolve_transcript_source`, which the MCP
+  `compile_transcript` tool and the Node binding both call.
 - **Node: a whole number past 2^32 is stored as an integer** (Node,
   2026-11-16). napi reads a JS number as an integer only within `u32` /
   `i32` range, so metadata such as `{ ts: 5000000000 }` was stored as the

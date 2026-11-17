@@ -11,7 +11,6 @@
 use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::ErrorCode;
 use rmcp::{tool, tool_router, ErrorData};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -383,56 +382,34 @@ impl McpServer {
     /// is [`crate::limits::MAX_TRANSCRIPT_BYTES`], not the ordinary 1 MiB
     /// fragment ceiling.
     #[cfg(not(target_arch = "wasm32"))]
-    fn resolve_transcript_path(&self, path: &str) -> Result<String, ErrorData> {
+    fn read_transcript_path(&self, path: &str) -> Result<String, crate::error::MemoryError> {
         let roots = self
             .ingest_roots
             .as_ref()
             .filter(|roots| roots.is_enabled())
-            .ok_or_else(|| to_error(crate::error::MemoryError::IngestDisabled))?;
-        crate::context::ingest::resolve_transcript_path(path, roots).map_err(to_error)
+            .ok_or(crate::error::MemoryError::IngestDisabled)?;
+        crate::context::ingest::resolve_transcript_path(path, roots)
     }
 
     /// `mcp` never targets `wasm32` (see [`Self::resolve_ingest`]'s wasm
     /// arm) — kept for call-site uniformity.
     #[cfg(target_arch = "wasm32")]
-    fn resolve_transcript_path(&self, _path: &str) -> Result<String, ErrorData> {
-        Err(to_error(crate::error::MemoryError::IngestDisabled))
+    fn read_transcript_path(&self, _path: &str) -> Result<String, crate::error::MemoryError> {
+        Err(crate::error::MemoryError::IngestDisabled)
     }
 
-    /// The text `compile_transcript` will segment: exactly one of `transcript`
-    /// (inline) or `path` (ingested through the allowlist), and never empty.
-    ///
-    /// The emptiness check runs AFTER `path` is resolved, rather than being
-    /// folded into the match, so an inline empty string and a `path` that
-    /// resolves to an empty file are rejected identically — the ingest
-    /// pipeline itself happily reads a zero-byte file, so this is the one
-    /// place that catches "nothing to compile" whatever the source.
+    /// The text `compile_transcript` will segment, by the rule every surface
+    /// shares ([`crate::context::resolve_transcript_source`]): exactly one of
+    /// `transcript` or `path`, never empty.
     fn resolve_transcript_text(
         &self,
         transcript: Option<String>,
-        path: Option<String>,
+        path: Option<&str>,
     ) -> Result<String, ErrorData> {
-        let text = match (transcript, path) {
-            (Some(text), None) => text,
-            (None, Some(path)) => self.resolve_transcript_path(&path)?,
-            _ => {
-                return Err(ErrorData::new(
-                    ErrorCode::INVALID_PARAMS,
-                    "exactly one of `transcript` or `path` must be set".to_owned(),
-                    None,
-                ));
-            }
-        };
-        if text.is_empty() {
-            return Err(ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                "the transcript is empty — `transcript` must be non-empty text, or `path` must \
-                 point to a non-empty file"
-                    .to_owned(),
-                None,
-            ));
-        }
-        Ok(text)
+        crate::context::resolve_transcript_source(transcript, path, |path| {
+            self.read_transcript_path(path)
+        })
+        .map_err(to_error)
     }
 
     #[tool(
@@ -493,7 +470,7 @@ impl McpServer {
             policy,
             segmentation,
         } = params;
-        let transcript_text = self.resolve_transcript_text(transcript, path)?;
+        let transcript_text = self.resolve_transcript_text(transcript, path.as_deref())?;
         let segmentation_policy = segmentation.unwrap_or_default();
         let (fragments, report) = segment_for_compilation(&transcript_text, &segmentation_policy)?;
         let ids_as_strings = policy.as_ref().is_some_and(|p| p.ids_as_strings);
