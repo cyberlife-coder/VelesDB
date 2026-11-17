@@ -50,7 +50,7 @@ export async function trainPq(
   const m = options?.m ?? 8;
   const k = options?.k ?? 256;
   const withClause = options?.opq
-    ? `WITH (m=${m}, k=${k}, opq=true)`
+    ? `WITH (m=${m}, k=${k}, type=opq)`
     : `WITH (m=${m}, k=${k})`;
   const queryString = `TRAIN QUANTIZER ON ${collection} ${withClause}`;
 

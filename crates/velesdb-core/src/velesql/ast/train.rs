@@ -13,6 +13,7 @@ use super::WithValue;
 pub struct TrainStatement {
     /// Target collection name.
     pub collection: String,
-    /// Training parameters (m, k, type, oversampling, sample, force, etc.).
+    /// Training parameters: `m`, `k`, `type`, `oversampling`, `sample`,
+    /// `force`. Execution refuses any other key.
     pub params: HashMap<String, WithValue>,
 }

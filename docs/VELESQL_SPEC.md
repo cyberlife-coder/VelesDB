@@ -3048,6 +3048,11 @@ TRAIN QUANTIZER ON <collection> WITH (<parameters>)
 | `sample` | integer | -- | Number of vectors to sample |
 | `force` | boolean | false | Force retrain if exists |
 
+Any other key is refused with `VELES-028` (invalid quantizer configuration),
+naming the key and the supported list: a misspelt parameter fails instead of
+silently falling back to its default. OPQ is `type = opq`; there is no `opq`
+key.
+
 ### Examples
 
 ```sql

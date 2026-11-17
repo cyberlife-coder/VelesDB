@@ -19,7 +19,8 @@ impl Database {
     /// # Errors
     ///
     /// - `Error::CollectionNotFound` if the target collection does not exist.
-    /// - `Error::InvalidQuantizerConfig` for invalid params (m=0, dim%m!=0, already trained).
+    /// - `Error::InvalidQuantizerConfig` for invalid params (unknown `WITH` key,
+    ///   m=0, dim%m!=0, already trained).
     /// - `Error::TrainingFailed` if the underlying training algorithm errors.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub(super) fn execute_train(
@@ -27,7 +28,7 @@ impl Database {
         stmt: &crate::velesql::TrainStatement,
     ) -> Result<Vec<SearchResult>> {
         let collection = self.resolve_train_collection(stmt)?;
-        let train_params = TrainParams::from_statement(stmt);
+        let train_params = TrainParams::from_statement(stmt)?;
 
         train_params.validate_basic()?;
 
@@ -330,6 +331,11 @@ fn train_result_response(metadata: serde_json::Value) -> Vec<SearchResult> {
     )]
 }
 
+/// The `WITH` keys a TRAIN QUANTIZER statement understands, in the order the
+/// refusal lists them. `from_statement` reads exactly these and refuses any
+/// other, so a misspelt or invented key cannot silently fall back to a default.
+const TRAIN_PARAM_KEYS: [&str; 6] = ["m", "k", "type", "oversampling", "sample", "force"];
+
 /// Parsed parameters for a TRAIN QUANTIZER statement.
 struct TrainParams {
     m: usize,
@@ -342,9 +348,17 @@ struct TrainParams {
 
 impl TrainParams {
     /// Extracts training parameters from a `TrainStatement`.
+    ///
+    /// # Errors
+    ///
+    /// `Error::InvalidQuantizerConfig` when a key is not in
+    /// [`TRAIN_PARAM_KEYS`] — `opq=true` used to train plain PQ and report
+    /// success, because the key was never read.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn from_statement(stmt: &crate::velesql::TrainStatement) -> Self {
+    fn from_statement(stmt: &crate::velesql::TrainStatement) -> Result<Self> {
         use crate::velesql::WithValue;
+
+        Self::reject_unknown_keys(stmt)?;
 
         let m = stmt
             .params
@@ -378,13 +392,32 @@ impl TrainParams {
             .and_then(WithValue::as_bool)
             .unwrap_or(false);
 
-        Self {
+        Ok(Self {
             m,
             k,
             train_type,
             oversampling,
             sample_limit,
             force,
+        })
+    }
+
+    /// Refuses the first `WITH` key (in sorted order, so the message is
+    /// deterministic over the `HashMap`) that TRAIN does not read.
+    fn reject_unknown_keys(stmt: &crate::velesql::TrainStatement) -> Result<()> {
+        let mut unknown: Vec<&str> = stmt
+            .params
+            .keys()
+            .map(String::as_str)
+            .filter(|key| !TRAIN_PARAM_KEYS.contains(key))
+            .collect();
+        unknown.sort_unstable();
+        match unknown.first() {
+            None => Ok(()),
+            Some(key) => Err(Error::InvalidQuantizerConfig(format!(
+                "unknown TRAIN QUANTIZER parameter: '{key}'. Supported: {}",
+                TRAIN_PARAM_KEYS.join(", ")
+            ))),
         }
     }
 

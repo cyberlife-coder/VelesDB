@@ -471,6 +471,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: `trainPq({ opq: true })` over REST trains OPQ; core
+  refuses an unknown `TRAIN QUANTIZER` parameter** (TypeScript SDK, core,
+  2026-11-17). The REST backend sent `WITH (m=…, k=…, opq=true)`, and core
+  read only `m`, `k`, `type`, `oversampling`, `sample` and `force`, ignoring
+  any other key, so the statement trained plain PQ and reported success. The
+  SDK now sends `type=opq`, as the Tauri plugin, the Python binding and the
+  mobile binding already did. Core now refuses any other `WITH` key with
+  `VELES-028`, naming the key and the supported list, so a misspelt parameter
+  fails on every surface instead of falling back to its default.
+
 - **Core: a `similarity()` threshold beside `SPARSE_NEAR` is applied** (core,
   2026-11-17). Under `AND` the sparse and hybrid search pushed down only the
   metadata part of the WHERE clause, so `vector SPARSE_NEAR {…} AND
