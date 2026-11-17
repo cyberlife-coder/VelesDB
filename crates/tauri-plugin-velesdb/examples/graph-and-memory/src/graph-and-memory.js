@@ -128,8 +128,9 @@ async function knowledgeGraph() {
     },
   });
   log(`reachable from node 100: ${JSON.stringify(reachable)}`);
-  // Each entry is { targetId, depth, path }, where `path` lists the ids of the
-  // edges walked, in order, as decimal strings (edge ids exceed 2^53).
+  // Each entry is { targetId, depth, path }: `targetId` is the node reached and
+  // `path` the ids of the edges walked, in order. Graph ids come back as decimal
+  // strings (edge ids exceed 2^53) and can be passed back in as they are.
 
   const degree = await invoke('plugin:velesdb|get_node_degree', {
     request: { collection: GRAPH, nodeId: 100 },
