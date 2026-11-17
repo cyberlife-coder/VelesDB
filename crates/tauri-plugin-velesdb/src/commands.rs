@@ -2,7 +2,6 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::CommandError;
-use crate::events::emit_collection_updated;
 use crate::helpers::{
     map_core_results, parse_filter, parse_fusion_strategy, parse_metric, parse_storage_mode,
     require_collection, timed_search_response,
@@ -815,7 +814,7 @@ pub async fn enable_streaming<R: Runtime>(
         .await
         .map_err(CommandError::from)?;
 
-    emit_collection_updated(&app, &collection_name, "enable_streaming", 0);
+    crate::events::emit_collection_updated(&app, &collection_name, "enable_streaming", 0);
     Ok(())
 }
 

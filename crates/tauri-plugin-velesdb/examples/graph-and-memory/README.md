@@ -84,8 +84,6 @@ Payload shape (camelCase, like every other IPC type):
 
 ## Other limits worth knowing before you build on this
 
-- **`quality` is ignored when a `filter` is supplied** on `search` /
-  `search_ids` (known limitation #457): the filtered path takes precedence.
 - **`query` has no `collection` field.** The target comes from the `FROM`
   clause or the `MATCH` pattern inside the VelesQL string; any extra field in
   the request is silently dropped.

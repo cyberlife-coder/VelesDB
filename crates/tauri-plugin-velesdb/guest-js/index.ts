@@ -521,8 +521,8 @@ export function search(request: SearchRequest): Promise<SearchResponse> {
  *
  * Takes the same request as {@link search}. Without a `filter` or `quality`
  * the engine skips payload hydration entirely; with either, the full search
- * runs and its results are projected to IDs + scores. When a `filter` is
- * supplied, `quality` is ignored (known limitation #457).
+ * runs and its results are projected to IDs + scores; a `filter` and a
+ * `quality` apply together.
  *
  * @param request - Search request with query vector
  * @returns ID + score pairs ordered by relevance
