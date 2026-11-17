@@ -216,8 +216,6 @@ two must never be enabled in a shipping bundle.
   endpoints have no stored node payload (#1442). No IPC command upserts a node
   payload — do it from Rust through `VelesDbState::with_db`
   ([recipe](../../docs/guides/TAURI_PLUGIN_RECIPES.md#knowledge-graph)).
-- **`quality` is ignored when a `filter` is supplied** on `search` /
-  `search_ids` (known limitation #457): the filtered path takes precedence.
 - **`query` has no `collection` field.** The target collection comes from the
   `FROM` clause or the `MATCH` pattern inside the VelesQL string; any extra
   field in the request is silently dropped.
