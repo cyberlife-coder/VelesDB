@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `USING FUSION` the strategy refuses is an error, not an empty
+  result.** `velesql_fusion::apply` turned every fusion error (e.g. two
+  `weighted_rrf` weights over three branches) into an empty ranking that
+  read as "nothing matched", and its docs promised an RRF fallback it did
+  not perform.
+
 - **`GraphPersistence.load` no longer drops a row it cannot read.** A node
   or edge row that did not deserialize was skipped, so the load resolved with
   a graph silently missing what was saved. The load now rejects, naming the

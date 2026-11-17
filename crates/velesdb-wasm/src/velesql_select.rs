@@ -431,10 +431,7 @@ fn apply_fusion(
 ) -> Result<Vec<(u64, f32)>, String> {
     let rrf_branch = scored.to_vec();
     let payload_branch = fusion_branch_from_residual(store, residual, params)?;
-    Ok(velesql_fusion::apply(
-        clause,
-        vec![rrf_branch, payload_branch],
-    ))
+    velesql_fusion::apply(clause, vec![rrf_branch, payload_branch])
 }
 
 /// Builds an `id -> index` lookup map so the vector-row collectors can
