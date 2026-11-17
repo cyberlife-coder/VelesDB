@@ -208,6 +208,21 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     expect(scored.results.map(r => r.bindings.b)).toEqual(['2']);
   });
 
+  it('an upsert replaces the whole point: a payload or sparse vector it leaves out is gone', async () => {
+    await db.createCollection('replace', { dimension: 2, metric: 'cosine' });
+    await db.upsert('replace', { id: 1, vector: [1, 0], payload: RUST, sparseVector: { 1: 1 } });
+    await db.upsert('replace', { id: 1, vector: [1, 0] });
+
+    expect((await db.get('replace', 1))?.payload ?? null).toBeNull();
+    const [hit] = await db.search('replace', [1, 0], { k: 1 });
+    expect(hit!.payload).toBeUndefined();
+    // Point 1 lost term 1 with its sparse vector: only point 2 still ranks
+    // on the sparse side, which lifts it above point 1 in the fusion.
+    await db.upsert('replace', { id: 2, vector: [0, 1], sparseVector: { 1: 0.5 } });
+    const fused = await db.search('replace', [1, 0], { k: 2, sparseVector: { 1: 1 } });
+    expect(fused.map(r => r.id)).toEqual(['2', '1']);
+  });
+
   it('a point id past 2^53 comes back exactly from every search and read', async () => {
     // The binding threw serializing such an id as a number, and the SDK
     // refused it up front; it now leaves every surface as its decimal string.

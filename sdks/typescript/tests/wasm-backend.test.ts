@@ -282,6 +282,32 @@ describe('WasmBackend', () => {
       expect(doc?.payload).toEqual({ title: 'Stored' });
     });
 
+    // An upsert replaces the whole point, as on core: a version without a
+    // payload leaves none behind for a search or a get to return.
+    it('drops the payload a re-upsert leaves out', async () => {
+      await backend.upsert('vectors', { id: '1', vector: [1, 0, 0, 0], payload: { title: 'Old' } });
+      await backend.upsert('vectors', { id: '1', vector: [1, 0, 0, 0] });
+      const store = storeOf(backend, 'vectors');
+      // The binding's own record: `insert` stored no payload.
+      store.get.mockImplementation((id: bigint) => ({
+        id: String(id), vector: [1, 0, 0, 0], payload: null,
+      }) as never);
+
+      const [hit] = await backend.search('vectors', [1, 0, 0, 0], { k: 1 });
+      expect(hit).toEqual({ id: '1', score: 0.95 });
+      expect((await backend.get('vectors', '1'))?.payload).toBeUndefined();
+    });
+
+    it('upsertBatch drops the payload a re-upsert leaves out', async () => {
+      await backend.upsertBatch('vectors', [
+        { id: '1', vector: [1, 0, 0, 0], payload: { title: 'Old' } },
+      ]);
+      await backend.upsertBatch('vectors', [{ id: '1', vector: [1, 0, 0, 0] }]);
+
+      const [hit] = await backend.search('vectors', [1, 0, 0, 0], { k: 1 });
+      expect(hit).toEqual({ id: '1', score: 0.95 });
+    });
+
     it('should throw on dimension mismatch', async () => {
       await expect(backend.upsert('vectors', {
         id: '1',
@@ -624,11 +650,49 @@ describe('WasmBackend — upsert indexes sparse vectors; sparse search sees live
     expect(await hitIds({ 9: 1 })).toEqual(['1']);
   });
 
-  it('keeps the sparse vector when a re-upsert brings none, as core does', async () => {
+  // Core replaces the whole point on upsert: a version without a sparse
+  // vector drops the one it had (`dropped_sparse_entries`, #2834).
+  it('drops the sparse vector when a re-upsert brings none, as core does', async () => {
     await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
     await backend.upsert('s', { id: 1, vector: [], payload: { v: 2 } });
 
-    expect(await hitIds({ 7: 1 })).toEqual(['1']);
+    expect(await hitIds({ 7: 1 })).toEqual([]);
+  });
+
+  it('upsertBatch drops the sparse vector a re-upsert leaves out', async () => {
+    await backend.upsertBatch('s', [
+      { id: 1, vector: [], sparseVector: { 7: 1 } },
+      { id: 2, vector: [], sparseVector: { 7: 0.5 } },
+    ]);
+    await backend.upsertBatch('s', [{ id: 1, vector: [] }]);
+
+    expect(await hitIds({ 7: 1 })).toEqual(['2']);
+  });
+
+  it('refuses a non-finite sparse vector before writing the point', async () => {
+    await backend.upsert('s', { id: 1, vector: [], payload: { v: 1 }, sparseVector: { 7: 1 } });
+    const refused = await backend
+      .upsert('s', { id: 1, vector: [], payload: { v: 2 }, sparseVector: { 7: Number.NaN } })
+      .catch((err: unknown) => err);
+
+    expect(String(refused)).toContain('not finite');
+    expect(storeOf(backend, 's').insert_with_payload).toHaveBeenCalledTimes(1);
+    const [hit] = await backend.search('s', [], { sparseVector: { 7: 1 } });
+    expect(hit).toMatchObject({ id: '1', score: 1, payload: { v: 1 } });
+  });
+
+  it('upsertBatch refuses a non-finite sparse vector before writing any point', async () => {
+    const refused = await backend
+      .upsertBatch('s', [
+        { id: 1, vector: [], payload: { v: 1 }, sparseVector: { 7: 1 } },
+        { id: 2, vector: [], sparseVector: { 7: Number.POSITIVE_INFINITY } },
+      ])
+      .catch((err: unknown) => err);
+
+    expect(String(refused)).toContain('not finite');
+    expect(storeOf(backend, 's').insert_with_payload).not.toHaveBeenCalled();
+    expect(storeOf(backend, 's').insert_batch).not.toHaveBeenCalled();
+    expect(await hitIds({ 7: 1 })).toEqual([]);
   });
 
   it('caps a sparse search at k when retired ids rank below live ones', async () => {

@@ -444,6 +444,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK, WASM backend: an upsert replaces the whole point** (TypeScript
+  SDK, 2026-11-17). Re-upserting a point without a `payload` left the old one
+  in the SDK's payload map, so `get()` and dense `search()` kept returning it
+  while VelesQL returned none; re-upserting without a `sparseVector` kept the
+  point in sparse and hybrid results, where core drops the sparse vector a new
+  version leaves out. Both now follow the new version. A sparse vector the
+  binding refuses (a non-finite weight) now fails the upsert before the point
+  is written, instead of after its dense vector was stored.
+
 - **WASM: IndexedDB persistence works in a Web Worker** (WASM, 2026-11-17).
   `VectorStore` and `GraphPersistence` looked the IndexedDB factory up on
   `window`, which a worker does not have, so every save, load and delete

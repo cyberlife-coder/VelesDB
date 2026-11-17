@@ -45,7 +45,9 @@ import { WASM_CAPABILITIES } from '../capabilities';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 import type { WasmModule, CollectionData, WasmVectorStore } from './wasm-types';
 import { requireWasmFieldsListed, requireWasmValueListed } from './wasm-capability-guards';
-import { freeSparse, indexSparse, newSparseIds, retireSparse } from './wasm-sparse';
+import {
+  abandonSparse, commitSparse, freeSparse, newSparseIds, retireSparse, stageSparse,
+} from './wasm-sparse';
 
 // Internal helpers
 import {
@@ -325,18 +327,13 @@ export class WasmBackend implements IVelesDBBackend {
       );
     }
 
-    if (doc.payload) {
-      collection.store.insert_with_payload(id, vector, doc.payload);
-    } else {
-      collection.store.insert(id, vector);
-    }
-    if (doc.sparseVector) {
-      indexSparse(collection.sparseIds, this.newSparseStore, id, doc.sparseVector);
-    }
-
-    if (doc.payload) {
-      collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
-    }
+    this.replacePoints(collection, [doc], () => {
+      if (doc.payload) {
+        collection.store.insert_with_payload(id, vector, doc.payload);
+      } else {
+        collection.store.insert(id, vector);
+      }
+    });
   }
 
   async upsertBatch(collectionName: string, docs: VectorDocument[]): Promise<void> {
@@ -353,27 +350,53 @@ export class WasmBackend implements IVelesDBBackend {
       }
     }
 
-    collection.store.reserve(docs.length);
-    const batch: Array<[bigint, number[]]> = [];
-    for (const doc of docs) {
-      const id = toPointId(doc.id);
-      const vector = doc.vector instanceof Float32Array
-        ? doc.vector
-        : new Float32Array(doc.vector);
-      if (doc.payload) {
-        collection.store.insert_with_payload(id, vector, doc.payload);
-      } else {
-        batch.push([id, Array.from(vector)]);
+    this.replacePoints(collection, docs, () => {
+      collection.store.reserve(docs.length);
+      const batch: Array<[bigint, number[]]> = [];
+      for (const doc of docs) {
+        const id = toPointId(doc.id);
+        const vector = doc.vector instanceof Float32Array
+          ? doc.vector
+          : new Float32Array(doc.vector);
+        if (doc.payload) {
+          collection.store.insert_with_payload(id, vector, doc.payload);
+        } else {
+          batch.push([id, Array.from(vector)]);
+        }
       }
-    }
-    if (batch.length > 0) { collection.store.insert_batch(batch); }
+      if (batch.length > 0) { collection.store.insert_batch(batch); }
+    });
+  }
 
+  /**
+   * Replace each of `docs`' points whole, as core's upsert does. Their sparse
+   * vectors are staged first, so one the binding refuses fails the call
+   * before `writeDense` touches any point; once it has written them, each
+   * point's sparse vector and SDK-side payload become the ones its new version
+   * carries — none where it carries none (`commitSparse`).
+   */
+  private replacePoints(
+    collection: CollectionData,
+    docs: VectorDocument[],
+    writeDense: () => void
+  ): void {
+    const { sparseIds } = collection;
+    const staged = stageSparse(
+      sparseIds, this.newSparseStore, docs.map((doc) => doc.sparseVector ?? undefined)
+    );
+    try {
+      writeDense();
+    } catch (error) {
+      abandonSparse(sparseIds, this.newSparseStore, staged);
+      throw error;
+    }
+    commitSparse(sparseIds, this.newSparseStore, docs.map((doc) => toPointId(doc.id)), staged);
     for (const doc of docs) {
+      const key = canonicalPayloadKey(doc.id);
       if (doc.payload) {
-        collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
-      }
-      if (doc.sparseVector) {
-        indexSparse(collection.sparseIds, this.newSparseStore, toPointId(doc.id), doc.sparseVector);
+        collection.payloads.set(key, doc.payload);
+      } else {
+        collection.payloads.delete(key);
       }
     }
   }

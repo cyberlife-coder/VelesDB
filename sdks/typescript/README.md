@@ -367,7 +367,7 @@ await db.upsert('docs', {
 });
 ```
 
-> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. A later `sparseVector` for the same id replaces it, an upsert without one keeps it (as core does), and a deleted point never comes back in sparse results. Replaced and deleted sparse vectors are purged from the index once they outnumber the live ones.
+> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. An upsert replaces the whole point, as core does: a later `sparseVector` for the same id replaces it, an upsert without one drops it — and its payload too when it carries none — and a deleted point never comes back in sparse results. A sparse vector the binding refuses (a non-finite weight) fails the upsert before the point is written. Replaced and deleted sparse vectors are purged from the index once they outnumber the live ones.
 
 #### `db.upsertBatch(collection, documents)`
 

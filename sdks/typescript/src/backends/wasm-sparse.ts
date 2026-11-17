@@ -16,7 +16,15 @@
  * `k`, and the index holds live entries only; on 8.0.0 the postings stay but
  * map to no point, searches skip them and over-fetch by the number of
  * retired ids so the dead cannot crowd live points out of the top `k`. As in
- * core, an upsert without a sparse vector keeps the point's current one.
+ * core (`dropped_sparse_entries`, #2834), an upsert replaces the whole point:
+ * one without a sparse vector retires the point's current one.
+ *
+ * An upsert stages its sparse vectors before the point is written
+ * ({@link stageSparse}): each goes into the index under a fresh id no point
+ * maps to yet, so the binding validates it — and refuses a non-finite weight
+ * — before the dense write, and no search sees it until {@link commitSparse}
+ * hands it to its point. A refused stage, or a dense write that fails after
+ * it, abandons what was staged and leaves the point as it was.
  *
  * Without `sparse_remove`, retired postings would pile up for good and every
  * search would over-fetch by their number, so the cost of a search would
@@ -43,25 +51,84 @@ export function newSparseIds(): SparseIds {
   return { store: null, byPoint: new Map(), byId: new Map(), vectors: new Map(), dead: 0, next: 1n };
 }
 
-/** Index `vector` as `pointId`'s sparse vector, retiring the one it had. */
-export function indexSparse(
+/**
+ * A sparse vector inserted under a fresh sparse id that no point maps to yet:
+ * the binding accepted it, and no search returns it before
+ * {@link commitSparse}.
+ */
+export type StagedSparse = bigint;
+
+/**
+ * Stage each of `vectors` (`undefined` stages nothing). When the binding
+ * refuses one, the ones staged before it are abandoned and its error is
+ * rethrown, leaving the index as it was.
+ */
+export function stageSparse(
   ids: SparseIds,
   newStore: NewSparseStore,
-  pointId: bigint,
-  vector: SparseVector
+  vectors: ReadonlyArray<SparseVector | undefined>
+): Array<StagedSparse | undefined> {
+  const staged: Array<StagedSparse | undefined> = [];
+  try {
+    for (const vector of vectors) {
+      staged.push(vector === undefined ? undefined : stageOne(ids, newStore, vector));
+    }
+  } catch (error) {
+    abandonSparse(ids, newStore, staged);
+    throw error;
+  }
+  return staged;
+}
+
+/**
+ * Give each point of `pointIds` the vector staged at the same position,
+ * retiring the one it had; a point with none staged loses its sparse vector,
+ * as its new version carries none. A point listed twice keeps the last.
+ */
+export function commitSparse(
+  ids: SparseIds,
+  newStore: NewSparseStore,
+  pointIds: readonly bigint[],
+  staged: ReadonlyArray<StagedSparse | undefined>
 ): void {
+  pointIds.forEach((pointId, i) => {
+    const sparseId = staged[i];
+    if (sparseId === undefined) {
+      retireSparse(ids, newStore, pointId);
+      return;
+    }
+    const previous = ids.byPoint.get(pointId);
+    ids.byPoint.set(pointId, sparseId);
+    ids.byId.set(sparseId, pointId);
+    if (previous !== undefined) {
+      retireId(ids, newStore, previous);
+    }
+  });
+}
+
+/** Retire staged vectors whose point was never written. */
+export function abandonSparse(
+  ids: SparseIds,
+  newStore: NewSparseStore,
+  staged: ReadonlyArray<StagedSparse | undefined>
+): void {
+  for (const sparseId of staged) {
+    if (sparseId !== undefined) {
+      retireId(ids, newStore, sparseId);
+    }
+  }
+}
+
+function stageOne(ids: SparseIds, newStore: NewSparseStore, vector: SparseVector): StagedSparse {
   const { indices, values } = sparseVectorToArrays(vector);
   const entry = { indices: new Uint32Array(indices), values: new Float32Array(values) };
   const sparseId = ids.next;
   (ids.store ??= newStore()).sparse_insert(sparseId, entry.indices, entry.values);
   ids.next += 1n;
-  const previous = ids.byPoint.get(pointId);
-  ids.byPoint.set(pointId, sparseId);
-  ids.byId.set(sparseId, pointId);
+  // In `vectors` at once, so a rebuild before the commit keeps it; not in
+  // `byId`, so no search returns it until then.
   ids.vectors.set(sparseId, entry);
-  if (previous !== undefined) {
-    retireId(ids, newStore, previous);
-  }
+  return sparseId;
 }
 
 /** Retire `pointId`'s sparse id, if it has one: its postings stop matching. */
