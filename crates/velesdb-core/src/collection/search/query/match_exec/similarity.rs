@@ -10,6 +10,7 @@
 
 use super::parse_property_path;
 use super::{parse_projection_item, MatchResult, ProjectionItem};
+use crate::api_types::serde_id;
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
 use crate::collection::types::Collection;
 use crate::distance::rank_scores;
@@ -121,7 +122,7 @@ impl Collection {
                 // A variable-length relationship alias binds a LIST of
                 // relationships (openCypher): project the edge-id list.
                 if let Some(edge_ids) = ctx.edge_paths.get(alias) {
-                    projected.insert(projection_key(item), serde_json::json!(edge_ids));
+                    projected.insert(projection_key(item), serde_id::ids_to_json(edge_ids));
                 } else {
                     Self::project_bare_alias(alias, ctx.bindings, ctx.memo, projected);
                 }
@@ -162,12 +163,10 @@ impl Collection {
         let Some(edge) = self.graph.edge_store.get_edge(edge_id) else {
             return;
         };
-        let Some(value) = super::where_eval::element_property(edge_id, property, |path| {
-            super::where_eval::edge_property_path(&edge, path)
-        }) else {
+        let Some(value) = projected_edge_property(edge_id, &edge, property) else {
             return;
         };
-        projected.insert(projection_key(item), value.into_owned());
+        projected.insert(projection_key(item), value);
     }
 
     /// Projects a dotted property across a variable-length alias's edge list
@@ -187,12 +186,7 @@ impl Collection {
                     .edge_store
                     .get_edge(edge_id)
                     .as_ref()
-                    .and_then(|edge| {
-                        super::where_eval::element_property(edge_id, property, |path| {
-                            super::where_eval::edge_property_path(edge, path)
-                        })
-                        .map(std::borrow::Cow::into_owned)
-                    })
+                    .and_then(|edge| projected_edge_property(edge_id, edge, property))
                     .unwrap_or(serde_json::Value::Null)
             })
             .collect();
@@ -562,18 +556,40 @@ fn build_match_payload(
     // Edge identities make parallel-edge rows (same node bindings, different
     // edge) and variable-length paths distinguishable by every consumer.
     if !result.edge_bindings.is_empty() {
+        let bindings = result
+            .edge_bindings
+            .iter()
+            .map(|(alias, &id)| (alias.clone(), serde_id::id_to_json(id)))
+            .collect();
         object.insert(
             "_edge_bindings".to_string(),
-            serde_json::json!(result.edge_bindings),
+            serde_json::Value::Object(bindings),
         );
     }
     if !result.edge_paths.is_empty() {
-        object.insert(
-            "_edge_paths".to_string(),
-            serde_json::json!(result.edge_paths),
-        );
+        let paths = result
+            .edge_paths
+            .iter()
+            .map(|(alias, ids)| (alias.clone(), serde_id::ids_to_json(ids)))
+            .collect();
+        object.insert("_edge_paths".to_string(), serde_json::Value::Object(paths));
     }
     serde_json::Value::Object(object)
+}
+
+/// A relationship's property as a MATCH row returns it: what WHERE reads,
+/// except `id`, which leaves as its decimal string — a derived edge id is
+/// hashed and routinely above 2^53, where a JSON number loses digits in
+/// JavaScript. WHERE and ORDER BY keep comparing the number.
+fn projected_edge_property(
+    edge_id: u64,
+    edge: &crate::collection::graph::GraphEdge,
+    property: &str,
+) -> Option<serde_json::Value> {
+    if property == "id" {
+        return Some(serde_id::id_to_json(edge_id));
+    }
+    super::where_eval::edge_property_path(edge, property).cloned()
 }
 
 #[cfg(test)]

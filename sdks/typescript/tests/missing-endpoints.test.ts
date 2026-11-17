@@ -307,6 +307,16 @@ describe('removeEdge', () => {
     expect(removed).toBe(true);
   });
 
+  it('removes an edge by the exact string id an edge read answers', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({}),
+    });
+    const removed = await backend.removeEdge('kg', '9007199254740993');
+    expect(lastCall().url).toContain('/collections/kg/graph/edges/9007199254740993');
+    expect(removed).toBe(true);
+  });
+
   it('returns false when the server answers typed VELES-020 (edge not found)', async () => {
     // Modern server: `core_error_response` propagates the VELES-020 code
     // through the wire, which `isNotFoundError` recognises via the

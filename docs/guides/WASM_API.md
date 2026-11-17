@@ -47,6 +47,8 @@ consequence of two different boundaries:
 | Ids **returned by search** (`search`, `batch_search`, …) | plain `number` | Those results go through `serde-wasm-bindgen`'s `Serializer::json_compatible()`, which emits `u64` as a JS number (it leaves `serialize_large_number_types_as_bigints` at `false`, see `serde-wasm-bindgen` 0.6 `src/ser.rs`). |
 | Ids returned by a **direct getter** (`ParsedQuery.limit`, `GraphStore.get_neighbors`, `GraphNode.id`) | `BigInt` / `BigUint64Array` | Direct `wasm-bindgen` return, no serde in between. |
 | Memory-wedge ids (`MemoryService`) | decimal **string** | Chosen so ids survive `JSON.stringify` without precision loss. |
+| **Edge** ids in JSON (`WasmDatabase.getEdges`, `addEdge`'s return, `removeEdge`'s argument, `SELECT EDGES` `edge_id`, MATCH `r.id` / `_edge_bindings` / `_edge_paths`) | decimal **string** | A derived edge id is hashed and routinely above 2^53, which a JSON number would round. An `addEdge` id may still be sent as a number. |
+| Every id in `GraphNode.to_json` / `GraphEdge.to_json` and in `GraphPersistence` rows (`id`, `source`, `target`) | decimal **string** | The JSON form of those classes' `BigInt` ids; a JSON number made `to_json` and `save` throw above 2^53. Rows saved with numeric ids still load. |
 
 This historical reference was verified against `@wiscale/velesdb-wasm@4.0.0`:
 

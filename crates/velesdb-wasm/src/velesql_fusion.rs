@@ -6,12 +6,10 @@
 //! id-equality hit set from the WHERE clause — still a useful hybrid for
 //! demos).
 //!
-//! Supports the two most common strategies used in the wild:
-//! - `rrf` (Reciprocal Rank Fusion, k default 60)
-//! - `weighted` (per-branch min-max normalized score)
-//!
-//! Unknown strategies fall back to `rrf` (with a logged warning in native
-//! tests) so a demo SQL never errors mid-query on a misspelled strategy.
+//! Every strategy core parses is mapped (`rrf`, `weighted`, `weighted_rrf`,
+//! `maximum`, `average`, `rsf`). An unknown strategy name never reaches
+//! here: the parser refuses it, and the validator refuses out-of-range
+//! weights; a refusal of the strategy itself surfaces as an error.
 
 use velesdb_core::fusion::FusionStrategy;
 use velesdb_core::velesql::{FusionClause, FusionStrategyType};
@@ -21,11 +19,17 @@ pub(crate) type RankedBranch = Vec<(u64, f32)>;
 
 /// Applies the clause's fusion strategy to the given branches.
 ///
-/// Falls back to RRF with k=60 on validation errors (weight-sum mismatch,
-/// negative weights) so the caller always gets a useful ranking.
-pub(crate) fn apply(clause: &FusionClause, branches: Vec<RankedBranch>) -> Vec<(u64, f32)> {
-    let strategy = build_strategy(clause);
-    strategy.fuse(branches).unwrap_or_default()
+/// # Errors
+///
+/// Returns the strategy's refusal (e.g. a branch count its weights do not
+/// cover) rather than an empty ranking that would read as "no match".
+pub(crate) fn apply(
+    clause: &FusionClause,
+    branches: Vec<RankedBranch>,
+) -> Result<Vec<(u64, f32)>, String> {
+    build_strategy(clause)
+        .fuse(branches)
+        .map_err(|e| format!("USING FUSION: {e}"))
 }
 
 /// Maps the AST clause onto a concrete [`FusionStrategy`].

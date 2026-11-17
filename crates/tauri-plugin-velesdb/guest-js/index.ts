@@ -812,7 +812,11 @@ export function getGuardrails(name: string): Promise<GuardrailLimits> {
 /** Request to add an edge to a graph collection. */
 export interface AddEdgeRequest {
   collection: string;
-  id: number;
+  /**
+   * Edge id. Send the decimal string an edge read answers (`EdgeOutput.id`);
+   * a number is accepted up to `Number.MAX_SAFE_INTEGER`.
+   */
+  id: string | number;
   source: number;
   target: number;
   label: string;
@@ -821,8 +825,11 @@ export interface AddEdgeRequest {
 
 /** A single edge inside an {@link AddEdgesBatchRequest}. */
 export interface BatchEdgeInput {
-  /** Edge ID. */
-  id: number;
+  /**
+   * Edge ID. Send the decimal string an edge read answers (`EdgeOutput.id`);
+   * a number is accepted up to `Number.MAX_SAFE_INTEGER`.
+   */
+  id: string | number;
   /** Source node ID. */
   source: number;
   /** Target node ID. */
@@ -870,7 +877,11 @@ export interface GetNodeDegreeRequest {
 
 /** A single edge in the knowledge graph. */
 export interface EdgeOutput {
-  id: number;
+  /**
+   * Edge id as a decimal string: a derived edge id is hashed and routinely
+   * above 2^53, which a JavaScript number rounds.
+   */
+  id: string;
   source: number;
   target: number;
   label: string;
@@ -881,7 +892,8 @@ export interface EdgeOutput {
 export interface TraversalOutput {
   targetId: number;
   depth: number;
-  path: number[];
+  /** Ids of the edges walked, in order, as decimal strings (see `EdgeOutput.id`). */
+  path: string[];
 }
 
 /** In/out degree of a graph node. */

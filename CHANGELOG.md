@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (JSON wire): edge ids are decimal strings wherever a row or a
+  JavaScript surface carries one** (core, WASM, Tauri, TypeScript SDK,
+  2026-11-17). A derived edge id is hashed from (source, target, label) and
+  routinely above 2^53, where a JSON number loses digits in every JavaScript
+  reader; the REST graph endpoints already sent strings, the other surfaces
+  did not. Now:
+  - VelesQL rows: `SELECT EDGES` `edge_id`, `DELETE EDGE` `edge_id`, and a
+    MATCH row's `r.id`, variable-length `r`, `_edge_bindings` and
+    `_edge_paths` (core, so REST `/query` and `/match`, Python, mobile and
+    WASM alike). `WHERE r.id = …` and `ORDER BY` still compare the number.
+    Node ids, `source` and `target` stay numbers.
+  - WASM `WasmDatabase`: `getEdges` lists `id` as a string, `addEdge`
+    returns a string and accepts `id` as a string or a number, `removeEdge`
+    takes the string. `GraphNode.to_json`, `GraphEdge.to_json` and
+    `GraphPersistence` rows write every id (`id`, `source`, `target`) as a
+    string — a node or edge id above 2^53 made them throw — and rows saved
+    with numeric ids still load.
+  - Tauri: `EdgeOutput.id` and `TraversalOutput.path` (edge ids — it was
+    documented as node ids) are strings; `add_edge` / `add_edges_batch`
+    accept a string or a number.
+  - TypeScript SDK: `removeEdge` takes a `GraphNodeId` (`number | string`).
+  - VelesQL `INSERT EDGE (id = …)` takes the id back as an integer or as
+    that decimal string. It silently dropped a string (or a negative or
+    fractional) id and stored the edge under a derived one; such an id is
+    now refused.
+
+  Migration: read edge ids as strings (`BigInt(id)` for arithmetic). In
+  Python, `SELECT EDGES` rows and a MATCH row's projected `r.id` now hold a
+  `str`; `match_query`'s typed `edge_bindings` / `edge_paths` stay `int`.
+
 - **Core reports every search to the observer, in every binding**
   (core, server, Python, mobile, Tauri, 2026-11-16). `on_query` fired inside
   core only for `execute_query`; the REST server measured its search

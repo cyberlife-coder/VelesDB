@@ -7,10 +7,19 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 /// A graph node for knowledge graph construction.
+///
+/// In JSON (`to_json`, `IndexedDB` rows) every id of this module's classes is
+/// a decimal string, as `JSON.stringify` writes a `BigInt`'s digits: a JSON
+/// number cannot hold a `u64` above 2^53 (serializing one threw). A row
+/// saved with a numeric id still reads back.
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct GraphNode {
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     id: u64,
     label: String,
     properties: std::collections::HashMap<String, serde_json::Value>,
@@ -96,8 +105,23 @@ impl GraphNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct GraphEdge {
+    /// A decimal string in JSON (`to_json`, IndexedDB), as every id here
+    /// (see [`GraphNode`]): a derived edge id is hashed and routinely above
+    /// 2^53. A number still reads back.
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     id: u64,
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     source: u64,
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     target: u64,
     label: String,
     properties: std::collections::HashMap<String, serde_json::Value>,

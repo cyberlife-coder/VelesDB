@@ -481,7 +481,7 @@ fn test_delete_edge() {
     assert_eq!(results.len(), 1, "DELETE EDGE should return one result");
     let payload = results[0].point.payload.as_ref().expect("payload");
     assert_eq!(payload["deleted"], true);
-    assert_eq!(payload["edge_id"], 1);
+    assert_eq!(payload["edge_id"], "1");
 
     assert_eq!(gc.edge_count(), 1);
     let remaining = gc.get_edges(None);
@@ -513,7 +513,7 @@ fn test_delete_edge_nonexistent_reports_false() {
     assert_eq!(results.len(), 1);
     let payload = results[0].point.payload.as_ref().expect("payload");
     assert_eq!(payload["deleted"], false);
-    assert_eq!(payload["edge_id"], 999);
+    assert_eq!(payload["edge_id"], "999");
 }
 
 #[test]
@@ -1305,5 +1305,5 @@ fn test_select_edges_and_swaps_for_selectivity() {
     // Only edge 1 matches (source=10 AND label=KNOWS); edge 2 is LIKES, edge 3 is source=40.
     assert_eq!(results.len(), 1);
     let payload = results[0].point.payload.as_ref().expect("payload");
-    assert_eq!(payload["edge_id"], 1);
+    assert_eq!(payload["edge_id"], "1");
 }

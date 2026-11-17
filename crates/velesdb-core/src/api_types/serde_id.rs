@@ -39,6 +39,22 @@ pub fn serialize_id_as_string<S: Serializer>(
     serializer.serialize_str(&value.to_string())
 }
 
+/// An id as it sits in a JSON row built by hand: its exact decimal string.
+///
+/// The `serde_json::Value` counterpart of [`serialize_id_as_string`], for
+/// rows assembled with `json!` rather than derived.
+#[must_use]
+pub fn id_to_json(id: u64) -> serde_json::Value {
+    serde_json::Value::String(id.to_string())
+}
+
+/// Ids as they sit in a JSON row built by hand: an array of exact decimal
+/// strings. See [`id_to_json`].
+#[must_use]
+pub fn ids_to_json(ids: &[u64]) -> serde_json::Value {
+    serde_json::Value::Array(ids.iter().copied().map(id_to_json).collect())
+}
+
 /// Deserializes a `u64` from either a JSON string or a JSON number.
 ///
 /// Accepts both `"12345"` (string) and `12345` (number) for backward
