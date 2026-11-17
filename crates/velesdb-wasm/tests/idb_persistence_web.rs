@@ -93,3 +93,18 @@ async fn a_failed_save_leaves_the_previous_save_intact() {
     assert_eq!(loaded.edge_count(), 1, "the first save's edge survives");
     p.delete_graph("intact").await.expect("cleanup");
 }
+
+/// A derived edge id is hashed and routinely above 2^53: the save writes it
+/// as its decimal string (a JSON number threw there) and the load reads the
+/// same id back.
+#[wasm_bindgen_test]
+async fn a_hashed_edge_id_survives_a_save_and_a_load() {
+    let hashed = (1_u64 << 53) + 1;
+    let p = persistence().await;
+    p.save("hashed", &graph(&[1, 2], &[(hashed, 1, 2)]))
+        .await
+        .expect("a hashed edge id saves");
+    let loaded = p.load("hashed").await.expect("load");
+    assert!(loaded.has_edge(hashed), "the exact id comes back");
+    p.delete_graph("hashed").await.expect("cleanup");
+}

@@ -3,7 +3,7 @@
 //! Provides async save/load operations for graph data in browser applications.
 //! Enables offline-first PWA with persistent knowledge graphs.
 
-use crate::graph::{GraphEdge, GraphNode, GraphStore};
+use crate::graph::{GraphEdge, GraphStore};
 use crate::idb_helpers::{open_with_stores, wait_for_request, WriteTransaction};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -145,14 +145,10 @@ impl GraphPersistence {
 
         let mut graph = GraphStore::new();
         for node_js in rows(&nodes_store, graph_name).await? {
-            if let Ok(node) = serde_wasm_bindgen::from_value::<GraphNode>(node_js) {
-                graph.add_node(node);
-            }
+            graph.add_node(decode_row(node_js, graph_name, "node")?);
         }
         for edge_js in rows(&edges_store, graph_name).await? {
-            if let Ok(edge) = serde_wasm_bindgen::from_value::<GraphEdge>(edge_js) {
-                let _ = graph.add_edge(edge);
-            }
+            graph.add_edge(decode_row::<GraphEdge>(edge_js, graph_name, "edge")?)?;
         }
         Ok(graph)
     }
@@ -228,6 +224,21 @@ fn all_store_names() -> js_sys::Array {
     arr.push(&JsValue::from_str(EDGES_STORE));
     arr.push(&JsValue::from_str(META_STORE));
     arr
+}
+
+/// A saved row as the element it holds. A row no element reads fails the
+/// load, naming the graph: dropping it would hand back a graph silently
+/// missing what was saved.
+fn decode_row<T: serde::de::DeserializeOwned>(
+    row: JsValue,
+    graph_name: &str,
+    kind: &str,
+) -> Result<T, JsValue> {
+    serde_wasm_bindgen::from_value(row).map_err(|e| {
+        JsValue::from_str(&format!(
+            "Graph '{graph_name}' has an unreadable {kind} row: {e}"
+        ))
+    })
 }
 
 /// The key of a node or edge row: `{graph_name}:{id}`.
