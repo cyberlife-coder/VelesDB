@@ -79,8 +79,9 @@ pub async fn semantic_query<R: Runtime>(
     request: SemanticQueryRequest,
 ) -> std::result::Result<Vec<SemanticQueryResult>, CommandError> {
     let quality = parse_search_quality(&request.quality).map_err(CommandError::from)?;
+    state.check_memory_embedding(&request.embedding)?;
     state
-        .run_memory(move |mem| {
+        .run_memory_read(move |mem| {
             let semantic = mem.semantic();
             let results = match quality {
                 Some(quality) => {
@@ -113,15 +114,18 @@ pub async fn semantic_delete<R: Runtime>(
         .map_err(CommandError::from)
 }
 
-/// Returns the embedding dimension of semantic memory.
+/// Returns the embedding dimension of semantic memory: the configured one
+/// while no memory exists yet, which is the one it will be created with.
 #[command]
 pub async fn semantic_dimension<R: Runtime>(
     _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<usize, CommandError> {
+    let configured = state.memory_dimension();
     state
-        .run_memory(move |mem| Ok(mem.semantic().dimension()))
+        .run_memory_read(move |mem| Ok(Some(mem.semantic().dimension())))
         .await
+        .map(|dimension| dimension.unwrap_or(configured))
         .map_err(CommandError::from)
 }
 
@@ -186,7 +190,7 @@ pub async fn episodic_recent<R: Runtime>(
     request: EpisodicRecentRequest,
 ) -> std::result::Result<Vec<EpisodicResult>, CommandError> {
     state
-        .run_memory(move |mem| {
+        .run_memory_read(move |mem| {
             let results = mem
                 .episodic()
                 .recent(request.limit, request.since_timestamp)?;
@@ -203,8 +207,9 @@ pub async fn episodic_recall_similar<R: Runtime>(
     state: State<'_, VelesDbState>,
     request: EpisodicRecallSimilarRequest,
 ) -> std::result::Result<Vec<EpisodicSimilarResult>, CommandError> {
+    state.check_memory_embedding(&request.embedding)?;
     state
-        .run_memory(move |mem| {
+        .run_memory_read(move |mem| {
             let results = mem
                 .episodic()
                 .recall_similar(&request.embedding, request.top_k)?;
@@ -230,7 +235,7 @@ pub async fn episodic_older_than<R: Runtime>(
     request: EpisodicOlderThanRequest,
 ) -> std::result::Result<Vec<EpisodicResult>, CommandError> {
     state
-        .run_memory(move |mem| {
+        .run_memory_read(move |mem| {
             let results = mem
                 .episodic()
                 .older_than(request.timestamp, request.limit)?;
@@ -317,8 +322,9 @@ pub async fn procedural_recall<R: Runtime>(
     state: State<'_, VelesDbState>,
     request: ProceduralRecallRequest,
 ) -> std::result::Result<Vec<ProceduralMatchResult>, CommandError> {
+    state.check_memory_embedding(&request.embedding)?;
     state
-        .run_memory(move |mem| {
+        .run_memory_read(move |mem| {
             let results = mem.procedural().recall(
                 &request.embedding,
                 request.top_k,
@@ -354,7 +360,7 @@ pub async fn procedural_list_all<R: Runtime>(
     state: State<'_, VelesDbState>,
 ) -> std::result::Result<Vec<ProceduralMatchResult>, CommandError> {
     state
-        .run_memory(move |mem| {
+        .run_memory_read(move |mem| {
             let results = mem.procedural().list_all()?;
             Ok(results.into_iter().map(to_match_result).collect())
         })

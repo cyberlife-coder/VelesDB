@@ -128,6 +128,32 @@ impl StateInner {
         *guard = Some(Arc::clone(&memory));
         Ok(memory)
     }
+
+    /// Returns the shared `AgentMemory` for a read, creating nothing:
+    /// `None` when the database holds no memory yet
+    /// ([`AgentMemory::open_existing`]).
+    ///
+    /// Same lock discipline as [`Self::memory_handle`]; a handle opened here
+    /// is cached and serves later writes too.
+    fn existing_memory_handle(&self, dimension: usize) -> Result<Option<Arc<AgentMemory>>> {
+        let cached = self.memory.read().clone();
+        if cached.is_some() {
+            return Ok(cached);
+        }
+        let db = self.db_handle()?;
+        let snapshot_dir = self.path.join(MEMORY_SNAPSHOT_DIR);
+        let mut guard = self.memory.write();
+        if guard.is_some() {
+            return Ok(guard.clone());
+        }
+        let Some(memory) = AgentMemory::open_existing(db, dimension)? else {
+            return Ok(None);
+        };
+        let snapshot_dir = snapshot_dir.to_string_lossy().into_owned();
+        let memory = Arc::new(memory.with_snapshots(&snapshot_dir, MEMORY_SNAPSHOT_MAX));
+        *guard = Some(Arc::clone(&memory));
+        Ok(Some(memory))
+    }
 }
 
 /// Plugin state holding the database instance.
@@ -333,6 +359,53 @@ impl VelesDbState {
         })
         .await
         .map_err(|e| Error::TaskJoin(e.to_string()))?
+    }
+
+    /// Runs a read-only `AgentMemory` operation on Tauri's blocking pool.
+    ///
+    /// A read must not write: unlike [`Self::run_memory`], this never
+    /// creates the memory collections. When the database holds no memory
+    /// yet, nothing was stored, so `f` is not run and the read answers
+    /// `T::default()` — the empty result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database cannot be opened, if the memory
+    /// exists only in part or with another dimension, if `f` fails, or if
+    /// the blocking task cannot be joined.
+    pub async fn run_memory_read<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&AgentMemory) -> Result<T> + Send + 'static,
+        T: Default + Send + 'static,
+    {
+        let inner = Arc::clone(&self.inner);
+        let dimension = self.memory_dimension;
+        tauri::async_runtime::spawn_blocking(move || {
+            match inner.existing_memory_handle(dimension)? {
+                Some(memory) => f(&memory),
+                None => Ok(T::default()),
+            }
+        })
+        .await
+        .map_err(|e| Error::TaskJoin(e.to_string()))?
+    }
+
+    /// Refuses an embedding whose length is not the memory's dimension —
+    /// what core answers once the memory exists, so a read on a database
+    /// without memory validates its input the same way.
+    ///
+    /// # Errors
+    ///
+    /// Returns the core `DimensionMismatch` error on a length mismatch.
+    pub fn check_memory_embedding(&self, embedding: &[f32]) -> Result<()> {
+        if embedding.len() == self.memory_dimension {
+            return Ok(());
+        }
+        Err(velesdb_core::agent::AgentMemoryError::DimensionMismatch {
+            expected: self.memory_dimension,
+            actual: embedding.len(),
+        }
+        .into())
     }
 
     /// Returns the shared `AgentMemory`, building it on first use.

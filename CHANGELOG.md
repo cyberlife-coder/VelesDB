@@ -471,6 +471,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tauri plugin: memory reads no longer create the memory collections**
+  (Tauri plugin, core, 2026-11-17). The agent-memory handle was built on the
+  first memory command of any kind, and building it created
+  `_semantic_memory`, `_episodic_memory` and `_procedural_memory`, so under
+  the `read-only` permission set a first `semantic_query` wrote three
+  collections. `semantic_query`, `episodic_recent`, `episodic_recall_similar`,
+  `episodic_older_than`, `procedural_recall`, `procedural_list_all` and
+  `semantic_dimension` now open only memory that exists: on a database
+  without it they return an empty list (the dimension: the configured one),
+  still refusing an embedding of the wrong size. Core gains
+  `AgentMemory::open_existing`, which never creates a collection: `None` when
+  no memory exists, the memory when all three collections do, and
+  `NotFound` when only some do.
+
 - **Tauri plugin: the agent-memory embedding dimension is configurable**
   (Tauri plugin, 2026-11-17). The memory handle was always built with core's
   default of 384 dimensions, so every memory command with another model's
