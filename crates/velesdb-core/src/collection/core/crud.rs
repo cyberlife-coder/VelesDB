@@ -55,10 +55,12 @@ impl Collection {
 
     /// The checks [`Self::upsert`] runs on its points before any write: a
     /// metadata-only collection refuses a vector
-    /// ([`Error::VectorNotAllowed`]); a vector collection runs
-    /// [`Self::validate_vector_upsert_batch`]. Streaming runs them too, when a
-    /// point is queued — the only moment its caller can still hear of a
-    /// refusal, since the drain writes it later.
+    /// ([`Error::VectorNotAllowed`]); a vector collection runs the runtime
+    /// ingest limits and the per-point dimension and finite checks. Streaming
+    /// runs them too, when a point is queued — the only moment its caller can
+    /// still hear of a refusal, since the drain writes it later — and refuses
+    /// with [`BackpressureError::InvalidPoint`](crate::collection::streaming::BackpressureError::InvalidPoint);
+    /// a surface calls this first to report the refusal with core's code.
     ///
     /// # Errors
     ///

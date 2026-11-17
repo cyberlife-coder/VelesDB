@@ -251,6 +251,10 @@ pub async fn stream_insert(
     };
 
     let point = Point::new(req.id, req.vector, req.payload);
+    // Core checks a streamed point as an upsert: its own code and status.
+    if let Err(err) = collection.validate_points_for_upsert(std::slice::from_ref(&point)) {
+        return auto_core_error_response(&err);
+    }
     stream_insert_result_to_response(collection.stream_insert(point))
 }
 
@@ -281,8 +285,6 @@ fn stream_insert_result_to_response(
             StatusCode::CONFLICT,
             "Streaming not configured for this collection".to_string(),
         ),
-        // Core checks a streamed point as an upsert: its own code and status.
-        Err(BackpressureError::InvalidPoint(err)) => auto_core_error_response(&err),
         Err(e) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Unexpected streaming error: {e}"),

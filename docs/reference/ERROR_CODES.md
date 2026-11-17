@@ -69,7 +69,6 @@ version incompatibility, or internal bugs:
 | VELES-026 | `EpochMismatch` | Stale mmap guard; re-acquire required |
 | VELES-033 | `AllocationFailed` | Out of memory; cannot continue |
 | VELES-036 | `IncompatibleSchemaVersion` | Collection created by a newer VelesDB; upgrade required |
-| VELES-037 | `AccessDenied` | The database's observer policy refused the request |
 
 ---
 
@@ -376,7 +375,7 @@ version incompatibility, or internal bugs:
 - **Message**: `Access denied: {reason}`
 - **Cause**: The `DatabaseObserver` the database was opened with turned the request down: a read denied by `on_query_request` (`AccessDecision::Deny`), or a DDL statement or DML mutation vetoed by `on_ddl_request` / `on_dml_mutation_request`. The bindings' observers (Python `observer=`, mobile) refuse with it, including a strict-mode refusal when the policy itself failed.
 - **Resolution**: The request is not malformed; it is not allowed. Ask for the access, or run the request as a principal the policy admits. Retrying it unchanged is refused again.
-- **Surfaces**: REST `403 Forbidden`; Python `PermissionError`; mobile `VelesError.Database` with `code = "VELES-037"`; Tauri `CommandError.code = "VELES-037"`.
+- **Surfaces**: REST `403 Forbidden` on every endpoint, VelesQL `/query` and `/aggregate` included; Python `PermissionError`; mobile `VelesError.Database` with `code = "VELES-037"`; Tauri `CommandError.code = "VELES-037"`.
 - **Recoverable**: Yes -- a caller error; it never counts toward a circuit breaker.
 
 ---

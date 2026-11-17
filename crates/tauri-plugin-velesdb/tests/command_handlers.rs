@@ -749,6 +749,38 @@ fn enable_streaming_then_stream_insert() {
     assert_eq!(inserted, 2);
 }
 
+/// A streamed point an upsert would refuse keeps core's code: it used to be
+/// reported as VELES-009 (a configuration error) like a full buffer, and
+/// before that it was queued and dropped by the drain.
+#[test]
+fn stream_insert_refuses_a_wrong_dimension_with_cores_code() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    seed_vector_collection(&app, "docs");
+    run(enable_streaming(
+        handle(&app),
+        st(&app),
+        EnableStreamingRequest {
+            collection: "docs".to_string(),
+            buffer_size: Some(256),
+            batch_size: Some(8),
+            flush_interval_ms: Some(10),
+        },
+    ))
+    .expect("enable_streaming");
+
+    let refused = run(stream_insert(
+        handle(&app),
+        st(&app),
+        StreamInsertRequest {
+            collection: "docs".to_string(),
+            points: vec![point(11, vec![0.1, 0.2], serde_json::json!({}))],
+        },
+    ))
+    .expect_err("a point of the wrong dimension is refused");
+    assert_eq!(refused.code, "VELES-004");
+}
+
 // ===========================================================================
 // Knowledge graph commands
 // ===========================================================================

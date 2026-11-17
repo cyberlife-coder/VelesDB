@@ -26,27 +26,36 @@ fn point(id: u64, vector: Vec<f32>) -> Point {
     Point::new(id, vector, None)
 }
 
-fn refused_code(result: Result<impl std::fmt::Debug, BackpressureError>) -> &'static str {
-    match result {
-        Err(BackpressureError::InvalidPoint(err)) => err.code(),
-        other => panic!("expected InvalidPoint, got {other:?}"),
-    }
+/// Streaming refuses the points (nothing queued) and the validation a surface
+/// runs first names the refusal with core's code.
+fn refused_code(
+    docs: &VectorCollection,
+    points: &[Point],
+    result: &Result<impl std::fmt::Debug, BackpressureError>,
+) -> &'static str {
+    assert!(
+        matches!(result, Err(BackpressureError::InvalidPoint)),
+        "expected InvalidPoint, got {result:?}"
+    );
+    docs.validate_points_for_upsert(points)
+        .expect_err("the validation refuses what streaming refused")
+        .code()
 }
 
 #[tokio::test]
 async fn a_point_of_the_wrong_dimension_is_refused_before_it_is_queued() {
     let (_dir, _db, docs) = streaming_docs(1);
-    assert_eq!(
-        refused_code(docs.stream_insert(point(1, vec![1.0, 0.0, 0.0]))),
-        "VELES-004"
-    );
+    let short = point(1, vec![1.0, 0.0, 0.0]);
+    let result = docs.stream_insert(short.clone());
+    assert_eq!(refused_code(&docs, &[short], &result), "VELES-004");
 }
 
 #[tokio::test]
 async fn a_non_finite_point_is_refused_before_it_is_queued() {
     let (_dir, _db, docs) = streaming_docs(1);
     let nan = point(1, vec![f32::NAN, 0.0, 0.0, 0.0]);
-    assert_eq!(refused_code(docs.stream_insert(nan)), "VELES-005");
+    let result = docs.stream_insert(nan.clone());
+    assert_eq!(refused_code(&docs, &[nan], &result), "VELES-005");
 }
 
 /// One bad point refuses the whole batch, and none of it is queued: the
@@ -56,10 +65,9 @@ async fn a_batch_with_one_bad_point_queues_nothing() {
     let (_dir, _db, docs) = streaming_docs(2);
     let good = point(1, vec![1.0, 0.0, 0.0, 0.0]);
     let bad = point(2, vec![1.0, 0.0]);
-    assert_eq!(
-        refused_code(docs.stream_insert_batch(vec![good, bad])),
-        "VELES-004"
-    );
+    let batch = vec![good, bad];
+    let result = docs.stream_insert_batch(batch.clone());
+    assert_eq!(refused_code(&docs, &batch, &result), "VELES-004");
 
     // batch_size 2: had point 1 been queued, this second point would flush both.
     docs.stream_insert(point(3, vec![0.0, 1.0, 0.0, 0.0]))

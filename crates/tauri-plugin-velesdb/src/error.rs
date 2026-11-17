@@ -120,15 +120,12 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-/// A streamed point an upsert would refuse keeps core's code; a full
-/// buffer, an unconfigured or a dead pipeline stays a configuration error
-/// naming the condition, as before.
+/// A full buffer, an unconfigured or a dead pipeline is a configuration error
+/// naming the condition. A point an upsert would refuse is checked first by
+/// `stream_insert` and keeps core's code.
 impl From<velesdb_core::BackpressureError> for Error {
     fn from(err: velesdb_core::BackpressureError) -> Self {
-        match err {
-            velesdb_core::BackpressureError::InvalidPoint(inner) => Self::Database(*inner),
-            other => Self::InvalidConfig(format!("Stream insert backpressure: {other}")),
-        }
+        Self::InvalidConfig(format!("Stream insert backpressure: {err}"))
     }
 }
 

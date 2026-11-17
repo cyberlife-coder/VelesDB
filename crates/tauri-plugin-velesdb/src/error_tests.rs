@@ -201,16 +201,3 @@ fn test_command_error_io_uses_veles_011() {
     // Assert — IO maps to VELES-011
     assert_eq!(cmd_err.code, "VELES-011");
 }
-
-/// A streamed point an upsert would refuse keeps core's code: it used to be
-/// reported as VELES-009 (a configuration error) like a full buffer.
-#[test]
-fn test_an_invalid_streamed_point_keeps_cores_code() {
-    let refusal = velesdb_core::BackpressureError::InvalidPoint(Box::new(
-        velesdb_core::Error::DimensionMismatch {
-            expected: 4,
-            actual: 2,
-        },
-    ));
-    assert_eq!(CommandError::from(Error::from(refusal)).code, "VELES-004");
-}

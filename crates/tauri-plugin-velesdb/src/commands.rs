@@ -776,14 +776,15 @@ pub async fn stream_insert<R: Runtime>(
         .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
 
-            let points = request
+            let points: Vec<_> = request
                 .points
                 .into_iter()
                 .map(|p| velesdb_core::Point::new(p.id, p.vector, p.payload))
                 .collect();
-            // One batch, checked by core before anything is queued: a point
-            // an upsert would refuse fails the call with core's code instead
-            // of being dropped later by the drain.
+            // One batch, checked before anything is queued: a point an upsert
+            // would refuse fails the call with core's code instead of being
+            // dropped later by the drain.
+            coll.validate_points_for_upsert(&points)?;
             coll.stream_insert_batch(points)
                 .map_err(crate::error::Error::from)
         })

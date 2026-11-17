@@ -54,8 +54,21 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the bind parameter is missing or has the wrong type.
+    /// Returns an error if the bind parameter is missing or has the wrong
+    /// type, or [`Error::InvalidVector`] for a weight that is not finite.
     pub(crate) fn resolve_sparse_vector(
+        expr: &SparseVectorExpr,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<SparseVector> {
+        let vector = Self::parse_sparse_vector(expr, params)?;
+        // A JSON weight past f32 (`1e300`) narrows to infinity: the same
+        // finite check every typed sparse search runs.
+        crate::validation::validate_sparse_vector_is_finite(&vector)?;
+        Ok(vector)
+    }
+
+    /// Reads the sparse vector `expr` names, unchecked.
+    fn parse_sparse_vector(
         expr: &SparseVectorExpr,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<SparseVector> {

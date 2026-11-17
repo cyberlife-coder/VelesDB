@@ -33,15 +33,15 @@ crates/velesdb-wasm/src/store_search.rs fn validate_dimension
 # surface loses it.
 crates/velesdb-python/src/database.rs fn open_shared
 
-# Second id parser removed: every id the JS bindings read back already
-# deserializes from a number or a decimal string through the crate-wide id
-# rule (model::deserialize_id), so the string-to-number tree walk only
-# duplicated it — and disagreed with it on surrounding whitespace. Breaking
-# for Rust callers of 0.x velesdb-memory, recorded in its CHANGELOG.
-crates/velesdb-memory/src/context/wire.rs fn parse_fragment_id_strings
-crates/velesdb-memory/src/context/wire.rs fn parse_id_fields
-crates/velesdb-memory/src/context/wire.rs struct InvalidId
-# The Node wrappers of the same helpers: `convert` is a private module of the
-# cdylib, so they were unreachable from the published package.
+# The Node wrappers of velesdb-memory's (now deprecated) string-to-number id
+# walks: every id the binding reads back deserializes from a decimal string,
+# and `convert` is a private module of the cdylib, so they were unreachable
+# from the published package.
 crates/velesdb-node/src/convert.rs fn parse_fragment_id_strings
 crates/velesdb-node/src/convert.rs fn parse_id_fields
+# Collection's streaming entry points moved, unchanged, from types.rs into
+# collection/core/streaming_ops.rs (types.rs crossed its file budget): same
+# inherent impl, same public path, not a removal.
+crates/velesdb-core/src/collection/types.rs fn stream_insert
+crates/velesdb-core/src/collection/types.rs fn stream_insert_batch
+crates/velesdb-core/src/collection/types.rs fn enable_streaming

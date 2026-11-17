@@ -12,10 +12,9 @@ use serde_json::{Map, Value};
 
 /// Serde `deserialize_with` for a required `u64` id field: accepts a JSON
 /// number or a decimal string (issue #1468). Sibling of
-/// [`crate::context::wire::deserialize_optional_id`] (that one is
-/// `Option`-shaped and lives behind the `context` feature) — this one is
-/// deliberately feature-independent because [`Link`] is compiled whenever
-/// `model` is, regardless of `context`. Reused by `crate::mcp::dto`'s
+/// `deserialize_optional_id` below (that one is `Option`-shaped and gated on
+/// its consumers) — this one is deliberately feature-independent because
+/// [`Link`] is compiled whenever `model` is, regardless of `context`. Reused by `crate::mcp::dto`'s
 /// `relate`/`forget`/`feedback` id parameters so the accepted-forms rule
 /// lives in exactly one place. Input-side only and purely widening — the
 /// serialized (output) shape of every domain type is unchanged.

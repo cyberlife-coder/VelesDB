@@ -87,7 +87,7 @@ fn segment_for_compilation(
 pub(super) use crate::schema::wire_safe_output_schema;
 
 /// Input-side counterpart: `fragments[].id` accepts an integer or a decimal
-/// string ([`crate::context::wire::deserialize_optional_id`]), so the
+/// string (`crate::model::deserialize_optional_id`), so the
 /// advertised input schema announces the string form — a client generating
 /// requests from the schema must be able to discover it.
 ///

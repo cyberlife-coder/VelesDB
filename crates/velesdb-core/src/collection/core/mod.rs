@@ -55,6 +55,8 @@ mod scroll;
 mod scroll_tests;
 mod sparse_lifecycle;
 mod statistics;
+#[cfg(feature = "persistence")]
+mod streaming_ops;
 #[cfg(all(test, feature = "persistence"))]
 mod ttl_read_tests;
 

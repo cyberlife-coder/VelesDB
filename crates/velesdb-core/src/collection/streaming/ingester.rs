@@ -128,10 +128,11 @@ pub enum BackpressureError {
     DrainTaskDead,
 
     /// A point fails the checks an upsert runs (dimension, finite components,
-    /// ingest limits, sparse index names); nothing of the call was queued.
-    /// The inner error carries core's code.
-    #[error("invalid point: {0}")]
-    InvalidPoint(Box<crate::error::Error>),
+    /// ingest limits); nothing of the call was queued.
+    /// [`VectorCollection::validate_points_for_upsert`](crate::collection::VectorCollection::validate_points_for_upsert)
+    /// names the refusal with core's code.
+    #[error("invalid point: it fails the checks an upsert runs; nothing was queued")]
+    InvalidPoint,
 }
 
 /// Streaming ingestion handle for a single collection.
