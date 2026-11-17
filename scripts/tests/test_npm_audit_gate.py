@@ -16,6 +16,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import date, timedelta
 import tempfile
 import textwrap
 import time
@@ -37,6 +38,7 @@ def _load_module():
     spec = importlib.util.spec_from_file_location("npm_audit_gate", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses resolve their module by name
     spec.loader.exec_module(module)
     return module
 
@@ -216,7 +218,7 @@ class RetryTests(unittest.TestCase):
         original = gate.run_audit
         gate.run_audit = run
         try:
-            counts = gate.audit_with_retries("npm", Path("."), 4, 0, sleep=lambda _: None)
+            counts = gate.audit_with_retries("npm", Path("."), 4, 0, sleep=lambda _: None).counts
         finally:
             gate.run_audit = original
         self.assertEqual(1, len(calls))
@@ -249,7 +251,7 @@ class RetryTests(unittest.TestCase):
         original = gate.run_audit
         gate.run_audit = run
         try:
-            counts = gate.audit_with_retries("npm", Path("."), 4, 0, sleep=lambda _: None)
+            counts = gate.audit_with_retries("npm", Path("."), 4, 0, sleep=lambda _: None).counts
         finally:
             gate.run_audit = original
         self.assertEqual(0, counts["high"])
@@ -410,6 +412,96 @@ class ExitCodeTests(unittest.TestCase):
             npm = _fake_npm(root, stdout=UNREACHABLE_PAYLOAD)
             result = _run(npm, root, "--attempts", "1")
         self.assertNotEqual(EXIT_CLEAN, result.returncode, result.stdout)
+
+
+GHSA = "GHSA-fc5q-39xc-vjpf"
+
+
+def _advisory_report(ghsa: str = GHSA, severity: str = "high") -> str:
+    """A completed report whose one advisory reaches a dependent through it,
+    as npm lays them out: an advisory object on the vulnerable package, and
+    the dependent pointing at it by name."""
+    counts = {name: 0 for name in gate.SEVERITIES}
+    counts[severity] = 2
+    counts["total"] = 2
+    advisory = {"source": 1, "name": "picomatch", "severity": severity,
+                "url": f"https://github.com/advisories/{ghsa}", "title": "ReDoS"}
+    return json.dumps({
+        "auditReportVersion": 2,
+        "vulnerabilities": {
+            "picomatch": {"name": "picomatch", "severity": severity, "via": [advisory]},
+            "vite": {"name": "vite", "severity": severity, "via": ["picomatch"]},
+        },
+        "metadata": {"vulnerabilities": counts},
+    })
+
+
+def _accepted(directory: Path, *, ghsa: str = GHSA, review_by: str | None = None) -> Path:
+    review_by = review_by or (date.today() + timedelta(days=30)).isoformat()
+    path = directory / "accepted.json"
+    path.write_text(json.dumps([{"ghsa": ghsa, "package": "picomatch",
+                                 "reason": "no fixed version published", "review_by": review_by}]))
+    return path
+
+
+class AcceptedAdvisoryTests(unittest.TestCase):
+    """An advisory with no fixed version can be accepted, by GHSA id, with a
+    reason and a review date — and only that: the gate still fails closed on
+    anything it cannot attribute, on another advisory, and once the date has
+    passed."""
+
+    def test_an_accepted_advisory_no_longer_refuses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            npm = _fake_npm(root, stdout=_advisory_report())
+            result = _run(npm, root, "--accepted", str(_accepted(root)))
+        self.assertEqual(EXIT_CLEAN, result.returncode, result.stderr)
+        self.assertIn(GHSA, result.stdout)
+
+    def test_another_advisory_still_refuses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            npm = _fake_npm(root, stdout=_advisory_report(ghsa="GHSA-xxxx-yyyy-zzzz"))
+            result = _run(npm, root, "--accepted", str(_accepted(root)))
+        self.assertEqual(EXIT_ADVISORY, result.returncode, result.stderr)
+        self.assertIn("GHSA-xxxx-yyyy-zzzz", result.stderr)
+
+    def test_an_expired_acceptance_refuses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            npm = _fake_npm(root, stdout=_advisory_report())
+            result = _run(npm, root, "--accepted", str(_accepted(root, review_by="2000-01-01")))
+        self.assertEqual(EXIT_ADVISORY, result.returncode, result.stderr)
+        self.assertIn("review_by", result.stderr)
+
+    def test_a_count_without_attributable_advisories_still_refuses(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            npm = _fake_npm(root, stdout=_report(high=1))
+            result = _run(npm, root, "--accepted", str(_accepted(root)))
+        self.assertEqual(EXIT_ADVISORY, result.returncode, result.stderr)
+
+    def test_an_acceptance_without_a_reason_or_date_is_a_usage_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bad = root / "accepted.json"
+            bad.write_text(json.dumps([{"ghsa": GHSA}]))
+            npm = _fake_npm(root, stdout=_advisory_report())
+            result = _run(npm, root, "--accepted", str(bad))
+        self.assertEqual(EXIT_USAGE, result.returncode, result.stderr)
+
+    def test_the_repository_list_is_well_formed(self) -> None:
+        entries = gate.load_accepted(ROOT / "scripts" / "npm-audit-accepted.json")
+        for entry in entries:
+            self.assertRegex(entry.ghsa, r"^GHSA(-[0-9a-z]{4}){3}$")
+            self.assertTrue(entry.reason.strip())
+            horizon = date.today() + timedelta(days=gate.MAX_ACCEPTANCE_DAYS)
+            self.assertLessEqual(
+                entry.review_by,
+                horizon,
+                f"{entry.ghsa}: review_by past the {gate.MAX_ACCEPTANCE_DAYS}-day horizon "
+                "makes the exception permanent; set a nearer date",
+            )
 
 
 class AttemptTimeoutTests(unittest.TestCase):
