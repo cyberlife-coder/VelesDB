@@ -4,10 +4,10 @@
 //! Enables offline-first PWA with persistent knowledge graphs.
 
 use crate::graph::{GraphEdge, GraphNode, GraphStore};
-use crate::idb_helpers::{open_with_stores, transaction_committed, wait_for_request};
+use crate::idb_helpers::{open_with_stores, wait_for_request, WriteTransaction};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-use web_sys::{IdbDatabase, IdbObjectStore, IdbTransactionMode};
+use web_sys::{IdbDatabase, IdbObjectStore};
 
 const DB_NAME: &str = "velesdb_graphs";
 const NODES_STORE: &str = "nodes";
@@ -66,33 +66,48 @@ impl GraphPersistence {
     /// One transaction drops the graph's previous rows, writes the current
     /// ones and the metadata (keeping the first save's `created_at`): a node
     /// or edge removed since the last save does not come back on load, and a
-    /// failed save leaves the previous one intact.
+    /// failed save leaves the previous one intact — every row is serialized
+    /// before anything is written, and a failure once writing has begun
+    /// aborts the transaction.
     #[wasm_bindgen]
     pub async fn save(&self, graph_name: &str, store: &GraphStore) -> Result<(), JsValue> {
         let db = self.require_db()?;
 
-        let transaction = db.transaction_with_str_sequence_and_mode(
-            &all_store_names(),
-            IdbTransactionMode::Readwrite,
-        )?;
-        let committed = transaction_committed(&transaction);
+        // Serialized first: a value JS cannot hold (an id past 2^53) fails
+        // here, before the previous rows are touched.
+        let node_rows = store
+            .get_all_nodes_internal()
+            .into_iter()
+            .map(|node| {
+                Ok((
+                    row_key(graph_name, node.id()),
+                    crate::js_value::to_js_value(&node)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, JsValue>>()?;
+        let edge_rows = store
+            .get_all_edges_internal()
+            .into_iter()
+            .map(|edge| {
+                Ok((
+                    row_key(graph_name, edge.id()),
+                    crate::js_value::to_js_value(&edge)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, JsValue>>()?;
 
-        let nodes_store = transaction.object_store(NODES_STORE)?;
-        let edges_store = transaction.object_store(EDGES_STORE)?;
-        let meta_store = transaction.object_store(META_STORE)?;
+        let transaction = WriteTransaction::begin(db, &all_store_names())?;
+        let nodes_store = transaction.store(NODES_STORE)?;
+        let edges_store = transaction.store(EDGES_STORE)?;
+        let meta_store = transaction.store(META_STORE)?;
 
         delete_rows(&nodes_store, graph_name).await?;
         delete_rows(&edges_store, graph_name).await?;
-
-        for node in store.get_all_nodes_internal() {
-            let value = crate::js_value::to_js_value(&node)?;
-            let key = JsValue::from_str(&row_key(graph_name, node.id()));
-            wait_for_request(&nodes_store.put_with_key(&value, &key)?).await?;
+        for (key, value) in &node_rows {
+            wait_for_request(&nodes_store.put_with_key(value, &JsValue::from_str(key))?).await?;
         }
-        for edge in store.get_all_edges_internal() {
-            let value = crate::js_value::to_js_value(&edge)?;
-            let key = JsValue::from_str(&row_key(graph_name, edge.id()));
-            wait_for_request(&edges_store.put_with_key(&value, &key)?).await?;
+        for (key, value) in &edge_rows {
+            wait_for_request(&edges_store.put_with_key(value, &JsValue::from_str(key))?).await?;
         }
 
         let now = js_sys::Date::now();
@@ -111,7 +126,7 @@ impl GraphPersistence {
         wait_for_request(&meta_store.put_with_key(&meta_value, &JsValue::from_str(graph_name))?)
             .await?;
 
-        committed.await
+        transaction.commit().await
     }
 
     /// Loads a graph from `IndexedDB` by name: exactly the rows saved under
@@ -162,18 +177,13 @@ impl GraphPersistence {
     pub async fn delete_graph(&self, graph_name: &str) -> Result<(), JsValue> {
         let db = self.require_db()?;
 
-        let transaction = db.transaction_with_str_sequence_and_mode(
-            &all_store_names(),
-            IdbTransactionMode::Readwrite,
-        )?;
-        let committed = transaction_committed(&transaction);
-
-        delete_rows(&transaction.object_store(NODES_STORE)?, graph_name).await?;
-        delete_rows(&transaction.object_store(EDGES_STORE)?, graph_name).await?;
-        let meta_store = transaction.object_store(META_STORE)?;
+        let transaction = WriteTransaction::begin(db, &all_store_names())?;
+        delete_rows(&transaction.store(NODES_STORE)?, graph_name).await?;
+        delete_rows(&transaction.store(EDGES_STORE)?, graph_name).await?;
+        let meta_store = transaction.store(META_STORE)?;
         wait_for_request(&meta_store.delete(&JsValue::from_str(graph_name))?).await?;
 
-        committed.await
+        transaction.commit().await
     }
 
     /// Closes the database connection; `init()` opens it again. An open

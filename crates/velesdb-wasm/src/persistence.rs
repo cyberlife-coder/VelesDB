@@ -2,7 +2,7 @@
 //!
 //! Provides async save/load operations for offline-first applications.
 
-use crate::idb_helpers::{idb_factory, open_with_stores, transaction_committed, wait_for_request};
+use crate::idb_helpers::{idb_factory, open_with_stores, wait_for_request, WriteTransaction};
 use wasm_bindgen::prelude::*;
 use web_sys::{IdbDatabase, IdbObjectStore, IdbTransactionMode};
 
@@ -27,16 +27,15 @@ pub async fn save_to_indexeddb(db_name: &str, data: &[u8]) -> Result<(), JsValue
 }
 
 async fn put_bytes(db: &IdbDatabase, data: &[u8]) -> Result<(), JsValue> {
-    let transaction =
-        db.transaction_with_str_and_mode(STORE_NAME, IdbTransactionMode::Readwrite)?;
-    let committed = transaction_committed(&transaction);
-    let store: IdbObjectStore = transaction.object_store(STORE_NAME)?;
+    let stores = js_sys::Array::of1(&JsValue::from_str(STORE_NAME));
+    let transaction = WriteTransaction::begin(db, &stores)?;
+    let store: IdbObjectStore = transaction.store(STORE_NAME)?;
 
     // Convert bytes to Uint8Array
     let array = js_sys::Uint8Array::from(data);
     let request = store.put_with_key(&array, &JsValue::from_str(DATA_KEY))?;
     wait_for_request(&request).await?;
-    committed.await
+    transaction.commit().await
 }
 
 /// Loads bytes from `IndexedDB`.

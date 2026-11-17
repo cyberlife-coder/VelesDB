@@ -69,3 +69,27 @@ async fn a_graph_name_is_not_a_prefix_of_another() {
     assert_eq!(p.load("a:b").await.expect("load a:b").node_count(), 2);
     p.delete_graph("a:b").await.expect("cleanup");
 }
+
+/// A save that fails leaves the previous save intact: a node id past 2^53
+/// cannot cross to JS, and that failure used to come after the previous
+/// rows were deleted — the transaction then committed the deletion alone.
+#[wasm_bindgen_test]
+async fn a_failed_save_leaves_the_previous_save_intact() {
+    let p = persistence().await;
+    p.save("intact", &graph(&[1, 2], &[(10, 1, 2)]))
+        .await
+        .expect("first save");
+
+    let unsafe_id = 1_u64 << 53;
+    assert!(
+        p.save("intact", &graph(&[1, unsafe_id], &[]))
+            .await
+            .is_err(),
+        "an id past 2^53 cannot be saved"
+    );
+
+    let loaded = p.load("intact").await.expect("load");
+    assert_eq!(loaded.node_count(), 2, "the first save's nodes survive");
+    assert_eq!(loaded.edge_count(), 1, "the first save's edge survives");
+    p.delete_graph("intact").await.expect("cleanup");
+}

@@ -102,18 +102,78 @@ async fn await_open(
     Ok(result.unchecked_into())
 }
 
-/// A future that resolves once `transaction` has committed and rejects if it
-/// errors or aborts.
+/// A read-write transaction that commits only through [`Self::commit`].
 ///
-/// A request's `success` only means the request ran: the transaction can
-/// still abort (a quota error, a later failing request), and nothing is
-/// durable until it commits. A save awaits this before reporting success.
-/// Create it right after the transaction, before its requests settle, so the
-/// `complete` event cannot fire unobserved.
-pub fn transaction_committed(
-    transaction: &web_sys::IdbTransaction,
-) -> impl std::future::Future<Output = Result<(), JsValue>> {
-    let promise = js_sys::Promise::new(&mut |resolve, reject| {
+/// A request's `success` only means the request ran: nothing is durable
+/// until the transaction commits, and it can still abort (a quota error, a
+/// later failing request). Two things follow, both held here once:
+///
+/// - The outcome is observed from the start: `complete`, `error` and `abort`
+///   feed a future created with the transaction, so an early return never
+///   leaves a rejected promise unhandled.
+/// - Dropped without `commit` — any `?` on an error path — the transaction
+///   aborts, so the writes it already made (a save's deletion of the
+///   previous rows) are rolled back instead of committing on their own.
+pub struct WriteTransaction {
+    transaction: web_sys::IdbTransaction,
+    outcome: Option<JsFuture>,
+}
+
+impl WriteTransaction {
+    /// Opens a read-write transaction over `stores` of `db`.
+    ///
+    /// # Errors
+    ///
+    /// The `JsValue` IndexedDB raises when the transaction cannot start.
+    pub fn begin(db: &web_sys::IdbDatabase, stores: &js_sys::Array) -> Result<Self, JsValue> {
+        let transaction = db.transaction_with_str_sequence_and_mode(
+            stores,
+            web_sys::IdbTransactionMode::Readwrite,
+        )?;
+        let outcome = JsFuture::from(outcome_promise(&transaction));
+        Ok(Self {
+            transaction,
+            outcome: Some(outcome),
+        })
+    }
+
+    /// The object store `name` inside this transaction.
+    ///
+    /// # Errors
+    ///
+    /// The `JsValue` IndexedDB raises for a store outside the transaction.
+    pub fn store(&self, name: &str) -> Result<web_sys::IdbObjectStore, JsValue> {
+        self.transaction.object_store(name)
+    }
+
+    /// Waits for the transaction to commit.
+    ///
+    /// # Errors
+    ///
+    /// `"Transaction failed"` / `"Transaction aborted"` when it does not.
+    pub async fn commit(mut self) -> Result<(), JsValue> {
+        match self.outcome.take() {
+            Some(outcome) => outcome.await.map(|_| ()),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for WriteTransaction {
+    fn drop(&mut self) {
+        if self.outcome.is_some() {
+            // Not committed: an error path left early. Roll back what was
+            // written. Aborting a transaction that already finished throws,
+            // and there is nothing left to undo then.
+            let _ = self.transaction.abort();
+        }
+    }
+}
+
+/// A promise that resolves when `transaction` commits and rejects when it
+/// errors or aborts.
+fn outcome_promise(transaction: &web_sys::IdbTransaction) -> js_sys::Promise {
+    js_sys::Promise::new(&mut |resolve, reject| {
         let oncomplete = Closure::once(move |_event: Event| {
             let _ = resolve.call0(&JsValue::UNDEFINED);
         });
@@ -139,11 +199,7 @@ pub fn transaction_committed(
         });
         transaction.set_onabort(Some(onabort.as_ref().unchecked_ref()));
         onabort.forget();
-    });
-    async move {
-        JsFuture::from(promise).await?;
-        Ok(())
-    }
+    })
 }
 
 /// Gets the `IdbFactory` from the current window context.
