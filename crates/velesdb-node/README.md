@@ -247,7 +247,10 @@ Three contracts hold across all of them: every method returns a `Promise` and
 runs off the event-loop thread; every id crosses as a **decimal string** (a JS
 `number` loses precision above 2^53); every rejection is an `Error` whose
 message starts with `[INVALID_INPUT]`, `[NOT_FOUND]`, `[UNSUPPORTED]` or
-`[INTERNAL]`.
+`[INTERNAL]`. Metadata, filters and requests must be JSON data (a `Date` or a
+`Map` rejects instead of being stored as `{}`); an argument of the wrong JS
+type for a typed parameter throws synchronously, from napi — see
+[argument errors](../../docs/guides/NODE_ADDON.md#argument-errors).
 
 Parameter types are generated into `index.d.ts` and shipped with the package —
 read them from your editor. Everything else (per-method semantics, the

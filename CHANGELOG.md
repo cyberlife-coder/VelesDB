@@ -340,6 +340,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Node: a `Date`, `Map`, `Set` or class instance in metadata, a filter or a
+  request is refused, not stored as `{}`.** napi read any object's own
+  enumerable properties, so these arrived as empty objects and were stored so
+  without a word. Metadata, filters, compile requests and working contexts now
+  go through one conversion that accepts JSON data only (plain objects, arrays,
+  finite numbers, strings, booleans, `null`) and rejects the rest with
+  `INVALID_INPUT` naming where it sits, in the returned `Promise`. Whole
+  numbers stay exact integers up to 2^53 − 1. The Node guide documents which
+  argument errors reject and which throw (a wrong JS type, refused by napi).
+
 - **Node: `freshness` is documented as it is sent** (Node, 2026-11-17). The
   `recall` hit type said `freshness` is `null` without `anchorRoot`; the
   binding leaves the field out (`undefined`), as the method's own doc said.

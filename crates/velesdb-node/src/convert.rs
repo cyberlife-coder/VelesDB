@@ -21,11 +21,11 @@ pub fn parse_id(s: &str) -> napi::Result<u64> {
         .map_err(|_| invalid_input(format!("invalid id '{s}' (expected a decimal u64 string)")))
 }
 
-/// JS object → engine [`Metadata`]. `null`/absent → `None`; a non-object is an
-/// error (callers must pass a plain object for metadata and filters). Whole
-/// numbers come back as integers ([`integral_numbers`]).
+/// JSON data (read by [`crate::json_arg`]) → engine [`Metadata`].
+/// `null`/absent → `None`; anything but an object is an error (callers must
+/// pass a plain object for metadata and filters).
 pub fn to_metadata(value: Option<Value>) -> napi::Result<Option<Metadata>> {
-    match value.map(integral_numbers) {
+    match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Object(map)) => Ok(Some(map)),
         Some(_) => Err(invalid_input("metadata/filter must be an object")),
@@ -35,7 +35,10 @@ pub fn to_metadata(value: Option<Value>) -> napi::Result<Option<Metadata>> {
 /// The largest whole number a JS `number` holds exactly (`2^53 - 1`).
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
-/// Restores the integers napi's JSON conversion turned into floats.
+/// Restores the integers napi's JSON conversion turned into floats, for the
+/// values napi still converts itself (a column filter's `value`, a field of
+/// a `#[napi(object)]`); the arguments [`crate::json_arg`] reads come out
+/// right.
 ///
 /// napi reads a JS number as an integer only within `u32` / `i32` range: a
 /// whole number past it — a millisecond timestamp, a large id — arrives as
@@ -46,11 +49,7 @@ const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 pub fn integral_numbers(value: Value) -> Value {
     match value {
         Value::Number(n) => Value::Number(match n.as_f64() {
-            Some(f) if n.is_f64() && f.fract() == 0.0 && f.abs() <= MAX_SAFE_INTEGER => {
-                // Reason: a whole number within ±(2^53 - 1), checked just above.
-                #[allow(clippy::cast_possible_truncation)]
-                serde_json::Number::from(f as i64)
-            }
+            Some(f) if n.is_f64() => json_number(f).unwrap_or(n),
             _ => n,
         }),
         Value::Array(items) => Value::Array(items.into_iter().map(integral_numbers).collect()),
@@ -61,6 +60,18 @@ pub fn integral_numbers(value: Value) -> Value {
         ),
         other => other,
     }
+}
+
+/// A JS number as JSON: a whole number a JS `number` holds exactly (within
+/// `±(2^53 - 1)`) as an integer, any other finite number as a float, and
+/// `None` for `NaN` and the infinities, which JSON cannot hold.
+pub fn json_number(f: f64) -> Option<serde_json::Number> {
+    if f.fract() == 0.0 && f.abs() <= MAX_SAFE_INTEGER {
+        // Reason: a whole number within ±(2^53 - 1), checked just above.
+        #[allow(clippy::cast_possible_truncation)]
+        return Some(serde_json::Number::from(f as i64));
+    }
+    serde_json::Number::from_f64(f)
 }
 
 /// JS `[{target, relation}]` → engine `Vec<Link>`, parsing each id.
