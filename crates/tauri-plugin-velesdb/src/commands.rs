@@ -2,12 +2,12 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::CommandError;
+#[cfg(feature = "persistence")]
+use crate::helpers::parse_search_quality;
 use crate::helpers::{
     map_core_results, parse_filter, parse_fusion_strategy, parse_metric, parse_storage_mode,
     require_collection, timed_search_response,
 };
-#[cfg(feature = "persistence")]
-use crate::helpers::{parse_search_quality, require_vector_collection};
 use crate::state::VelesDbState;
 #[path = "commands_batch.rs"]
 mod batch;
@@ -761,7 +761,7 @@ pub async fn stream_insert<R: Runtime>(
 ) -> std::result::Result<usize, CommandError> {
     state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let mut inserted = 0;
             for p in request.points {
@@ -807,7 +807,7 @@ pub async fn enable_streaming<R: Runtime>(
     let config = streaming_config_from_request(&request);
     state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
             coll.enable_streaming(config)?;
             Ok(())
         })

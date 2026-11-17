@@ -1419,3 +1419,51 @@ fn a_scoped_sparse_search_fills_its_top_k_or_refuses() {
         "a scope a sparse-only search cannot carry is refused"
     );
 }
+
+/// `search` reaches a graph collection's node embeddings, as `searchIds`,
+/// `batchSearch` and the text and hybrid searches already did: it answered
+/// "Collection 'kg' not found", core's gated read resolving vector
+/// collections only.
+#[test]
+fn search_reaches_a_graph_collections_embeddings() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    run(create_graph_collection(
+        handle(&app),
+        st(&app),
+        CreateGraphCollectionRequest {
+            name: "kg".to_string(),
+            dimension: Some(4),
+            metric: "cosine".to_string(),
+            graph_schema: None,
+        },
+    ))
+    .expect("create graph collection");
+    run(upsert(
+        handle(&app),
+        st(&app),
+        UpsertRequest {
+            collection: "kg".to_string(),
+            points: vec![point(
+                10,
+                vec![1.0, 0.0, 0.0, 0.0],
+                serde_json::json!({"name": "Alice"}),
+            )],
+        },
+    ))
+    .expect("upsert a node embedding");
+
+    let found = run(search(
+        handle(&app),
+        st(&app),
+        SearchRequest {
+            collection: "kg".to_string(),
+            vector: vec![1.0, 0.0, 0.0, 0.0],
+            top_k: 1,
+            filter: None,
+            quality: None,
+        },
+    ))
+    .expect("a graph collection is searchable");
+    assert_eq!(found.results[0].id, 10);
+}

@@ -5,8 +5,7 @@
 
 use crate::error::CommandError;
 use crate::helpers::{
-    map_core_results, parse_sparse_vector, require_collection, require_vector_collection,
-    timed_search_response,
+    map_core_results, parse_sparse_vector, require_collection, timed_search_response,
 };
 use crate::state::VelesDbState;
 use crate::types::{
@@ -25,7 +24,7 @@ pub async fn sparse_search<R: Runtime>(
 
     let results = state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let idx_name = request.index_name.unwrap_or_default();
@@ -62,7 +61,7 @@ pub async fn hybrid_sparse_search<R: Runtime>(
 
     let results = state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let strategy = velesdb_core::fusion::FusionStrategy::rrf_default();
