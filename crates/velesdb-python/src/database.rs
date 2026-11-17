@@ -136,18 +136,27 @@ impl Database {
     ///     config: Optional typed configuration (limits, etc.) applied
     ///         at open time. See :class:`VelesConfigOptions`.
     ///     observer: Optional callable invoked on collection lifecycle
-    ///         events and before every gated read. Called as
+    ///         events, after every write and delete, and before every gated
+    ///         read and VelesQL mutation. Called as
     ///         ``observer(event, **fields)`` where ``event`` is one of
     ///         ``"collection_created"``, ``"collection_deleted"``,
-    ///         ``"upsert"``, ``"query"``, or ``"query_request"``:
+    ///         ``"upsert"``, ``"delete"``, ``"query"``, ``"query_request"``,
+    ///         ``"ddl_request"``, or ``"dml_mutation_request"``:
     ///
     ///         - ``collection_created`` → ``name``, ``kind``
     ///           (``"vector"``/``"metadata"``/``"graph"``/``"unknown"``)
     ///         - ``collection_deleted`` → ``name``
-    ///         - ``upsert`` → ``collection``, ``point_count``
+    ///         - ``upsert`` → ``collection``, ``point_count`` (after every
+    ///           completed write, SDK or VelesQL)
+    ///         - ``delete`` → ``collection``, ``point_count`` (after every
+    ///           completed point delete, SDK or VelesQL ``DELETE``)
     ///         - ``query`` → ``collection``, ``duration_us`` (after execution)
     ///         - ``query_request`` → ``collection``, ``operation``,
     ///           ``principal``, ``tenant`` (before execution — **veto point**)
+    ///         - ``ddl_request`` / ``dml_mutation_request`` → ``operation``,
+    ///           ``collection`` (before a VelesQL DDL statement or mutation —
+    ///           **veto point**: ``None``/``True`` allow, ``False`` or a
+    ///           string reason deny)
     ///
     ///         The observer is immutable once the database is opened
     ///         (there is no post-open setter). For the *notify* events the

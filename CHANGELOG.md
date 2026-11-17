@@ -411,6 +411,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python: the observer receives point deletes** (Python, 2026-11-17).
+  Core reports every completed delete with `on_delete`, but the binding's
+  observer adapter did not implement it, so `Collection.delete` and VelesQL
+  `DELETE` never reached a Python callback. It now receives
+  `observer("delete", collection=…, point_count=…)`, like `upsert`. The
+  `Database` docstring lists every event, `ddl_request` and
+  `dml_mutation_request` included, and `CORE_OPERATIONS_API.md` no longer
+  says `on_upsert` / `on_query` fire only for VelesQL statements, and lists
+  `on_delete`.
+
 - **WASM: `VectorStore.save()` / `export_to_bytes()` keep the sparse
   index.** It was dropped, so a loaded store answered no sparse query until
   every sparse vector was inserted again. Format v4 appends one record per

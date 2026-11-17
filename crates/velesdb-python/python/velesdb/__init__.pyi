@@ -1139,8 +1139,9 @@ class Database:
                 open time.
             observer: Optional callable invoked on engine events as
                 ``observer(event, **fields)``. Events: ``collection_created``,
-                ``collection_deleted``, ``upsert`` (also fired by direct SDK
-                writes), ``query``, the read-path veto ``query_request``
+                ``collection_deleted``, ``upsert`` / ``delete`` (fields
+                ``collection``, ``point_count``; fired after every completed
+                write or point delete, SDK or VelesQL), ``query``, the read-path veto ``query_request``
                 (``None``/``True`` allow, ``False``/str deny, ``{"filter": ...}``
                 allow-with-scope), and the VelesQL vetoes ``ddl_request`` /
                 ``dml_mutation_request`` (``None``/``True`` allow, ``False``/str
