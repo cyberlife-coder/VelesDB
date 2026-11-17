@@ -108,11 +108,14 @@ fn project_item(
         }
         ProjectionItem::FunctionCall(_) => {}
         ProjectionItem::PropertyPath { alias, property } => {
-            let Some(element) = find(&binding.nodes, alias).or_else(|| find(&binding.edges, alias))
-            else {
+            let value = if let Some(node) = find(&binding.nodes, alias) {
+                element_property(node, property)
+            } else if let Some(edge) = find(&binding.edges, alias) {
+                edge_property(edge, property)
+            } else {
                 return;
             };
-            if let Some(value) = element_property(element, property) {
+            if let Some(value) = value {
                 projected.insert(projection_key(item), value);
             }
         }
@@ -140,6 +143,16 @@ fn element_property(element: &BoundElement, property: &str) -> Option<serde_json
     }
     let payload = element.payload.as_ref()?;
     payload_path(payload, property).cloned()
+}
+
+/// Core's `projected_edge_property`: a relationship's `id` leaves as its
+/// decimal string (a derived edge id is hashed, routinely above 2^53); any
+/// other property reads as on a node.
+fn edge_property(edge: &BoundElement, property: &str) -> Option<serde_json::Value> {
+    if property == "id" {
+        return Some(velesdb_core::api_types::serde_id::id_to_json(edge.id));
+    }
+    element_property(edge, property)
 }
 
 /// Core's `project_all_node_properties`: every payload property but `id`

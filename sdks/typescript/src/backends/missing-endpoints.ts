@@ -34,6 +34,7 @@ import type {
   GraphSearchResponse,
   GraphSearchResultItem,
   GraphEdge,
+  GraphNodeId,
   MatchQueryOptions,
   MatchQueryResponse,
   MatchQueryResultItem,
@@ -286,11 +287,11 @@ export async function matchQuery(
 export async function removeEdge(
   transport: BaseTransport,
   collection: string,
-  edgeId: number
+  edgeId: GraphNodeId
 ): Promise<boolean> {
   const response = await transport.requestJson(
     'DELETE',
-    `${collectionPath(collection)}/graph/edges/${edgeId}`
+    `${collectionPath(collection)}/graph/edges/${encodeURIComponent(String(edgeId))}`
   );
   if (response.error !== undefined) {
     const { code, message } = response.error;

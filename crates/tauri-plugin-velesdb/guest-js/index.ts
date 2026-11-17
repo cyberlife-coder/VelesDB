@@ -713,7 +713,11 @@ export async function flush(name: string): Promise<void> {
 /** Request to add an edge to a graph collection. */
 export interface AddEdgeRequest {
   collection: string;
-  id: number;
+  /**
+   * Edge id. Send the decimal string an edge read answers (`EdgeOutput.id`);
+   * a number is accepted up to `Number.MAX_SAFE_INTEGER`.
+   */
+  id: string | number;
   source: number;
   target: number;
   label: string;
@@ -749,7 +753,11 @@ export interface GetNodeDegreeRequest {
 
 /** A single edge in the knowledge graph. */
 export interface EdgeOutput {
-  id: number;
+  /**
+   * Edge id as a decimal string: a derived edge id is hashed and routinely
+   * above 2^53, which a JavaScript number rounds.
+   */
+  id: string;
   source: number;
   target: number;
   label: string;
@@ -760,7 +768,8 @@ export interface EdgeOutput {
 export interface TraversalOutput {
   targetId: number;
   depth: number;
-  path: number[];
+  /** Ids of the edges walked, in order, as decimal strings (see `EdgeOutput.id`). */
+  path: string[];
 }
 
 /** In/out degree of a graph node. */

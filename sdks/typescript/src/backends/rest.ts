@@ -199,7 +199,7 @@ export class RestBackend implements IVelesDBBackend {
   async updateGuardrails(r: GuardRailsUpdateRequest): Promise<GuardRailsConfigResponse> { this.ensureInitialized(); return _updateGuardrails(buildBaseTransport(this.httpConfig), r); }
   async aggregate(q: string, p?: Record<string, unknown>, o?: AggregateQueryOptions): Promise<AggregateResponse> { this.ensureInitialized(); return _aggregate(buildBaseTransport(this.httpConfig), q, p, o); }
   async matchQuery(c: string, q: string, p?: Record<string, unknown>, o?: MatchQueryOptions): Promise<MatchQueryResponse> { this.ensureInitialized(); return _matchQuery(buildBaseTransport(this.httpConfig), c, q, p, o); }
-  async removeEdge(c: string, id: number): Promise<boolean> { this.ensureInitialized(); return _removeEdge(buildBaseTransport(this.httpConfig), c, id); }
+  async removeEdge(c: string, id: GraphNodeId): Promise<boolean> { this.ensureInitialized(); return _removeEdge(buildBaseTransport(this.httpConfig), c, id); }
   async getEdgeCount(c: string): Promise<number> { this.ensureInitialized(); return _getEdgeCount(buildBaseTransport(this.httpConfig), c); }
   async listNodes(c: string): Promise<ListNodesResponse> { this.ensureInitialized(); return _listNodes(buildBaseTransport(this.httpConfig), c); }
   async getNodeEdges(c: string, id: number, o?: GetNodeEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return _getNodeEdges(buildBaseTransport(this.httpConfig), c, id, o); }

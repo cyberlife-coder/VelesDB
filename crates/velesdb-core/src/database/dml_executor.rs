@@ -81,7 +81,7 @@ impl Database {
         let removed = collection.remove_edge(stmt.edge_id);
         let payload = serde_json::json!({
             "deleted": removed,
-            "edge_id": stmt.edge_id,
+            "edge_id": crate::api_types::serde_id::id_to_json(stmt.edge_id),
         });
         let result = SearchResult::new(crate::Point::metadata_only(0, payload), 0.0);
         Ok(vec![result])

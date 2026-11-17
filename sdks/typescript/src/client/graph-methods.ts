@@ -171,7 +171,7 @@ export function matchQuery(
 export function removeEdge(
   backend: IVelesDBBackend,
   collection: string,
-  edgeId: number
+  edgeId: GraphNodeId
 ): Promise<boolean> {
   requireNonEmptyString(collection, 'Collection');
   return backend.removeEdge(collection, edgeId);

@@ -96,6 +96,12 @@ impl GraphNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct GraphEdge {
+    /// A decimal string in JSON (`to_json`, IndexedDB): a derived edge id is
+    /// hashed and routinely above 2^53. A number still reads back.
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     id: u64,
     source: u64,
     target: u64,

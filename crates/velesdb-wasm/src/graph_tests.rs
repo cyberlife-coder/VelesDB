@@ -336,3 +336,22 @@ fn test_degree() {
     assert_eq!(store.out_degree(2), 1);
     assert_eq!(store.in_degree(2), 1);
 }
+
+#[test]
+fn a_graph_edge_writes_its_id_as_a_string_and_reads_either_form() {
+    let hashed = (1_u64 << 53) + 1;
+    let edge = GraphEdge::new(hashed, 1, 2, "KNOWS").unwrap();
+    let json = serde_json::to_value(&edge).unwrap();
+    assert_eq!(json["id"], "9007199254740993", "to_json and IndexedDB rows");
+    let back: GraphEdge = serde_json::from_value(json).unwrap();
+    assert_eq!(back.id(), hashed);
+    let saved_before: GraphEdge = serde_json::from_value(serde_json::json!({
+        "id": 7, "source": 1, "target": 2, "label": "KNOWS", "properties": {}
+    }))
+    .unwrap();
+    assert_eq!(
+        saved_before.id(),
+        7,
+        "a row saved with a numeric id still loads"
+    );
+}

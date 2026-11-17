@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (JSON wire): edge ids are decimal strings wherever a row or a
+  JavaScript surface carries one** (core, WASM, Tauri, TypeScript SDK,
+  2026-11-17). A derived edge id is hashed from (source, target, label) and
+  routinely above 2^53, where a JSON number loses digits in every JavaScript
+  reader; the REST graph endpoints already sent strings, the other surfaces
+  did not. Now:
+  - VelesQL rows: `SELECT EDGES` `edge_id`, `DELETE EDGE` `edge_id`, and a
+    MATCH row's `r.id`, variable-length `r`, `_edge_bindings` and
+    `_edge_paths` (core, so REST `/query` and `/match`, Python, mobile and
+    WASM alike). `WHERE r.id = …` and `ORDER BY` still compare the number.
+    Node ids, `source` and `target` stay numbers.
+  - WASM `WasmDatabase`: `getEdges` lists `id` as a string, `addEdge`
+    returns a string and accepts `id` as a string or a number, `removeEdge`
+    takes the string; `GraphEdge.to_json` and IndexedDB rows write the id as
+    a string (it threw above 2^53) and still load a numeric one.
+  - Tauri: `EdgeOutput.id` and `TraversalOutput.path` (edge ids — it was
+    documented as node ids) are strings; `add_edge` / `add_edges_batch`
+    accept a string or a number.
+  - TypeScript SDK: `removeEdge` takes a `GraphNodeId` (`number | string`).
+
+  Migration: read edge ids as strings (`BigInt(id)` for arithmetic); a
+  Python caller of `SELECT EDGES` gets `edge_id` as `str`.
+
 - **Core reports every search to the observer, in every binding**
   (core, server, Python, mobile, Tauri, 2026-11-16). `on_query` fired inside
   core only for `execute_query`; the REST server measured its search

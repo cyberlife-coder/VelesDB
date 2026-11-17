@@ -131,6 +131,10 @@ impl EdgeQuery {
     }
 
     /// The row a `SELECT EDGES` answers for one edge, on every engine.
+    ///
+    /// `edge_id` is the id's decimal string: a derived edge id is hashed and
+    /// routinely above 2^53, which a JSON number would round in JavaScript.
+    /// `source` and `target` are point ids and stay numbers.
     #[must_use]
     pub fn row(
         id: u64,
@@ -140,7 +144,7 @@ impl EdgeQuery {
         properties: &serde_json::Value,
     ) -> serde_json::Value {
         serde_json::json!({
-            "edge_id": id,
+            "edge_id": crate::api_types::serde_id::id_to_json(id),
             "source": source,
             "target": target,
             "label": label,

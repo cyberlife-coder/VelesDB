@@ -375,7 +375,7 @@ export interface IVelesDBBackend {
   ): Promise<MatchQueryResponse>;
 
   /** Remove a graph edge by ID. Returns `true` if removed, `false` if not found. */
-  removeEdge(collection: string, edgeId: number): Promise<boolean>;
+  removeEdge(collection: string, edgeId: import('./graph').GraphNodeId): Promise<boolean>;
 
   /** Total edge count in a graph collection. */
   getEdgeCount(collection: string): Promise<number>;

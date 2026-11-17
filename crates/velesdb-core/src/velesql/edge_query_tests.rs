@@ -57,10 +57,20 @@ fn every_shape_outside_the_grammar_is_refused() {
 #[test]
 fn the_row_nests_properties_under_their_own_key() {
     let row = EdgeQuery::row(5, 1, 2, "KNOWS", &serde_json::json!({"source": "x"}));
-    assert_eq!(row["edge_id"], 5);
+    assert_eq!(row["edge_id"], "5");
     assert_eq!(
         row["source"], 1,
         "a property named source cannot shadow the column"
     );
     assert_eq!(row["properties"]["source"], "x");
+}
+
+#[test]
+fn a_hashed_edge_id_reaches_the_row_exactly() {
+    let id = (1_u64 << 53) + 1;
+    let row = EdgeQuery::row(id, 1, 2, "KNOWS", &serde_json::json!({}));
+    assert_eq!(
+        row["edge_id"], "9007199254740993",
+        "a JSON number would round it in every JavaScript reader"
+    );
 }

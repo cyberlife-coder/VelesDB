@@ -65,7 +65,7 @@ export function wasmMatchQuery(
   return Promise.resolve(wasmNotSupported('MATCH queries'));
 }
 
-export function wasmRemoveEdge(_c: string, _id: number): Promise<boolean> {
+export function wasmRemoveEdge(_c: string, _id: GraphNodeId): Promise<boolean> {
   return Promise.resolve(wasmNotSupported('Graph edge removal'));
 }
 
