@@ -452,23 +452,23 @@ impl Collection {
         deny_if_scoped(scope, "info")?;
         let config = self.inner.config();
         let dict = PyDict::new(py);
-        let _ = dict.set_item(PyString::intern(py, "name"), config.name.as_str());
-        let _ = dict.set_item(PyString::intern(py, "dimension"), config.dimension);
-        let _ = dict.set_item(
+        dict.set_item(PyString::intern(py, "name"), config.name.as_str())?;
+        dict.set_item(PyString::intern(py, "dimension"), config.dimension)?;
+        dict.set_item(
             PyString::intern(py, "metric"),
             config.metric.canonical_name(),
-        );
-        let _ = dict.set_item(
+        )?;
+        dict.set_item(
             PyString::intern(py, "storage_mode"),
             config.storage_mode.canonical_name(),
-        );
-        let _ = dict.set_item(PyString::intern(py, "point_count"), config.point_count);
-        let _ = dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only);
+        )?;
+        dict.set_item(PyString::intern(py, "point_count"), config.point_count)?;
+        dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only)?;
         let auto_reindex = config
             .auto_reindex_config
             .as_ref()
             .is_some_and(|c| c.enabled);
-        let _ = dict.set_item(PyString::intern(py, "auto_reindex"), auto_reindex);
+        dict.set_item(PyString::intern(py, "auto_reindex"), auto_reindex)?;
         Ok(dict.into_any().unbind())
     }
 
@@ -790,7 +790,7 @@ impl Collection {
         let json = serde_json::to_value(&stats).map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Stats serialization failed: {e}"))
         })?;
-        Ok(crate::utils::json_to_python(py, &json))
+        crate::utils::json_to_python(py, &json)
     }
 
     /// Membership test: ``id in collection``.

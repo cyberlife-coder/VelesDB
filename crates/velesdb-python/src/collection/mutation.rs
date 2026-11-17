@@ -269,7 +269,7 @@ impl Collection {
         })?;
 
         // Phase 3: Convert to Python (GIL held)
-        let py_points = points
+        points
             .into_iter()
             .map(|opt_point| {
                 opt_point
@@ -278,9 +278,9 @@ impl Collection {
                         None => true,
                     })
                     .map(|p| crate::collection_helpers::point_to_dict(py, &p))
+                    .transpose()
             })
-            .collect();
-        Ok(py_points)
+            .collect()
     }
 
     /// Delete points by their IDs.

@@ -328,6 +328,7 @@ fn parse_weighted_call(
     if args.len() > 3 {
         return Err(weighted_shape_error());
     }
+    // An index past `args.len()` is a slot not given positionally, not an error.
     let positional = |index: usize| args.get_item(index).ok();
     // A `None` avg_weight is "not given" (the keyword legacy shape
     // `weighted(None, max_weight=…, hit_weight=…)`), not a weight.

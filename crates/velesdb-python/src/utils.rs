@@ -215,59 +215,49 @@ fn container_depth(enclosing: usize) -> PyResult<usize> {
     Ok(depth)
 }
 
-/// Helper to convert a value to `Py<PyAny>` using the `IntoPyObject` trait.
-///
-/// Returns `py.None()` on conversion failure instead of panicking,
-/// which preserves the existing `-> Py<PyAny>` signature for 18 callers.
-/// Failures are logged to help diagnose unexpected `None` values in results.
-#[inline]
-pub fn to_pyobject<'py, T>(py: Python<'py>, value: T) -> Py<PyAny>
-where
-    T: IntoPyObjectExt<'py>,
-{
-    value.into_py_any(py).unwrap_or_else(|e| {
-        eprintln!("[velesdb] to_pyobject conversion failed, returning None: {e}");
-        py.None()
-    })
-}
-
 /// Convert a `serde_json::Value` to a Python object.
 ///
 /// Builds `PyDict`/`PyList` directly instead of going through `HashMap`/`Vec`
 /// intermediaries to avoid unnecessary allocations.
-pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> Py<PyAny> {
+///
+/// # Errors
+///
+/// Propagates any Python error raised while building a value, so a failed
+/// conversion raises instead of coming back as a silently missing key.
+pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
     use pyo3::types::{PyDict, PyList};
 
     match value {
-        serde_json::Value::Null => py.None(),
-        serde_json::Value::Bool(b) => to_pyobject(py, *b),
+        serde_json::Value::Null => Ok(py.None()),
+        serde_json::Value::Bool(b) => (*b).into_py_any(py),
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                to_pyobject(py, i)
+                i.into_py_any(py)
             } else if let Some(u) = n.as_u64() {
                 // A u64 that does not fit i64 (e.g. a `stable_id` above
                 // i64::MAX) — convert directly instead of falling through to
                 // f64, which would silently lose precision.
-                to_pyobject(py, u)
+                u.into_py_any(py)
             } else if let Some(f) = n.as_f64() {
-                to_pyobject(py, f)
+                f.into_py_any(py)
             } else {
-                py.None()
+                Ok(py.None())
             }
         }
-        serde_json::Value::String(s) => to_pyobject(py, s.as_str()),
+        serde_json::Value::String(s) => s.as_str().into_py_any(py),
         serde_json::Value::Array(arr) => {
-            let items: Vec<Py<PyAny>> = arr.iter().map(|v| json_to_python(py, v)).collect();
-            // PyList::new is infallible for Vec<Py<PyAny>> items.
-            let list = PyList::new(py, &items).unwrap_or_else(|_| PyList::empty(py));
-            list.into_any().unbind()
+            let items = arr
+                .iter()
+                .map(|v| json_to_python(py, v))
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(PyList::new(py, items)?.into_any().unbind())
         }
         serde_json::Value::Object(map) => {
             let dict = PyDict::new(py);
             for (k, v) in map {
-                let _ = dict.set_item(k.as_str(), json_to_python(py, v));
+                dict.set_item(k.as_str(), json_to_python(py, v)?)?;
             }
-            dict.into_any().unbind()
+            Ok(dict.into_any().unbind())
         }
     }
 }

@@ -103,7 +103,11 @@ impl ScrollIterator {
         // Exhaustion is handled via the empty-batch early return above.
         self.cursor = batch.next_cursor;
 
-        let dicts: Vec<Py<PyAny>> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
+        let dicts = batch
+            .points
+            .iter()
+            .map(|p| point_to_dict(py, p))
+            .collect::<PyResult<Vec<_>>>()?;
         let py_list = pyo3::types::PyList::new(py, &dicts)?;
 
         if self.as_dataframe {
@@ -198,7 +202,11 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        let dicts: Vec<Py<PyAny>> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
+        let dicts = batch
+            .points
+            .iter()
+            .map(|p| point_to_dict(py, p))
+            .collect::<PyResult<Vec<_>>>()?;
         Ok((dicts, batch.next_cursor))
     }
 }

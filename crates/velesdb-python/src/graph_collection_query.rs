@@ -125,7 +125,7 @@ impl PyGraphCollection {
         // set publicly; MATCH still reports a real strategy via from_match's
         // default graph stats.
         let indexed = std::collections::HashSet::new();
-        Ok(build_explain_dict(py, &parsed, &indexed, None))
+        build_explain_dict(py, &parsed, &indexed, None)
     }
 
     /// Execute a query with instrumentation and return plan + actual stats (EXPLAIN ANALYZE).
@@ -157,7 +157,7 @@ impl PyGraphCollection {
                 .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)
                 .map_err(core_err)
         })?;
-        Ok(build_explain_analyze_dict(py, &output))
+        build_explain_analyze_dict(py, &output)
     }
 
     /// Execute a VelesQL query returning only IDs and scores (no payload).

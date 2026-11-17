@@ -662,7 +662,7 @@ impl Database {
         let results = py
             .detach(move || inner.execute_query(&parsed, &rust_params))
             .map_err(core_err)?;
-        Ok(search_results_to_multimodel_dicts(py, results))
+        search_results_to_multimodel_dicts(py, results)
     }
 
     /// Toggle automatic re-indexing on a collection at runtime.
@@ -749,7 +749,7 @@ impl Database {
             .map_err(core_err)?;
         let json = serde_json::to_value(&stats)
             .map_err(|e| PyRuntimeError::new_err(format!("Serialization failed: {e}")))?;
-        Ok(utils::json_to_python(py, &json))
+        utils::json_to_python(py, &json)
     }
 
     /// Get cached collection statistics (or None if never analyzed).
@@ -795,7 +795,7 @@ impl Database {
                 let json = serde_json::to_value(&stats).map_err(|e| {
                     PyRuntimeError::new_err(format!("stats serialization failed: {e}"))
                 })?;
-                Ok(utils::json_to_python(py, &json))
+                utils::json_to_python(py, &json)
             })
             .transpose()
     }

@@ -112,38 +112,34 @@ impl PyGraphSchema {
     /// ``{"name": str, "properties": {name: value_type}}`` dicts.
     #[getter]
     fn node_types(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
-        let out: Vec<Py<PyAny>> = self
-            .inner
+        self.inner
             .node_types()
             .iter()
             .map(|nt| {
                 let d = PyDict::new(py);
-                let _ = d.set_item("name", nt.name());
-                let _ = d.set_item("properties", property_types_to_dict(py, nt.properties()));
-                d.into_any().unbind()
+                d.set_item("name", nt.name())?;
+                d.set_item("properties", property_types_to_dict(py, nt.properties())?)?;
+                Ok(d.into_any().unbind())
             })
-            .collect();
-        Ok(out)
+            .collect()
     }
 
     /// The declared edge types, as a list of
     /// ``{"name": str, "from_type": str, "to_type": str, "properties": {...}}``.
     #[getter]
     fn edge_types(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
-        let out: Vec<Py<PyAny>> = self
-            .inner
+        self.inner
             .edge_types()
             .iter()
             .map(|et| {
                 let d = PyDict::new(py);
-                let _ = d.set_item("name", et.name());
-                let _ = d.set_item("from_type", et.from_type());
-                let _ = d.set_item("to_type", et.to_type());
-                let _ = d.set_item("properties", property_types_to_dict(py, et.properties()));
-                d.into_any().unbind()
+                d.set_item("name", et.name())?;
+                d.set_item("from_type", et.from_type())?;
+                d.set_item("to_type", et.to_type())?;
+                d.set_item("properties", property_types_to_dict(py, et.properties())?)?;
+                Ok(d.into_any().unbind())
             })
-            .collect();
-        Ok(out)
+            .collect()
     }
 
     fn __repr__(&self) -> String {
@@ -197,12 +193,15 @@ fn value_type_to_str(value_type: &ValueType) -> &'static str {
 }
 
 /// Build a Python ``{name: type_name}`` dict from a core property map.
-fn property_types_to_dict(py: Python<'_>, properties: &HashMap<String, ValueType>) -> Py<PyAny> {
+fn property_types_to_dict(
+    py: Python<'_>,
+    properties: &HashMap<String, ValueType>,
+) -> PyResult<Py<PyAny>> {
     let d = PyDict::new(py);
     for (key, value_type) in properties {
-        let _ = d.set_item(key, value_type_to_str(value_type));
+        d.set_item(key, value_type_to_str(value_type))?;
     }
-    d.into_any().unbind()
+    Ok(d.into_any().unbind())
 }
 
 #[cfg(test)]

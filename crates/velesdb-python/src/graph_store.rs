@@ -170,7 +170,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Gets outgoing edges from a node.
@@ -184,7 +184,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Alias for `get_outgoing`.
@@ -204,7 +204,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Alias for `get_incoming`.
@@ -230,7 +230,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Performs streaming BFS traversal from a start node.
@@ -454,7 +454,7 @@ impl GraphStore {
             let store = self.inner.read();
             store.get_edge(edge_id).cloned()
         });
-        Ok(edge.map(|e| edge_to_dict(py, &e)))
+        edge.map(|e| edge_to_dict(py, &e)).transpose()
     }
 
     /// List all edges in the store.
@@ -464,7 +464,7 @@ impl GraphStore {
             let store = self.inner.read();
             store.all_edges().into_iter().cloned().collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Gets incoming edges to a node filtered by label.
@@ -484,7 +484,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Remove all edges touching a node (both directions).
