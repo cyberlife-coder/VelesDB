@@ -100,6 +100,7 @@ mod score_context;
 mod set_operation;
 mod similarity_threshold;
 mod vector_predicates;
+#[cfg(feature = "persistence")]
 pub(crate) use edge_query::literal_id;
 pub use edge_query::EdgeQuery;
 pub use hash_join::{hash_join, JoinKeys};

@@ -115,6 +115,21 @@ impl EdgeQuery {
             .collect()
     }
 
+    /// An edge label as every engine stores it: trimmed, never empty.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidEdgeLabel`] for an empty or whitespace-only label.
+    pub fn normalized_label(label: &str) -> Result<String> {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err(Error::InvalidEdgeLabel(
+                "Edge label cannot be empty or whitespace-only".to_string(),
+            ));
+        }
+        Ok(trimmed.to_string())
+    }
+
     /// The row a `SELECT EDGES` answers for one edge, on every engine.
     #[must_use]
     pub fn row(
