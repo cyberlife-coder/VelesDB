@@ -357,7 +357,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reqwest` error itself). `velesdb_migrate::Error` is not
   `#[non_exhaustive]`, so a downstream exhaustive `match` on it needs a
   `SourceStatus` arm; a non-2xx response that used to arrive as
-  `SourceConnection(String)` arrives as `SourceStatus`. Pinned
+  `SourceConnection(String)` arrives as `SourceStatus`. Weaviate GraphQL
+  errors, which arrive inside an HTTP 200 as free text with no status, are
+  no longer retried: only their wording could have marked them transient.
+  Pinned
   by `retry_tests.rs` and
   `test_pipeline_qdrant_400_quoting_500_is_not_retried`, which made four
   scroll calls before the fix and makes one now.

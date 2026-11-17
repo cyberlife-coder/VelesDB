@@ -178,25 +178,30 @@ fn test_not_retryable_permanent_io_error() {
     }
 }
 
-/// Regression: a reqwest connection failure displays as "error sending
-/// request for url (...)", which the old text match did not recognise.
+/// Regression: a reqwest timeout displays as "error sending request for url
+/// (...)", which the old text match did not recognise. The server is a
+/// wiremock that answers later than the client waits, so the timeout is
+/// deterministic and no port is ever released to another process.
 #[tokio::test]
-async fn test_retryable_http_connect_error() {
-    // A port that was just released: connecting to it is refused locally.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    let addr = listener.local_addr().expect("local addr");
-    drop(listener);
+async fn test_retryable_http_timeout_error() {
+    use wiremock::{matchers::any, Mock, MockServer, ResponseTemplate};
 
-    let error = reqwest::Client::new()
-        .get(format!("http://{addr}/"))
+    let server = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(5)))
+        .mount(&server)
+        .await;
+
+    let error = reqwest::Client::builder()
+        .timeout(Duration::from_millis(50))
+        .build()
+        .expect("client")
+        .get(server.uri())
         .send()
         .await
-        .expect_err("nothing listens on a released port");
+        .expect_err("the response arrives after the client timeout");
 
-    assert!(
-        error.is_connect(),
-        "precondition: a connect error, got {error}"
-    );
+    assert!(error.is_timeout(), "precondition: a timeout, got {error}");
     assert!(is_retryable_error(&Error::Http(error)));
 }
 
