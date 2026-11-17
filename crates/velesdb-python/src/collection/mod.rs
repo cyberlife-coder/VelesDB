@@ -363,6 +363,16 @@ impl Collection {
             .authorize_read(&self.name, operation, principal, tenant)
             .map_err(crate::collection_helpers::core_err)
     }
+
+    /// An ids-only read (`what` names it in a refusal) through the read gate.
+    /// Ids carry no payload a governance scope filter could narrow, so a
+    /// scoped read fails closed (mirrors `search_ids`); a deny is an `Err`
+    /// from [`Self::authorize`]. No observer ⇒ a single `Option` check.
+    fn read_ids(&self, what: &str, read: impl FnOnce() -> Vec<u64>) -> PyResult<Vec<u64>> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, what)?;
+        Ok(read())
+    }
 }
 
 /// AND-composes a caller filter with an observer scope filter. The result
@@ -475,7 +485,8 @@ impl Collection {
     /// decides like ``count``.
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn is_empty(&self) -> PyResult<bool> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "is_empty")?;
@@ -527,7 +538,8 @@ impl Collection {
     ///     int: The point count
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn __len__(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "__len__")?;
@@ -541,7 +553,8 @@ impl Collection {
     ///     int: The point count
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read or returns a scope.
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope (fail closed).
     fn count(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "count")?;
@@ -554,17 +567,11 @@ impl Collection {
     ///     List[int]: All point IDs
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read, or returns a
-    ///         scope filter (ids carry no payload to filter — fail closed).
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope filter (ids carry
+    ///         no payload to filter — fail closed).
     fn all_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
-        py.detach(|| {
-            // Ids-only shape: a governance scope filter cannot be applied, so
-            // a scoped read fails closed (mirrors search_ids); deny is an Err
-            // from authorize(). No observer ⇒ single Option check, unchanged.
-            let scope = self.authorize(QueryOperationKind::Select, None, None)?;
-            deny_if_scoped(scope, "all_ids")?;
-            Ok(self.inner.all_ids())
-        })
+        py.detach(|| self.read_ids("all_ids", || self.inner.all_ids()))
     }
 
     /// Full durability flush including vectors.idx serialization.
@@ -598,8 +605,13 @@ impl Collection {
 
     /// All point IDs in the collection (vector and payload indexes union),
     /// ascending. Used by training paths that need every stored vector.
-    fn all_point_ids(&self) -> Vec<u64> {
-        self.inner.all_point_ids()
+    ///
+    /// Raises:
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope filter (ids carry
+    ///         no payload to filter — fail closed).
+    fn all_point_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
+        py.detach(|| self.read_ids("all_point_ids", || self.inner.all_point_ids()))
     }
 
     /// Reorder the HNSW adjacency lists and vector storage for cache
@@ -794,9 +806,10 @@ impl Collection {
     /// ``__iter__`` and raises ``TypeError`` for the ``in`` operator.
     ///
     /// Raises:
-    ///     PermissionError: If the read gate denies the read, or returns a
-    ///         scope filter (membership is id-only — fail closed rather than
-    ///         reveal the existence of out-of-scope points).
+    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate returns a scope filter
+    ///         (membership is id-only — fail closed rather than reveal the
+    ///         existence of out-of-scope points).
     fn __contains__(&self, id: u64) -> PyResult<bool> {
         // Membership reveals point existence, so it is a gated read. The GIL
         // stays held (no `py` in the slot signature) — acceptable, since the

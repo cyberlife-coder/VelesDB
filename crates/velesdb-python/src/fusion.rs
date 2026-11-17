@@ -2,7 +2,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyTuple};
 
 use velesdb_core::fusion::ScoreDirection;
 use velesdb_core::{FusionParams, FusionStrategy as CoreFusionStrategy};
@@ -101,14 +101,15 @@ impl FusionStrategy {
     ///     ...     hit_weight=0.1
     ///     ... )
     #[staticmethod]
-    #[pyo3(signature = (avg_weight = None, max_weight = None, hit_weight = None))]
+    #[pyo3(signature = (*args, avg_weight = None, max_weight = None, hit_weight = None))]
     fn weighted(
+        args: &Bound<'_, PyTuple>,
         avg_weight: Option<&Bound<'_, PyAny>>,
         max_weight: Option<f32>,
         hit_weight: Option<f32>,
     ) -> PyResult<Self> {
         let (avg_weight, max_weight, hit_weight) =
-            parse_weighted_args(avg_weight, max_weight, hit_weight)?;
+            parse_weighted_call(args, avg_weight, max_weight, hit_weight)?;
         CoreFusionStrategy::weighted(avg_weight, max_weight, hit_weight)
             .map(|inner| Self { inner })
             .map_err(|e| PyValueError::new_err(format!("{e}")))
@@ -307,6 +308,61 @@ impl FusionStrategy {
     }
 }
 
+/// Reads `weighted(...)`'s arguments. Two positional weights and nothing
+/// else are the legacy `(max_weight, hit_weight)` shape; otherwise the
+/// positionals fill `avg_weight`, `max_weight`, `hit_weight` in order and the
+/// keywords the slots they name. Only a positional count can tell the legacy
+/// pair from `(avg_weight, max_weight)`, so keywords are never re-read as it.
+fn parse_weighted_call(
+    args: &Bound<'_, PyTuple>,
+    avg_weight: Option<&Bound<'_, PyAny>>,
+    max_weight: Option<f32>,
+    hit_weight: Option<f32>,
+) -> PyResult<(f32, f32, f32)> {
+    let no_keywords = avg_weight.is_none() && max_weight.is_none() && hit_weight.is_none();
+    if args.len() == 2 && no_keywords {
+        let max = args.get_item(0)?.extract::<f32>()?;
+        let hit = args.get_item(1)?.extract::<f32>()?;
+        return Ok((derive_avg_weight(max, hit), max, hit));
+    }
+    if args.len() > 3 {
+        return Err(weighted_shape_error());
+    }
+    let positional = |index: usize| args.get_item(index).ok();
+    // A `None` avg_weight is "not given" (the keyword legacy shape
+    // `weighted(None, max_weight=…, hit_weight=…)`), not a weight.
+    let avg = merge_slot(positional(0), avg_weight.cloned(), "avg_weight")?
+        .filter(|value| !value.is_none());
+    let max = merge_slot(
+        positional(1).map(|v| v.extract::<f32>()).transpose()?,
+        max_weight,
+        "max_weight",
+    )?;
+    let hit = merge_slot(
+        positional(2).map(|v| v.extract::<f32>()).transpose()?,
+        hit_weight,
+        "hit_weight",
+    )?;
+    parse_weighted_args(avg.as_ref(), max, hit)
+}
+
+/// One argument slot filled at most once, positionally or by keyword.
+fn merge_slot<T>(positional: Option<T>, keyword: Option<T>, name: &str) -> PyResult<Option<T>> {
+    match (positional, keyword) {
+        (Some(_), Some(_)) => Err(PyValueError::new_err(format!(
+            "FusionStrategy.weighted got {name} both positionally and as a keyword"
+        ))),
+        (value, None) | (None, value) => Ok(value),
+    }
+}
+
+fn weighted_shape_error() -> PyErr {
+    PyValueError::new_err(
+        "FusionStrategy.weighted expects (avg_weight, max_weight, hit_weight), \
+         a weights dict, or legacy (max_weight, hit_weight)",
+    )
+}
+
 fn parse_weighted_args(
     avg_weight: Option<&Bound<'_, PyAny>>,
     max_weight: Option<f32>,
@@ -315,10 +371,7 @@ fn parse_weighted_args(
     let Some(avg_weight) = avg_weight else {
         return match (max_weight, hit_weight) {
             (Some(max), Some(hit)) => Ok((derive_avg_weight(max, hit), max, hit)),
-            _ => Err(PyValueError::new_err(
-                "FusionStrategy.weighted expects (avg_weight, max_weight, hit_weight), \
-                 a weights dict, or legacy (max_weight, hit_weight)",
-            )),
+            _ => Err(weighted_shape_error()),
         };
     };
 
@@ -334,18 +387,7 @@ fn parse_weighted_args(
     let first = avg_weight.extract::<f32>()?;
     match (max_weight, hit_weight) {
         (Some(max), Some(hit)) => Ok((first, max, hit)),
-        (Some(hit), None) => {
-            // Legacy two-argument shape: weighted(max_weight, hit_weight).
-            // Derive avg_weight so the validated three-component strategy is
-            // still the only runtime representation.
-            let max = first;
-            let avg = derive_avg_weight(max, hit);
-            Ok((avg, max, hit))
-        }
-        _ => Err(PyValueError::new_err(
-            "FusionStrategy.weighted expects (avg_weight, max_weight, hit_weight), \
-             a weights dict, or legacy (max_weight, hit_weight)",
-        )),
+        _ => Err(weighted_shape_error()),
     }
 }
 

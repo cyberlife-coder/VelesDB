@@ -304,6 +304,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Python: strict observer mode denies a write veto it cannot read, and
+  `all_point_ids` passes the read gate** (Python, 2026-11-16). With
+  `observer_strict=True`, a `ddl_request` / `dml_mutation_request` callback
+  returning anything but `None`, a bool or a str (a scope dict, `0`, `[]`)
+  allowed the DDL/DML; it now denies, as the read gate already did. And
+  `Collection.all_point_ids()` skipped the read gate that `all_ids()` — a
+  subset of the same ids — passes, so a denied or scoped caller got every
+  id; it is now gated and fails closed on a scope.
+
 - **Tauri: the `read-only` permission set no longer admits writes**
   (core, Tauri, 2026-11-16). `velesdb:read-only` granted `query`, which runs
   every VelesQL statement — a window holding only that set could
@@ -387,6 +396,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   document. The storage mode of a VelesQL `CREATE COLLECTION` was ignored
   (every collection Full) and an unknown mode accepted; it is now read by
   core's parser, which refuses unknown names.
+
+- **Python: the facade forwards `principal` / `tenant`, and a scipy sparse
+  query reads like its dict** (Python, 2026-11-16). The `Collection` every
+  `Database` call returns defined `search`, `batch_search`,
+  `multi_query_search`, `search_batch_parallel` and `search_with_quality`
+  without the identity keywords the binding takes, so passing them raised
+  `TypeError` and an identity-keyed policy only ever saw `None`; they now
+  forward them, and a test fails when a facade override drops one. A scipy
+  sparse query was densified (out of memory on a 2^31-wide vocabulary), had
+  its rows flattened into one query and lost weights at or below
+  `f32::EPSILON`; a one-row matrix is now read through `tocoo()` with every
+  stored weight kept, and several rows are refused.
+
+- **Python: traversal steps, `FusionStrategy.weighted` keywords and
+  `add_edge(..., id=)` read as written** (Python, 2026-11-16). A reverse or
+  bidirectional `GraphStore.traverse_bfs` step reported `source == target`;
+  `source` is now the node the step leaves from.
+  `FusionStrategy.weighted(avg_weight=…, max_weight=…)` was silently read as
+  the legacy `(max_weight, hit_weight)` pair; only two positional weights
+  are that pair now, and an incomplete keyword set is refused.
+  `add_edge(source, target, label, id=n)` stored the edge from node 0; the
+  positional is now the source, `id=` with `source=` is refused, and the
+  stubs declare every form `GraphStore` and `GraphCollection` accept.
 
 - **Tauri commands honour every argument and keep core's error codes**
   (core, Tauri, 2026-11-16). `search_ids` and `batch_search` dropped
