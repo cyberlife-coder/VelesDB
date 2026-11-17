@@ -172,79 +172,99 @@ pub(crate) fn build_explain_analyze_dict(
     set_plan_items(py, &plan_dict, &output.plan)?;
     dict.set_item(PyString::intern(py, "plan"), plan_dict)?;
 
-    // actual_stats sub-dict (or None)
-    if let Some(stats) = &output.actual_stats {
-        let stats_dict = PyDict::new(py);
-        stats_dict.set_item(PyString::intern(py, "actual_rows"), stats.actual_rows)?;
-        stats_dict.set_item(PyString::intern(py, "actual_time_ms"), stats.actual_time_ms)?;
-        stats_dict.set_item(PyString::intern(py, "loops"), stats.loops)?;
-        stats_dict.set_item(PyString::intern(py, "nodes_visited"), stats.nodes_visited)?;
-        stats_dict.set_item(
-            PyString::intern(py, "edges_traversed"),
-            stats.edges_traversed,
-        )?;
-        dict.set_item(PyString::intern(py, "actual_stats"), stats_dict)?;
-    } else {
-        dict.set_item(PyString::intern(py, "actual_stats"), py.None())?;
-    }
-
-    // node_stats list
-    let node_dicts: Vec<Py<PyAny>> = output
+    dict.set_item(
+        PyString::intern(py, "actual_stats"),
+        output
+            .actual_stats
+            .as_ref()
+            .map(|stats| actual_stats_dict(py, stats))
+            .transpose()?,
+    )?;
+    let node_dicts = output
         .node_stats
         .iter()
-        .map(|ns| {
-            let d = PyDict::new(py);
-            d.set_item(PyString::intern(py, "node_label"), &ns.node_label)?;
-            d.set_item(PyString::intern(py, "actual_time_ms"), ns.actual_time_ms)?;
-            d.set_item(PyString::intern(py, "actual_rows_in"), ns.actual_rows_in)?;
-            d.set_item(PyString::intern(py, "actual_rows_out"), ns.actual_rows_out)?;
-            d.set_item(PyString::intern(py, "loops"), ns.loops)?;
-            d.set_item(PyString::intern(py, "estimated"), ns.estimated)?;
-            Ok(d.into_any().unbind())
-        })
-        .collect::<PyResult<_>>()?;
+        .map(|ns| node_stats_dict(py, ns))
+        .collect::<PyResult<Vec<_>>>()?;
     dict.set_item(
         PyString::intern(py, "node_stats"),
         PyList::new(py, &node_dicts)?,
     )?;
-
-    // cost_factors (dict or None)
-    if let Some(ref factors) = output.cost_factors {
-        let cf = PyDict::new(py);
-        cf.set_item(PyString::intern(py, "seq_page_cost"), factors.seq_page_cost)?;
-        cf.set_item(
-            PyString::intern(py, "random_page_cost"),
-            factors.random_page_cost,
-        )?;
-        cf.set_item(
-            PyString::intern(py, "cpu_tuple_cost"),
-            factors.cpu_tuple_cost,
-        )?;
-        cf.set_item(
-            PyString::intern(py, "cpu_index_cost"),
-            factors.cpu_index_cost,
-        )?;
-        cf.set_item(
-            PyString::intern(py, "cpu_distance_cost"),
-            factors.cpu_distance_cost,
-        )?;
-        cf.set_item(PyString::intern(py, "cpu_edge_cost"), factors.cpu_edge_cost)?;
-        dict.set_item(PyString::intern(py, "cost_factors"), cf)?;
-    } else {
-        dict.set_item(PyString::intern(py, "cost_factors"), py.None())?;
-    }
-
-    // calibration_source (str or None)
+    dict.set_item(
+        PyString::intern(py, "cost_factors"),
+        output
+            .cost_factors
+            .as_ref()
+            .map(|factors| cost_factors_dict(py, factors))
+            .transpose()?,
+    )?;
     dict.set_item(
         PyString::intern(py, "calibration_source"),
         output
             .calibration_source
             .as_deref()
-            .map(|s| PyString::intern(py, s).into_any().unbind())
-            .unwrap_or_else(|| py.None()),
+            .map(|s| PyString::intern(py, s)),
     )?;
 
     Ok(dict.into_any().unbind())
+}
+
+/// The measured execution metrics of an EXPLAIN ANALYZE.
+fn actual_stats_dict<'py>(
+    py: Python<'py>,
+    stats: &velesdb_core::velesql::ActualStats,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(PyString::intern(py, "actual_rows"), stats.actual_rows)?;
+    d.set_item(PyString::intern(py, "actual_time_ms"), stats.actual_time_ms)?;
+    d.set_item(PyString::intern(py, "loops"), stats.loops)?;
+    d.set_item(PyString::intern(py, "nodes_visited"), stats.nodes_visited)?;
+    d.set_item(
+        PyString::intern(py, "edges_traversed"),
+        stats.edges_traversed,
+    )?;
+    Ok(d)
+}
+
+/// One plan node's (estimated) statistics.
+fn node_stats_dict<'py>(
+    py: Python<'py>,
+    ns: &velesdb_core::velesql::NodeStats,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(PyString::intern(py, "node_label"), &ns.node_label)?;
+    d.set_item(PyString::intern(py, "actual_time_ms"), ns.actual_time_ms)?;
+    d.set_item(PyString::intern(py, "actual_rows_in"), ns.actual_rows_in)?;
+    d.set_item(PyString::intern(py, "actual_rows_out"), ns.actual_rows_out)?;
+    d.set_item(PyString::intern(py, "loops"), ns.loops)?;
+    d.set_item(PyString::intern(py, "estimated"), ns.estimated)?;
+    Ok(d)
+}
+
+/// The cost-model factors the plan was costed with.
+fn cost_factors_dict<'py>(
+    py: Python<'py>,
+    factors: &velesdb_core::collection::query_cost::OperationCostFactors,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(PyString::intern(py, "seq_page_cost"), factors.seq_page_cost)?;
+    d.set_item(
+        PyString::intern(py, "random_page_cost"),
+        factors.random_page_cost,
+    )?;
+    d.set_item(
+        PyString::intern(py, "cpu_tuple_cost"),
+        factors.cpu_tuple_cost,
+    )?;
+    d.set_item(
+        PyString::intern(py, "cpu_index_cost"),
+        factors.cpu_index_cost,
+    )?;
+    d.set_item(
+        PyString::intern(py, "cpu_distance_cost"),
+        factors.cpu_distance_cost,
+    )?;
+    d.set_item(PyString::intern(py, "cpu_edge_cost"), factors.cpu_edge_cost)?;
+    Ok(d)
 }
 
 /// Converts `Vec<SearchResult>` to id/score dicts.
