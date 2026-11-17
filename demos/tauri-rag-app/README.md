@@ -100,12 +100,13 @@ use tauri_plugin_velesdb::VelesDbState;
 use velesdb_core::{Database, DistanceMetric, Point};
 use std::sync::Arc;
 
-// Ensure collection exists with 384 dimensions (AllMiniLML6V2)
-state.with_db(|db: Arc<Database>| {
+// Ensure collection exists with 384 dimensions (AllMiniLML6V2). `run_db` runs
+// the core call on the blocking pool, off the async command's runtime worker.
+state.run_db(|db: Arc<Database>| {
     db.create_vector_collection("rag-docs", 384, DistanceMetric::Cosine)
         .map_err(|e| /* ... */)?;
     Ok(())
-})?;
+}).await?;
 
 // Store chunks with text in payload
 let point = Point::new(id, embedding, Some(serde_json::json!({ "text": chunk })));

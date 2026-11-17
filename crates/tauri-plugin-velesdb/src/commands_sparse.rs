@@ -4,10 +4,8 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::CommandError;
-use crate::events::emit_collection_updated;
 use crate::helpers::{
-    map_core_results, parse_sparse_vector, require_collection, require_vector_collection,
-    timed_search_response,
+    map_core_results, parse_sparse_vector, require_collection, timed_search_response,
 };
 use crate::state::VelesDbState;
 use crate::types::{
@@ -26,7 +24,7 @@ pub async fn sparse_search<R: Runtime>(
 
     let results = state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let idx_name = request.index_name.unwrap_or_default();
@@ -36,12 +34,12 @@ pub async fn sparse_search<R: Runtime>(
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
                 |scope| {
-                    let mut search_results =
-                        coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
-                    if let Some(scope) = scope {
-                        search_results
-                            .retain(|r| scope.matches_point(r.point.id, r.point.payload.as_ref()));
-                    }
+                    // A sparse-only search has no filter leaf to compose a
+                    // scope into; narrowing its top-k afterwards returned
+                    // fewer than `top_k` hits while matching points existed.
+                    // Refused, as REST refuses it.
+                    crate::helpers::deny_if_scoped(scope.as_ref(), "sparse-only search")?;
+                    let search_results = coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
                     Ok(map_core_results(search_results))
                 },
             )
@@ -63,7 +61,7 @@ pub async fn hybrid_sparse_search<R: Runtime>(
 
     let results = state
         .run_db(move |db| {
-            let coll = require_vector_collection(&db, &request.collection)?;
+            let coll = require_collection(&db, &request.collection)?;
 
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let strategy = velesdb_core::fusion::FusionStrategy::rrf_default();
@@ -73,17 +71,18 @@ pub async fn hybrid_sparse_search<R: Runtime>(
                 &request.collection,
                 velesdb_core::observer::QueryOperationKind::VectorSearch,
                 |scope| {
-                    let mut search_results = coll.hybrid_sparse_search(
+                    // The scope is core's filter: it narrows both branches
+                    // before fusion, so the top-k is drawn from in-scope
+                    // points only (narrowing the fused top-k afterwards
+                    // under-filled it).
+                    let search_results = coll.hybrid_sparse_search_filtered(
                         &request.vector,
                         &core_sv,
                         request.top_k,
                         "",
                         &strategy,
+                        scope.as_ref(),
                     )?;
-                    if let Some(scope) = scope {
-                        search_results
-                            .retain(|r| scope.matches_point(r.point.id, r.point.payload.as_ref()));
-                    }
                     Ok(map_core_results(search_results))
                 },
             )
@@ -97,12 +96,11 @@ pub async fn hybrid_sparse_search<R: Runtime>(
 /// Upserts points with optional sparse vectors.
 #[command]
 pub async fn sparse_upsert<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: SparseUpsertRequest,
 ) -> std::result::Result<usize, CommandError> {
-    let collection_name = request.collection.clone();
-    let count = state
+    state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
 
@@ -126,8 +124,5 @@ pub async fn sparse_upsert<R: Runtime>(
             Ok(count)
         })
         .await
-        .map_err(CommandError::from)?;
-
-    emit_collection_updated(&app, &collection_name, "sparse_upsert", count);
-    Ok(count)
+        .map_err(CommandError::from)
 }

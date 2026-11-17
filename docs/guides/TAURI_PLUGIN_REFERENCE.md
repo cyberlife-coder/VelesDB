@@ -8,14 +8,28 @@ tables. For runnable snippets see the
 [recipes guide](./TAURI_PLUGIN_RECIPES.md).
 
 Every command is invoked as `plugin:velesdb|<command>` and takes a single
-`request` argument (except `delete_collection`, which takes `name`). All
-request and response fields are **camelCase** on the JavaScript side; the Rust
-DTOs use `#[serde(rename_all = "camelCase")]`.
+`request` argument, except:
+
+- `name` (a collection name): `delete_collection`, `get_collection`,
+  `is_empty`, `flush`, `compact_storage`, `get_guardrails`;
+- `limits` (the full `GuardrailLimits`): `update_guardrails`;
+- `data` (snapshot bytes as a number array): `semantic_deserialize`,
+  `episodic_deserialize`, `procedural_deserialize`;
+- no argument: `list_collections`, `semantic_dimension`, `semantic_serialize`,
+  `episodic_serialize`, `procedural_serialize`, `procedural_list_all`,
+  `memory_auto_expire`, `memory_snapshot`, `memory_load_latest_snapshot`,
+  `memory_list_snapshot_versions`.
+
+All request and response fields are **camelCase** on the JavaScript side; the
+Rust DTOs use `#[serde(rename_all = "camelCase")]`. The typed wrapper
+[`guest-js/index.ts`](../../crates/tauri-plugin-velesdb/guest-js/index.ts)
+exports one function per command (`compact_storage` → `compactStorage`).
 
 The authoritative list lives in `crates/tauri-plugin-velesdb/build.rs`
-(`COMMANDS`), and a test in `src/commands_tests.rs` fails the build if
-`build.rs`, the `invoke_handler` registration in `src/lib.rs`, and
-`permissions/default.toml` ever drift apart.
+(`COMMANDS`), and tests in `src/commands_tests.rs` fail the build if
+`build.rs`, the `invoke_handler` registration in `src/lib.rs`,
+`permissions/default.toml` and the `guest-js/index.ts` bindings ever drift
+apart.
 
 ---
 
@@ -112,13 +126,15 @@ VelesQL DDL routed through `query`.
 |-------|---------|------------|
 | `velesdb://collection-created` | `{ collection, operation: "created" }` | any collection creation, via the observer |
 | `velesdb://collection-deleted` | `{ collection, operation: "deleted" }` | any collection deletion, via the observer |
-| `velesdb://collection-updated` | `{ collection, operation, count }` | `upsert`, `upsert_metadata`, `sparse_upsert`, `delete_points`, `stream_insert`, `enable_streaming` |
+| `velesdb://collection-updated` | `{ collection, operation, count }` | every write and delete, via the observer (commands, `VelesQL` DML through `query`, the streaming drain, agent memory); `enable_streaming` |
 | `velesdb://operation-progress` | `{ operationId, progress, total, processed, message? }` | **nothing yet** — see below |
 | `velesdb://operation-complete` | `{ operationId, success, error?, durationMs? }` | **nothing yet** — see below |
 
-`operation` on `collection-updated` is the name of the command that produced
-the change (`"upsert"`, `"upsert_metadata"`, `"sparse_upsert"`,
-`"delete_points"`, `"stream_insert"`, `"enable_streaming"`).
+`operation` on `collection-updated` is `"upsert"` for any completed write and
+`"delete"` for any completed delete — core reports both, whatever surface made
+them, so `count` is the number of points the write or delete carried —, or
+`"enable_streaming"` (count 0) when streaming is switched on. A streamed point
+is reported when the drain stores it, not when `stream_insert` queues it.
 
 > The progress and complete payload types and their emit helpers exist in
 > `src/events.rs`, but no command calls `emit_progress` / `emit_complete`
