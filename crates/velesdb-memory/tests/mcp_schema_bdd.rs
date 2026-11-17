@@ -1223,7 +1223,7 @@ async fn every_non_string_scalar_input_rejects_incompatible_forms() {
 /// So the probe must separate the two tolerances, and `"+1"` does it with no
 /// list at all:
 /// - the id contract (`model::deserialize_id`,
-///   `context::wire::deserialize_optional_id`) parses with Rust's
+///   `model::deserialize_optional_id`) parses with Rust's
 ///   `u64::from_str`, which accepts a leading `+` (pinned by
 ///   `model_tests::deserialize_id_plus_prefixed_string_parses`);
 /// - `lenient` re-parses the string AS JSON, and JSON has no leading `+`, so
@@ -1449,7 +1449,7 @@ async fn every_input_slot_named_for_an_id_announces_the_string_form() {
         narrowed.is_empty(),
         "{} of {probed} input slot(s) named for an id do not announce the decimal-string form. \
          Add the property name to that tool's `wire_safe_input_schema` keys AND give the field \
-         the id contract (`model::deserialize_id` / `context::wire::deserialize_optional_id`), \
+         the id contract (`model::deserialize_id` / `model::deserialize_optional_id`), \
          or the caller cannot resubmit an id the server handed it as a string:\n{}",
         narrowed.len(),
         narrowed.join("\n")

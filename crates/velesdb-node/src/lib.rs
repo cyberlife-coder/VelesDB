@@ -485,8 +485,6 @@ impl NodeMemoryService {
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
-            let mut request = request;
-            convert::parse_fragment_id_strings(&mut request)?;
             let mut request: CompileRequest = serde_json::from_value(request)
                 .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
             resolve_fragments(&mut request.fragments, ingest_roots.as_ref())
@@ -549,8 +547,6 @@ impl NodeMemoryService {
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
-            let mut request = request;
-            convert::parse_fragment_id_strings(&mut request)?;
             let mut request: CompileRequest = serde_json::from_value(request)
                 .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
             // Same pre-pass as compile_context (the MCP tool shares it):
@@ -605,8 +601,6 @@ impl NodeMemoryService {
     ) -> AsyncTask<Job<String>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let mut working = working;
-            convert::parse_id_fields(&mut working)?;
             let working: WorkingContext = serde_json::from_value(working)
                 .map_err(|err| invalid_input(format!("invalid working context: {err}")))?;
             svc.save_working_context(&project, &session, &working)

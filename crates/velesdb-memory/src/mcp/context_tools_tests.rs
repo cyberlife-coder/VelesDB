@@ -466,7 +466,7 @@ fn published_fragment_property<'a>(
 #[test]
 fn test_compile_context_input_schema_advertises_string_fragment_id() {
     // fragments[].id accepts a decimal string on input (see
-    // wire::deserialize_optional_id) — a client generating requests from the
+    // model::deserialize_optional_id) — a client generating requests from the
     // advertised schema must be able to discover that.
     //
     // Annonce `"string"` TOUT COURT depuis le 2026-07-29, la ou le schema

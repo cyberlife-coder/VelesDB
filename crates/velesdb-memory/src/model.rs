@@ -42,17 +42,16 @@ where
 }
 
 /// [`deserialize_id`]'s `Option`-shaped sibling for OPTIONAL id fields
-/// (`list_memories.cursor`): absent and `null` mean `None`, anything else
-/// takes the same number-or-decimal-string rule. Feature-independent like
-/// its sibling and for the same reason — `crate::context::wire`'s
-/// equivalent lives behind the `context` feature, and an `mcp`-only build
-/// must still parse the cursor.
+/// (`list_memories.cursor`, `ContextFragment.id`, `SourceReference.memory_id`):
+/// absent and `null` mean `None`, anything else takes the same
+/// number-or-decimal-string rule — one id rule for the MCP tools and the JS
+/// bindings alike.
 ///
-/// Gated on `mcp` — its one consumer is the tool DTO layer — because the
-/// wasm build (`context` alone, `-D warnings`) rejects it as dead code
-/// otherwise. `deserialize_id` above stays ungated only because [`Link`]'s
-/// own deserialization uses it feature-free.
-#[cfg(feature = "mcp")]
+/// Gated on its consumers (the `mcp` tool DTOs and the `context` types),
+/// because a build with neither rejects it as dead code under `-D warnings`.
+/// `deserialize_id` above stays ungated only because [`Link`]'s own
+/// deserialization uses it feature-free.
+#[cfg(any(feature = "mcp", feature = "context"))]
 pub(crate) fn deserialize_optional_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: serde::Deserializer<'de>,
