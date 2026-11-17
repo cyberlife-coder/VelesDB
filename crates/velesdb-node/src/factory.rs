@@ -16,9 +16,9 @@ use std::sync::Arc;
 use napi_derive::napi;
 use velesdb_memory::context::ingest::IngestRoots;
 use velesdb_memory::{
-    embedder_env_endpoint, role_auth, select_embedder, DynEmbedder, DynExtractor,
-    EmbedderSelection, MemoryService, OllamaEmbedder, OllamaExtractor, OpenAiEmbedder,
-    OpenAiExtractor, OutlineExtractor, RemoteEndpoint, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
+    embedder_env_endpoint, select_embedder, DynEmbedder, DynExtractor, EmbedderSelection,
+    MemoryService, OllamaEmbedder, OllamaExtractor, OpenAiEmbedder, OpenAiExtractor,
+    OutlineExtractor, RemoteEndpoint, DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_URL,
     HASH_EMBEDDER_NOTICE,
 };
 
@@ -95,17 +95,10 @@ pub(crate) fn build_openai_embedder() -> napi::Result<(DynEmbedder, String)> {
     Ok((Box::new(embedder), model))
 }
 
-/// The extraction role's environment endpoint
-/// (`VELESDB_MEMORY_EXTRACTOR_URL` / `_MODEL` / `_API_TOKEN`), built from the
-/// same public pieces the daemon uses — the struct fields are public and
-/// [`role_auth`] resolves the credential — so the binding resolves the role
-/// exactly like the MCP server does.
+/// The extraction role's endpoint, read by `velesdb_memory` once for the
+/// daemon and every binding.
 pub(crate) fn extractor_env_endpoint() -> napi::Result<RemoteEndpoint> {
-    Ok(RemoteEndpoint {
-        url: std::env::var("VELESDB_MEMORY_EXTRACTOR_URL").ok(),
-        model: std::env::var("VELESDB_MEMORY_EXTRACTOR_MODEL").ok(),
-        auth: role_auth("VELESDB_MEMORY_EXTRACTOR_API_TOKEN").map_err(setting_error)?,
-    })
+    velesdb_memory::extractor_env_endpoint().map_err(setting_error)
 }
 
 /// Read `VELESDB_MEMORY_INGEST_ROOTS` once at `open`: the canonical allowlist

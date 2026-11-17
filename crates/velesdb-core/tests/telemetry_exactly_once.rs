@@ -378,3 +378,22 @@ fn join_fires_on_query_exactly_once() {
         "a JOIN read must not fire on_upsert"
     );
 }
+
+/// `Database::match_query` — REST `/match` and the SDKs' `match_query` — is a
+/// read like any other, reported once on the collection it runs on. It ran
+/// gated but unreported, so a MATCH through those surfaces never reached a
+/// host's read telemetry.
+#[test]
+fn database_match_query_fires_on_query_exactly_once() {
+    let spy = Arc::new(CountingSpy::new());
+    let (_dir, db) = open_db(spy.clone());
+    seed_items(&db);
+    spy.reset();
+    let query = Parser::parse("MATCH (n:Item) RETURN n").expect("test: parse");
+    let clause = query.match_clause.as_ref().expect("test: match clause");
+    db.match_query("items", clause, &HashMap::new(), None)
+        .expect("test: match_query");
+    let calls = spy.query_calls();
+    assert_eq!(calls.len(), 1, "match_query must fire on_query once");
+    assert_eq!(calls[0].0, "items");
+}

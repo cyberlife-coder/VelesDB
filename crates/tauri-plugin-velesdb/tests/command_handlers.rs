@@ -185,7 +185,7 @@ fn create_collection_with_advanced_params_validates() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app = mock_app(dir.path());
 
-    // hnswM triggers the advanced-params path (build_hnsw_params + validate).
+    // Pinned HNSW fields go to core, which resolves the rest and validates.
     let req: CreateCollectionRequest = serde_json::from_value(serde_json::json!({
         "name": "tuned",
         "dimension": DIM,
@@ -196,7 +196,7 @@ fn create_collection_with_advanced_params_validates() {
     let info = run(create_collection(handle(&app), st(&app), req)).expect("create tuned");
     assert_eq!(info.name, "tuned");
 
-    // An out-of-range alpha is rejected by hnsw_params.validate().
+    // An out-of-range alpha is rejected by core before anything is created.
     let bad: CreateCollectionRequest = serde_json::from_value(serde_json::json!({
         "name": "bad",
         "dimension": DIM,
@@ -747,6 +747,38 @@ fn enable_streaming_then_stream_insert() {
     ))
     .expect("stream_insert after enable");
     assert_eq!(inserted, 2);
+}
+
+/// A streamed point an upsert would refuse keeps core's code: it used to be
+/// reported as VELES-009 (a configuration error) like a full buffer, and
+/// before that it was queued and dropped by the drain.
+#[test]
+fn stream_insert_refuses_a_wrong_dimension_with_cores_code() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    seed_vector_collection(&app, "docs");
+    run(enable_streaming(
+        handle(&app),
+        st(&app),
+        EnableStreamingRequest {
+            collection: "docs".to_string(),
+            buffer_size: Some(256),
+            batch_size: Some(8),
+            flush_interval_ms: Some(10),
+        },
+    ))
+    .expect("enable_streaming");
+
+    let refused = run(stream_insert(
+        handle(&app),
+        st(&app),
+        StreamInsertRequest {
+            collection: "docs".to_string(),
+            points: vec![point(11, vec![0.1, 0.2], serde_json::json!({}))],
+        },
+    ))
+    .expect_err("a point of the wrong dimension is refused");
+    assert_eq!(refused.code, "VELES-004");
 }
 
 // ===========================================================================

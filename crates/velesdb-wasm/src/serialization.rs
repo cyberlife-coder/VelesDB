@@ -13,7 +13,7 @@ pub const HEADER_SIZE: usize = 18;
 const HEADER_SIZE_V2: usize = 19;
 
 /// Current format version written by [`export_to_bytes`].
-const FORMAT_VERSION: u8 = 3;
+const FORMAT_VERSION: u8 = 4;
 
 #[path = "serialization_legacy.rs"]
 mod legacy;
@@ -68,9 +68,16 @@ fn write_payloads(out: &mut Vec<u8>, payloads: &[Option<serde_json::Value>]) {
     }
 }
 
-/// Serializes a `VectorStore` to the v3 binary format.
+/// Serializes a `VectorStore` to the v4 binary format.
 ///
-/// Layout (little-endian): `"VELS"`(4) | version=3(1) | dimension u32(4) |
+/// v4 is v3 followed by the sparse index, one record per document: a u64
+/// document count, then per document its u64 id, a u32 term count and that
+/// many (u32 term id, f32 weight) pairs. The index used to be dropped on
+/// save, so a loaded store answered no sparse query. An older build rejects a
+/// v4 blob ("Unsupported version: 4"); this one still reads v1 to v3, which
+/// carry no sparse index.
+///
+/// v3 layout (little-endian): `"VELS"`(4) | version(1) | dimension u32(4) |
 /// metric u8(1) | storage-mode u8(1) | count u64(8), then `count` u64 IDs, then
 /// one length-prefixed f32 blob holding the `count * dimension` vectors, then
 /// `count` payload blobs (empty = None).
@@ -79,9 +86,7 @@ fn write_payloads(out: &mut Vec<u8>, payloads: &[Option<serde_json::Value>]) {
 /// `sq8_mins`, `sq8_scales`): every storage mode now keeps the f32 vectors, so
 /// `data` is populated whatever the mode. The version bump makes an older
 /// build reject a v3 blob ("Unsupported version: 3") rather than load a
-/// quantized-mode store with empty code buffers. The sparse index is not
-/// persisted, as in v1/v2, and nothing rebuilds it: a loaded store has no
-/// sparse postings until the caller inserts them again (`sparse_insert`).
+/// quantized-mode store with empty code buffers.
 pub fn export_to_bytes(store: &StoreState) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"VELS");
@@ -100,7 +105,74 @@ pub fn export_to_bytes(store: &StoreState) -> Vec<u8> {
     }
     write_f32_blob(&mut bytes, &store.data);
     write_payloads(&mut bytes, &store.payloads);
+    write_sparse(&mut bytes, store.sparse_index.as_ref());
     bytes
+}
+
+/// Appends the v4 sparse section (see [`export_to_bytes`]).
+fn write_sparse(out: &mut Vec<u8>, index: Option<&crate::sparse::SparseIndex>) {
+    let documents = index
+        .map(crate::sparse::SparseIndex::documents)
+        .unwrap_or_default();
+    out.extend_from_slice(&(documents.len() as u64).to_le_bytes());
+    for (doc_id, terms) in &documents {
+        out.extend_from_slice(&doc_id.to_le_bytes());
+        out.extend_from_slice(&u32::try_from(terms.len()).unwrap_or(u32::MAX).to_le_bytes());
+        for &(term, weight) in terms {
+            out.extend_from_slice(&term.to_le_bytes());
+            out.extend_from_slice(&weight.to_le_bytes());
+        }
+    }
+}
+
+/// Reads a u32 LE at `*offset`, advancing it. Bounds-checked.
+fn read_u32(bytes: &[u8], offset: &mut usize) -> Result<u32, JsValue> {
+    let end = offset
+        .checked_add(4)
+        .filter(|&e| e <= bytes.len())
+        .ok_or_else(|| JsValue::from_str("Invalid data: truncated u32"))?;
+    let arr: [u8; 4] = bytes[*offset..end]
+        .try_into()
+        .map_err(|_| JsValue::from_str("Invalid data: u32 slice"))?;
+    *offset = end;
+    Ok(u32::from_le_bytes(arr))
+}
+
+/// Reads the v4 sparse section into an index (`None` when it holds no
+/// document). Every count is checked against the bytes left before anything
+/// is allocated.
+fn read_sparse(
+    bytes: &[u8],
+    offset: &mut usize,
+) -> Result<Option<crate::sparse::SparseIndex>, JsValue> {
+    let count = read_u64(bytes, offset)?;
+    // Each document record needs at least 12 bytes (id + term count).
+    if count > (bytes.len().saturating_sub(*offset) / 12) as u64 {
+        return Err(JsValue::from_str(
+            "Invalid data: sparse document count exceeds input size",
+        ));
+    }
+    if count == 0 {
+        return Ok(None);
+    }
+    let mut index = crate::sparse::SparseIndex::new();
+    for _ in 0..count {
+        let doc_id = read_u64(bytes, offset)?;
+        let terms = read_u32(bytes, offset)? as usize;
+        if terms > bytes.len().saturating_sub(*offset) / 8 {
+            return Err(JsValue::from_str(
+                "Invalid data: sparse term count exceeds input size",
+            ));
+        }
+        let mut indices = Vec::with_capacity(terms);
+        let mut values = Vec::with_capacity(terms);
+        for _ in 0..terms {
+            indices.push(read_u32(bytes, offset)?);
+            values.push(f32::from_bits(read_u32(bytes, offset)?));
+        }
+        index.insert(doc_id, &indices, &values)?;
+    }
+    Ok(Some(index))
 }
 
 /// Reads a u64 LE at `*offset`, advancing it. Bounds-checked.
@@ -173,16 +245,16 @@ pub fn import_from_bytes(bytes: &[u8]) -> Result<StoreState, JsValue> {
     }
     match bytes[4] {
         1 => import_v1(bytes),
-        version @ (2 | 3) => import_v2_or_v3(bytes, version),
+        version @ (2..=4) => import_v2_to_v4(bytes, version),
         v => Err(JsValue::from_str(&format!("Unsupported version: {v}"))),
     }
 }
 
-/// Reads the v2 or v3 format. They share the header, the ids, the f32 `data`
+/// Reads the v2, v3 or v4 format. They share the header, the ids, the f32 `data`
 /// blob and the payloads; v2 adds four quantized blobs between the last two,
 /// from which [`legacy::reconstruct_vectors`] rebuilds the f32 vectors of a
 /// quantized-mode store.
-fn import_v2_or_v3(bytes: &[u8], version: u8) -> Result<StoreState, JsValue> {
+fn import_v2_to_v4(bytes: &[u8], version: u8) -> Result<StoreState, JsValue> {
     if bytes.len() < HEADER_SIZE_V2 {
         return Err(JsValue::from_str("Invalid data: too short"));
     }
@@ -218,6 +290,11 @@ fn import_v2_or_v3(bytes: &[u8], version: u8) -> Result<StoreState, JsValue> {
     }
     check_vector_count(data.len(), count, dimension).map_err(|e| JsValue::from_str(&e))?;
     let payloads = read_payloads(bytes, &mut offset, count)?;
+    let sparse_index = if version >= 4 {
+        read_sparse(bytes, &mut offset)?
+    } else {
+        None
+    };
 
     Ok(StoreState {
         ids,
@@ -226,7 +303,7 @@ fn import_v2_or_v3(bytes: &[u8], version: u8) -> Result<StoreState, JsValue> {
         dimension,
         metric,
         storage_mode,
-        sparse_index: None,
+        sparse_index,
     })
 }
 

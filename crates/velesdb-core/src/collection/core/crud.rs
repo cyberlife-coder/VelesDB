@@ -13,7 +13,7 @@ use crate::quantization::StorageMode;
 use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 impl Collection {
     /// Inserts or updates points in the collection.
@@ -26,30 +26,22 @@ impl Collection {
     /// attempting to insert vectors into a metadata-only collection.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
+        // Parity item E + dimension validation at the cold boundary, before any
+        // storage lock or WAL write — a violation rejects the whole batch.
+        self.validate_points_for_upsert(&points)?;
         let config = self.storage.config.read();
-        let dimension = config.dimension;
         let storage_mode = config.storage_mode;
-
         if config.metadata_only {
-            for point in &points {
-                if !point.vector.is_empty() {
-                    return Err(Error::VectorNotAllowed(config.name.clone()));
-                }
-            }
             drop(config);
             // `upsert_metadata` is the storage entry for this path and applies
-            // the runtime limits itself — checking here too would double-scan.
+            // the runtime limits itself.
             return self.upsert_metadata(points);
         }
         drop(config);
 
-        // Parity item E + dimension validation at the cold boundary, before any
-        // storage lock or WAL write — a violation rejects the whole batch.
-        self.validate_vector_upsert_batch(&points, dimension)?;
+        let old_payloads = self.upsert_storage_and_index(&points, storage_mode)?;
 
-        let (sparse_batch, old_payloads) = self.upsert_storage_and_index(&points, storage_mode)?;
-
-        self.apply_sparse_batch_upsert(&sparse_batch)?;
+        self.apply_sparse_batch_upsert(&points)?;
 
         // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
         // so only the final payload counts, then decrement old + increment
@@ -59,6 +51,31 @@ impl Collection {
         self.bump_generation_with_mirror_upserts(&points);
         self.report_upsert(points.len());
         Ok(())
+    }
+
+    /// The checks [`Self::upsert`] runs on its points before any write: a
+    /// metadata-only collection refuses a vector
+    /// ([`Error::VectorNotAllowed`]); a vector collection runs the runtime
+    /// ingest limits and the per-point dimension and finite checks. Streaming
+    /// runs them too, when a point is queued — the only moment its caller can
+    /// still hear of a refusal, since the drain writes it later — and refuses
+    /// with [`BackpressureError::InvalidPoint`](crate::collection::streaming::BackpressureError::InvalidPoint);
+    /// a surface calls this first to report the refusal with core's code.
+    ///
+    /// # Errors
+    ///
+    /// The refusal of the first point that fails a check.
+    pub(crate) fn validate_points_for_upsert(&self, points: &[Point]) -> Result<()> {
+        let config = self.storage.config.read();
+        if config.metadata_only {
+            if points.iter().any(|point| !point.vector.is_empty()) {
+                return Err(Error::VectorNotAllowed(config.name.clone()));
+            }
+            return Ok(());
+        }
+        let dimension = config.dimension;
+        drop(config);
+        self.validate_vector_upsert_batch(points, dimension)
     }
 
     /// Validates a vector-collection upsert batch at the cold boundary:
@@ -76,7 +93,9 @@ impl Collection {
     ///
     /// Returns [`Error::GuardRail`] on a limit violation, or the dimension
     /// mismatch error from [`validate_dimension_match`], or
-    /// [`Error::SchemaValidation`] on an invalid sparse index name.
+    /// [`Error::SchemaValidation`] on an invalid sparse index name, or
+    /// [`Error::InvalidVector`] on a non-finite dense component or sparse
+    /// weight.
     pub(super) fn validate_vector_upsert_batch(
         &self,
         points: &[Point],
@@ -87,8 +106,9 @@ impl Collection {
             validate_dimension_match(dimension, point.dimension())?;
             crate::validation::validate_vector_is_finite(&point.vector)?;
             if let Some(sv_map) = &point.sparse_vectors {
-                for name in sv_map.keys() {
+                for (name, vector) in sv_map {
                     crate::validation::validate_sparse_index_name(name)?;
+                    crate::validation::validate_sparse_vector_is_finite(vector)?;
                 }
             }
         }
@@ -99,7 +119,7 @@ impl Collection {
     ///
     /// Three-phase pipeline to minimize lock contention and I/O:
     /// 1. Batch storage: `store_batch()` for vectors + payloads (1 fsync each)
-    /// 2. Per-point updates: secondary indexes, quantization, text, sparse
+    /// 2. Per-point updates: secondary indexes, quantization, text
     /// 3. Batch HNSW insert via `bulk_index_or_defer()`
     ///
     /// # Crash Recovery
@@ -109,28 +129,25 @@ impl Collection {
     /// detection compares storage IDs against HNSW mappings and re-indexes
     /// any missing vectors. The recovery window is bounded by one batch.
     ///
-    /// Returns buffered sparse vectors for deferred insertion.
-    #[allow(clippy::type_complexity)] // Reason: tuple of (sparse_batch, old_payloads) — extracting a named type adds indirection without clarity
+    /// Returns the payloads the batch replaced. Sparse vectors are not phase
+    /// work: `apply_sparse_batch_upsert` replaces them afterwards.
     fn upsert_storage_and_index(
         &self,
         points: &[Point],
         storage_mode: StorageMode,
-    ) -> Result<(
-        Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>,
-        Vec<Option<serde_json::Value>>,
-    )> {
+    ) -> Result<Vec<Option<serde_json::Value>>> {
         // Phase 1: Batch storage under write locks (1 fsync per storage)
         let old_payloads = self.batch_store_all(points)?;
 
         // Phase 2: Per-point updates (no storage locks held)
-        let sparse_batch = self.per_point_updates(points, &old_payloads, storage_mode)?;
+        self.per_point_updates(points, &old_payloads, storage_mode)?;
 
         // Phase 3: Batch HNSW insert
         let vector_refs: Vec<(u64, &[f32])> =
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         self.bulk_index_or_defer(&vector_refs);
 
-        Ok((sparse_batch, old_payloads))
+        Ok(old_payloads)
     }
 
     /// Phase 1: Batch-stores vectors and payloads with minimal lock scope.
@@ -346,8 +363,7 @@ impl Collection {
     /// Returns `true` when Phase 2 processing can be skipped entirely.
     ///
     /// Issue #425: For the common case (`StorageMode::Full`, no secondary
-    /// indexes, empty BM25 index, no sparse vectors in the batch), Phase 2
-    /// does zero useful work. Skipping avoids PQ cache guard acquisition,
+    /// indexes, empty BM25 index), Phase 2 does zero useful work. Skipping avoids PQ cache guard acquisition,
     /// `seen_payloads` HashMap allocation, and the per-point loop.
     fn can_skip_phase2(&self, points: &[Point], storage_mode: StorageMode) -> bool {
         // PQ is the only mode with per-upsert quantization caching; every
@@ -367,13 +383,7 @@ impl Collection {
         // carries a payload (nothing to add, nothing to remove)
         let bm25_empty = self.storage.text_index.is_empty();
         let any_payload = points.iter().any(|p| p.payload.is_some());
-        if !bm25_empty || any_payload {
-            return false;
-        }
-
-        // Sparse vectors require collection into the sparse batch buffer
-        let any_sparse = points.iter().any(Point::has_sparse_vectors);
-        !any_sparse
+        bm25_empty && !any_payload
     }
 
     /// Phase 2: Per-point updates that don't need storage write locks.
@@ -393,12 +403,12 @@ impl Collection {
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
         storage_mode: StorageMode,
-    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
+    ) -> Result<()> {
         // Issue #425: Fast-path — skip Phase 2 entirely when no secondary
         // processing is needed. Avoids lock acquisition, HashMap allocation,
         // and the per-point loop for the common StorageMode::Full case.
         if self.can_skip_phase2(points, storage_mode) {
-            return Ok(Vec::new());
+            return Ok(());
         }
 
         // PQ is the only mode with per-upsert quantization work; its quantizer
@@ -409,8 +419,8 @@ impl Collection {
         self.per_point_sequential_updates(points, old_payloads, &mut pq_guard)
     }
 
-    /// Runs the sequential per-point loop for secondary indexes, BM25, sparse
-    /// vectors, and (when not pre-computed) quantization. The label and range
+    /// Runs the sequential per-point loop for secondary indexes, BM25, and
+    /// (when not pre-computed) quantization. The label and range
     /// indexes are not phase-2 work: `write_and_flush_payloads` updates them
     /// under the payload lock.
     ///
@@ -420,8 +430,7 @@ impl Collection {
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
         pq_guard: &mut Option<super::crud_helpers::PqCacheGuard<'_>>,
-    ) -> Result<Vec<(u64, BTreeMap<String, crate::index::sparse::SparseVector>)>> {
-        let mut sparse_batch = Vec::new();
+    ) -> Result<()> {
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> =
             HashMap::with_capacity(points.len());
         let skip_bm25 =
@@ -444,11 +453,10 @@ impl Collection {
                 effective_old,
                 point.payload.as_ref(),
             );
-            Self::collect_sparse_vectors(point, &mut sparse_batch);
             seen_payloads.insert(point.id, point.payload.as_ref());
         }
 
-        Ok(sparse_batch)
+        Ok(())
     }
 
     /// Inserts or updates metadata-only points (no vectors).

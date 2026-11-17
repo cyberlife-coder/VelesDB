@@ -11,14 +11,13 @@ use crate::collection::order_by_advisor::OrderByIndexAdvisor;
 use crate::collection::stats::CollectionStats;
 use crate::collection::streaming::AsyncIndexBuilder;
 #[cfg(feature = "persistence")]
-use crate::collection::streaming::{BackpressureError, DeferredIndexer, StreamIngester};
+use crate::collection::streaming::{DeferredIndexer, StreamIngester};
 use crate::distance::DistanceMetric;
 use crate::guardrails::GuardRails;
 use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
 use crate::lock_audit::{Mutex, RwLock};
 #[cfg(feature = "persistence")]
-use crate::point::Point;
 use crate::quantization::{PQVector, ProductQuantizer, StorageMode};
 use crate::storage::{LogPayloadStorage, MmapStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
@@ -818,70 +817,6 @@ impl Collection {
     /// Extracts all string values from a JSON payload for text indexing.
     pub(crate) fn extract_text_from_payload(payload: &serde_json::Value) -> String {
         crate::collection::text_utils::extract_text(payload)
-    }
-
-    /// Sends a point into the streaming ingestion channel.
-    ///
-    /// Returns `BackpressureError::NotConfigured` if streaming is not active
-    /// on this collection.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BackpressureError`] on buffer-full or not-configured.
-    #[cfg(feature = "persistence")]
-    pub fn stream_insert(&self, point: Point) -> Result<(), BackpressureError> {
-        let guard = self.streaming.stream_ingester.read();
-        match guard.as_ref() {
-            Some(ingester) => ingester.try_send(point),
-            None => Err(BackpressureError::NotConfigured),
-        }
-    }
-
-    /// Sends a batch of points into the streaming ingestion channel.
-    ///
-    /// Acquires the ingester read-lock once for the entire batch, eliminating
-    /// per-point lock overhead. Returns the number of points successfully
-    /// queued. If the channel fills mid-batch, returns
-    /// [`BackpressureError::BufferFull`] (points already sent are still queued).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BackpressureError`] on buffer-full, drain-dead, or not-configured.
-    #[cfg(feature = "persistence")]
-    pub fn stream_insert_batch(&self, points: Vec<Point>) -> Result<usize, BackpressureError> {
-        let guard = self.streaming.stream_ingester.read();
-        match guard.as_ref() {
-            Some(ingester) => ingester.try_send_batch(points),
-            None => Err(BackpressureError::NotConfigured),
-        }
-    }
-
-    /// Enables streaming ingestion on this collection.
-    ///
-    /// Creates a [`StreamIngester`] with the given `config` and stores it in
-    /// the `stream_ingester` field. Points can then be submitted via
-    /// [`stream_insert`](Self::stream_insert).
-    ///
-    /// Calling this when streaming is already active replaces the existing
-    /// ingester (the old drain task is aborted via `Drop`).
-    ///
-    /// Future: auto-enable from persisted StreamingConfig on open (STREAM-01)
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Config`](crate::error::Error::Config) for a config
-    /// [`StreamingConfig::validate`](crate::collection::streaming::StreamingConfig::validate)
-    /// refuses; the current ingester, if any, is left running.
-    #[cfg(feature = "persistence")]
-    pub fn enable_streaming(
-        &self,
-        config: crate::collection::streaming::StreamingConfig,
-    ) -> crate::error::Result<()> {
-        use crate::collection::streaming::StreamIngester;
-        config.validate()?;
-        let ingester = StreamIngester::new(self.clone(), config);
-        *self.streaming.stream_ingester.write() = Some(ingester);
-        Ok(())
     }
 
     /// Attaches an [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)

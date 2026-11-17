@@ -988,6 +988,7 @@ class RealRepositoryTests(unittest.TestCase):
             },
             "list_memories": {
                 "crates/velesdb-node/src/lib.rs",
+                "crates/velesdb-python/python/velesdb/__init__.pyi",
                 "docs/reference/MCP_TOOLS.md",
             },
             "memory_status": {

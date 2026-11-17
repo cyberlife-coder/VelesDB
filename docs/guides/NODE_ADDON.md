@@ -360,6 +360,18 @@ silently reduced instead.
 | Fragments per compile request | 1024 | rejects |
 | Fragment `content` size | 1 MiB | rejects |
 
+### JSON arguments: metadata, filters, requests, working contexts
+
+These arguments must be JSON data, what `JSON.parse` can produce: `null`,
+booleans, finite numbers, strings, arrays and plain objects (an object
+literal, or `Object.create(null)`). Anything else rejects with
+`INVALID_INPUT`, naming where it sits (`metadata.when is a Date, not a plain
+object`): a `Date`, a `Map`, a `Set`, a class instance, a typed array, a
+function, a symbol, a `bigint`, `NaN` or an infinity. They used to be stored
+as `{}` (or `null`) without a word; convert them first (`date.toISOString()`,
+`Object.fromEntries(map)`, a decimal string for a `bigint`). As with
+`JSON.stringify`, a property set to `undefined` is left out.
+
 ### Numbers in metadata and filters
 
 A JS `number` that holds a whole value — up to `Number.MAX_SAFE_INTEGER`
@@ -367,6 +379,18 @@ A JS `number` that holds a whole value — up to `Number.MAX_SAFE_INTEGER`
 reads back as the integer `5000000000` from Python or Rust, and an exact
 metadata filter on it matches what the other bindings stored. Fractions, and
 whole numbers past 2^53 − 1 (which JS cannot hold exactly), stay floats.
+
+### Argument errors
+
+A value the binding refuses — a JSON argument that is not JSON data, a count
+out of range, a malformed id — rejects the returned `Promise` with an
+`[INVALID_INPUT]` error. An argument of the wrong JS type for a typed
+parameter (a number where a string is expected) is refused by napi before the
+method runs: that call throws synchronously, with napi's own `code`
+(`StringExpected`, `NumberExpected`, …) and no `[CODE]` prefix.
+The same holds for a JSON argument whose getter or `Proxy` trap throws while
+the binding reads it: napi offers no safe way to take that pending JS
+exception back, so it surfaces synchronously, as the getter's own error.
 
 ---
 

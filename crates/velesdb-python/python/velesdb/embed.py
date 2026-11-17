@@ -23,17 +23,8 @@ Example::
 
 from __future__ import annotations
 
+import importlib
 from typing import Any, Protocol, Sequence, runtime_checkable
-
-try:  # optional backend, gated by `pip install velesdb[embed-openai]`
-    import openai as _openai
-except ImportError:  # pragma: no cover - tested via no-extras install
-    _openai = None  # type: ignore[assignment]
-
-try:  # optional backend, gated by `pip install velesdb[embed-sentence-transformers]`
-    import sentence_transformers as _sentence_transformers
-except ImportError:  # pragma: no cover - tested via no-extras install
-    _sentence_transformers = None  # type: ignore[assignment]
 
 _OPENAI_MISSING_HINT = (
     "OpenAIEmbedder requires the 'openai' package. "
@@ -124,16 +115,23 @@ class SentenceTransformerEmbedder:
         return vectors.tolist()
 
 
+def _load_backend(module: str, missing_hint: str) -> Any:
+    """Imports an optional backend when an adapter is built, never at
+    ``import velesdb``: sentence-transformers pulls torch in (seconds and
+    hundreds of MB), and a backend that fails to import must not break the
+    package."""
+    try:
+        return importlib.import_module(module)
+    except ImportError as err:
+        raise ImportError(missing_hint) from err
+
+
 def _load_openai() -> Any:
-    if _openai is None:
-        raise ImportError(_OPENAI_MISSING_HINT)
-    return _openai
+    return _load_backend("openai", _OPENAI_MISSING_HINT)
 
 
 def _load_sentence_transformers() -> Any:
-    if _sentence_transformers is None:
-        raise ImportError(_SENTENCE_TRANSFORMERS_MISSING_HINT)
-    return _sentence_transformers
+    return _load_backend("sentence_transformers", _SENTENCE_TRANSFORMERS_MISSING_HINT)
 
 
 __all__ = [

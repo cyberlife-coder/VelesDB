@@ -90,12 +90,12 @@ pub struct ContextSource {
 pub struct ContextFragment {
     /// Caller-side identifier; when absent, the compiler derives a stable
     /// content-addressed id ([`super::fragment_id`]). Accepts a JSON number
-    /// or decimal string (`wire::deserialize_optional_id`) — a `fragment_id`
-    /// received as a string can be resubmitted unchanged.
+    /// or a decimal string — a `fragment_id` received as a string can be
+    /// resubmitted unchanged.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "super::wire::deserialize_optional_id"
+        deserialize_with = "crate::model::deserialize_optional_id"
     )]
     pub id: Option<u64>,
     /// The fragment text. `#[serde(default)]`: a `path` fragment carries no
@@ -411,7 +411,7 @@ pub struct SourceReference {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "super::wire::deserialize_optional_id"
+        deserialize_with = "crate::model::deserialize_optional_id"
     )]
     pub memory_id: Option<u64>,
 }

@@ -125,10 +125,10 @@ impl AgentMemory {
     ) -> PyResult<Self> {
         let dim = dimension.unwrap_or(DEFAULT_DIMENSION);
 
-        // PyO3 classes cannot hold lifetime parameters, so we open an
-        // independent Database handle from the same path. Each handle has its
-        // own in-memory registries but reads/writes the same on-disk data.
-        let owned_db = db.open_shared().map_err(PyRuntimeError::new_err)?;
+        // PyO3 classes cannot hold lifetime parameters, so the memory owns an
+        // `Arc` of the caller's database: the same registries, observer and
+        // file lock, not a second handle on the same path.
+        let owned_db = db.shared();
 
         // Initialize memory subsystems — this creates the underlying collections
         // if they do not already exist. The returned handle owns the shared TTL

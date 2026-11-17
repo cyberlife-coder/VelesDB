@@ -2,7 +2,7 @@
 //! through `ok()`.
 use serde_json::json;
 
-use super::{integral_numbers, resolve_transcript_input, to_metadata};
+use super::{integral_numbers, json_number, resolve_transcript_input};
 
 /// What napi hands over for a JS whole number past `u32::MAX`: a float.
 fn napi_float(n: f64) -> serde_json::Value {
@@ -33,17 +33,6 @@ fn fractions_and_numbers_past_2_pow_53_stay_floats() {
     let unsafe_whole = napi_float(9_007_199_254_740_992.0);
     assert_eq!(integral_numbers(fraction.clone()), fraction);
     assert_eq!(integral_numbers(unsafe_whole.clone()), unsafe_whole);
-}
-
-#[test]
-fn metadata_and_filters_carry_the_integer() {
-    let metadata = to_metadata(Some(json!({ "ts": napi_float(5_000_000_000.0) })))
-        .ok()
-        .flatten();
-    assert_eq!(
-        metadata.and_then(|m| m.get("ts").cloned()),
-        Some(json!(5_000_000_000_i64))
-    );
 }
 
 #[test]
@@ -87,4 +76,17 @@ fn neither_both_nor_an_empty_transcript_is_accepted() {
             "{request}: {reason:?}"
         );
     }
+}
+
+#[test]
+fn json_number_keeps_whole_numbers_exact_and_refuses_non_finite() {
+    assert_eq!(json_number(5_000_000_000.0), Some(5_000_000_000_i64.into()));
+    assert_eq!(json_number(-3.0), Some((-3_i64).into()));
+    assert_eq!(json_number(2.5).and_then(|n| n.as_f64()), Some(2.5));
+    assert!(
+        json_number(2.0_f64.powi(53)).is_some_and(|n| n.is_f64()),
+        "past 2^53 - 1 stays a float"
+    );
+    assert_eq!(json_number(f64::NAN), None);
+    assert_eq!(json_number(f64::INFINITY), None);
 }

@@ -88,8 +88,11 @@ loading a quantized-mode store with no codes. The v1 header was 18 bytes (no
 storage-mode byte) and carried only ids plus f32 vectors, i.e. full precision
 only, and no payloads.
 
-**The sparse index is not persisted** in either version — rebuild it after a
-load with `sparse_insert`.
+v4 adds the sparse index after the payloads: a u64 document count, then per
+document its u64 id, a u32 term count and that many (u32 term, f32 weight)
+pairs, so a loaded store answers sparse queries as before the save. v1 to v3
+carried no sparse index and still load, without one; an older build rejects
+a v4 blob with `Unsupported version: 4`.
 
 A truncated or foreign buffer is rejected loudly:
 
@@ -98,10 +101,10 @@ VectorStore.import_from_bytes(new Uint8Array([1, 2, 3, 4, 5]));
 // Error: Invalid data: wrong magic number
 ```
 
-A 3-dimension store holding one vector without a payload exports to 55 bytes,
-magic `VELS`, version byte `3`, and re-imports with `len === 1`
-(`serialization_tests.rs` pins the size; the v2 export of the same store was
-87 bytes).
+A 3-dimension store holding one vector without a payload exports to 63 bytes,
+magic `VELS`, version byte `4`, and re-imports with `len === 1`
+(`serialization_tests.rs` pins the size; the same store took 55 bytes in v3,
+the empty sparse section adding 8, and 87 in v2).
 
 ## Graph persistence
 

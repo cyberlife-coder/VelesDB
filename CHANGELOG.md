@@ -378,6 +378,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM: `VectorStore.save()` / `export_to_bytes()` keep the sparse
+  index.** It was dropped, so a loaded store answered no sparse query until
+  every sparse vector was inserted again. Format v4 appends one record per
+  document (id, then its term/weight pairs); v1 to v3 still load, without a
+  sparse index, and an older build rejects a v4 blob.
+
+- **Python binding, second audit pass.**
+  - `MemoryService.list_memories` returns `next_cursor` as an int, like every
+    id of the binding, so it is passed back as `cursor` unchanged (it was a
+    string the `int` parameter refused); `list_memories` and `memory_status`
+    gain their stubs.
+  - `remember_extracted` follows the Node binding's contract: the fact cap
+    applies before any backend runs, `VELESDB_MEMORY_EXTRACTOR` /
+    `_URL` / `_MODEL` / `_API_TOKEN` are honoured, `"openai"` is accepted, and
+    a configuration error is a `ValueError` (a malformed embedder URL too).
+    The extraction role's environment is read once, in `velesdb-memory`.
+  - `GraphCollection.search_by_embedding` reaches the observer's `on_query`
+    like every other search.
+  - `import velesdb` no longer imports `openai` or `sentence_transformers`;
+    an adapter imports its backend when it is built.
+  - A strided numpy vector (`matrix[:, 0]`) is read instead of raising
+    `TypeError`.
+  - The auto-dimension collection measures a vector without consuming a
+    one-shot iterator.
+  - `GraphStore` refuses a bad direction or depth with `ValueError`.
+  - The stubs' `Raises:` sections name the exceptions the code raises.
+
+- **Node: a `Date`, `Map`, `Set` or class instance in metadata, a filter or a
+  request is refused, not stored as `{}`.** napi read any object's own
+  enumerable properties, so these arrived as empty objects and were stored so
+  without a word. Metadata, filters, compile requests and working contexts now
+  go through one conversion that accepts JSON data only (plain objects, arrays,
+  finite numbers, strings, booleans, `null`) and rejects the rest with
+  `INVALID_INPUT` naming where it sits, in the returned `Promise`. Whole
+  numbers stay exact integers up to 2^53 − 1. The Node guide documents which
+  argument errors reject and which throw (a wrong JS type, refused by napi).
+
 - **WASM VelesQL answers as core does.**
   - `SELECT EDGES … WHERE` refuses a shape it cannot apply (`OR`, `!=`,
     another column, a parameter, a negative id) instead of dropping it and
@@ -460,6 +497,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   136-year TTL and `2**32 + 60` a 60-second one. A count must now be a whole
   number in `0..=2^32-1`; anything else rejects with `INVALID_INPUT`.
 
+- **Python: a float-column id past 2^53 is refused, not silently changed**
+  (Python, 2026-11-17). `upsert_dataframe` turned an id from a float column
+  into an integer with `int()`; past 2^53 the column had already rounded it,
+  so a different point was written. Such an id, and a missing (NaN) one, are
+  now refused with `ValueError`. Docs that had drifted are corrected: the
+  `Database` observer note said `query` fired only on an explicit
+  `notify_query` (core reports every read; the binding has no such call),
+  `scroll_batch` promised a `None` cursor on the last non-empty batch (it
+  carries the last id; an empty batch ends the walk), and `AgentMemory`
+  claimed an independent database handle where it shares the caller's.
+
+- **Python `match_query` runs as REST `/match` does, and MATCH reads are
+  reported** (core, Python, 2026-11-16). `Collection.match_query` and
+  `GraphCollection.match_query` ran on the collection leaf with a gate of
+  their own, on the stale premise that no gated database call returned MATCH
+  rows: `@collection` annotations were not resolved as on `/match`, and the
+  read never reached the observer. Both now call `Database::match_query`,
+  which also reports each completed run to `on_query` once — REST `/match`
+  included, which was gated but unreported.
+
 - **VelesQL `NOW()` and `INTERVAL` run in the browser** (core, WASM,
   2026-11-16). Every temporal expression read `std::time::SystemTime::now`,
   which panics on `wasm32-unknown-unknown`: a WASM query naming `NOW()` — or
@@ -517,6 +574,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (every collection Full) and an unknown mode accepted; it is now read by
   core's parser, which refuses unknown names.
 
+- **An access denial is `AccessDenied` (VELES-037), not a query error**
+  (core, server, Python, mobile, 2026-11-17). Every observer refusal — a
+  denied read, a vetoed DDL statement or DML mutation, a strict-mode
+  fail-closed answer — travelled as `Error::Query` (VELES-010), so REST
+  answered 400 and Python raised `ValueError`, indistinguishable from a
+  malformed query. Core gains `Error::AccessDenied`, a caller error that
+  never counts toward a circuit breaker; REST answers it `403 Forbidden`,
+  Python raises `PermissionError`, and the Python and mobile observers
+  refuse with it. Core's own refusal of a scope it cannot apply stays
+  `VELES-009`.
+
 - **Python: the facade forwards `principal` / `tenant`, and a scipy sparse
   query reads like its dict** (Python, 2026-11-16). The `Collection` every
   `Database` call returns defined `search`, `batch_search`,
@@ -563,6 +631,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edges matching all of them. `add_edge` and `create_index` reported core
   errors as VELES-009 (a caller configuration error); they keep core's code
   (an invalid edge label is VELES-021).
+
+- **`stream_insert` refuses a bad point up front, with core's code** (core,
+  server, Python, mobile, Tauri, 2026-11-16). A streamed point with the wrong
+  dimension, a non-finite component, or a vector on a metadata-only
+  collection was queued, then the background drain rejected the whole
+  micro-batch and dropped it silently, so the good points streamed alongside
+  it were lost too. `stream_insert` and `stream_insert_batch` now run the
+  same validation as `upsert` before queueing anything
+  (`BackpressureError::InvalidPoint`), and every surface reports core's code
+  (`VELES-004`, `VELES-005`, `VELES-014`): REST answers 400 instead of
+  queueing, Tauri no longer reports `VELES-009`, Python raises the typed
+  core exception (`DimensionMismatchError`, ...) instead of `RuntimeError`.
+  The server's own dimension pre-check is gone.
+
+- **A point's sparse vectors are what its last upsert said** (core, WASM,
+  every binding, 2026-11-16). The sparse index merged instead of replacing:
+  a re-upserted point kept every term it ever had, so it still matched
+  words its new vector dropped, and a point upserted again without sparse
+  vectors (or without one named index) stayed in those indexes. A point
+  re-upserted after its segment froze was held — and scored — twice.
+  `upsert` now replaces a point's sparse vectors as it replaces its payload
+  (the last duplicate in a batch wins; WAL replay agrees), while
+  `upsert_bulk` keeps a named index the point does not mention, as it keeps
+  a payload. Non-finite sparse weights, which only the REST parser refused,
+  are now refused by core itself on upsert and on every sparse query
+  (`VELES-005`), for Python, Node, Tauri, mobile and WASM alike.
+- **WASM `SparseIndex` is core's sparse index** (WASM, 2026-11-16). The
+  binding reimplemented the index and dropped every weight under
+  `f32::EPSILON` (sub-unit TF-IDF and SPLADE scores matched nothing); it now
+  delegates storage, replacement, removal and scoring to
+  `velesdb_core::sparse_index`.
+
+- **Partial HNSW options are completed by core, the same way everywhere**
+  (core, server, Python, Tauri, 2026-11-16). Each surface merged the fields a
+  caller left unset over a base of its own and none read the `[hnsw]`
+  section that `create_vector_collection_with_hnsw` honours (#2087); Python's
+  base was the 768-dimension profile whatever the collection's dimension, so
+  `HnswOptions(alpha=1.2)` on a 64-dim collection got 768-dim `M` and
+  `ef_construction`. New `HnswOverrides` and
+  `Database::create_vector_collection_with_overrides`: a pinned field wins,
+  then `[hnsw]`, then the auto-tuning for the collection's dimension, and an
+  out-of-range value is refused before anything is created. REST
+  `POST /collections`, Python `create_collection(hnsw=...)` and Tauri
+  `create_collection` all call it.
+
+- **Python `match_query` runs as REST `/match` does, and MATCH reads are
+  reported** (core, Python, 2026-11-16). `Collection.match_query` and
+  `GraphCollection.match_query` ran on the collection leaf with a gate of
+  their own, on the stale premise that no gated database call returned MATCH
+  rows: `@collection` annotations were not resolved as on `/match`, and the
+  read never reached the observer. Both now call `Database::match_query`,
+  which also reports each completed run to `on_query` once — REST `/match`
+  included, which was gated but unreported.
 
 - **The Tauri plugin's TypeScript bindings cover every command**
   (tauri-plugin-velesdb, 2026-11-16). `guest-js/index.ts` wrapped 38 of the

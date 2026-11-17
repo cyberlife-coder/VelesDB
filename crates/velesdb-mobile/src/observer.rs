@@ -173,9 +173,9 @@ impl DatabaseObserver for ForeignObserver {
         // foreign `Deny` to `AccessDecision::Deny` (mirrors `PyObserver`).
         Ok(match self.inner.on_query_request(context) {
             MobileAccessDecision::Allow => CoreAccessDecision::Allow,
-            MobileAccessDecision::Deny { reason } => CoreAccessDecision::Deny(CoreError::Query(
-                format!("read denied by observer: {reason}"),
-            )),
+            MobileAccessDecision::Deny { reason } => CoreAccessDecision::Deny(
+                CoreError::AccessDenied(format!("read denied by observer: {reason}")),
+            ),
         })
     }
 }

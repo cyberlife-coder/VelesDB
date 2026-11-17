@@ -485,7 +485,7 @@ impl Collection {
     /// decides like ``count``.
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn is_empty(&self) -> PyResult<bool> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
@@ -538,7 +538,7 @@ impl Collection {
     ///     int: The point count
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn __len__(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
@@ -553,7 +553,7 @@ impl Collection {
     ///     int: The point count
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn count(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
@@ -567,7 +567,7 @@ impl Collection {
     ///     List[int]: All point IDs
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope filter (ids carry
     ///         no payload to filter — fail closed).
     fn all_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
@@ -607,7 +607,7 @@ impl Collection {
     /// ascending. Used by training paths that need every stored vector.
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope filter (ids carry
     ///         no payload to filter — fail closed).
     fn all_point_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
@@ -806,7 +806,7 @@ impl Collection {
     /// ``__iter__`` and raises ``TypeError`` for the ``in`` operator.
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope filter
     ///         (membership is id-only — fail closed rather than reveal the
     ///         existence of out-of-scope points).

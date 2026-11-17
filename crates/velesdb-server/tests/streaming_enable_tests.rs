@@ -120,3 +120,32 @@ async fn test_rest_enable_streaming_collection_not_found() {
         "enable_streaming on a missing collection should return 404"
     );
 }
+
+/// A streamed point of the wrong dimension is refused by core — the check an
+/// upsert runs — with core's code, before anything is queued.
+#[tokio::test]
+async fn test_rest_stream_insert_refuses_a_wrong_dimension_with_cores_code() {
+    let temp = TempDir::new().expect("test: temp dir");
+    let app = create_test_app(&temp);
+    create_collection(&app).await;
+    let enable = post(
+        &app,
+        &format!("/collections/{COLLECTION}/stream/enable"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(enable.status(), StatusCode::OK, "test setup: enable");
+
+    let resp = post(
+        &app,
+        &format!("/collections/{COLLECTION}/stream/insert"),
+        json!({"id": 1, "vector": [0.1, 0.2]}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("test: body");
+    let body: Value = serde_json::from_slice(&body).expect("test: json");
+    assert_eq!(body["code"], "VELES-004", "{body}");
+}

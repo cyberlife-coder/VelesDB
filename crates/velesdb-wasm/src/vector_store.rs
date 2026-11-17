@@ -382,15 +382,14 @@ impl VectorStore {
     }
 
     /// Exports to binary format for IndexedDB/localStorage: ids, dense
-    /// vectors, payloads and configuration. The sparse index is not included
-    /// — after an import, insert the sparse vectors again (`sparse_insert`).
+    /// vectors, payloads, configuration and the sparse index (format v4).
     #[wasm_bindgen]
     pub fn export_to_bytes(&self) -> Result<Vec<u8>, JsValue> {
         self.state.borrow().export_to_bytes()
     }
 
     /// Saves to `IndexedDB`, as [`Self::export_to_bytes`] serializes the
-    /// store: the sparse index is not saved.
+    /// store, sparse index included.
     #[wasm_bindgen]
     pub async fn save(&self, db_name: &str) -> Result<(), JsValue> {
         let bytes = self.state.borrow().export_to_bytes()?;

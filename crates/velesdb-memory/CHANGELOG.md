@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where the fragment path was `high`. The default `compile-stdin` path is
   unchanged.
 
+### Deprecated
+
+- **`context::wire::parse_id_fields` and `parse_fragment_id_strings`.** They
+  rewrote a JS binding's decimal-string ids into numbers before serde, a
+  second id parser beside the domain's own: every id the Node and WASM
+  bindings read back (`WorkingContext`, `CompileRequest.fragments[].id`)
+  already deserializes from a number or a decimal string. Hand the JSON
+  straight to `serde_json::from_value` instead. The bindings no longer call
+  them, so the two parsers' disagreement on surrounding whitespace is gone:
+  `" 7"`, accepted by the MCP tools, is now accepted by Node and WASM too.
+
 ### Fixed
 
 - **A relation label is its trimmed text.** The graph stores trim an edge

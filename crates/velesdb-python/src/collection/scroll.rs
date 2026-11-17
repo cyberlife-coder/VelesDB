@@ -167,7 +167,9 @@ impl Collection {
     /// Fetch one batch of points starting after `cursor` (O(1) cursor seek).
     ///
     /// Returns ``(points, next_cursor)``: the batch as a list of dicts and the
-    /// cursor to pass on the next call (``None`` once the batch is the last).
+    /// cursor to pass on the next call — the last point's ID. A batch that
+    /// comes back empty (``next_cursor`` ``None``) means the walk is over; the
+    /// last non-empty batch still carries a cursor.
     /// Unlike the [`scroll`](Self::scroll) generator this is a stateless
     /// one-shot for callers that persist the cursor themselves (e.g.
     /// ``velesdb_common.scroll``), avoiding an O(n) re-scan per page.

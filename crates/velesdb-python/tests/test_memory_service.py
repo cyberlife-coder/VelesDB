@@ -478,7 +478,7 @@ def test_remember_extracted_keeps_an_attribute_json_type(mem):
 def test_unknown_extractor_raises_value_error(mem):
     # Mirrors test_unknown_embedder_raises_value_error: a caller who asked for
     # a backend that does not exist is told so, never handed another one.
-    with pytest.raises(ValueError, match="unknown extractor"):
+    with pytest.raises(ValueError, match="unknown extraction backend"):
         mem.remember_extracted("fact: anything", extractor="nope")
 
 
@@ -533,7 +533,7 @@ def test_list_memories_walks_the_store_exhaustively(mem):
         seen.extend(page["memories"])
         if page["next_cursor"] is None:
             break
-        cursor = int(page["next_cursor"])
+        cursor = page["next_cursor"]  # passed back as is, no conversion
     assert len(seen) == 5
     ids = [entry["id"] for entry in seen]
     assert ids == sorted(ids), "ids come back ascending"
@@ -541,3 +541,18 @@ def test_list_memories_walks_the_store_exhaustively(mem):
 
     filtered = mem.list_memories(filter={"project": "globex"})
     assert filtered["memories"] == []
+
+
+def test_remember_extracted_follows_the_node_bindings_contract(mem, monkeypatch):
+    """Same contract as Node and the MCP tool: the fact cap applies before
+    any backend runs, VELESDB_MEMORY_EXTRACTOR picks the backend when the
+    argument is omitted, and an unknown backend is the caller's ValueError."""
+    with pytest.raises(ValueError, match="exceeds"):
+        mem.remember_extracted("x" * (2 * 1024 * 1024), extractor="outline")
+
+    monkeypatch.setenv("VELESDB_MEMORY_EXTRACTOR", "outline")
+    outcome = mem.remember_extracted("fact: Alpha ships the parser. | alpha")
+    assert len(outcome["ids"]) == 1, "the env-selected offline backend ran"
+
+    with pytest.raises(ValueError, match="unknown extraction backend"):
+        mem.remember_extracted("fact: x | y", extractor="sideways")

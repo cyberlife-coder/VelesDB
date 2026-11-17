@@ -407,8 +407,14 @@ impl PyMemoryService {
     ///         backend and ignored by `"outline"`.
     ///     url: the Ollama base URL (`"ollama"` only).
     ///     metadata: merged onto every stored fact.
-    ///     extractor: which backend to use, `"ollama"` (default) or
-    ///         `"outline"`. `"outline"` is deterministic and network-free —
+    ///     extractor: which backend to use, `"ollama"`, `"openai"` or
+    ///         `"outline"`; omitted, `VELESDB_MEMORY_EXTRACTOR`, else
+    ///         `"ollama"` — the Node binding's precedence. The remote backends
+    ///         read `url`/`model` from the arguments, else
+    ///         `VELESDB_MEMORY_EXTRACTOR_URL` / `_MODEL`, and a credential from
+    ///         `VELESDB_MEMORY_EXTRACTOR_API_TOKEN` only. A `text` over the
+    ///         fact cap raises `ValueError` before any backend runs.
+    ///         `"outline"` is deterministic and network-free —
     ///         it reads the structure the passage STATES, one directive per
     ///         line (`edge:`, `attr:`, `fact:`) — and stands to `"ollama"`
     ///         exactly as the `"hash"` embedder does, so the whole contract
@@ -686,7 +692,9 @@ impl PyMemoryService {
     /// Audit the store page by page — the SAME walk and envelope as the MCP
     /// `list_memories` tool: ids ascending, TTL-expired facts skipped,
     /// metadata under recall's visibility rule unless `include_internal`.
-    /// `cursor` is the previous page's `next_cursor`; `None` ends the walk.
+    /// `cursor` is the previous page's `next_cursor`, passed back as is (a
+    /// native Python int, like every id of this binding); `None` ends the
+    /// walk.
     /// A filtered page may come back sparse — keep following the cursor,
     /// the walk stays exhaustive.
     #[pyo3(signature = (cursor = None, limit = 50, filter = None, include_internal = false))]
@@ -717,7 +725,7 @@ impl PyMemoryService {
             .collect();
         let page = serde_json::json!({
             "memories": entries,
-            "next_cursor": next.map(|id| id.to_string()),
+            "next_cursor": next,
         });
         Ok(json_to_python(py, &page))
     }

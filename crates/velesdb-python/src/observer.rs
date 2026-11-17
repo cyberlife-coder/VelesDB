@@ -81,7 +81,7 @@ impl PyObserver {
     /// `Deny` under strict mode, `Allow` otherwise.
     fn on_error_decision(&self, what: &str) -> AccessDecision {
         if self.strict {
-            AccessDecision::Deny(Error::Query(format!(
+            AccessDecision::Deny(Error::AccessDenied(format!(
                 "read denied by observer strict mode: {what}"
             )))
         } else {
@@ -133,13 +133,13 @@ impl PyObserver {
             // A string is a veto reason — check before bool, like
             // `interpret_decision`, so "" still denies.
             if let Ok(reason) = ret.extract::<String>() {
-                return Err(Error::Query(format!(
+                return Err(Error::AccessDenied(format!(
                     "{event} vetoed by observer for collection '{collection_name}' ({operation}): {reason}"
                 )));
             }
             match ret.extract::<bool>() {
                 Ok(true) => Ok(()),
-                Ok(false) => Err(Error::Query(format!(
+                Ok(false) => Err(Error::AccessDenied(format!(
                     "{event} vetoed by observer policy for collection '{collection_name}' ({operation})"
                 ))),
                 Err(_) => self.veto_failure(
@@ -154,7 +154,7 @@ impl PyObserver {
     /// otherwise — what [`Self::on_error_decision`] decides for a read.
     fn veto_failure(&self, event: &str, what: &str) -> velesdb_core::Result<()> {
         if self.strict {
-            Err(Error::Query(format!(
+            Err(Error::AccessDenied(format!(
                 "{event} denied by observer strict mode: {what}"
             )))
         } else {
@@ -207,13 +207,17 @@ fn interpret_decision(ret: &Bound<'_, PyAny>, strict: bool) -> AccessDecision {
     // A string is a deny *reason*. Check before bool so `""`—an empty reason—
     // still denies rather than being coerced to a falsey bool.
     if let Ok(reason) = ret.extract::<String>() {
-        return AccessDecision::Deny(Error::Query(format!("read denied by observer: {reason}")));
+        return AccessDecision::Deny(Error::AccessDenied(format!(
+            "read denied by observer: {reason}"
+        )));
     }
     if let Ok(allow) = ret.extract::<bool>() {
         return if allow {
             AccessDecision::Allow
         } else {
-            AccessDecision::Deny(Error::Query("read denied by observer policy".to_string()))
+            AccessDecision::Deny(Error::AccessDenied(
+                "read denied by observer policy".to_string(),
+            ))
         };
     }
     // A dict expresses an allow-with-scope narrowing.
@@ -225,7 +229,7 @@ fn interpret_decision(ret: &Bound<'_, PyAny>, strict: bool) -> AccessDecision {
     // under strict mode so a policy bug that returns the wrong type denies
     // rather than silently allowing.
     if strict {
-        return AccessDecision::Deny(Error::Query(
+        return AccessDecision::Deny(Error::AccessDenied(
             "read denied by observer strict mode: policy returned an \
              uninterpretable value (expected None/bool/str/dict)"
                 .to_string(),
@@ -256,13 +260,13 @@ fn interpret_scope(dict: &Bound<'_, PyDict>) -> AccessDecision {
         Ok(Some(v)) if !v.is_none() => match v.extract::<String>() {
             Ok(predicate) => predicate,
             Err(_) => {
-                return AccessDecision::Deny(Error::Query(
+                return AccessDecision::Deny(Error::AccessDenied(
                     "observer scope 'filter' must be a VelesQL predicate string".to_string(),
                 ))
             }
         },
         _ => {
-            return AccessDecision::Deny(Error::Query(
+            return AccessDecision::Deny(Error::AccessDenied(
                 "observer returned an allow-with-scope dict without an enforceable 'filter' \
                  predicate; OSS does not narrow by 'tenant' alone, so the read is denied \
                  (fail closed). Return a {\"filter\": \"<VelesQL predicate>\"} dict to scope, \
@@ -275,7 +279,7 @@ fn interpret_scope(dict: &Bound<'_, PyDict>) -> AccessDecision {
     let condition = match parse_scope_predicate(&predicate) {
         Ok(condition) => condition,
         Err(err) => {
-            return AccessDecision::Deny(Error::Query(format!(
+            return AccessDecision::Deny(Error::AccessDenied(format!(
                 "invalid observer scope filter: {err}"
             )))
         }

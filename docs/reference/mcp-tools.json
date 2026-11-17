@@ -16,7 +16,7 @@
                   "type": "string"
                 },
                 "id": {
-                  "description": "Caller-side identifier; when absent, the compiler derives a stable\ncontent-addressed id (`super::fragment_id`). Accepts a JSON number\nor decimal string (`wire::deserialize_optional_id`) — a `fragment_id`\nreceived as a string can be resubmitted unchanged.",
+                  "description": "Caller-side identifier; when absent, the compiler derives a stable\ncontent-addressed id (`super::fragment_id`). Accepts a JSON number\nor a decimal string — a `fragment_id` received as a string can be\nresubmitted unchanged.",
                   "type": "string"
                 },
                 "kind": {
@@ -1600,7 +1600,7 @@
                       "type": "string"
                     },
                     "id": {
-                      "description": "Caller-side identifier; when absent, the compiler derives a stable\ncontent-addressed id (`super::fragment_id`). Accepts a JSON number\nor decimal string (`wire::deserialize_optional_id`) — a `fragment_id`\nreceived as a string can be resubmitted unchanged.",
+                      "description": "Caller-side identifier; when absent, the compiler derives a stable\ncontent-addressed id (`super::fragment_id`). Accepts a JSON number\nor a decimal string — a `fragment_id` received as a string can be\nresubmitted unchanged.",
                       "type": "string"
                     },
                     "kind": {

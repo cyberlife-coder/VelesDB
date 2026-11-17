@@ -2,21 +2,22 @@
 //! binding (Node, WASM) of the `context` types: a `u64` id crosses as a
 //! decimal string, because JS `number` loses precision above 2^53.
 //!
-//! Node and WASM independently need the exact same tree walk over a
-//! serialized [`CompiledContext`](crate::context::CompiledContext) — one to turn
-//! outgoing ids into strings, the other to turn incoming strings back into
-//! numbers before deserializing. Living here once (instead of copy-pasted
-//! per binding) means [`crate::context::wire::ID_KEYS`] has a single source of truth: a future id
-//! field added to a `context` type only needs updating in one place, not
-//! silently missed in whichever binding a copy-paste forgot.
+//! Node and WASM need the exact same tree walk over a serialized
+//! [`CompiledContext`](crate::context::CompiledContext) to turn outgoing ids
+//! into strings. Living here once (instead of copy-pasted per binding) means
+//! [`crate::context::wire::ID_KEYS`] has a single source of truth.
 //!
-//! Deliberately binding-agnostic: this crate depends on neither `napi` nor
-//! `wasm-bindgen`, so each binding maps the [`InvalidId`](crate::context::wire::InvalidId) error to its own
-//! error type at the call site.
+//! The way in needs no walk: every id a binding reads back (a
+//! `WorkingContext`, a `CompileRequest`'s `fragments[].id`) deserializes
+//! from a number or a decimal string through the crate-wide id rule
+//! (`crate::model::deserialize_id` and its `Option` sibling), so a binding
+//! hands its input straight to serde. The string-to-number walks
+//! (`parse_id_fields`, `parse_fragment_id_strings`) are deprecated.
 
 use serde_json::Value;
 
-/// An id that is not a decimal `u64` string.
+/// An id that is not a decimal `u64` string: the error of the deprecated
+/// [`parse_id_fields`] and [`parse_fragment_id_strings`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid id '{text}' (expected a decimal u64 string)")]
 pub struct InvalidId {
@@ -80,6 +81,10 @@ fn stringify_ids_in(value: &mut Value) {
 /// # Errors
 /// Returns [`InvalidId`] if an [`ID_KEYS`] field holds a string that
 /// does not parse as a decimal `u64`.
+#[deprecated(
+    since = "0.18.1",
+    note = "every context type deserializes its ids from a number or a decimal string; hand the JSON to serde as is"
+)]
 pub fn parse_id_fields(value: &mut Value) -> Result<(), InvalidId> {
     match value {
         Value::Object(map) => {
@@ -125,6 +130,10 @@ fn parse_ids_in(value: &mut Value) -> Result<(), InvalidId> {
 /// # Errors
 /// Returns [`InvalidId`] if a fragment's `id` does not parse as a
 /// decimal `u64`.
+#[deprecated(
+    since = "0.18.1",
+    note = "every context type deserializes its ids from a number or a decimal string; hand the JSON to serde as is"
+)]
 pub fn parse_fragment_id_strings(request: &mut Value) -> Result<(), InvalidId> {
     let Some(fragments) = request.get_mut("fragments").and_then(Value::as_array_mut) else {
         return Ok(());
@@ -144,39 +153,6 @@ pub(crate) fn parse_u64(text: &str) -> Result<u64, InvalidId> {
     text.parse().map_err(|_| InvalidId {
         text: text.to_owned(),
     })
-}
-
-/// Serde `deserialize_with` for [`super::model::ContextFragment::id`]:
-/// accepts either a JSON number or a decimal string, so a caller who
-/// received an id as a string (e.g. echoing back a `fragment_id` handed out
-/// under [`super::model::CompilePolicy::ids_as_strings`], or any client that
-/// serializes `u64` as a JS-safe string by convention) can resubmit it
-/// as-is. Reuses [`parse_u64`] — the same decimal-parsing rule
-/// [`parse_fragment_id_strings`] and [`parse_ids_in`] already apply,
-/// centralized once. Matched by hand over a [`Value`] (not an untagged
-/// enum) so a rejected value gets a message naming it and the accepted
-/// forms, instead of serde's opaque "did not match any variant".
-///
-/// # Errors
-/// Returns a deserialize error naming the offending value if it is neither
-/// a `u64` JSON number nor a decimal-`u64` string.
-pub(crate) fn deserialize_optional_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error;
-    use serde::Deserialize;
-
-    let expected = "expected a u64 number or a decimal u64 string";
-    Option::<Value>::deserialize(deserializer)?
-        .map(|value| match value {
-            Value::Number(number) => number
-                .as_u64()
-                .ok_or_else(|| Error::custom(format!("invalid id {number} ({expected})"))),
-            Value::String(text) => parse_u64(&text).map_err(Error::custom),
-            other => Err(Error::custom(format!("invalid id {other} ({expected})"))),
-        })
-        .transpose()
 }
 
 #[cfg(test)]

@@ -54,11 +54,12 @@ mod dto;
 mod error;
 mod factory;
 mod guards;
+mod json_arg;
 mod tasks;
 
 use std::sync::Arc;
 
-use napi::bindgen_prelude::AsyncTask;
+use napi::bindgen_prelude::{AsyncTask, Unknown};
 use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::anchor::AnchorRoot;
@@ -176,17 +177,19 @@ impl NodeMemoryService {
         &self,
         fact: String,
         links: Option<Vec<LinkJs>>,
-        metadata: Option<Value>,
+        metadata: Option<Unknown>,
         ttl_seconds: Option<f64>,
         anchors: Option<Vec<String>>,
         anchor_root: Option<String>,
     ) -> AsyncTask<Job<RememberOutcomeJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let metadata = json_arg::to_optional_json(metadata.as_ref(), "metadata");
         let svc = Arc::clone(&self.inner);
         let allowlist = anchor_allowlist(self.ingest_roots.as_ref());
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&fact)?;
             let links = convert::to_links(links)?;
-            let metadata = convert::to_metadata(metadata)?;
+            let metadata = convert::to_metadata(metadata?)?;
             // Same call the MCP `remember` tool makes: resolve_request reads
             // each anchored file under the allowlist (containment checked at
             // the sink in AnchorRoot) and refuses before anything is written.
@@ -221,14 +224,16 @@ impl NodeMemoryService {
         &self,
         query: String,
         k: Option<f64>,
-        filter: Option<Value>,
+        filter: Option<Unknown>,
         anchor_root: Option<String>,
     ) -> AsyncTask<Job<Vec<AnchoredRecollectionJs>>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         let allowlist = anchor_allowlist(self.ingest_roots.as_ref());
         AsyncTask::new(Job::new(move || {
             let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
-            let filter = convert::to_metadata(filter)?;
+            let filter = convert::to_metadata(filter?)?;
             let Some(root) = anchor_root else {
                 let hits = svc
                     .recall(&query, k, filter.as_ref())
@@ -292,13 +297,15 @@ impl NodeMemoryService {
         &self,
         query: String,
         k: Option<f64>,
-        filter: Option<Value>,
+        filter: Option<Unknown>,
         opts: Option<FusionOptionsJs>,
     ) -> AsyncTask<Job<Vec<RecollectionJs>>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
-            let filter = convert::to_metadata(filter)?;
+            let filter = convert::to_metadata(filter?)?;
             let opts = convert::to_fusion_options(opts)?;
             let hits = svc
                 .recall_fused(&query, k, filter.as_ref(), opts)
@@ -322,13 +329,15 @@ impl NodeMemoryService {
         query: String,
         date_field: String,
         k: Option<f64>,
-        filter: Option<Value>,
+        filter: Option<Unknown>,
         opts: Option<FusionOptionsJs>,
     ) -> AsyncTask<Job<DatedRecallJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
-            let filter = convert::to_metadata(filter)?;
+            let filter = convert::to_metadata(filter?)?;
             let opts = convert::to_fusion_options(opts)?;
             let (hits, ctx) = svc
                 .recall_fused_dated(&query, k, filter.as_ref(), opts, &date_field)
@@ -417,12 +426,14 @@ impl NodeMemoryService {
         &self,
         decision: String,
         max_hops: Option<f64>,
-        filter: Option<Value>,
+        filter: Option<Unknown>,
     ) -> AsyncTask<Job<ExplanationJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let max_hops = guards::clamp_hops(guards::count("maxHops", max_hops)?.unwrap_or(2));
-            let filter = convert::to_metadata(filter)?;
+            let filter = convert::to_metadata(filter?)?;
             svc.why(&decision, max_hops, filter.as_ref())
                 .map(ExplanationJs::from)
                 .map_err(to_napi_err)
@@ -481,13 +492,13 @@ impl NodeMemoryService {
         js_name = "compileContext",
         ts_return_type = "Promise<CompiledContextJs>"
     )]
-    pub fn compile_context(&self, request: Value) -> AsyncTask<Job<CompiledContextJs>> {
+    pub fn compile_context(&self, request: Unknown) -> AsyncTask<Job<CompiledContextJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let request = json_arg::to_json(&request, "request");
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
-            let mut request = request;
-            convert::parse_fragment_id_strings(&mut request)?;
-            let mut request: CompileRequest = serde_json::from_value(request)
+            let mut request: CompileRequest = serde_json::from_value(request?)
                 .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
             resolve_fragments(&mut request.fragments, ingest_roots.as_ref())
                 .map_err(to_napi_err)?;
@@ -542,16 +553,16 @@ impl NodeMemoryService {
     )]
     pub fn explain_compilation(
         &self,
-        request: Value,
+        request: Unknown,
         fragment_id: String,
         fragment_index: Option<f64>,
     ) -> AsyncTask<Job<JsonOut>> {
+        // Read on the JS thread, refused in the Promise.
+        let request = json_arg::to_json(&request, "request");
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
-            let mut request = request;
-            convert::parse_fragment_id_strings(&mut request)?;
-            let mut request: CompileRequest = serde_json::from_value(request)
+            let mut request: CompileRequest = serde_json::from_value(request?)
                 .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
             // Same pre-pass as compile_context (the MCP tool shares it):
             // `path` fragments resolve under the ingest-roots allowlist.
@@ -601,13 +612,13 @@ impl NodeMemoryService {
         &self,
         project: String,
         session: String,
-        working: Value,
+        working: Unknown,
     ) -> AsyncTask<Job<String>> {
+        // Read on the JS thread, refused in the Promise.
+        let working = json_arg::to_json(&working, "working");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let mut working = working;
-            convert::parse_id_fields(&mut working)?;
-            let working: WorkingContext = serde_json::from_value(working)
+            let working: WorkingContext = serde_json::from_value(working?)
                 .map_err(|err| invalid_input(format!("invalid working context: {err}")))?;
             svc.save_working_context(&project, &session, &working)
                 .map(convert::id_to_string)
@@ -709,7 +720,9 @@ impl NodeMemoryService {
         js_name = "compileTranscript",
         ts_return_type = "Promise<CompileTranscriptJs>"
     )]
-    pub fn compile_transcript(&self, request: Value) -> AsyncTask<Job<CompileTranscriptJs>> {
+    pub fn compile_transcript(&self, request: Unknown) -> AsyncTask<Job<CompileTranscriptJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let request = json_arg::to_json(&request, "request");
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
@@ -717,7 +730,7 @@ impl NodeMemoryService {
             // input struct: resolve it under the allowlist and feed the text
             // back as `transcript` — exactly the MCP tool's
             // transcript-or-path resolution.
-            let request = convert::resolve_transcript_input(request, ingest_roots.as_ref())?;
+            let request = convert::resolve_transcript_input(request?, ingest_roots.as_ref())?;
             let input: convert::CompileTranscriptInput =
                 serde_json::from_value(request).map_err(|err| {
                     invalid_input(format!("invalid compile_transcript request: {err}"))
@@ -833,9 +846,11 @@ impl NodeMemoryService {
         &self,
         cursor: Option<String>,
         limit: Option<f64>,
-        filter: Option<Value>,
+        filter: Option<Unknown>,
         include_internal: Option<bool>,
     ) -> AsyncTask<Job<JsonOut>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let cursor = match cursor {
@@ -846,7 +861,7 @@ impl NodeMemoryService {
                 })?),
                 None => None,
             };
-            let filter = convert::to_metadata(filter)?;
+            let filter = convert::to_metadata(filter?)?;
             let (memories, next) = svc
                 .list(
                     cursor,
@@ -909,13 +924,15 @@ impl NodeMemoryService {
         text: String,
         model: Option<String>,
         url: Option<String>,
-        metadata: Option<Value>,
+        metadata: Option<Unknown>,
         extractor: Option<String>,
     ) -> AsyncTask<Job<RememberedExtractionJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let metadata = json_arg::to_optional_json(metadata.as_ref(), "metadata");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&text)?;
-            let metadata = convert::to_metadata(metadata)?;
+            let metadata = convert::to_metadata(metadata?)?;
             // Explicit argument > VELESDB_MEMORY_EXTRACTOR > "ollama" — the
             // same precedence the embedder factory applies (#1886).
             let env_backend = std::env::var("VELESDB_MEMORY_EXTRACTOR").ok();

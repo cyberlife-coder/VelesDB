@@ -252,7 +252,7 @@ impl Collection {
     /// Get points by their IDs.
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///
     /// When the read gate returns a scope filter, out-of-scope points are
     /// masked to ``None`` (id-alignment with the input list is preserved).
@@ -348,12 +348,14 @@ impl Collection {
         let parsed = parse_point_dicts(py, &points)?;
 
         // Phase 2: Send entire batch in one call (single lock acquisition), GIL released
+        // A point an upsert would refuse raises what that upsert raises.
         let queued = py.detach(|| {
-            self.inner.stream_insert_batch(parsed).map_err(|e| {
-                pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "Stream insert failed (buffer full or not configured): {e}"
-                ))
-            })
+            self.inner
+                .validate_points_for_upsert(&parsed)
+                .map_err(core_err)?;
+            self.inner
+                .stream_insert_batch(parsed)
+                .map_err(stream_insert_err)
         })?;
         Ok(queued)
     }
@@ -397,4 +399,11 @@ fn convert_payloads(
         }
     }
     Ok(Some(result))
+}
+
+/// A full buffer, an unconfigured or a dead pipeline is a `RuntimeError`; a
+/// point an upsert would refuse never gets here, `stream_insert` checks it
+/// first and raises what that upsert raises.
+fn stream_insert_err(err: velesdb_core::BackpressureError) -> PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(format!("Stream insert failed: {err}"))
 }

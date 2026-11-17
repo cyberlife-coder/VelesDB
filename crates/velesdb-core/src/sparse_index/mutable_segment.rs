@@ -25,7 +25,10 @@ impl MutableSegment {
         }
     }
 
-    /// Inserts or updates `vector` for `point_id`.
+    /// Adds `vector`'s postings for `point_id`, overwriting the weight of a
+    /// term it already had. Terms it had and `vector` lacks are kept: the
+    /// replace semantics live one level up, in `SparseInvertedIndex::insert`,
+    /// which retires the document from every segment first.
     ///
     /// Returns `true` if this is a new document.
     pub(super) fn insert(&mut self, point_id: u64, vector: &SparseVector) -> bool {
@@ -109,21 +112,35 @@ impl MutableSegment {
         *entries = merged;
     }
 
-    /// Removes all posting entries for `point_id`.
+    /// Removes every document of `ids` the segment holds, in one pass over
+    /// the posting lists, and returns the ones it held.
     ///
-    /// Returns `true` if the point had at least one entry in this segment.
-    pub(super) fn delete(&mut self, point_id: u64) -> bool {
-        self.doc_set.remove(&point_id);
+    /// Membership is `doc_set`, so a document indexed with an empty vector
+    /// (no postings) is found and removed too.
+    pub(super) fn delete_many(&mut self, ids: &FxHashSet<u64>) -> FxHashSet<u64> {
+        let held: FxHashSet<u64> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.doc_set.remove(id))
+            .collect();
+        if !held.is_empty() {
+            self.doc_count -= held.len();
+            self.remove_postings(|doc_id| held.contains(&doc_id));
+        }
+        held
+    }
 
-        let mut any_removed = false;
+    /// Drops the postings of every doomed document, then the posting lists
+    /// left empty, and recomputes `max_weights` for the terms that lost an
+    /// entry (the removed one may have carried the term's maximum).
+    fn remove_postings(&mut self, doomed: impl Fn(u64) -> bool) {
         let mut recalc_terms: Vec<u32> = Vec::new();
         let mut empty_terms: Vec<u32> = Vec::new();
 
         for (&term_id, entries) in &mut self.postings {
             let before = entries.len();
-            entries.retain(|e| e.doc_id != point_id);
+            entries.retain(|e| !doomed(e.doc_id));
             if entries.len() < before {
-                any_removed = true;
                 if entries.is_empty() {
                     empty_terms.push(term_id);
                 } else {
@@ -146,7 +163,5 @@ impl MutableSegment {
                 self.max_weights.insert(term_id, max_w);
             }
         }
-
-        any_removed
     }
 }

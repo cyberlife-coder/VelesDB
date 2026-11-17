@@ -3600,6 +3600,16 @@
           "202": {
             "description": "Point accepted into streaming buffer"
           },
+          "400": {
+            "description": "A point the collection refuses: wrong dimension (VELES-004), a non-finite component (VELES-005) or a vector on a metadata-only collection (VELES-014); nothing is queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found",
             "content": {
