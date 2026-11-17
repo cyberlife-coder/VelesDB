@@ -1,0 +1,8 @@
+[
+  {
+    "ghsa": "GHSA-fc5q-39xc-vjpf",
+    "package": "picomatch",
+    "reason": "ReDoS in the glob matcher of build and test tooling only (vite, vitest, tsup, typescript-eslint through tinyglobby/fdir); every published version up to 4.0.7, the latest, is affected and no fix exists. Remove this entry once picomatch ships a fix and the lockfiles take it.",
+    "review_by": "2027-01-15"
+  }
+]
