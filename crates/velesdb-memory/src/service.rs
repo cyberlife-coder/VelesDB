@@ -465,7 +465,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// nothing has been stored or overwritten yet.
     fn validate_links(&self, links: &[Link]) -> Result<(), MemoryError> {
         for link in links {
-            validate_relation(&link.relation)?;
+            relation_label(&link.relation)?;
         }
         self.ensure_link_targets_exist(links)
     }
@@ -947,12 +947,15 @@ fn with_system_entries(metadata: Option<Metadata>, system: Option<&Metadata>) ->
 /// from reaching the storage layer).
 const MAX_RELATION_BYTES: usize = 512;
 
-/// Validate a caller-supplied relation label: non-empty, within the size cap, and
-/// containing only printable, non-control ASCII characters (32–126) or non-ASCII
-/// Unicode. This prevents null bytes and control characters from reaching the
-/// storage layer while permitting natural-language labels like `"decided_in"` or
-/// `"is a friend of"`.
-fn validate_relation(label: &str) -> Result<(), MemoryError> {
+/// A caller-supplied relation label as the store keeps it: trimmed (the graph
+/// stores trim an edge label, as core's `GraphEdge::new` does, so the label
+/// written, compared on a repeated `relate` and matched by `unrelate` is the
+/// same text), non-empty, within the size cap, and containing only printable,
+/// non-control ASCII characters (32–126) or non-ASCII Unicode. This prevents
+/// null bytes and control characters from reaching the storage layer while
+/// permitting natural-language labels like `"decided_in"` or `"is a friend of"`.
+pub(super) fn relation_label(label: &str) -> Result<&str, MemoryError> {
+    let label = label.trim();
     if label.is_empty() {
         return Err(MemoryError::InvalidRelation(
             "relation label must not be empty".to_owned(),
@@ -969,5 +972,5 @@ fn validate_relation(label: &str) -> Result<(), MemoryError> {
             "relation label must not contain ASCII control characters".to_owned(),
         ));
     }
-    Ok(())
+    Ok(label)
 }

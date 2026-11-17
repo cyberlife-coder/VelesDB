@@ -55,17 +55,11 @@ impl GraphEdge {
     ///
     /// Returns `Error::InvalidEdgeLabel` if the label is empty or whitespace-only.
     pub fn new(id: u64, source: u64, target: u64, label: &str) -> Result<Self> {
-        let trimmed = label.trim();
-        if trimmed.is_empty() {
-            return Err(Error::InvalidEdgeLabel(
-                "Edge label cannot be empty or whitespace-only".to_string(),
-            ));
-        }
         Ok(Self {
             id,
             source,
             target,
-            label: trimmed.to_string(),
+            label: crate::velesql::EdgeQuery::normalized_label(label)?,
             properties: HashMap::new(),
         })
     }

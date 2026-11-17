@@ -57,7 +57,7 @@ fn describe_collection(
     } else {
         "vector"
     };
-    let metric = metric_to_string(borrowed.metric);
+    let metric = borrowed.metric.canonical_name();
     let payload = serde_json::json!({
         "name": stmt.name,
         "type": kind,
@@ -76,18 +76,6 @@ fn describe_collection(
 /// as `"unknown"` rather than silently masquerading as cosine in
 /// `DESCRIBE COLLECTION`.
 // TODO(US-S4-13): update when DistanceMetric gains new variants.
-fn metric_to_string(m: velesdb_core::DistanceMetric) -> &'static str {
-    use velesdb_core::DistanceMetric;
-    match m {
-        DistanceMetric::Cosine => "cosine",
-        DistanceMetric::Euclidean => "euclidean",
-        DistanceMetric::DotProduct => "dot",
-        DistanceMetric::Hamming => "hamming",
-        DistanceMetric::Jaccard => "jaccard",
-        _ => "unknown",
-    }
-}
-
 #[cfg(test)]
 #[path = "velesql_introspection_tests.rs"]
 mod tests;
