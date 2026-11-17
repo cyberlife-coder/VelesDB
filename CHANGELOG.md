@@ -433,8 +433,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared `Collection.upsert` and `batch_search` with keywords the facade
   does not take. A test now diffs the built module's members and
   signatures against the stub's AST, both ways, so the stub cannot drift
-  again. `Collection.stream_insert` gets back the docstring that had
-  landed on `enable_streaming`.
+  again. The `GraphCollection` a `Database` returns now types the members
+  it forwards to `PyGraphCollection` (`query`, `traverse_bfs`, `len()`, a
+  `with` block, …), which a type checker refused: both stub classes share a
+  stub-only base, and the test resolves only the bases the stub declares.
+  `Collection.stream_insert` gets back the docstring that had landed on
+  `enable_streaming`.
 
 - **Python: `search_request` refuses a knob its search path ignores**
   (Python, 2026-11-17). `SearchOptions.ef_search` and `quality` were honoured

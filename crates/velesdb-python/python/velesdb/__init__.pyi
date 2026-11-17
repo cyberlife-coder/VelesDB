@@ -2053,8 +2053,11 @@ class PyGraphSchema:
     def __repr__(self) -> str: ...
 
 
-class PyGraphCollection:
-    """Persistent graph collection with typed nodes, edges, and optional vector search."""
+class _GraphCollectionMembers:
+    """Stub-only base: the members :class:`PyGraphCollection` and the
+    :class:`GraphCollection` facade expose with the same signature. It does
+    not exist at runtime; a member whose signature differs between the two
+    is declared on each class instead."""
 
     @property
     def name(self) -> str:
@@ -2069,15 +2072,6 @@ class PyGraphCollection:
     @property
     def has_embeddings(self) -> bool:
         """Whether this collection has node embeddings enabled."""
-        ...
-
-    def add_edge(self, edge: Dict[str, Any]) -> None:
-        """Add an edge between two nodes.
-
-        Args:
-            edge: Dict with keys: id (int), source (int), target (int),
-                  label (str), properties (dict, optional)
-        """
         ...
 
     def add_edges_batch(self, edges: List[Dict[str, Any]]) -> int:
@@ -2458,10 +2452,6 @@ class PyGraphCollection:
         """Membership test: ``node_id in graph`` (true if node has a payload)."""
         ...
 
-    def __enter__(self) -> "PyGraphCollection":
-        """Context manager entry — returns ``self``."""
-        ...
-
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
         """Context manager exit — calls :py:meth:`close` and propagates exceptions."""
         ...
@@ -2474,15 +2464,34 @@ class PyGraphCollection:
         ...
 
 
-class GraphCollection:
+class PyGraphCollection(_GraphCollectionMembers):
+    """Persistent graph collection with typed nodes, edges, and optional vector search."""
+
+    def add_edge(self, edge: Dict[str, Any]) -> None:
+        """Add an edge between two nodes.
+
+        Args:
+            edge: Dict with keys: id (int), source (int), target (int),
+                  label (str), properties (dict, optional)
+        """
+        ...
+
+    def __enter__(self) -> "PyGraphCollection":
+        """Context manager entry — returns ``self``."""
+        ...
+
+
+class GraphCollection(_GraphCollectionMembers):
     """Python compatibility wrapper returned by the graph-collection helpers.
 
     Returned by :meth:`Database.create_graph_collection` and
     :meth:`Database.get_graph_collection`. This is a delegating wrapper
     around :class:`PyGraphCollection` (composition, not inheritance —
     ``isinstance(g, PyGraphCollection)`` is False at runtime); unknown
-    attributes delegate to the underlying :class:`PyGraphCollection`, and the
-    members below are the facade-specific overrides and convenience aliases.
+    attributes delegate to the underlying :class:`PyGraphCollection`. The
+    members both expose alike are declared once, on the stub-only
+    ``_GraphCollectionMembers`` base; the members below are the
+    facade-specific overrides and convenience aliases.
     """
 
     @overload

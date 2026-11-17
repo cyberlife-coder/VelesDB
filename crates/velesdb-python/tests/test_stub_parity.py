@@ -28,8 +28,8 @@ import pytest
 STUB_PATH = Path(__file__).parents[1] / "python" / "velesdb" / "__init__.pyi"
 
 
-def _classes() -> dict[str, ast.ClassDef]:
-    module = ast.parse(STUB_PATH.read_text())
+def _classes(source: "str | None" = None) -> dict[str, ast.ClassDef]:
+    module = ast.parse(STUB_PATH.read_text() if source is None else source)
     return {
         node.name: node
         for node in module.body
@@ -38,10 +38,11 @@ def _classes() -> dict[str, ast.ClassDef]:
 
 
 def _methods(classes: dict[str, ast.ClassDef], class_name: str) -> set[str]:
+    """Methods a type checker sees on ``class_name``, inherited ones included."""
     return {
-        node.name
-        for node in classes[class_name].body
-        if isinstance(node, ast.FunctionDef)
+        name
+        for name, nodes in _stub_members(classes, class_name).items()
+        if any(isinstance(node, ast.FunctionDef) for node in nodes)
     }
 
 
@@ -167,10 +168,6 @@ _PROTOCOL_DUNDERS = frozenset(
     {"__len__", "__contains__", "__iter__", "__next__", "__enter__", "__exit__", "__getitem__"}
 )
 
-#: A stub class documented as delegating to another stub class, the way its
-#: runtime facade forwards unknown attributes.
-_STUB_DELEGATES = {"GraphCollection": "PyGraphCollection"}
-
 #: The facade constructor parameter that receives the wrapped compiled
 #: object: the wrapping seam the facade's own factories use, not caller API.
 _FACADE_SEAM_PARAM = "inner"
@@ -203,17 +200,21 @@ def _runtime_members(cls: type, inner: "type | None") -> dict[str, Any]:
 
 
 def _stub_members(classes: dict[str, ast.ClassDef], class_name: str) -> dict[str, list[ast.AST]]:
+    """What a type checker sees on ``class_name``: its own declarations over
+    those of the base classes it names that the stub defines, resolved like
+    an MRO. Nothing else counts — a runtime ``__getattr__`` the stub does not
+    declare is invisible to a type checker, so it is invisible here too."""
     members: dict[str, list[ast.AST]] = {}
-    for name in [_STUB_DELEGATES.get(class_name), class_name]:
-        if name is None:
-            continue
-        own: dict[str, list[ast.AST]] = {}
-        for node in classes[name].body:
-            if isinstance(node, ast.FunctionDef):
-                own.setdefault(node.name, []).append(node)
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                own.setdefault(node.target.id, []).append(node)
-        members.update(own)
+    for base in reversed(classes[class_name].bases):
+        if isinstance(base, ast.Name) and base.id in classes:
+            members.update(_stub_members(classes, base.id))
+    own: dict[str, list[ast.AST]] = {}
+    for node in classes[class_name].body:
+        if isinstance(node, ast.FunctionDef):
+            own.setdefault(node.name, []).append(node)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            own.setdefault(node.target.id, []).append(node)
+    members.update(own)
     return members
 
 
@@ -263,10 +264,9 @@ def _keyword_drift(where: str, runtime: Any, stub_nodes: list[ast.AST], exempt=f
     return drift
 
 
-def _class_drift(velesdb, classes, name: str) -> list[str]:
-    cls = getattr(velesdb, name)
-    facades = _facade_targets(velesdb)
-    inner = facades.get(name)
+def _class_drift(classes, name: str, cls: type, inner: "type | None") -> list[str]:
+    """Drift between runtime class ``cls`` (forwarding to ``inner`` when it
+    is a facade) and the stub class ``name``."""
     runtime = _runtime_members(cls, inner)
     stub = _stub_members(classes, name)
     drift = [f"{name}.{m} missing from stub" for m in sorted(set(runtime) - set(stub))]
@@ -307,7 +307,7 @@ def test_stub_declares_every_runtime_member_and_keyword() -> None:
     for name in velesdb.__all__:
         obj = getattr(velesdb, name)
         if inspect.isclass(obj) and not issubclass(obj, BaseException):
-            drift += _class_drift(velesdb, classes, name)
+            drift += _class_drift(classes, name, obj, _facade_targets(velesdb).get(name))
     assert drift == [], "type stub drifted from runtime:\n" + "\n".join(drift)
 
 
@@ -324,3 +324,40 @@ def test_stub_functions_take_the_runtime_keywords() -> None:
         if inspect.isroutine(obj) and name in functions:
             drift += _keyword_drift(name, obj, functions[name])
     assert drift == [], "type stub drifted from runtime:\n" + "\n".join(drift)
+
+
+def test_a_member_reached_only_through_runtime_delegation_is_drift() -> None:
+    """The guard reads the stub as a type checker does: a facade that
+    forwards a member at runtime but whose stub class neither declares it nor
+    inherits it from a stub base is reported, and a stub base declaring it
+    settles the drift."""
+    runtime_only_delegation = """
+class Raw:
+    def query(self, q: str) -> None: ...
+class Facade:
+    def close(self) -> None: ...
+"""
+    shared_base = """
+class _Shared:
+    def query(self, q: str) -> None: ...
+class Raw(_Shared): ...
+class Facade(_Shared):
+    def close(self) -> None: ...
+"""
+
+    class Raw:
+        def query(self, q):
+            return None
+
+    class Facade:
+        def __getattr__(self, name):
+            return getattr(Raw(), name)
+
+        def close(self):
+            return None
+
+    assert _class_drift(_classes(runtime_only_delegation), "Facade", Facade, Raw) == [
+        "Facade.query missing from stub"
+    ]
+    assert _class_drift(_classes(shared_base), "Facade", Facade, Raw) == []
+    assert _class_drift(_classes(shared_base), "Raw", Raw, None) == []
