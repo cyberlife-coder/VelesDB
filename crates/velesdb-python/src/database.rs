@@ -812,12 +812,13 @@ impl Database {
         &self.path
     }
 
-    /// Return a shared `Arc<CoreDatabase>` handle to the already-opened database.
+    /// A shared `Arc<CoreDatabase>` handle to this already-opened database.
     ///
     /// Used by subsystems (e.g., AgentMemory) that need `Arc` ownership.
-    /// The handle shares the same in-memory registries and file lock as the
-    /// parent `Database`, avoiding VELES-031 re-entrant lock errors.
-    pub fn open_shared(&self) -> std::result::Result<Arc<CoreDatabase>, String> {
-        Ok(Arc::clone(&self.inner))
+    /// The handle is the same database — same in-memory registries, same
+    /// observer, same file lock — so it cannot hit a VELES-031 re-entrant
+    /// lock error, and it cannot fail.
+    pub fn shared(&self) -> Arc<CoreDatabase> {
+        Arc::clone(&self.inner)
     }
 }

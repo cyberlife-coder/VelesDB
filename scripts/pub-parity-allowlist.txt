@@ -27,3 +27,8 @@ crates/velesdb-wasm/src/store_search.rs fn search
 # metadata-only and finite-component checks core runs: `store_search` is a
 # private module of the cdylib, so it was unreachable from the published package.
 crates/velesdb-wasm/src/store_search.rs fn validate_dimension
+# Renamed to the infallible `shared()`: `Database::open_shared` returned a
+# Result it could never fail with. It is a Rust method of the PyO3 cdylib,
+# not exposed to Python (#[pymethods] does not list it), so no published
+# surface loses it.
+crates/velesdb-python/src/database.rs fn open_shared

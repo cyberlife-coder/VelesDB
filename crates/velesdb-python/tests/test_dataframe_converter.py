@@ -416,3 +416,20 @@ class TestRowToPointIdCoercion:
 
     def test_int_id_unchanged(self):
         assert _row_to_point({"id": 7})["id"] == 7
+
+
+class TestFloatColumnIds:
+    """An id read from a float column is an id only while a float holds it exactly."""
+
+    def test_an_integral_float_id_is_accepted(self):
+        assert _row_to_point({"id": 3.0})["id"] == 3
+
+    @pytest.mark.parametrize("bad", [1.5, float("nan"), float(2**53 + 2), -float(2**53 + 2)])
+    def test_a_fractional_missing_or_unrepresentable_float_id_is_refused(self, bad):
+        # Past 2^53 a float column has already rounded the id: int() would
+        # upsert a different point without a word.
+        with pytest.raises(ValueError):
+            _row_to_point({"id": bad})
+
+    def test_the_largest_exact_float_id_is_accepted(self):
+        assert _row_to_point({"id": float(2**53)})["id"] == 2**53

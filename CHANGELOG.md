@@ -372,6 +372,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   136-year TTL and `2**32 + 60` a 60-second one. A count must now be a whole
   number in `0..=2^32-1`; anything else rejects with `INVALID_INPUT`.
 
+- **Python: a float-column id past 2^53 is refused, not silently changed**
+  (Python, 2026-11-17). `upsert_dataframe` turned an id from a float column
+  into an integer with `int()`; past 2^53 the column had already rounded it,
+  so a different point was written. Such an id, and a missing (NaN) one, are
+  now refused with `ValueError`. Docs that had drifted are corrected: the
+  `Database` observer note said `query` fired only on an explicit
+  `notify_query` (core reports every read; the binding has no such call),
+  `scroll_batch` promised a `None` cursor on the last non-empty batch (it
+  carries the last id; an empty batch ends the walk), and `AgentMemory`
+  claimed an independent database handle where it shares the caller's.
+
+- **Python `match_query` runs as REST `/match` does, and MATCH reads are
+  reported** (core, Python, 2026-11-16). `Collection.match_query` and
+  `GraphCollection.match_query` ran on the collection leaf with a gate of
+  their own, on the stale premise that no gated database call returned MATCH
+  rows: `@collection` annotations were not resolved as on `/match`, and the
+  read never reached the observer. Both now call `Database::match_query`,
+  which also reports each completed run to `on_query` once — REST `/match`
+  included, which was gated but unreported.
+
 - **VelesQL `NOW()` and `INTERVAL` run in the browser** (core, WASM,
   2026-11-16). Every temporal expression read `std::time::SystemTime::now`,
   which panics on `wasm32-unknown-unknown`: a WASM query naming `NOW()` — or

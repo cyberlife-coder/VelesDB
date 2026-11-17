@@ -221,15 +221,28 @@ def _nan_to_none(value: Any) -> Any:
     return value
 
 
+# The largest integer a float64 holds exactly (2^53).
+_MAX_EXACT_FLOAT_ID = 2**53
+
+
 def _coerce_point_id(value: Any) -> int:
     """Coerce a DataFrame id cell to an integer point id.
 
-    Integral floats (e.g. 3.0 from a float column) are accepted; a
-    non-integral float is rejected instead of silently truncated by
-    ``int()``.
+    Integral floats (e.g. 3.0 from a float column) are accepted. A float that
+    is not a whole number, is NaN (a missing id), or lies past 2^53 is
+    refused: past 2^53 a float column has already rounded the id, so
+    ``int()`` would silently upsert a *different* point.
     """
-    if isinstance(value, float) and not math.isnan(value) and not value.is_integer():
-        raise ValueError(f"id must be an integer, got {value!r}")
+    if isinstance(value, float):
+        if math.isnan(value):
+            raise ValueError("id is missing (NaN)")
+        if not value.is_integer():
+            raise ValueError(f"id must be an integer, got {value!r}")
+        if abs(value) > _MAX_EXACT_FLOAT_ID:
+            raise ValueError(
+                f"id {value!r} came from a float column, which cannot hold ids past 2^53 "
+                "exactly; store the id column as int64 or uint64"
+            )
     return int(value)
 
 

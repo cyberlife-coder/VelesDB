@@ -683,11 +683,11 @@ class Database:
                 (``None``/``True``/``False``/str/dict) are unaffected by this
                 flag.
 
-                In the embedded Python SDK the lifecycle events, the
-                ``query_request`` read gate, the VelesQL vetoes, and
-                ``upsert`` (fired by the core DML path and by direct SDK
-                writes) all fire from the core engine. ``query`` is emitted
-                only by an explicit ``notify_query`` call.
+                In the embedded Python SDK every event fires from the core
+                engine: the lifecycle events, the ``query_request`` read gate,
+                the VelesQL vetoes, ``upsert`` (the core DML path and direct
+                SDK writes alike) and ``query`` (once per completed search,
+                VelesQL statement or ``match_query``).
         """
         self._inner = _RawDatabase(path, config, observer, observer_strict)
 
