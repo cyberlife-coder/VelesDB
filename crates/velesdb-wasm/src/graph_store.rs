@@ -98,10 +98,16 @@ impl WasmGraphStore {
     /// over (source, target, label) so the same logical edge matches the id
     /// produced by every other VelesDB engine. Returns the final edge id.
     ///
+    /// An id is held once, as in core (`Error::EdgeExists`): inserting an
+    /// edge under an id the store already holds — explicit or derived — is
+    /// refused and leaves the stored edge untouched. A caller that wants
+    /// "add if absent" (`MemoryService.relate`) checks [`Self::edge`] first,
+    /// as core's agent-memory relation does.
+    ///
     /// # Errors
     ///
-    /// Returns `Err` when `explicit_id` collides with an edge already in the
-    /// store. Without this check, `delete_edge_by_id(n)` would delete every
+    /// Returns `Err` when the id collides with an edge already in the store.
+    /// Without this check, `delete_edge_by_id(n)` would delete every
     /// duplicate at once — a data-integrity risk for user SQL like
     /// `INSERT EDGE (id = 1, ...)` executed twice (Devin Review Finding J).
     pub(crate) fn insert_edge(
@@ -112,18 +118,15 @@ impl WasmGraphStore {
         label: String,
         payload: Option<serde_json::Value>,
     ) -> Result<u64, String> {
-        if let Some(eid) = explicit_id {
-            if self.edges.iter().any(|e| e.id == eid) {
-                return Err(format!(
-                    "Edge id {eid} already exists; explicit edge ids must be unique"
-                ));
-            }
+        // Delegate to core's canonical edge-id derivation so the same
+        // logical edge gets the same id across every VelesDB engine.
+        let id = explicit_id.unwrap_or_else(|| velesdb_core::hash_edge_id(source, target, &label));
+        if self.edge(id).is_some() {
+            return Err(format!(
+                "Edge id {id} already exists; edge ids must be unique (an edge without \
+                 an id takes the one derived from its source, label and target)"
+            ));
         }
-        let id = explicit_id.unwrap_or_else(|| {
-            // Delegate to core's canonical edge-id derivation so the same
-            // logical edge gets the same id across every VelesDB engine.
-            velesdb_core::hash_edge_id(source, target, &label)
-        });
         self.edges.push(WasmEdge {
             id,
             source,
@@ -132,6 +135,11 @@ impl WasmGraphStore {
             payload,
         });
         Ok(id)
+    }
+
+    /// The edge stored under `id`, if any.
+    pub(crate) fn edge(&self, id: u64) -> Option<&WasmEdge> {
+        self.edges.iter().find(|e| e.id == id)
     }
 
     /// Deletes an edge by id. Returns `true` if an edge was removed.

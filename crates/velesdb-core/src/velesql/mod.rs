@@ -37,6 +37,7 @@ mod cache;
 mod cache_tests;
 #[cfg(test)]
 mod cbo_tests;
+mod clock;
 #[cfg(test)]
 mod complex_parser_tests;
 mod cost_estimator;

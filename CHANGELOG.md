@@ -304,6 +304,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Python: strict observer mode denies a write veto it cannot read, and
+  `all_point_ids` passes the read gate** (Python, 2026-11-16). With
+  `observer_strict=True`, a `ddl_request` / `dml_mutation_request` callback
+  returning anything but `None`, a bool or a str (a scope dict, `0`, `[]`)
+  allowed the DDL/DML; it now denies, as the read gate already did. And
+  `Collection.all_point_ids()` skipped the read gate that `all_ids()` — a
+  subset of the same ids — passes, so a denied or scoped caller got every
+  id; it is now gated and fails closed on a scope.
+
 - **Tauri: the `read-only` permission set no longer admits writes**
   (core, Tauri, 2026-11-16). `velesdb:read-only` granted `query`, which runs
   every VelesQL statement — a window holding only that set could
@@ -366,6 +375,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persisted configuration: `storageMode` is `graph` or `metadata_only` for
   those kinds (metric `none` and dimension 0 for the latter), as the guest
   bindings document.
+
+- **VelesQL `NOW()` and `INTERVAL` run in the browser** (core, WASM,
+  2026-11-16). Every temporal expression read `std::time::SystemTime::now`,
+  which panics on `wasm32-unknown-unknown`: a WASM query naming `NOW()` — or
+  an `INTERVAL` alone, since the clock was read before the expression was
+  inspected — trapped the module (`RuntimeError: unreachable`). `NOW()` now
+  reads one clock, `velesql::clock`, which takes the page's time
+  (`Date.now()`, through `web-time`) on wasm32 and the system clock
+  elsewhere, and only `NOW()` reads it. Pinned by
+  `crates/velesdb-wasm/tests/velesql_temporal_web.rs`, run under Node by the
+
+- **WASM `SemanticMemory.query()` answers** (WASM, 2026-11-16). Since 4.0.0
+  it threw `Invalid search results` on every call: it ran the store's
+  JavaScript-facing `search`, then tried to re-read the array it returned as
+  a JSON string. It now reads the store's typed top-k, and returns the
+  nearest facts as `{ id, score, content }`. Pinned by
+  `crates/velesdb-wasm/tests/semantic_memory_web.rs`, run under Node by the
+  wasm-bindgen CI step.
+
+- **WASM `VectorStore`: a metadata-only store refuses a vector search, a
+  non-finite vector is refused, and a hybrid search ranks a distance metric
+  nearest-first** (WASM, 2026-11-16). `batch_search` / `multi_query_search`
+  on a dimension-0 store reached `chunks_exact(0)` and trapped the module
+  (`RuntimeError: unreachable`); every vector search now refuses a
+  metadata-only store with `SearchNotSupported` (VELES-015), as core does.
+  Inserts and searches accepted `NaN` / infinite components, which core
+  refuses (`InvalidVector`, VELES-005); they now refuse them too, through
+  core's `validate_vector_is_finite`. And `hybrid_search` blended a raw
+  distance as if it were a similarity, dropped rows at or below 0 and sorted
+  descending, so on a `euclidean` or `hamming` store the exact match was
+  dropped and the farthest vector ranked first; the distance is now negated
+  before the blend, as core's fusion orients a lower-is-better branch; with
+  `vector_weight = 0` the search is text-only under every metric. The
+  TypeScript SDK checked a `quality` preset by searching a metadata-only
+  probe store; it now calls the new `VectorStore.validate_search_quality`
+  when the binding has it (and keeps the probe for an older binding).
+  `insertBatchRaw` refusals carry core's codes (VELES-004 / VELES-005) like
+  every other insert.
+
+- **WASM: an edge id is held once, as in core** (WASM, 2026-11-16). An
+  edge whose id is derived from (source, target, label) was stored again on
+  every insert — `WasmDatabase.addEdge` or `INSERT EDGE` run twice,
+  `MemoryService.relate` called twice — so `getEdges` listed it twice,
+  `why()` / `entity()` showed the relation twice, and `removeEdge` /
+  `unrelate` deleted every copy at once. Inserting under an id the store
+  already holds, explicit or derived, is now refused and leaves the stored
+  edge untouched, as core refuses it (`EdgeExists`); `relate` answers an
+  existing relation with its id and writes nothing, as core's agent-memory
+  relation does.
+
+- **WASM: deleting a row drops its sparse postings, and `CREATE COLLECTION
+  … WITH (storage = …)` is honoured** (WASM, 2026-11-16).
+  `VectorStore.remove` and VelesQL `DELETE` left the row's postings in the
+  store's sparse index, so `search_sparse` kept returning a deleted
+  document. The storage mode of a VelesQL `CREATE COLLECTION` was ignored
+  (every collection Full) and an unknown mode accepted; it is now read by
+  core's parser, which refuses unknown names.
+
+- **Python: the facade forwards `principal` / `tenant`, and a scipy sparse
+  query reads like its dict** (Python, 2026-11-16). The `Collection` every
+  `Database` call returns defined `search`, `batch_search`,
+  `multi_query_search`, `search_batch_parallel` and `search_with_quality`
+  without the identity keywords the binding takes, so passing them raised
+  `TypeError` and an identity-keyed policy only ever saw `None`; they now
+  forward them, and a test fails when a facade override drops one. A scipy
+  sparse query was densified (out of memory on a 2^31-wide vocabulary), had
+  its rows flattened into one query and lost weights at or below
+  `f32::EPSILON`; a one-row matrix is now read through `tocoo()` with every
+  stored weight kept, and several rows are refused.
+
+- **Python: traversal steps, `FusionStrategy.weighted` keywords and
+  `add_edge(..., id=)` read as written** (Python, 2026-11-16). A reverse or
+  bidirectional `GraphStore.traverse_bfs` step reported `source == target`;
+  `source` is now the node the step leaves from.
+  `FusionStrategy.weighted(avg_weight=…, max_weight=…)` was silently read as
+  the legacy `(max_weight, hit_weight)` pair; only two positional weights
+  are that pair now, and an incomplete keyword set is refused.
+  `add_edge(source, target, label, id=n)` stored the edge from node 0; the
+  positional is now the source, `id=` with `source=` is refused, and the
+  stubs declare every form `GraphStore` and `GraphCollection` accept.
 
 - **Tauri commands honour every argument and keep core's error codes**
   (core, Tauri, 2026-11-16). `search_ids` and `batch_search` dropped

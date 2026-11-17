@@ -189,6 +189,13 @@ export interface WasmVectorStoreConstructor {
   new_metadata_only(
     ...args: AllParams<typeof BindingVectorStore.new_metadata_only>
   ): WasmVectorStore;
+
+  /**
+   * The binding's search-quality parser, run without a store: throws its
+   * refusal of an unparseable preset. Optional because a binding released
+   * before it has none (the SDK then falls back, see `wasm-search.ts`).
+   */
+  validate_search_quality?(quality: string): void;
 }
 
 /** What the backend reads from a `WasmDatabase.executeQuery` result. */

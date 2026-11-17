@@ -86,7 +86,8 @@ impl SemanticMemory {
     /// * `embedding` - Vector representation (`Float32Array`)
     #[wasm_bindgen]
     pub fn store(&mut self, id: u64, content: &str, embedding: &[f32]) -> Result<(), JsValue> {
-        crate::store_search::validate_dimension(embedding.len(), self.store.dimension)?;
+        crate::store_search::validate_ingest_vector(embedding, self.store.dimension)
+            .map_err(crate::wasm_error::WasmError::into_js_value)?;
         let payload = serde_json::json!({ "content": content });
         store_insert::insert_with_payload(&mut self.store, id, embedding, Some(payload));
         Ok(())
@@ -97,22 +98,14 @@ impl SemanticMemory {
     /// Returns a JSON array of {id, score, content} objects.
     #[wasm_bindgen]
     pub fn query(&self, embedding: &[f32], top_k: usize) -> Result<JsValue, JsValue> {
-        let results_js = self.store.search(embedding, top_k)?;
-
-        // Parse search results and enrich with content
-        let results_str = results_js
-            .as_string()
-            .ok_or_else(|| JsValue::from_str("Invalid search results"))?;
-
-        let search_results: Vec<crate::SearchResult> = serde_json::from_str(&results_str)
-            .map_err(|e| JsValue::from_str(&format!("Parse error: {e}")))?;
-
-        let semantic_results: Vec<SemanticResult> = search_results
+        let semantic_results: Vec<SemanticResult> = self
+            .store
+            .top_k(embedding, top_k)?
             .into_iter()
-            .map(|r| SemanticResult {
-                id: r.id,
-                score: r.score,
-                content: self.content_for(r.id),
+            .map(|(id, score)| SemanticResult {
+                id,
+                score,
+                content: self.content_for(id),
             })
             .collect();
 

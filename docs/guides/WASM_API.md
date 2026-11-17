@@ -76,6 +76,7 @@ map were ES2015 `Map`s, on which `record.id` is `undefined` (#2332).
 | `VectorStore.new_with_mode(dimension, metric, mode)` | Store with a declared storage mode — `'full'`, `'sq8'`, `'binary'`, `'pq'` or `'rabitq'` (see [storage modes](#storage-modes-and-memory)). |
 | `VectorStore.with_capacity(dimension, metric, capacity)` | Pre-allocates, avoids repeated reallocation during bulk load. |
 | `VectorStore.new_metadata_only()` | Payload-only store, no vectors. |
+| `VectorStore.validate_search_quality(quality)` | Checks a `quality` preset with the parser `search_with_quality` runs, without a store: throws its refusal, returns nothing otherwise. A metadata-only store refuses every vector search, so it cannot serve as a probe. |
 
 `metric` is one of `cosine`, `euclidean` (alias `l2`), `dot`, `hamming`,
 `jaccard`. An unknown metric throws immediately.
@@ -138,7 +139,7 @@ Inserting an id that already exists replaces the previous entry — `insert` and
 | `search_with_quality(query, k, quality)` | `[[id, score], …]` | Accepts the Python/Server quality strings (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`). **All modes return identical results in WASM** — there is no HNSW graph; the parameter exists for API parity, and is checked as the server checks it: each ef in 16–4096, or it throws (#2275). |
 | `search_with_filter(query, k, filter)` | `[{id, score, payload}, …]` | Metadata-filtered search. |
 | `text_search(query, k, field?)` | `[{id, score: null, payload}, …]` | Case-insensitive substring match over payload fields, in insertion order. It selects without ranking, so `score` is always `null`. |
-| `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion. |
+| `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion: `vectorWeight × vector score + (1 − vectorWeight) × text match` (0 or 1), best first. Under a distance metric (`euclidean`, `hamming`) the vector score is the negated distance, so the blend stays higher-is-better and every row is kept; under a similarity metric a row whose blend is not above 0 is dropped. |
 | `multi_query_search(vectors, numVectors, k, strategy, rrfK?, weights?)` | `[[id, score], …]` | Multi-query fusion (MQG). |
 | `batch_search(vectors, numVectors, k)` | `[[[id, score], …], …]` | One result list per query vector. |
 | `similarity_search(query, threshold, operator, k)` | `[[id, score], …]` | Threshold-based selection. |
@@ -146,8 +147,11 @@ Inserting an id that already exists replaces the previous entry — `insert` and
 | `sparse_search(indices, values, k)` | `[{doc_id, score}, …]` | Same kernel, but returns `[]` instead of throwing when empty. |
 | `query(vector, k)` | `[{nodeId, vectorScore, graphScore, fusedScore, bindings, columnData}, …]` | Multi-model result shape. |
 
-A query whose length differs from `store.dimension` throws before any scoring
-happens — the error names both the expected and the received length.
+Before any scoring, as core does for a collection, a vector search throws when
+the store is metadata-only (`VELES-015`), when the query's length differs from
+`store.dimension` (`VELES-004`, naming both lengths), or when a component is
+`NaN` or infinite (`VELES-005`). Every insert refuses a non-finite component
+too.
 
 ### Filter format
 
@@ -338,26 +342,24 @@ Most applications should prefer the higher-level `MemoryService` re-exported
 from [`@wiscale/velesdb-sdk`](../../sdks/typescript), which wraps this class
 with Promise-returning methods and the SDK's typed error hierarchy.
 
-## SemanticMemory — legacy, and its `query()` is broken
+## SemanticMemory — legacy
 
 `SemanticMemory` predates `MemoryService` and stores `(id, content, embedding)`
-triples. `store`, `len`, `dimension`, `delete`, `remove` and `clear` work, but
-**`query()` threw `Invalid search results` on every call** in the historical
-4.0.0 release: the
-implementation calls `JsValue::as_string()` on a value that
-`serde-wasm-bindgen` produced as an array, so the conversion always fails
-(`crates/velesdb-wasm/src/agent.rs`, `query`).
-
-Historical reference reproduced against `@wiscale/velesdb-wasm@4.0.0`:
+triples: `store`, `query`, `len`, `dimension`, `delete`, `remove` and `clear`.
+`query(embedding, topK)` returns the `topK` nearest facts, best first, as
+plain objects `{ id, score, content }` under cosine similarity.
 
 ```javascript
 const sm = new SemanticMemory(4);
 sm.store(1n, 'Paris is the capital of France', new Float32Array([1, 0, 0, 0]));
-sm.query(new Float32Array([1, 0, 0, 0]), 2);   // throws: Invalid search results
+sm.query(new Float32Array([1, 0, 0, 0]), 2);
+// [{ id: 1, score: 1, content: 'Paris is the capital of France' }]
 ```
 
-Use `MemoryService` (above), or a plain `VectorStore` with
-`insert_with_payload` + `search_with_filter`, until this is fixed.
+Releases from 4.0.0 until this fix threw `Invalid search results` on every
+`query()` call (it re-read the JavaScript search result as a JSON string).
+New code should prefer `MemoryService` (above): it links facts, explains its
+answers and expires them.
 
 ## SparseIndex and RRF fusion
 

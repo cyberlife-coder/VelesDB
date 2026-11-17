@@ -344,3 +344,47 @@ def test_observer_strict_denies_on_callback_error():
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
         shutil.rmtree(temp_dir + "_2", ignore_errors=True)
+
+
+@pytest.mark.parametrize("bad_return", [{"filter": "x = 1"}, 0, [], 1.5])
+def test_observer_strict_denies_a_write_veto_it_cannot_read(bad_return):
+    """Under ``observer_strict=True`` a DDL/DML veto callback returning
+    anything but ``None``, a bool or a str denies — the policy reads
+    returns follow. It used to allow the write."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def policy(event, **fields):
+            if event in ("ddl_request", "dml_mutation_request"):
+                return bad_return
+            return None
+
+        db = Database(temp_dir, observer=policy, observer_strict=True)
+        db.create_collection("docs", dimension=DIM)
+        with pytest.raises(Exception, match="strict"):
+            db.execute_query("DROP COLLECTION docs")
+        assert "docs" in db.list_collections()
+        with pytest.raises(Exception, match="strict"):
+            db.execute_query(
+                "INSERT INTO docs (id, vector) VALUES (1, $v)",
+                params={"v": [1.0, 0.0, 0.0, 0.0]},
+            )
+        assert db.get_collection("docs").count() == 0
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_observer_lenient_allows_a_write_veto_it_cannot_read():
+    """The fail-open default keeps allowing an uninterpretable veto return."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def policy(event, **fields):
+            return 0 if event == "ddl_request" else None
+
+        db = Database(temp_dir, observer=policy)
+        db.create_collection("docs", dimension=DIM)
+        db.execute_query("DROP COLLECTION docs")
+        assert "docs" not in db.list_collections()
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

@@ -311,6 +311,36 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
   });
 });
 
+describe('wasmSearch — a binding with validate_search_quality parses the preset without a probe store', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('asks the parser, never a metadata-only store (which the binding now refuses to search)', async () => {
+    const validate = vi.fn((quality: string) => {
+      if (quality === 'nonsense') {
+        throw REFUSAL;
+      }
+    });
+    const new_metadata_only = vi.fn(() => buildStore());
+    const ctx = buildCtx('docs', buildStore(), {
+      wasmModule: {
+        VectorStore: {
+          new_metadata_only,
+          validate_search_quality: validate,
+        } as unknown as WasmModule['VectorStore'],
+      },
+    });
+
+    await wasmSearch(ctx, 'docs', [0.1, 0.2], { k: 3, quality: 'fast' });
+    expect(validate).toHaveBeenCalledWith('fast');
+
+    const outcome = await settle(
+      wasmSearch(ctx, 'docs', [0.1, 0.2], { quality: 'nonsense' as SearchQuality })
+    );
+    expectBadRequest(outcome, /Unknown search mode/);
+    expect(new_metadata_only).not.toHaveBeenCalled();
+  });
+});
+
 describe('wasmSearchBatch — an unparseable preset stops the batch before it starts (#2282)', () => {
   beforeEach(() => vi.clearAllMocks());
 
