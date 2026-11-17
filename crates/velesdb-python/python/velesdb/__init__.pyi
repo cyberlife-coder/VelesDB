@@ -546,6 +546,9 @@ class Collection:
         filter: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[int, float]] = None,
         sparse_index_name: Optional[str] = None,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors (dense, sparse, or hybrid).
 
@@ -781,6 +784,14 @@ class Collection:
 
     def all_ids(self) -> List[int]:
         """Get all point IDs in the collection."""
+        ...
+
+    def all_point_ids(self) -> List[int]:
+        """All point IDs (vector and payload indexes union), ascending.
+
+        Gated like ``all_ids``: raises if the observer denies the read or
+        narrows it with a scope.
+        """
         ...
 
     def has_secondary_index(self, field: str) -> bool:
@@ -1558,8 +1569,8 @@ class TraversalResult:
 
     Attributes:
         depth: Current depth in the traversal
-        source: Source node ID
-        target: Target node ID
+        source: Node the step leaves from (in every direction)
+        target: Node the step reaches
         label: Edge label
         edge_id: Edge ID
     """
@@ -1591,6 +1602,7 @@ class GraphStore:
 
     def __init__(self) -> None: ...
 
+    @overload
     def add_edge(self, edge: Dict[str, Any]) -> None:
         """Add an edge.
 
@@ -1598,6 +1610,44 @@ class GraphStore:
             edge: Dict with keys: id (int), source (int), target (int),
                   label (str), properties (dict, optional)
         """
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        edge_id: int,
+        *,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add an edge using the explicit-id legacy shape."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+        *,
+        id: int,
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add edge ``id`` from ``source`` to ``target``: the positional is the source."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+    ) -> None:
+        """Add an edge using the legacy no-id positional shape."""
         ...
 
     def get_edges_by_label(self, label: str) -> List[GraphEdgeDict]: ...
@@ -2009,6 +2059,20 @@ class GraphCollection:
         properties: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Add an edge using the explicit-id legacy shape."""
+        ...
+
+    @overload
+    def add_edge(
+        self,
+        source: int,
+        target: int,
+        label: str = "RELATED_TO",
+        weight: Any = None,
+        *,
+        id: int,
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Add edge ``id`` from ``source`` to ``target``: the positional is the source."""
         ...
 
     @overload

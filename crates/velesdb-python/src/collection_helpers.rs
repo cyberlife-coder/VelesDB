@@ -292,11 +292,41 @@ pub fn id_score_pairs_to_dicts(py: Python<'_>, results: Vec<(u64, f32)>) -> Vec<
         .collect()
 }
 
+/// The `SparseVector` of a one-row scipy sparse matrix: its stored column
+/// indices and weights. A matrix of several rows holds several queries and
+/// is refused rather than flattened into one.
+fn scipy_sparse_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<SparseVector> {
+    let coo = obj
+        .call_method0(py, "tocoo")
+        .map_err(|e| PyValueError::new_err(format!("scipy tocoo() failed: {e}")))?;
+    let (rows, _cols): (usize, usize) = coo.getattr(py, "shape")?.extract(py)?;
+    if rows != 1 {
+        return Err(PyValueError::new_err(format!(
+            "a scipy sparse query must have exactly one row, got {rows}"
+        )));
+    }
+    let columns: Vec<i64> = coo
+        .getattr(py, "col")?
+        .call_method0(py, "tolist")?
+        .extract(py)?;
+    let weights: Vec<f32> = coo
+        .getattr(py, "data")?
+        .call_method0(py, "tolist")?
+        .extract(py)?;
+    let pairs = columns
+        .into_iter()
+        .zip(weights)
+        .map(|(column, weight)| u32::try_from(column).map(|index| (index, weight)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| PyValueError::new_err("a sparse column index must fit in u32"))?;
+    Ok(SparseVector::new(pairs))
+}
+
 /// Parse a Python object into a `SparseVector`.
 ///
 /// Accepts:
 /// - A Python `dict[int, float]` mapping dimension indices to weights.
-/// - A scipy sparse object with a `.toarray()` method (COO/CSR/CSC).
+/// - A one-row scipy sparse matrix (COO/CSR/CSC), read through `tocoo()`.
 ///
 /// Returns `PyValueError` if the object is neither format.
 pub fn parse_sparse_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<SparseVector> {
@@ -306,35 +336,16 @@ pub fn parse_sparse_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<SparseVe
         return Ok(SparseVector::new(pairs));
     }
 
-    // Try scipy.sparse via duck typing: check for `.toarray()` method.
-    // First confirm the attribute exists without calling it, so we can distinguish
-    // "not a scipy object" (AttributeError → try next format) from runtime errors.
-    let has_toarray_attr = obj
-        .getattr(py, "toarray")
+    // A scipy sparse matrix (COO/CSR/CSC), by duck typing on `tocoo`: read
+    // its one row's column indices and weights as stored — no densifying (a
+    // hashed vocabulary is 2^31 wide) and no epsilon filter (core keeps any
+    // non-zero weight, as the dict path does).
+    let has_tocoo = obj
+        .getattr(py, "tocoo")
         .map(|attr| !attr.is_none(py))
         .unwrap_or(false);
-
-    if has_toarray_attr {
-        // `.toarray()` returns a dense numpy 2D array; flatten to 1D.
-        let array = obj
-            .call_method0(py, "toarray")
-            .map_err(|e| PyValueError::new_err(format!("scipy toarray() failed: {e}")))?;
-        let flat = array
-            .call_method0(py, "flatten")
-            .map_err(|e| PyValueError::new_err(format!("scipy flatten() failed: {e}")))?;
-        let values: Vec<f32> = flat.extract(py).map_err(|e| {
-            PyValueError::new_err(format!("Failed to extract floats from scipy array: {e}"))
-        })?;
-        let pairs: Vec<(u32, f32)> = values
-            .into_iter()
-            .enumerate()
-            .filter(|(_, v)| v.abs() > f32::EPSILON)
-            .map(|(i, v)| u32::try_from(i).map(|idx| (idx, v)))
-            .collect::<Result<_, _>>()
-            .map_err(|_| {
-                PyValueError::new_err("Sparse vector has more than u32::MAX dimensions")
-            })?;
-        return Ok(SparseVector::new(pairs));
+    if has_tocoo {
+        return scipy_sparse_vector(py, obj);
     }
 
     Err(PyValueError::new_err(

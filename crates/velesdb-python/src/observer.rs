@@ -103,8 +103,9 @@ impl PyObserver {
     /// Shared implementation of the DDL/DML veto hooks: invokes the callback as
     /// `callback(event, operation=…, collection=…)` and maps the return value to
     /// the trait's `Result<()>` veto channel — `None`/`True` allow, `False` or a
-    /// `str` veto with that reason, anything else (or a raised callback) follows
-    /// the strict-mode failure policy, exactly like `query_request`.
+    /// `str` veto with that reason, anything else (a scope dict, a number, a
+    /// list…) or a raised callback follows the strict-mode failure policy
+    /// ([`Self::veto_failure`]), exactly like `query_request`.
     fn veto_request(
         &self,
         event: &str,
@@ -116,42 +117,49 @@ impl PyObserver {
             if fields.set_item("operation", operation).is_err()
                 || fields.set_item("collection", collection_name).is_err()
             {
-                return match self.on_error_decision("could not populate veto fields") {
-                    AccessDecision::Allow => Ok(()),
-                    AccessDecision::Deny(e) => Err(e),
-                    _ => Ok(()), // AllowWithScope is not expressible on a write veto
-                };
+                return self.veto_failure(event, "could not populate veto fields");
             }
-            match self.cb.bind(py).call((event,), Some(&fields)) {
-                Ok(ret) if ret.is_none() => Ok(()),
-                Ok(ret) => {
-                    // A string is a veto reason — check before bool, like
-                    // `interpret_decision`, so "" still denies.
-                    if let Ok(reason) = ret.extract::<String>() {
-                        return Err(Error::Query(format!(
-                            "{event} vetoed by observer for collection '{collection_name}' ({operation}): {reason}"
-                        )));
-                    }
-                    let allow = ret.extract::<bool>().unwrap_or(true);
-                    if allow {
-                        Ok(())
-                    } else {
-                        Err(Error::Query(format!(
-                            "{event} vetoed by observer policy for collection '{collection_name}' ({operation})"
-                        )))
-                    }
-                }
+            let ret = match self.cb.bind(py).call((event,), Some(&fields)) {
+                Ok(ret) => ret,
                 Err(err) => {
                     let verb = if self.strict { "denying" } else { "allowing" };
                     eprintln!("[velesdb] observer callback '{event}' raised; {verb}: {err}");
-                    match self.on_error_decision("veto callback raised") {
-                        AccessDecision::Allow => Ok(()),
-                        AccessDecision::Deny(e) => Err(e),
-                        _ => Ok(()),
-                    }
+                    return self.veto_failure(event, "veto callback raised");
                 }
+            };
+            if ret.is_none() {
+                return Ok(());
+            }
+            // A string is a veto reason — check before bool, like
+            // `interpret_decision`, so "" still denies.
+            if let Ok(reason) = ret.extract::<String>() {
+                return Err(Error::Query(format!(
+                    "{event} vetoed by observer for collection '{collection_name}' ({operation}): {reason}"
+                )));
+            }
+            match ret.extract::<bool>() {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(Error::Query(format!(
+                    "{event} vetoed by observer policy for collection '{collection_name}' ({operation})"
+                ))),
+                Err(_) => self.veto_failure(
+                    event,
+                    "veto callback returned neither None, a bool nor a str",
+                ),
             }
         })
+    }
+
+    /// The strict-mode failure policy on a write veto: deny when strict, allow
+    /// otherwise — what [`Self::on_error_decision`] decides for a read.
+    fn veto_failure(&self, event: &str, what: &str) -> velesdb_core::Result<()> {
+        if self.strict {
+            Err(Error::Query(format!(
+                "{event} denied by observer strict mode: {what}"
+            )))
+        } else {
+            Ok(())
+        }
     }
 }
 
