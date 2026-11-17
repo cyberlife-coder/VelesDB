@@ -2,6 +2,8 @@
 //! trim an edge label (core's `GraphEdge::new`), so `relate` and `unrelate`
 //! compare and write the same canonical label.
 
+#![cfg(feature = "persistence")]
+
 use velesdb_memory::{HashEmbedder, MemoryError, MemoryService, DEFAULT_DIMENSION};
 
 #[test]
