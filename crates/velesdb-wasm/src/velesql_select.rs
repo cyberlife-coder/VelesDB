@@ -321,6 +321,32 @@ impl WhereFilters {
     }
 }
 
+/// The ids of `store` the WHERE clause of `stmt` keeps once its vector,
+/// fused and sparse leaves are taken out, its `similarity()` leaves evaluated
+/// as the dense path evaluates them, under AND / OR / NOT; `None` when no
+/// predicate is left. What a search beside those leaves may return
+/// (`velesql_sparse`).
+pub(crate) fn eligible_ids(
+    db: &DatabaseInner,
+    stmt: &SelectStatement,
+    store: &crate::store_state::StoreState,
+    params: &Params,
+) -> Result<Option<std::collections::HashSet<u64>>, String> {
+    let residual = strip_vector_search(stmt.where_clause.as_ref());
+    if residual.is_none() {
+        return Ok(None);
+    }
+    let filters = WhereFilters::build(db, stmt, params, Some(residual))?;
+    let mut keep = std::collections::HashSet::new();
+    for (idx, &id) in store.ids.iter().enumerate() {
+        let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
+        if filters.passes(id, payload, idx, store, params)? {
+            keep.insert(id);
+        }
+    }
+    Ok(Some(keep))
+}
+
 // --- Vector NEAR ---------------------------------------------------------
 
 fn execute_vector_search(

@@ -10,8 +10,10 @@
 //! - the store's one sparse index: it is the default index, and a store
 //!   without sparse vectors, or a named index, is refused as core refuses a
 //!   missing one;
-//! - both branches bounded by the residual metadata filter before they rank,
-//!   as core pushes it into each branch;
+//! - both branches bounded by the rest of the WHERE clause before they rank,
+//!   as core pushes its metadata filter into each branch; a `similarity()`
+//!   threshold there is evaluated as the dense SELECT path evaluates it
+//!   ([`eligible_ids`](crate::velesql_select::eligible_ids));
 //! - sparse only: the `LIMIT + OFFSET` best sparse hits, scored by the sparse
 //!   kernel;
 //! - hybrid: [`dense_sparse_candidate_k`] points from each branch, fused by
@@ -60,8 +62,7 @@ pub(crate) fn execute_sparse_search(
 ) -> Result<Vec<OwnedScanRow>, String> {
     let store = db.get_shared_store(&stmt.from)?;
     let store = store.borrow();
-    let residual = crate::velesql_fused::residual_metadata_filter(stmt.where_clause.as_ref());
-    let keep = crate::velesql_fused::passing_ids(&store, residual.as_ref(), params)?;
+    let keep = crate::velesql_select::eligible_ids(db, stmt, &store, params)?;
     if stmt.is_aggregation_query() {
         return Ok(every_kept_point(&store, keep.as_ref()));
     }
@@ -79,7 +80,7 @@ pub(crate) fn execute_sparse_search(
 }
 
 /// The sparse side of a search: the index, the query, and the ids the
-/// residual metadata filter keeps (`None` keeps every id).
+/// rest of the WHERE clause keeps (`None` keeps every id).
 struct SparseQuery<'a> {
     index: &'a SparseIndex,
     vector: SparseVector,

@@ -92,3 +92,56 @@ fn a_hybrid_ranks_by_the_fusion() {
     let sql = "SELECT * FROM c WHERE vector NEAR $q AND vector SPARSE_NEAR {7: 1.0} LIMIT 5";
     assert_eq!(ids(&mut db, sql).expect("test: hybrid"), vec![2, 1]);
 }
+
+/// Points 1 (`a`, the query's own vector), 2 (`a`, similarity 0.8) and 3
+/// (`b`, similarity 0), whose sparse scores rank 1 > 2 > 3.
+fn db_with_similarities() -> DatabaseInner {
+    let mut db = DatabaseInner::new();
+    db.create_collection("s", 2, "cosine")
+        .expect("test: create");
+    let points = [
+        (1u64, "[1.0, 0.0]", "a", 3.0),
+        (2, "[0.8, 0.6]", "a", 2.0),
+        (3, "[0.0, 1.0]", "b", 1.0),
+    ];
+    for (id, v, cat, weight) in points {
+        execute(
+            &mut db,
+            &format!("INSERT INTO s (id, vector, cat) VALUES ({id}, $v, '{cat}')"),
+            Some(&format!("{{\"v\": {v}}}")),
+        )
+        .expect("test: insert");
+        let store = db.get_shared_store("s").expect("test: store");
+        store
+            .borrow_mut()
+            .sparse_insert(id, &[7], &[weight])
+            .expect("test: sparse");
+    }
+    db
+}
+
+/// A `similarity()` threshold beside `SPARSE_NEAR` bounds the points either
+/// branch may return, evaluated as the dense SELECT path evaluates it — it
+/// used to fail with "similarity() threshold filters are not supported".
+#[test]
+fn a_similarity_threshold_bounds_a_sparse_near() {
+    let mut db = db_with_similarities();
+    let near = "SELECT * FROM s WHERE vector SPARSE_NEAR {7: 1.0} AND similarity(vector, $q) > 0.5 LIMIT 5";
+    assert_eq!(ids(&mut db, near).expect("test: sparse"), vec![1, 2]);
+    let hybrid = "SELECT * FROM s WHERE vector NEAR $q AND vector SPARSE_NEAR {7: 1.0} \
+                  AND similarity(vector, $q) > 0.5 LIMIT 5";
+    assert_eq!(ids(&mut db, hybrid).expect("test: hybrid"), vec![1, 2]);
+}
+
+/// Under `OR` and `NOT` the threshold composes with the other predicates,
+/// and the survivors still rank by the sparse score.
+#[test]
+fn a_similarity_threshold_composes_under_or_and_not() {
+    let mut db = db_with_similarities();
+    let or = "SELECT * FROM s WHERE vector SPARSE_NEAR {7: 1.0} \
+              AND (similarity(vector, $q) > 0.9 OR cat = 'b') LIMIT 5";
+    assert_eq!(ids(&mut db, or).expect("test: or"), vec![1, 3]);
+    let not = "SELECT * FROM s WHERE vector SPARSE_NEAR {7: 1.0} \
+               AND NOT similarity(vector, $q) > 0.9 LIMIT 5";
+    assert_eq!(ids(&mut db, not).expect("test: not"), vec![2, 3]);
+}
