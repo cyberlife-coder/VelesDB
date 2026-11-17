@@ -29,8 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     accept a string or a number.
   - TypeScript SDK: `removeEdge` takes a `GraphNodeId` (`number | string`).
 
-  Migration: read edge ids as strings (`BigInt(id)` for arithmetic); a
-  Python caller of `SELECT EDGES` gets `edge_id` as `str`.
+  Migration: read edge ids as strings (`BigInt(id)` for arithmetic). In
+  Python, `SELECT EDGES` rows and a MATCH row's projected `r.id` now hold a
+  `str`; `match_query`'s typed `edge_bindings` / `edge_paths` stay `int`.
 
 - **Core reports every search to the observer, in every binding**
   (core, server, Python, mobile, Tauri, 2026-11-16). `on_query` fired inside
