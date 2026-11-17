@@ -1166,7 +1166,9 @@ export async function semanticDelete(request: SemanticDeleteRequest): Promise<vo
 }
 
 /**
- * Returns the embedding dimension of semantic memory.
+ * Returns the embedding dimension of semantic memory: 384 unless the host app
+ * set another with `Builder::with_memory_dimension` on the Rust side. Every
+ * agent-memory embedding must have this length.
  *
  * @returns Embedding dimension
  */

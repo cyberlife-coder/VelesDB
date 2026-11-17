@@ -471,6 +471,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tauri plugin: the agent-memory embedding dimension is configurable**
+  (Tauri plugin, 2026-11-17). The memory handle was always built with core's
+  default of 384 dimensions, so every memory command with another model's
+  embeddings failed with a dimension mismatch. `Builder::with_memory_dimension`
+  (and `VelesDbState::with_memory_dimension`) sets it; the default stays 384,
+  as in the Python binding's `AgentMemory(db, dimension=…)`.
+
 - **WASM: a `MATCH` walk is bounded, and stops at `LIMIT` when nothing
   orders its rows** (WASM, core, 2026-11-17). The walk collected every row
   before ORDER BY and LIMIT, with no bound, so a fan-out pattern grew one
