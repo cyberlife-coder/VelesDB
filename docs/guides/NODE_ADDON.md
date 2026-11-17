@@ -48,8 +48,9 @@ documented in the [MCP tool reference](../reference/MCP_TOOLS.md).
 **1. Everything is async and off-thread.** Each method schedules its work on
 the libuv pool and resolves a `Promise`; the event loop is never blocked. The
 one exception is the `MemoryService.open` factory, which is synchronous —
-with `embedder="ollama"` it performs a single blocking probe of the embedding
-endpoint at open time.
+with a remote embedder (`"ollama"` or `"openai"`) it performs a single
+blocking probe of the embedding endpoint at open time, to learn the vector
+dimension; the default `"hash"` embedder does no I/O.
 
 **2. Ids are decimal strings, never numbers.** A JS `number` is an f64 and
 silently loses precision above 2^53, so every id (`remember`'s return,
@@ -92,8 +93,13 @@ const semantic = MemoryService.open(
 )
 ```
 
-Any other embedder name rejects with
-`[INVALID_INPUT] unknown embedder '<name>' (expected 'hash' or 'ollama')`.
+`embedder="openai"` reaches any OpenAI-compatible server (oMLX, llama.cpp,
+LM Studio, vLLM or a hosted provider); its URL, model and credential come from
+the `VELESDB_MEMORY_EMBEDDER_*` environment only, never from an argument — see
+[MCP_SERVER_SETUP.md](MCP_SERVER_SETUP.md#embedding-backend). Any other
+embedder name rejects with `[INVALID_INPUT] unknown embedding backend '<name>'
+(expected 'hash' for the offline deterministic embedder, 'ollama' for a local
+model, or 'openai' for any OpenAI-compatible server — …)`.
 
 A store is fixed to one embedder: the vector dimension is decided when the
 store is created, so pointing an `ollama` service at a store first written
