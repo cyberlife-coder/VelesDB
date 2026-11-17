@@ -508,7 +508,7 @@ export class VelesDB {
     return graphMethods.matchQuery(this.backend, collection, queryString, params, options);
   }
 
-  async removeEdge(collection: string, edgeId: number): Promise<boolean> {
+  async removeEdge(collection: string, edgeId: GraphNodeId): Promise<boolean> {
     this.ensureInitialized();
     return graphMethods.removeEdge(this.backend, collection, edgeId);
   }

@@ -9,6 +9,7 @@
 //! through the same read gate as `SELECT EDGES`.
 
 use serde::{Deserialize, Serialize};
+use velesdb_core::api_types::serde_id;
 
 use crate::database::DatabaseInner;
 use crate::graph_store::WasmEdge;
@@ -17,7 +18,12 @@ use crate::observer::WasmQueryOperationKind;
 /// An edge as the client sends it (`GraphEdge` of the TS SDK and REST).
 #[derive(Debug, Deserialize)]
 pub(crate) struct EdgeInput {
-    /// Explicit edge id; derived from (source, target, label) when absent.
+    /// Explicit edge id, as a decimal string or a number; derived from
+    /// (source, target, label) when absent.
+    #[serde(
+        default,
+        deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
+    )]
     pub id: Option<u64>,
     pub source: u64,
     pub target: u64,
@@ -26,9 +32,11 @@ pub(crate) struct EdgeInput {
     pub properties: Option<serde_json::Value>,
 }
 
-/// An edge as the client reads it.
+/// An edge as the client reads it. Its id is a decimal string: a derived
+/// edge id is hashed and routinely above 2^53, which `JSON.parse` rounds.
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct EdgeOutput {
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     pub source: u64,
     pub target: u64,
@@ -47,6 +55,17 @@ impl From<&WasmEdge> for EdgeOutput {
             properties: edge.payload.clone(),
         }
     }
+}
+
+/// An edge id as JavaScript passes it: the decimal string every edge read
+/// answers (`getEdges`, `addEdge`, SELECT EDGES, MATCH `r.id`).
+///
+/// # Errors
+///
+/// Returns an error for anything but a decimal `u64`.
+pub(crate) fn parse_edge_id(id: &str) -> Result<u64, String> {
+    id.parse::<u64>()
+        .map_err(|_| format!("Invalid edge id '{id}': expected a decimal u64 string"))
 }
 
 impl DatabaseInner {

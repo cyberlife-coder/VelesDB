@@ -516,7 +516,7 @@ export class WasmBackend implements IVelesDBBackend {
   async updateGuardrails(r: import('../types').GuardRailsUpdateRequest): Promise<import('../types').GuardRailsConfigResponse> { this.ensureInitialized(); return wasmUpdateGuardrails(r); }
   async aggregate(_q: string, _p?: Record<string, unknown>, _o?: import('../types').AggregateQueryOptions): Promise<import('../types').AggregateResponse> { this.ensureInitialized(); return wasmAggregate(_q, _p, _o); }
   async matchQuery(c: string, q: string, p?: Record<string, unknown>, o?: import('../types').MatchQueryOptions): Promise<import('../types').MatchQueryResponse> { this.ensureInitialized(); return wasmMatchQuery(c, q, p, o); }
-  async removeEdge(c: string, id: number): Promise<boolean> { this.ensureInitialized(); return wasmRemoveEdge(c, id); }
+  async removeEdge(c: string, id: import('../types').GraphNodeId): Promise<boolean> { this.ensureInitialized(); return wasmRemoveEdge(c, id); }
   async getEdgeCount(c: string): Promise<number> { this.ensureInitialized(); return wasmGetEdgeCount(c); }
   async listNodes(c: string): Promise<import('../types').ListNodesResponse> { this.ensureInitialized(); return wasmListNodes(c); }
   async getNodeEdges(c: string, id: number, o?: import('../types').GetNodeEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return wasmGetNodeEdges(c, id, o); }

@@ -517,8 +517,9 @@ fn test_var_length_alias_projects_edge_id_list() {
         .cloned();
     assert_eq!(
         projected,
-        Some(json!([100, 101])),
-        "RETURN r on a var-length alias must project the ordered edge-id list"
+        Some(json!(["100", "101"])),
+        "RETURN r on a var-length alias must project the ordered edge-id list \
+         (decimal strings, as every edge id leaves a row)"
     );
 }
 

@@ -76,3 +76,12 @@ fn empty_collections_round_trip() {
     let map_back: IdMap = serde_json::from_value(map_json).unwrap();
     assert!(map_back.map.is_empty());
 }
+
+#[test]
+fn an_id_put_in_a_json_row_is_its_exact_decimal_string() {
+    assert_eq!(serde_id::id_to_json(ABOVE_SAFE), json!("9007199254740993"));
+    assert_eq!(
+        serde_id::ids_to_json(&[1, ABOVE_SAFE]),
+        json!(["1", "9007199254740993"])
+    );
+}

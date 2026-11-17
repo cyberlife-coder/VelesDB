@@ -181,10 +181,14 @@ pub enum QueryType {
 ///
 /// When the query contains a `MATCH` clause, each row may carry additional
 /// graph-specific fields:
-/// - `_edge_bindings` — map of alias → edge (id, source, target, label, properties)
-///   for every named relationship in the pattern.
-/// - `_edge_paths` — array of edge-ID arrays, one per matched path variable.
-///   Only present when the `MATCH` clause binds a path variable (`p = (…)-[…]->(…)`).
+/// - `_edge_bindings` — map of alias → edge id (a decimal string) for every
+///   fixed-length named relationship in the pattern.
+/// - `_edge_paths` — map of alias → edge ids (decimal strings, in path order)
+///   for every variable-length named relationship (`-[r*1..3]->`).
+///
+/// Edge ids are strings wherever a row carries one (`edge_id`, `r.id`, and
+/// the two maps above): a derived edge id is hashed and routinely above
+/// 2^53, which a JSON number would round in JavaScript.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct QueryResponse {

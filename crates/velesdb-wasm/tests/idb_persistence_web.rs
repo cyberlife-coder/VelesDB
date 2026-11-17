@@ -70,26 +70,24 @@ async fn a_graph_name_is_not_a_prefix_of_another() {
     p.delete_graph("a:b").await.expect("cleanup");
 }
 
-/// A save that fails leaves the previous save intact: a node id past 2^53
-/// cannot cross to JS, and that failure used to come after the previous
-/// rows were deleted — the transaction then committed the deletion alone.
+/// Ids past 2^53 — a node's, an edge's (a derived edge id is hashed and
+/// routinely there) and an edge's ends — survive a save and a load. Rows
+/// write them as decimal strings; a JSON number made the save throw.
 #[wasm_bindgen_test]
-async fn a_failed_save_leaves_the_previous_save_intact() {
+async fn ids_past_2_pow_53_survive_a_save_and_a_load() {
+    let big = 1_u64 << 53;
+    let hashed = big + 1;
     let p = persistence().await;
-    p.save("intact", &graph(&[1, 2], &[(10, 1, 2)]))
+    p.save("big-ids", &graph(&[1, big], &[(hashed, 1, big)]))
         .await
-        .expect("first save");
-
-    let unsafe_id = 1_u64 << 53;
-    assert!(
-        p.save("intact", &graph(&[1, unsafe_id], &[]))
-            .await
-            .is_err(),
-        "an id past 2^53 cannot be saved"
+        .expect("ids past 2^53 save");
+    let loaded = p.load("big-ids").await.expect("load");
+    assert!(loaded.has_node(big), "the exact node id comes back");
+    assert!(loaded.has_edge(hashed), "the exact edge id comes back");
+    assert_eq!(
+        loaded.get_edge(hashed).expect("edge").target(),
+        big,
+        "the exact end comes back"
     );
-
-    let loaded = p.load("intact").await.expect("load");
-    assert_eq!(loaded.node_count(), 2, "the first save's nodes survive");
-    assert_eq!(loaded.edge_count(), 1, "the first save's edge survives");
-    p.delete_graph("intact").await.expect("cleanup");
+    p.delete_graph("big-ids").await.expect("cleanup");
 }
