@@ -360,6 +360,14 @@ silently reduced instead.
 | Fragments per compile request | 1024 | rejects |
 | Fragment `content` size | 1 MiB | rejects |
 
+### Numbers in metadata and filters
+
+A JS `number` that holds a whole value — up to `Number.MAX_SAFE_INTEGER`
+(2^53 − 1) — is stored as an integer, whatever its size: `{ ts: 5000000000 }`
+reads back as the integer `5000000000` from Python or Rust, and an exact
+metadata filter on it matches what the other bindings stored. Fractions, and
+whole numbers past 2^53 − 1 (which JS cannot hold exactly), stay floats.
+
 ---
 
 Last updated: 2026-08-09 · Applies to: velesdb-core 8.2.0
