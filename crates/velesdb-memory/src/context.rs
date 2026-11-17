@@ -98,7 +98,8 @@ pub use segment::{
 };
 pub use tool_output::{prune_tool_output, PrunedToolOutput, ToolOutputPolicy};
 pub use transcript_bridge::{
-    build_transcript_compile_request, SegmentInfo, SegmentationReport, TranscriptCompileInput,
+    build_transcript_compile_request, resolve_transcript_source, SegmentInfo, SegmentationReport,
+    TranscriptCompileInput,
 };
 
 mod analysis;

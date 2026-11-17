@@ -340,6 +340,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Node: `freshness` is documented as it is sent** (Node, 2026-11-17). The
+  `recall` hit type said `freshness` is `null` without `anchorRoot`; the
+  binding leaves the field out (`undefined`), as the method's own doc said.
+  The type docs now agree, and the spec asserts the field is absent.
+- **Node: an open refused for its ingest roots leaves no store behind**
+  (Node, 2026-11-17). `MemoryService.open` read `VELESDB_MEMORY_INGEST_ROOTS`
+  after opening the store, so a bad value threw only once the store
+  directory, its lock and its files existed. Every setting is now checked
+  before the store is opened.
+- **Node: `compileTranscript` reads a `null` field as absent, like the MCP
+  tool** (Node, velesdb-memory, 2026-11-17). `{ transcript, path: null }`
+  was refused as "both", `{ transcript: null, path }` never read the path,
+  and a `path` resolving to an empty file slipped past the emptiness check.
+  The transcript-or-path rule — exactly one, never empty — now lives once in
+  `velesdb_memory::context::resolve_transcript_source`, which the MCP
+  `compile_transcript` tool and the Node binding both call.
+- **Node: a whole number past 2^32 is stored as an integer** (Node,
+  2026-11-16). napi reads a JS number as an integer only within `u32` /
+  `i32` range, so metadata such as `{ ts: 5000000000 }` was stored as the
+  float `5000000000.0`: it read back as a float from Python and Rust and
+  missed a JSON equality against the integer every other surface stores.
+  Metadata, metadata filters and column-filter values now restore every
+  whole number a JS number holds exactly (up to `2^53 - 1`) to an integer.
+- **Node: a count argument is checked, never wrapped** (Node, 2026-11-16).
+  `recall`'s `k`, `remember`'s `ttlSeconds`, `why`'s `maxHops`,
+  `listMemories`' `limit`, `suggestBudget`'s `reserveTokens`,
+  `explainCompilation`'s `fragmentIndex` and `recallFused`'s `hops` / `pool`
+  went through napi's `u32` conversion, JS `ToUint32`, which wraps:
+  `recall(q, Infinity)` returned `[]`, a `ttlSeconds` of `-1` stored a
+  136-year TTL and `2**32 + 60` a 60-second one. A count must now be a whole
+  number in `0..=2^32-1`; anything else rejects with `INVALID_INPUT`.
+
 - **VelesQL `NOW()` and `INTERVAL` run in the browser** (core, WASM,
   2026-11-16). Every temporal expression read `std::time::SystemTime::now`,
   which panics on `wasm32-unknown-unknown`: a WASM query naming `NOW()` — or

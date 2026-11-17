@@ -88,6 +88,45 @@ pub struct SegmentationReport {
     pub merged_segments: usize,
 }
 
+/// The text `compile_transcript` segments: exactly one of `transcript`
+/// (inline) or `path` (read by `read_path`), never empty — the one
+/// resolution the MCP tool and the bindings share. An absent field and a
+/// JSON `null` are the same thing to a caller: each surface hands `None`
+/// for both.
+///
+/// The emptiness check runs after `path` is read, so an inline empty string
+/// and a `path` to an empty file are refused identically. Reading the file
+/// stays with the caller (`read_path`): the ingest allowlist and its
+/// containment checks are platform-specific, the rule is not.
+///
+/// # Errors
+/// [`MemoryError::SegmentationError`] when neither or both are set, or the
+/// text is empty; whatever `read_path` returns (ingest disabled, a path
+/// outside the roots, an oversized file, ...).
+pub fn resolve_transcript_source(
+    transcript: Option<String>,
+    path: Option<&str>,
+    read_path: impl FnOnce(&str) -> Result<String, MemoryError>,
+) -> Result<String, MemoryError> {
+    let text = match (transcript, path) {
+        (Some(text), None) => text,
+        (None, Some(path)) => read_path(path)?,
+        _ => {
+            return Err(MemoryError::SegmentationError(
+                "exactly one of `transcript` or `path` must be set".to_owned(),
+            ))
+        }
+    };
+    if text.is_empty() {
+        return Err(MemoryError::SegmentationError(
+            "the transcript is empty — `transcript` must be non-empty text, or `path` must \
+             point to a non-empty file"
+                .to_owned(),
+        ));
+    }
+    Ok(text)
+}
+
 /// Segment `input.transcript` and assemble the [`CompileRequest`] a binding
 /// then hands to `compile_context`, plus the [`SegmentationReport`] it
 /// returns next to the compiled context.
