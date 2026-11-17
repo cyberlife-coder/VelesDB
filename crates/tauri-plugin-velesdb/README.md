@@ -196,7 +196,7 @@ two must never be enabled in a shipping bundle.
 
 - Rust API (`init`, `init_with_path`, `init_with_app_data`, `Builder`,
   `VelesDbState`, `Error`): [docs.rs/tauri-plugin-velesdb](https://docs.rs/tauri-plugin-velesdb).
-- The 69 IPC commands, the event payloads, the permission model, the storage
+- The 70 IPC commands, the event payloads, the permission model, the storage
   modes, the distance metrics and the error codes:
   [plugin reference](../../docs/guides/TAURI_PLUGIN_REFERENCE.md).
 - Runnable snippets for graph, sparse vectors, secondary indexes, VelesQL,

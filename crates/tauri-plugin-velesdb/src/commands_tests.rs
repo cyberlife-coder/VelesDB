@@ -1049,3 +1049,93 @@ mod filtered_search_telemetry {
         assert!(spy.queries.lock().unwrap().is_empty());
     }
 }
+
+/// The permissions of a named `[set]` in `permissions/default.toml`.
+fn permission_set(name: &str) -> Vec<String> {
+    let parsed: toml::Value = toml::from_str(include_str!("../permissions/default.toml"))
+        .expect("Failed to parse default.toml as valid TOML");
+    parsed[name]["permissions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("Missing permissions array in [{name}]"))
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+/// A command that changes the database: `query` (every `VelesQL` statement,
+/// DDL and DML included) or one named by a write verb.
+fn command_writes(command: &str) -> bool {
+    const WRITE_VERBS: &[&str] = &[
+        "create",
+        "delete",
+        "drop",
+        "truncate",
+        "upsert",
+        "insert",
+        "update",
+        "add",
+        "stream",
+        "enable",
+        "compact",
+        "flush",
+        "rebuild",
+        "reorder",
+        "store",
+        "record",
+        "learn",
+        "reinforce",
+        "deserialize",
+        "remember",
+        "forget",
+        "relate",
+        "unrelate",
+        "import",
+    ];
+    command == "query" || command.split('_').any(|word| WRITE_VERBS.contains(&word))
+}
+
+/// A webview granted `velesdb:read-only` or `velesdb:search-only` must not be
+/// able to change anything — before, `read-only` granted `query`, which runs
+/// `DROP COLLECTION` like any other statement.
+#[test]
+fn test_read_only_and_search_only_sets_grant_no_write() {
+    for set in ["read-only", "search-only"] {
+        for permission in permission_set(set) {
+            let command = permission.trim_start_matches("allow-").replace('-', "_");
+            assert!(
+                !command_writes(&command),
+                "[{set}] grants '{permission}', which can change the database"
+            );
+        }
+    }
+    assert!(
+        command_writes("query"),
+        "the classifier knows `query` writes"
+    );
+    assert!(command_writes("delete_points") && !command_writes("read_query"));
+}
+
+/// `read_query` runs a statement only when it changes nothing.
+#[test]
+fn test_read_query_refuses_every_statement_that_writes() {
+    let parse = |sql: &str| velesdb_core::velesql::Parser::parse(sql).expect("test: parse");
+    for read in [
+        "SELECT * FROM docs",
+        "MATCH (a)-[:R]->(b) RETURN b",
+        "SHOW COLLECTIONS",
+    ] {
+        assert!(
+            crate::commands_query::ensure_read_only(&parse(read)).is_ok(),
+            "{read}"
+        );
+    }
+    for write in [
+        "DROP COLLECTION docs",
+        "DELETE FROM docs WHERE id = 1",
+        "INSERT INTO docs (id, x) VALUES (1, 2)",
+        "FLUSH",
+    ] {
+        let refused = crate::commands_query::ensure_read_only(&parse(write)).expect_err(write);
+        assert!(refused.to_string().contains("read_query"), "{refused}");
+    }
+}

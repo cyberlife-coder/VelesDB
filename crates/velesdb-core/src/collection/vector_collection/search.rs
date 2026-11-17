@@ -147,6 +147,39 @@ impl VectorCollection {
             .search_with_quality_and_filter(query, self.capped_k(k), quality, filter)
     }
 
+    /// Dense kNN search with every optional knob at once — the one dispatch
+    /// a caller holding an optional filter, `ef_search` and quality profile
+    /// runs, so none of them is dropped on the way to a leaf. `ef` wins over
+    /// `quality` (it travels as [`crate::SearchQuality::Custom`]); a filter
+    /// routes through the filtered leaves with that tuning honoured.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the leaf it runs: [`Self::search`],
+    /// [`Self::search_with_ef`], [`Self::search_with_quality`],
+    /// [`Self::search_with_filter`] or
+    /// [`Self::search_with_quality_and_filter`].
+    pub fn search_dense(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: Option<usize>,
+        quality: Option<crate::SearchQuality>,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<Vec<SearchResult>> {
+        match filter {
+            Some(f) => match ef.map(crate::SearchQuality::Custom).or(quality) {
+                Some(q) => self.search_with_quality_and_filter(query, k, q, f),
+                None => self.search_with_filter(query, k, f),
+            },
+            None => match (ef, quality) {
+                (Some(ef), _) => self.search_with_ef(query, k, ef),
+                (None, Some(q)) => self.search_with_quality(query, k, q),
+                (None, None) => self.search(query, k),
+            },
+        }
+    }
+
     /// Returns [`crate::ScoredResult`] pairs without payload hydration.
     ///
     /// Faster than [`search`](Self::search) when only IDs and scores are needed.

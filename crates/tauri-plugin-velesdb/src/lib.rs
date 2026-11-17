@@ -271,6 +271,7 @@ impl Builder {
                 commands::hybrid_search,
                 commands::multi_query_search,
                 commands_query::query,
+                commands_query::read_query,
                 commands::is_empty,
                 commands::flush,
                 commands::compact_storage,

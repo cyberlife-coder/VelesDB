@@ -557,6 +557,23 @@ export function query(request: QueryRequest): Promise<QueryResponse> {
 }
 
 /**
+ * Executes a VelesQL statement that changes nothing — SELECT, MATCH,
+ * SELECT EDGES, SHOW, DESCRIBE or EXPLAIN — and refuses any other one
+ * (VELES-010) before it runs.
+ *
+ * The VelesQL entry point the `velesdb:read-only` permission set grants;
+ * `query` also runs DDL and DML.
+ *
+ * @param request - Query request with VelesQL string
+ * @returns Query response with hybrid results and timing
+ * @throws {CommandError} If the statement writes, its syntax is invalid or
+ *   the collection doesn't exist
+ */
+export function readQuery(request: QueryRequest): Promise<QueryResponse> {
+  return invoke<QueryResponse>('plugin:velesdb|read_query', { request });
+}
+
+/**
  * Retrieves points by their IDs.
  * 
  * @param request - Get points request with collection name and IDs

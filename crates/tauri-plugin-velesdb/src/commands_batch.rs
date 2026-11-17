@@ -4,7 +4,7 @@
 //! observer's scope AND-composed into each per-search filter.
 #![allow(clippy::missing_errors_doc)]
 
-use super::dispatch_quality_search;
+use super::core_quality;
 #[cfg(feature = "persistence")]
 use super::parse_search_quality;
 use super::BatchSearchRequest;
@@ -58,19 +58,20 @@ async fn batch_search_per_query(
                         let filter =
                             crate::helpers::and_scope(parse_filter(&s.filter)?, scope.clone());
                         #[cfg(feature = "persistence")]
-                        let quality = parse_search_quality(&s.quality)
-                            .map_err(|e| crate::error::Error::InvalidConfig(e.to_string()))?;
+                        let quality = parse_search_quality(&s.quality)?;
                         #[cfg(not(feature = "persistence"))]
                         let quality: Option<()> = {
                             crate::helpers::reject_unsupported_quality(s.quality.as_ref())?;
                             None
                         };
 
-                        let search_results = if let Some(ref f) = filter {
-                            coll.search_with_filter(&s.vector, s.top_k, f)?
-                        } else {
-                            dispatch_quality_search(&coll, &s.vector, s.top_k, quality.as_ref())?
-                        };
+                        let search_results = coll.search_dense(
+                            &s.vector,
+                            s.top_k,
+                            None,
+                            core_quality(quality.as_ref()),
+                            filter.as_ref(),
+                        )?;
                         all_results.push(
                             search_results
                                 .into_iter()
