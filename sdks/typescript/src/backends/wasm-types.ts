@@ -118,7 +118,10 @@ export interface WasmVectorStore {
   /** Pre-allocate memory for additional vectors. */
   reserve(...args: StoreParams<'reserve'>): void;
 
-  /** Remove a vector by ID. Returns true if found. It leaves the ID's sparse postings in place. */
+  /**
+   * Remove a vector by ID. Returns true if found. velesdb-wasm 8.2.0 leaves
+   * the ID's sparse postings in place; later releases remove them too.
+   */
   remove(...args: StoreParams<'remove'>): boolean;
 
   /** Get a point by ID. Returns point object or null. */
@@ -146,20 +149,19 @@ export interface WasmVectorStore {
   search_with_filter(...args: StoreParams<'search_with_filter'>): WasmFilteredResult[];
 
   /**
-   * Add a document's sparse postings (`wasm-sparse.ts`). On velesdb-wasm
-   * 8.0.0 nothing removes them afterwards; newer bindings take them out
-   * through {@link sparse_remove} and re-inserts replace the document.
+   * Index a document's sparse vector, replacing the one it had
+   * (`wasm-sparse.ts`). Throws the binding's refusal of a non-finite weight
+   * before changing anything.
    */
   sparse_insert(...args: StoreParams<'sparse_insert'>): void;
 
   /**
-   * Remove a document's sparse postings; `true` when it had any. Absent on
-   * velesdb-wasm 8.0.0 — the version the SDK's declared range still admits —
-   * so callers must feature-test before using it (`wasm-sparse.ts`), which
-   * is also why it is declared here by hand rather than via `StoreParams`:
-   * the published declaration this type reads has no such method yet.
+   * Remove a document's sparse postings; `true` when it had any. Present
+   * since velesdb-wasm 8.2.0, the floor of the SDK's dependency range;
+   * declared by hand rather than via `StoreParams` so the type does not
+   * depend on which binding happens to be installed.
    */
-  sparse_remove?(doc_id: bigint): boolean;
+  sparse_remove(doc_id: bigint): boolean;
 
   /** Sparse index search. Returns array of {doc_id, score}. */
   sparse_search(...args: StoreParams<'sparse_search'>): WasmSparseResult[];
@@ -193,7 +195,7 @@ export interface WasmVectorStoreConstructor {
   /** Create a store holding its vectors in `mode` (`full`, `sq8`, `binary`, …). */
   new_with_mode(...args: AllParams<typeof BindingVectorStore.new_with_mode>): WasmVectorStore;
 
-  /** Create a store with no vectors: it holds a collection's sparse index (`wasm-sparse.ts`). */
+  /** Create a store with no vectors: the scratch store sparse vectors are validated in (`wasm-sparse.ts`). */
   new_metadata_only(
     ...args: AllParams<typeof BindingVectorStore.new_metadata_only>
   ): WasmVectorStore;
@@ -226,7 +228,7 @@ export interface WasmVelesQLDatabase {
   /**
    * Register an existing store as collection `name`, sharing it rather than
    * copying it. Declared by hand, like {@link WasmVectorStore.sparse_remove}:
-   * velesdb-wasm 8.0.0, the floor of the SDK's dependency range, has no such
+   * velesdb-wasm 8.2.0, the floor of the SDK's dependency range, has no such
    * method, and the backend then keeps its pre-executor behaviour.
    */
   attachStore?(name: string, store: WasmVectorStore): void;
@@ -319,35 +321,11 @@ export interface WasmModule {
   hybrid_search_fuse(...args: AllParams<typeof bindingHybridSearchFuse>): WasmSparseResult[];
 }
 
-/**
- * Sparse bookkeeping for one collection: each sparse upsert is indexed under
- * a fresh sparse id, and a replaced or deleted point's id is retired. A
- * binding that exposes `sparse_remove` deletes the retired id's postings;
- * an older one (velesdb-wasm 8.0.0) keeps them, so they are tombstoned and
- * the index is rebuilt once retired ids outnumber live ones
- * (`backends/wasm-sparse.ts`).
- */
-export interface SparseIds {
-  /** The metadata-only store holding the sparse index; `null` until the first sparse upsert. */
-  store: WasmVectorStore | null;
-  /** Live sparse id of each point that has a sparse vector, by point id ({@link WasmContext.toPointId}). */
-  byPoint: Map<bigint, bigint>;
-  /** Point behind each live sparse id. */
-  byId: Map<bigint, bigint>;
-  /** Each live sparse id's vector, kept to rebuild the index from when the binding cannot remove. */
-  vectors: Map<bigint, { indices: Uint32Array; values: Float32Array }>;
-  /** Retired ids a remove-incapable binding still holds; a search over-fetches by this many. */
-  dead: number;
-  /** Next sparse id to hand out. */
-  next: bigint;
-}
-
 /** In-memory collection storage */
 export interface CollectionData {
   config: CollectionConfig;
   store: WasmVectorStore;
   payloads: Map<string, Record<string, unknown>>;
-  sparseIds: SparseIds;
   createdAt: Date;
 }
 

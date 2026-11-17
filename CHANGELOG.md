@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **TypeScript SDK: the WASM backend needs the `@wiscale/velesdb-wasm` of its
+  own release, and keeps sparse vectors in each collection's store**
+  (TypeScript SDK, 2026-11-17). The backend indexed sparse vectors in a
+  separate store under ids of its own, with tombstones and periodic rebuilds,
+  only so that velesdb-wasm 8.0.0, which cannot remove a sparse vector, kept
+  working. VelesQL runs in the collection's store, so `SPARSE_NEAR` through the
+  SDK found no sparse index there. Sparse vectors now go into the collection's
+  store under the point's own id, replaced by `sparse_insert` and removed by
+  `sparse_remove` on upsert and delete; sparse and hybrid `search` read that
+  store and rank as before. The SDK's in-repo dependency range therefore
+  starts at 8.2.0, the first binding with `sparse_remove`; the package
+  published to npm already depended on the binding of its own release, which
+  the publish step pins, and needs it for string point ids and `SPARSE_NEAR`.
+
 - **BREAKING (WASM, TypeScript SDK): point ids leave every WASM search and
   read surface as decimal strings, as REST sends them** (WASM, TypeScript
   SDK, 2026-11-17). The binding serialized point ids as JavaScript numbers:
@@ -452,10 +466,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search over the store's sparse index: both branches bounded by the metadata
   filter, core's candidate depth, the strategy core maps from `USING FUSION`
   (RRF without one) and each branch read in its score direction — same ids
-  and scores as a core `Database`. A store without sparse vectors, or a named
-  sparse index, is refused as core refuses a missing index; through the
-  TypeScript SDK, whose WASM backend keeps sparse vectors in a store of its
-  own, such a query is now that refusal rather than a dense-only answer. A
+  and scores as a core `Database`. Through the TypeScript SDK's WASM backend
+  it runs the same way, over the sparse vectors `upsert` wrote, alone, fused
+  with a `NEAR` (RRF or any `USING FUSION` strategy), under a `WHERE` filter,
+  with a `$param` operand and on a collection without dense vectors. Only a
+  collection never given a sparse vector, or a named sparse index (WASM keeps
+  the default one only), is refused, as core refuses a missing index. A
   score-level `USING FUSION` over two `NEAR`s also reads a Euclidean or
   Hamming branch closest-first. Core exposes the pieces both engines share:
   `SparseVectorExpr::resolve`, `FusionClause::dense_sparse_strategy` and

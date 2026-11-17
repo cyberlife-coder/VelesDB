@@ -29,7 +29,6 @@ vi.mock('../src/capabilities', async (importOriginal) => {
 
 import { wasmSearchBatch } from '../src/backends/wasm-search';
 import { VelesDBError } from '../src/types';
-import { newSparseIds } from '../src/backends/wasm-sparse';
 import type {
   CollectionData,
   WasmContext,
@@ -59,7 +58,6 @@ function buildCtx(): { ctx: WasmContext; store: WasmVectorStore } {
     config: { dimension: 2, metric: 'cosine' },
     store,
     payloads: new Map(),
-    sparseIds: newSparseIds(),
     createdAt: new Date(),
   };
 
