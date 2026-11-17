@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (Tauri IPC): graph node ids cross the IPC boundary as REST's
+  graph DTOs carry them** (Tauri, 2026-11-17). The plugin read and wrote node
+  ids as JSON numbers, which JavaScript rounds past 2^53, while REST reads a
+  decimal string or a number and writes a decimal string. Now:
+  - `add_edge` / `add_edges_batch` `source` and `target`, `get_edges`'
+    `source` / `target` filters, `traverse_graph`'s `source`,
+    `traverse_graph_parallel`'s `sources` and `get_node_degree`'s `nodeId`
+    accept a decimal string or a number;
+  - `EdgeOutput.source` / `target`, `TraversalOutput.targetId` and
+    `NodeDegreeOutput.nodeId` are decimal strings, as edge ids already were.
+
+  guest-js types follow. Migration: read node ids from graph results as
+  strings (`BigInt(id)` for arithmetic); numbers keep working as input.
+
 - **BREAKING (JSON wire): edge ids are decimal strings wherever a row or a
   JavaScript surface carries one** (core, WASM, Tauri, TypeScript SDK,
   2026-11-17). A derived edge id is hashed from (source, target, label) and

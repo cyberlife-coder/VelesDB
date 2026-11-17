@@ -817,8 +817,10 @@ export interface AddEdgeRequest {
    * a number is accepted up to `Number.MAX_SAFE_INTEGER`.
    */
   id: string | number;
-  source: number;
-  target: number;
+  /** Node id: a decimal string or a number (a number is exact up to `Number.MAX_SAFE_INTEGER`). */
+  source: string | number;
+  /** Node id: a decimal string or a number (a number is exact up to `Number.MAX_SAFE_INTEGER`). */
+  target: string | number;
   label: string;
   properties?: Record<string, unknown>;
 }
@@ -830,10 +832,10 @@ export interface BatchEdgeInput {
    * a number is accepted up to `Number.MAX_SAFE_INTEGER`.
    */
   id: string | number;
-  /** Source node ID. */
-  source: number;
-  /** Target node ID. */
-  target: number;
+  /** Source node ID: a decimal string or a number. */
+  source: string | number;
+  /** Target node ID: a decimal string or a number. */
+  target: string | number;
   /** Edge label (relationship type). */
   label: string;
   /** Optional edge properties. */
@@ -852,14 +854,15 @@ export interface AddEdgesBatchRequest {
 export interface GetEdgesRequest {
   collection: string;
   label?: string;
-  source?: number;
-  target?: number;
+  source?: string | number;
+  target?: string | number;
 }
 
 /** Request to traverse the knowledge graph. */
 export interface TraverseGraphRequest {
   collection: string;
-  source: number;
+  /** Node id: a decimal string or a number (a number is exact up to `Number.MAX_SAFE_INTEGER`). */
+  source: string | number;
   /** Maximum traversal depth. Default: 3. */
   maxDepth?: number;
   relTypes?: string[];
@@ -872,7 +875,8 @@ export interface TraverseGraphRequest {
 /** Request to get the degree of a node. */
 export interface GetNodeDegreeRequest {
   collection: string;
-  nodeId: number;
+  /** Node id: a decimal string or a number (a number is exact up to `Number.MAX_SAFE_INTEGER`). */
+  nodeId: string | number;
 }
 
 /** A single edge in the knowledge graph. */
@@ -882,15 +886,18 @@ export interface EdgeOutput {
    * above 2^53, which a JavaScript number rounds.
    */
   id: string;
-  source: number;
-  target: number;
+  /** Source node id, as a decimal string (as REST's `EdgeResponse`). */
+  source: string;
+  /** Target node id, as a decimal string. */
+  target: string;
   label: string;
   properties: Record<string, unknown>;
 }
 
 /** A single traversal result node. */
 export interface TraversalOutput {
-  targetId: number;
+  /** Node reached, as a decimal string (as REST's `TraversalResultItem`). */
+  targetId: string;
   depth: number;
   /** Ids of the edges walked, in order, as decimal strings (see `EdgeOutput.id`). */
   path: string[];
@@ -898,7 +905,8 @@ export interface TraversalOutput {
 
 /** In/out degree of a graph node. */
 export interface NodeDegreeOutput {
-  nodeId: number;
+  /** Node id, as a decimal string. */
+  nodeId: string;
   inDegree: number;
   outDegree: number;
 }
@@ -1882,8 +1890,8 @@ export function listIndexes(request: ListIndexesRequest): Promise<IndexInfoOutpu
 export interface TraverseGraphParallelRequest {
   /** Target collection name. */
   collection: string;
-  /** Source node IDs to start traversal from. */
-  sources: number[];
+  /** Source node ids to start traversal from, each a decimal string or a number. */
+  sources: Array<string | number>;
   /** Maximum traversal depth. Default: 3. */
   maxDepth?: number;
   /** Maximum results to return. Default: 100. */
