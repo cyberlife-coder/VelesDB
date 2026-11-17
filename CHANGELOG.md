@@ -420,6 +420,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python: the type stub declares every runtime member and keyword**
+  (Python, 2026-11-17). `__init__.pyi` lacked dozens of methods and
+  keywords the module has — among them `Collection.enable_streaming`,
+  `create_index`, `scroll_batch`, `rebuild_index`, `compact_storage`;
+  `Database.explain`, `explain_analyze`, `train_quantizer`, `flush_all`;
+  `GraphStore.get_edge`, `in_degree`, `out_degree`;
+  `GraphCollection.truncate`, `try_remove_edge`, `metrics`; the
+  `GraphSchema` builders; `hybrid_search(rrf_k=)`,
+  `StreamingConfig(limit=, deadline_ms=)`, the traversals' `min_depth` /
+  `timeout_ms` and `search_by_embedding(principal=, tenant=)` — and
+  declared `Collection.upsert` and `batch_search` with keywords the facade
+  does not take. A test now diffs the built module's members and
+  signatures against the stub's AST, both ways, so the stub cannot drift
+  again. `Collection.stream_insert` gets back the docstring that had
+  landed on `enable_streaming`.
+
 - **Python: `search_request` refuses a knob its search path ignores**
   (Python, 2026-11-17). `SearchOptions.ef_search` and `quality` were honoured
   on a dense-only search and silently dropped once `sparse_vector` was set
