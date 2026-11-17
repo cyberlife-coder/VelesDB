@@ -331,6 +331,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Node: `freshness` is documented as it is sent** (Node, 2026-11-17). The
+  `recall` hit type said `freshness` is `null` without `anchorRoot`; the
+  binding leaves the field out (`undefined`), as the method's own doc said.
+  The type docs now agree, and the spec asserts the field is absent.
 - **Node: an open refused for its ingest roots leaves no store behind**
   (Node, 2026-11-17). `MemoryService.open` read `VELESDB_MEMORY_INGEST_ROOTS`
   after opening the store, so a bad value threw only once the store

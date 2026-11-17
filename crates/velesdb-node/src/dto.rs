@@ -110,7 +110,7 @@ impl From<&Freshness> for FreshnessJs {
 }
 
 /// One hit of `recall` — same fields as [`RecollectionJs`], plus `freshness`
-/// when the call passed `anchorRoot` (`null` otherwise). Anchored hits are
+/// when the call passed `anchorRoot` (absent — `undefined` — otherwise). Anchored hits are
 /// ranked lower when stale, but the `score` stays the raw similarity.
 #[napi(object)]
 pub struct AnchoredRecollectionJs {
@@ -123,7 +123,8 @@ pub struct AnchoredRecollectionJs {
     /// Caller-supplied structured metadata stored with the fact, or
     /// `undefined` when the fact carries none.
     pub metadata: Option<Value>,
-    /// Freshness verdict when recalled with `anchorRoot`; `null` otherwise.
+    /// Freshness verdict when recalled with `anchorRoot`; absent
+    /// (`undefined`) otherwise.
     pub freshness: Option<FreshnessJs>,
 }
 

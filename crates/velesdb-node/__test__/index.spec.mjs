@@ -1778,10 +1778,11 @@ test('anchored remember + recall(anchorRoot) reports fresh, then stale with the 
     assert.deepEqual(staleHit.freshness.changed, ['notes.md'])
 
     const plain = await store.recall('deploy broke', 5, null, null)
-    assert.equal(
-      plain.find((h) => h.id === id)?.freshness ?? null,
-      null,
-      'no anchorRoot: no freshness verdict on the hit',
+    const plainHit = plain.find((h) => h.id === id)
+    assert.ok(plainHit, 'the fact is recalled')
+    assert.ok(
+      !('freshness' in plainHit),
+      'no anchorRoot: the freshness field is absent, as documented (not null)',
     )
   } finally {
     delete process.env.VELESDB_MEMORY_INGEST_ROOTS
