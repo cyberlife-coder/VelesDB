@@ -490,22 +490,18 @@ class AcceptedAdvisoryTests(unittest.TestCase):
             result = _run(npm, root, "--accepted", str(bad))
         self.assertEqual(EXIT_USAGE, result.returncode, result.stderr)
 
-    def test_an_acceptance_reviewed_beyond_the_horizon_is_a_usage_error(self) -> None:
-        """A dated exception that need not be re-examined for years is a
-        permanent one: `review_by` is capped at MAX_ACCEPTANCE_DAYS ahead."""
-        too_far = date.today() + timedelta(days=gate.MAX_ACCEPTANCE_DAYS + 1)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            npm = _fake_npm(root, stdout=_advisory_report())
-            result = _run(npm, root, "--accepted", str(_accepted(root, review_by=too_far.isoformat())))
-        self.assertEqual(EXIT_USAGE, result.returncode, result.stderr)
-        self.assertIn("review_by", result.stderr)
-
     def test_the_repository_list_is_well_formed(self) -> None:
         entries = gate.load_accepted(ROOT / "scripts" / "npm-audit-accepted.json")
         for entry in entries:
             self.assertRegex(entry.ghsa, r"^GHSA(-[0-9a-z]{4}){3}$")
             self.assertTrue(entry.reason.strip())
+            horizon = date.today() + timedelta(days=gate.MAX_ACCEPTANCE_DAYS)
+            self.assertLessEqual(
+                entry.review_by,
+                horizon,
+                f"{entry.ghsa}: review_by past the {gate.MAX_ACCEPTANCE_DAYS}-day horizon "
+                "makes the exception permanent; set a nearer date",
+            )
 
 
 class AttemptTimeoutTests(unittest.TestCase):
