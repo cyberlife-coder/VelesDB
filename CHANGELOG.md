@@ -444,6 +444,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM: the `SemanticMemory` docs no longer promise a `save()` it does not
+  have** (WASM, 2026-11-17). Its documentation, copied into the generated
+  TypeScript typings, told users to call `save()` to keep facts across
+  reloads; the class has no save, export or load. It now states that the
+  memory is in-memory only.
+
 - **Tauri: `add_edge` / `add_edges_batch` refuse properties that are not an
   object** (Tauri, 2026-11-17). A `properties` of `[1, 2]`, `"x"` or a number
   was stored as an empty map without a word, while REST refuses it with
