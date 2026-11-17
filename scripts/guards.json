@@ -1310,7 +1310,7 @@
     },
     {
       "script": "scripts/npm-audit-gate.py",
-      "purpose": "No npm lockfile carries a high or critical advisory — and a registry that never answered is reported as infrastructure (exit 75), never as a finding.",
+      "purpose": "No npm lockfile carries a high or critical advisory unless that advisory is attributed to a GHSA id accepted, with a reason and an unexpired review_by date, in scripts/npm-audit-accepted.json — and a registry that never answered is reported as infrastructure (exit 75), never as a finding.",
       "workflow": ".github/workflows/gate-contracts.yml",
       "job": "npm-audit",
       "required": true,
@@ -1341,6 +1341,39 @@
             "{root}",
             "--npm",
             "{root}/tools/fake-npm",
+            "--attempts",
+            "1",
+            "--backoff-seconds",
+            "0"
+          ]
+        },
+        {
+          "vector": "an advisory attributed to a GHSA id the acceptance list does not name — the accepted control differs only in the id, so the gate matches acceptances by advisory, not by package or count",
+          "files": {
+            "package-lock.json": "{\n  \"lockfileVersion\": 3\n}\n",
+            "accepted.json": "[{\"ghsa\": \"GHSA-aaaa-bbbb-cccc\", \"package\": \"picomatch\", \"reason\": \"vector fixture\", \"review_by\": \"2999-01-01\"}]\n",
+            "tools/fake-npm": "#!/usr/bin/env python3\nimport json, sys\nadvisory = {'source': 1, 'name': 'picomatch', 'severity': 'high', 'url': 'https://github.com/advisories/GHSA-zzzz-yyyy-xxxx'}\nsys.stdout.write(json.dumps({'auditReportVersion': 2, 'vulnerabilities': {'picomatch': {'name': 'picomatch', 'severity': 'high', 'via': [advisory]}}, 'metadata': {'vulnerabilities': {'info': 0, 'low': 0, 'moderate': 0, 'high': 1, 'critical': 0, 'total': 1}}}))\nraise SystemExit(1)\n"
+          },
+          "accepts": {
+            "package-lock.json": "{\n  \"lockfileVersion\": 3\n}\n",
+            "accepted.json": "[{\"ghsa\": \"GHSA-aaaa-bbbb-cccc\", \"package\": \"picomatch\", \"reason\": \"vector fixture\", \"review_by\": \"2999-01-01\"}]\n",
+            "tools/fake-npm": "#!/usr/bin/env python3\nimport json, sys\nadvisory = {'source': 1, 'name': 'picomatch', 'severity': 'high', 'url': 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc'}\nsys.stdout.write(json.dumps({'auditReportVersion': 2, 'vulnerabilities': {'picomatch': {'name': 'picomatch', 'severity': 'high', 'via': [advisory]}}, 'metadata': {'vulnerabilities': {'info': 0, 'low': 0, 'moderate': 0, 'high': 1, 'critical': 0, 'total': 1}}}))\nraise SystemExit(1)\n"
+          },
+          "executable": {
+            "files": [
+              "tools/fake-npm"
+            ],
+            "accepts": [
+              "tools/fake-npm"
+            ]
+          },
+          "argv": [
+            "--root",
+            "{root}",
+            "--npm",
+            "{root}/tools/fake-npm",
+            "--accepted",
+            "{root}/accepted.json",
             "--attempts",
             "1",
             "--backoff-seconds",
