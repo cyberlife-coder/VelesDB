@@ -2,6 +2,9 @@
 //!
 //! Orchestrates the SELECT pipeline:
 //!
+//! 0. **Sparse branch**: if WHERE contains `vector SPARSE_NEAR …`, hand off
+//!    to [`crate::velesql_sparse`], which runs it alone or fused with a
+//!    `NEAR` beside it, as core does.
 //! 1. **Vector-search branch**: if WHERE contains `vector NEAR $v`, run
 //!    brute-force scoring, then apply any non-vector / non-similarity
 //!    WHERE predicates as a post-filter.
@@ -142,6 +145,9 @@ fn scan(
     }
     if let Some(vfs) = crate::velesql_fused::find_fused_search(stmt.where_clause.as_ref()) {
         crate::velesql_fused::execute_fused_search(db, stmt, vfs, params)
+    } else if let Some(svs) = crate::velesql_sparse::find_sparse_search(stmt.where_clause.as_ref())
+    {
+        crate::velesql_sparse::execute_sparse_search(db, stmt, svs, params)
     } else if let Some(vs) = find_vector_search(stmt.where_clause.as_ref()) {
         execute_vector_search(db, stmt, vs, params)
     } else {
@@ -334,8 +340,10 @@ fn execute_vector_search(
     let filters = WhereFilters::build(db, stmt, params, Some(residual_without_vector.clone()))?;
 
     // A FUSION clause reaches this point only when core's validator counted a
-    // second fusable branch (text MATCH or SPARSE_NEAR) beside the NEAR; over
-    // a lone NEAR it is refused before dispatch (V012, `velesql_exec::execute`).
+    // second fusable branch beside the NEAR — a text MATCH, which the WHERE
+    // filter refuses in WASM, or a second NEAR; over a lone NEAR it is refused
+    // before dispatch (V012, `velesql_exec::execute`), and a SPARSE_NEAR runs
+    // its own fusion (`velesql_sparse`).
     if let Some(clause) = &stmt.fusion_clause {
         reject_single_branch_weighted_fusion(clause)?;
         scored = apply_fusion(
@@ -379,7 +387,7 @@ fn reject_single_branch_weighted_fusion(
     }
 }
 
-fn validate_vector_collection(
+pub(crate) fn validate_vector_collection(
     store: &crate::store_state::StoreState,
     name: &str,
 ) -> Result<(), String> {
@@ -391,7 +399,7 @@ fn validate_vector_collection(
     Ok(())
 }
 
-fn resolve_query_vector(
+pub(crate) fn resolve_query_vector(
     vs: &VectorSearch,
     store: &crate::store_state::StoreState,
     params: &Params,
@@ -431,7 +439,13 @@ fn apply_fusion(
 ) -> Result<Vec<(u64, f32)>, String> {
     let rrf_branch = scored.to_vec();
     let payload_branch = fusion_branch_from_residual(store, residual, params)?;
-    velesql_fusion::apply(clause, vec![rrf_branch, payload_branch])
+    // The vector branch carries the metric's scores (distances for
+    // Euclidean/Hamming); the metadata branch's 1.0 is a match, higher-is-better.
+    let directions = [
+        store.metric.score_direction(),
+        velesdb_core::fusion::ScoreDirection::HigherIsBetter,
+    ];
+    velesql_fusion::apply(clause, vec![rrf_branch, payload_branch], &directions)
 }
 
 /// Builds an `id -> index` lookup map so the vector-row collectors can
@@ -582,12 +596,15 @@ fn window_plain(
     order: &velesql_orderby::OrderContext<'_>,
 ) -> Result<Vec<SearchResult>, String> {
     let mut results = velesql_project::to_search_results(rows);
-    if find_vector_search(stmt.where_clause.as_ref()).is_some()
-        && crate::velesql_fused::find_fused_search(stmt.where_clause.as_ref()).is_none()
+    let where_clause = stmt.where_clause.as_ref();
+    if find_vector_search(where_clause).is_some()
+        && crate::velesql_fused::find_fused_search(where_clause).is_none()
+        && crate::velesql_sparse::find_sparse_search(where_clause).is_none()
     {
         // A NEAR row's score is its vector component, as core tags its
         // search results (`tag_vector_component_scores`): `vector_score` then
-        // reads it and `bm25_score` reads 0.0.
+        // reads it and `bm25_score` reads 0.0. A fused or hybrid row's score
+        // is the fusion's, which core does not tag.
         for result in &mut results {
             result.component_scores =
                 Some(std::iter::once(("vector_score", result.score)).collect());
@@ -624,7 +641,7 @@ fn apply_limit_offset<T>(stmt: &SelectStatement, rows: Vec<T>, default_limit: u6
 
 // --- Condition-tree helpers ---------------------------------------------
 
-fn find_vector_search(cond: Option<&Condition>) -> Option<&VectorSearch> {
+pub(crate) fn find_vector_search(cond: Option<&Condition>) -> Option<&VectorSearch> {
     let cond = cond?;
     match cond {
         Condition::VectorSearch(vs) => Some(vs),

@@ -5,7 +5,6 @@
 //! filtering, result finalization, and fusion strategy resolution.
 
 use super::{Collection, ExtractedComponents, Result, SearchResult, MAX_LIMIT};
-use tracing::warn;
 
 impl Collection {
     /// Dispatches sparse-only or hybrid dense+sparse search.
@@ -178,60 +177,14 @@ impl Collection {
         self.apply_select_postprocessing(stmt, results, params, final_limit, &[])
     }
 
-    /// Resolves the fusion strategy from the query's FUSION clause.
+    /// Resolves the fusion strategy from the query's FUSION clause: RRF when
+    /// there is none ([`crate::velesql::FusionClause::dense_sparse_strategy`]).
     pub(super) fn resolve_fusion_strategy(
         stmt: &crate::velesql::SelectStatement,
     ) -> crate::fusion::FusionStrategy {
-        stmt.fusion_clause
-            .as_ref()
-            .map_or_else(crate::fusion::FusionStrategy::rrf_default, |fc| {
-                use crate::velesql::FusionStrategyType;
-                match fc.strategy {
-                    FusionStrategyType::Rsf => {
-                        let dw = fc.dense_weight.unwrap_or(0.5);
-                        let sw = fc.sparse_weight.unwrap_or(0.5);
-                        crate::fusion::FusionStrategy::relative_score(dw, sw).unwrap_or_else(|e| {
-                            warn!(
-                                dense_weight = dw,
-                                sparse_weight = sw,
-                                error = %e,
-                                "RSF fusion strategy invalid; falling back to RRF"
-                            );
-                            crate::fusion::FusionStrategy::rrf_default()
-                        })
-                    }
-                    FusionStrategyType::Rrf => crate::fusion::FusionStrategy::RRF {
-                        k: fc.k.unwrap_or(60),
-                    },
-                    FusionStrategyType::Average => crate::fusion::FusionStrategy::Average,
-                    FusionStrategyType::Maximum => crate::fusion::FusionStrategy::Maximum,
-                    FusionStrategyType::Weighted | FusionStrategyType::WeightedRrf => {
-                        // 'weighted' and 'weighted_rrf' both build weighted
-                        // Reciprocal Rank Fusion over the two branches
-                        // (branch 0 = dense NEAR, branch 1 = sparse),
-                        // honoring the dense_w/sparse_w from the FUSION
-                        // clause. 'weighted_rrf' is simply the honest name of
-                        // the math 'weighted' has always run here. Falls back
-                        // to RRF on a validation error (e.g. a negative
-                        // weight).
-                        let dw = fc.dense_weight.unwrap_or(0.5);
-                        let sw = fc.sparse_weight.unwrap_or(0.5);
-                        #[allow(clippy::cast_precision_loss)]
-                        let k = fc.k.unwrap_or(60) as f32;
-                        crate::fusion::FusionStrategy::weighted_rrf(vec![dw, sw], k).unwrap_or_else(
-                            |e| {
-                                warn!(
-                                    dense_weight = dw,
-                                    sparse_weight = sw,
-                                    k,
-                                    error = %e,
-                                    "Weighted RRF fusion strategy invalid; falling back to RRF"
-                                );
-                                crate::fusion::FusionStrategy::rrf_default()
-                            },
-                        )
-                    }
-                }
-            })
+        stmt.fusion_clause.as_ref().map_or_else(
+            crate::fusion::FusionStrategy::rrf_default,
+            crate::velesql::FusionClause::dense_sparse_strategy,
+        )
     }
 }

@@ -444,6 +444,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM: VelesQL runs `SPARSE_NEAR`, alone or fused with a `NEAR`, as core
+  does** (core, WASM, 2026-11-17). Beside a `NEAR` the sparse leaf was
+  dropped without a word, so `vector NEAR $d AND vector SPARSE_NEAR {…}`
+  returned the dense ranking alone; a lone `SPARSE_NEAR` failed with a
+  message about the SELECT dispatcher. The executor now runs core's hybrid
+  search over the store's sparse index: both branches bounded by the metadata
+  filter, core's candidate depth, the strategy core maps from `USING FUSION`
+  (RRF without one) and each branch read in its score direction — same ids
+  and scores as a core `Database`. A store without sparse vectors, or a named
+  sparse index, is refused as core refuses a missing index; through the
+  TypeScript SDK, whose WASM backend keeps sparse vectors in a store of its
+  own, such a query is now that refusal rather than a dense-only answer. A
+  score-level `USING FUSION` over two `NEAR`s also reads a Euclidean or
+  Hamming branch closest-first. Core exposes the pieces both engines share:
+  `SparseVectorExpr::resolve`, `FusionClause::dense_sparse_strategy` and
+  `fusion::dense_sparse_candidate_k`.
+
 - **TypeScript SDK, WASM backend: an upsert replaces the whole point** (TypeScript
   SDK, 2026-11-17). Re-upserting a point without a `payload` left the old one
   in the SDK's payload map, so `get()` and dense `search()` kept returning it

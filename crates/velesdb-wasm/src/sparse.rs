@@ -7,7 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 use velesdb_core::api_types::serde_id;
-use velesdb_core::sparse_index::{sparse_search, SparseInvertedIndex, SparseVector};
+use velesdb_core::sparse_index::{
+    sparse_search, sparse_search_filtered, SparseInvertedIndex, SparseVector,
+};
 use wasm_bindgen::prelude::*;
 
 use crate::js_value::PointId;
@@ -142,6 +144,27 @@ impl SparseIndex {
 }
 
 impl SparseIndex {
+    /// The `k` best documents for `query` among those `keep` holds (every
+    /// document when `None`), best first, as core's filtered sparse search
+    /// ranks them.
+    pub(crate) fn search_filtered(
+        &self,
+        query: &SparseVector,
+        k: usize,
+        keep: Option<&std::collections::HashSet<u64>>,
+    ) -> Vec<(u64, f32)> {
+        let filter = keep.map(|keep| move |id: u64| keep.contains(&id));
+        sparse_search_filtered(
+            &self.inner,
+            query,
+            k,
+            filter.as_ref().map(|f| f as &dyn Fn(u64) -> bool),
+        )
+        .into_iter()
+        .map(|doc| (doc.doc_id, doc.score))
+        .collect()
+    }
+
     /// The index as per-document sparse vectors, ids ascending: what
     /// [`Self::insert`] rebuilds it from (the store's persistence writes it).
     pub(crate) fn documents(&self) -> Vec<(u64, Vec<(u32, f32)>)> {

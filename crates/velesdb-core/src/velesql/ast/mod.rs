@@ -12,6 +12,7 @@ mod introspection;
 mod join;
 mod result_kind;
 mod select;
+mod sparse_vector_expr;
 mod train;
 mod values;
 mod window;

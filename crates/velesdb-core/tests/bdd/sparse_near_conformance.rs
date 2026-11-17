@@ -107,7 +107,7 @@ fn test_sparse_near_limit_truncates_after_rank() {
 
 /// WHEN the query vector is bound as a `$sv` parameter (shorthand JSON object
 /// `{"10":1.0,"30":2.0}`) THEN ranking is identical to the literal form.
-/// Ground truth: `resolve_sparse_vector` parses an object whose keys are u32
+/// Ground truth: `SparseVectorExpr::resolve` parses an object whose keys are u32
 /// strings and whose values are weights into the same `SparseVector`.
 #[test]
 fn test_sparse_near_param_matches_literal() {
