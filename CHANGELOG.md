@@ -331,6 +331,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tauri: a scoped sparse search fills its top-k or refuses** (Tauri,
+  2026-11-17). `sparse_search` and `hybrid_sparse_search` narrowed their
+  top-k to the observer's scope after cutting it, so a scoped search could
+  answer fewer than `topK` hits — none at all — while in-scope points
+  existed. The hybrid search hands the scope to core as its filter, which
+  narrows both branches before fusion; a sparse-only search, which has no
+  filter leaf, refuses a scope, as REST does.
+
 - **Tauri example and RAG demo run core calls off the async runtime**
   (Tauri, 2026-11-16). `examples/graph-and-memory` and
   `demos/tauri-rag-app` called `VelesDbState::with_db` from `async`

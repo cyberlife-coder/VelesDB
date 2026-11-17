@@ -1299,3 +1299,123 @@ fn every_write_and_delete_emits_one_collection_updated() {
         ]
     );
 }
+
+/// Scopes reads to `tenant = 'a'`, the way a tenancy policy would, once
+/// switched on.
+#[derive(Default)]
+struct TenantScope {
+    on: std::sync::atomic::AtomicBool,
+}
+
+impl velesdb_core::DatabaseObserver for TenantScope {
+    fn on_query_request(
+        &self,
+        _ctx: &velesdb_core::QueryAccessContext,
+    ) -> velesdb_core::Result<velesdb_core::AccessDecision> {
+        if !self.on.load(Ordering::SeqCst) {
+            return Ok(velesdb_core::AccessDecision::Allow);
+        }
+        let condition = velesdb_core::velesql::Parser::parse("SELECT * FROM c WHERE tenant = 'a'")
+            .expect("test: parse")
+            .select
+            .where_clause
+            .expect("test: where");
+        #[allow(clippy::field_reassign_with_default)] // `AccessScope` is non_exhaustive
+        let mut scope = velesdb_core::AccessScope::default();
+        scope.filter = Some(condition);
+        Ok(velesdb_core::AccessDecision::AllowWithScope(scope))
+    }
+}
+
+/// A scoped hybrid search draws its top-k from in-scope points only; a
+/// scoped sparse-only search, which has no filter leaf, is refused. Both
+/// used to narrow the top-k after it was cut, so a search could answer
+/// fewer than `top_k` hits while in-scope points existed.
+#[test]
+fn a_scoped_sparse_search_fills_its_top_k_or_refuses() {
+    use tauri_plugin_velesdb::commands_sparse::{
+        hybrid_sparse_search, sparse_search, sparse_upsert,
+    };
+    use tauri_plugin_velesdb::types::{
+        HybridSparseSearchRequest, SparseSearchRequest, SparseUpsertRequest,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_builder()
+        .build(mock_context(noop_assets()))
+        .expect("build app");
+    let policy = Arc::new(TenantScope::default());
+    app.manage(VelesDbState::new_with_observer(
+        dir.path().to_path_buf(),
+        policy.clone(),
+    ));
+    run(create_collection(
+        handle(&app),
+        st(&app),
+        vector_collection_request("docs"),
+    ))
+    .expect("create");
+    // Ids 1-4 are tenant b and nearest the query; 5-8 are tenant a.
+    let points: Vec<serde_json::Value> = (1..=8)
+        .map(|id| {
+            let tenant = if id <= 4 { "b" } else { "a" };
+            let weight = 10.0 - f64::from(id);
+            serde_json::json!({
+                "id": id,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "payload": { "tenant": tenant },
+                "sparseVector": { "7": weight },
+            })
+        })
+        .collect();
+    run(sparse_upsert(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<SparseUpsertRequest>(
+            serde_json::json!({ "collection": "docs", "points": points }),
+        )
+        .expect("deserialize"),
+    ))
+    .expect("upsert");
+    policy.on.store(true, Ordering::SeqCst);
+
+    let hybrid = run(hybrid_sparse_search(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<HybridSparseSearchRequest>(serde_json::json!({
+            "collection": "docs",
+            "vector": [1.0, 0.0, 0.0, 0.0],
+            "sparseVector": { "7": 1.0 },
+            "topK": 3,
+        }))
+        .expect("deserialize"),
+    ))
+    .expect("scoped hybrid search");
+    let tenants: Vec<String> = hybrid
+        .results
+        .iter()
+        .map(|r| {
+            r.payload
+                .as_ref()
+                .and_then(|p| p["tenant"].as_str())
+                .unwrap_or("")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(tenants, vec!["a"; 3], "three in-scope hits, not fewer");
+
+    let sparse_only = run(sparse_search(
+        handle(&app),
+        st(&app),
+        serde_json::from_value::<SparseSearchRequest>(serde_json::json!({
+            "collection": "docs",
+            "sparseVector": { "7": 1.0 },
+            "topK": 3,
+        }))
+        .expect("deserialize"),
+    ));
+    assert!(
+        sparse_only.is_err(),
+        "a scope a sparse-only search cannot carry is refused"
+    );
+}
