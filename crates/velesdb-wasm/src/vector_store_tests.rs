@@ -93,3 +93,84 @@ fn given_a_taken_name_when_attaching_then_it_is_refused_and_the_first_store_kept
         vec![1, 2]
     );
 }
+
+/// Removing a row drops its sparse postings too — `clear()` already did,
+/// for the reason its doc gives: they would reference a row that is gone.
+#[test]
+fn given_a_removed_row_when_searching_sparse_then_it_is_not_returned() {
+    let mut store = store_with_two_points();
+    store
+        .sparse_insert(1, &[7], &[1.0])
+        .expect("test: sparse 1");
+    store
+        .sparse_insert(2, &[7], &[0.5])
+        .expect("test: sparse 2");
+    assert!(store.remove(1));
+    let hits = store
+        .state
+        .borrow()
+        .search_sparse_scored(&[7], &[1.0], 10)
+        .expect("test: sparse search");
+    let ids: Vec<u64> = hits
+        .iter()
+        .map(crate::sparse::SparseSearchResult::doc_id)
+        .collect();
+    assert_eq!(ids, vec![2]);
+}
+
+#[test]
+fn given_a_velesql_delete_when_searching_sparse_then_the_row_is_not_returned() {
+    let mut store = store_with_two_points();
+    store
+        .sparse_insert(1, &[7], &[1.0])
+        .expect("test: sparse 1");
+    let mut db = WasmDatabase::new();
+    db.attach_store("docs", &store).expect("test: attach");
+    execute(db.inner_mut(), "DELETE FROM docs WHERE id = 1", None).expect("test: delete");
+    let hits = store
+        .state
+        .borrow()
+        .search_sparse_scored(&[7], &[1.0], 10)
+        .expect("test: sparse search");
+    assert!(hits.is_empty(), "the deleted row's postings are gone");
+}
+
+/// `CREATE COLLECTION … WITH (storage = …)` reads the mode as core does,
+/// refusing a name core refuses; it used to be dropped (every collection Full).
+#[test]
+fn given_create_collection_with_a_storage_mode_then_it_is_honoured_or_refused() {
+    let mut db = WasmDatabase::new();
+    execute(
+        db.inner_mut(),
+        "CREATE COLLECTION q (dimension = 4, metric = 'cosine') WITH (storage = 'sq8')",
+        None,
+    )
+    .expect("test: sq8 create");
+    let store = db.inner_mut().get_shared_store("q").expect("test: store");
+    assert_eq!(store.borrow().storage_mode(), "sq8");
+    assert!(execute(
+        db.inner_mut(),
+        "CREATE COLLECTION b (dimension = 4, metric = 'cosine') WITH (storage = 'bogus')",
+        None,
+    )
+    .is_err());
+}
+
+/// The preset parser runs without a store: the SDK validates a `quality`
+/// with it ahead of a search, now that a metadata-only store refuses one.
+#[test]
+fn given_a_valid_preset_when_validating_then_no_store_is_needed() {
+    for preset in [
+        "fast",
+        "balanced",
+        "accurate",
+        "perfect",
+        "autotune",
+        "custom:128",
+    ] {
+        assert!(
+            VectorStore::validate_search_quality(preset).is_ok(),
+            "{preset}"
+        );
+    }
+}

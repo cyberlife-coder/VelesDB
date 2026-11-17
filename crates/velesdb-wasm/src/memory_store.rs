@@ -318,13 +318,24 @@ impl GraphStore for WasmStore {
                 return Err(MemoryError::UnknownMemory(endpoint));
             }
         }
-        // `explicit_id: None` derives the id from (source, target, label), so
-        // the only documented failure mode (an explicit id collision) cannot
-        // occur here — still mapped, not unwrapped, so a future signature
-        // change can't silently reintroduce a panic path.
+        // Idempotent like core's agent-memory relation (`add_relation_edge`):
+        // the relation already stored under its derived id is answered with
+        // that id and nothing is written; another edge holding the id is a
+        // hash collision, refused.
+        let id = velesdb_core::hash_edge_id(from, to, relation);
+        if let Some(existing) = inner.graph.edge(id) {
+            if (existing.source, existing.target, existing.label.as_str()) == (from, to, relation) {
+                return Ok(id);
+            }
+            return Err(MemoryError::InvalidRelation(format!(
+                "edge id {id} derived from ({from}, {relation}, {to}) is already held by \
+                 ({}, {}, {}) — a hash collision, not a duplicate relation",
+                existing.source, existing.label, existing.target
+            )));
+        }
         inner
             .graph
-            .insert_edge(None, from, to, relation.to_string(), None)
+            .insert_edge(Some(id), from, to, relation.to_string(), None)
             .map_err(MemoryError::InvalidRelation)
     }
 
