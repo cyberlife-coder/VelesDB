@@ -11,7 +11,7 @@
 //! because either half alone would blow the file budget the split serves.
 
 use super::{
-    reject_reserved_keys, validate_relation, Embedder, Explanation, FactStore, GraphStore, HashSet,
+    reject_reserved_keys, relation_label, Embedder, Explanation, FactStore, GraphStore, HashSet,
     MemoryError, MemoryNode, MemoryService, Metadata, RecallStore, UnrelateOutcome, HUB_FIELD,
     MENTIONS_RELATION,
 };
@@ -50,7 +50,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     where
         S: GraphStore,
     {
-        validate_relation(relation)?;
+        let relation = relation_label(relation)?;
         if from == to {
             return Err(MemoryError::SelfRelation(from));
         }
@@ -90,7 +90,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         S: GraphStore,
     {
         let _generation = self.enter_generation();
-        validate_relation(relation)?;
+        let relation = relation_label(relation)?;
         if from == to {
             return Err(MemoryError::SelfRelation(from));
         }

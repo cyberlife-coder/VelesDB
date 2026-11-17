@@ -39,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them, so the two parsers' disagreement on surrounding whitespace is gone:
   `" 7"`, accepted by the MCP tools, is now accepted by Node and WASM too.
 
+### Fixed
+
+- **A relation label is its trimmed text.** The graph stores trim an edge
+  label (core's `GraphEdge::new`), but `relate` and `unrelate` compared and
+  wrote the label as given: `relate(a, b, " decided_in ")` stored
+  `decided_in`, a repeated call was refused as a hash collision on the WASM
+  store, and `unrelate` with the same label reported `found: false` and left
+  the edge. `relate`, `unrelate`, `remember`'s links and the autograph now
+  validate and write the canonical label; a whitespace-only label is refused.
+
 ## [0.18.0] - 2026-11-11
 
 ### Added

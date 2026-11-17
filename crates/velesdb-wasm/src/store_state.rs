@@ -81,13 +81,10 @@ impl StoreState {
     /// Returns the storage mode.
     #[must_use]
     pub fn storage_mode(&self) -> String {
-        match self.storage_mode {
-            StorageMode::Full => "full".to_string(),
-            StorageMode::SQ8 => "sq8".to_string(),
-            StorageMode::Binary => "binary".to_string(),
-            StorageMode::ProductQuantization => "pq".to_string(),
-            StorageMode::RaBitQ => "rabitq".to_string(),
-        }
+        // Core names its modes once (`StorageMode::canonical_name`).
+        parsing::wasm_to_core_storage_mode(self.storage_mode)
+            .canonical_name()
+            .to_string()
     }
 
     /// Returns the number of vectors in the store.
