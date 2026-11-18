@@ -46,3 +46,25 @@ def test_batch_search_accepts_a_2d_numpy_array(docs):
     results = docs.batch_search(queries, top_k=1)
     assert [[h["id"] for h in hits] for hits in results] == [[1], [2]]
     assert docs.batch_search(np.empty((0, 4), dtype=np.float32)) == []
+
+
+def test_upsert_bulk_numpy_converts_float64(docs):
+    """The docs said float64 "forces a conversion"; it raised TypeError."""
+    vectors = np.array([[1.0, 0.0, 0.0, 0.0], [0.0, 0.5, 0.0, 0.0]], dtype=np.float64)
+    assert docs.upsert_bulk_numpy(vectors, [1, 2], [{"k": 1}, None]) == 2
+    assert docs.get([2])[0]["vector"].tolist() == [0.0, 0.5, 0.0, 0.0]
+    assert docs.get([1])[0]["payload"] == {"k": 1}
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, 1e39])
+def test_upsert_bulk_numpy_refuses_a_float64_that_is_not_a_finite_float32(docs, value):
+    vectors = np.array([[1.0, 0.0, 0.0, value]], dtype=np.float64)
+    with pytest.raises(ValueError, match="non-finite"):
+        docs.upsert_bulk_numpy(vectors, [1])
+    assert docs.count() == 0
+
+
+def test_upsert_bulk_numpy_still_refuses_other_dtypes(docs):
+    with pytest.raises(TypeError):
+        docs.upsert_bulk_numpy(np.ones((1, 4), dtype=np.int64), [1])
+    assert docs.count() == 0

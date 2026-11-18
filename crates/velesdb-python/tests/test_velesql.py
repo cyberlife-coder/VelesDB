@@ -182,3 +182,14 @@ def test_velesql_table_alias():
     
     # Table alias should be accessible
     assert parsed.collection_name == "products"
+
+
+def test_an_unbound_parameter_raises_value_error(temp_db):
+    """A ``$name`` with no binding raises ValueError (VELES-010) — the
+    behaviour the stub documents for ``VelesQLParameterError``'s place."""
+    col = temp_db.create_collection("unbound_param", dimension=4)
+    col.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"n": 1}}])
+    with pytest.raises(ValueError, match=r"VELES-010.*\$v"):
+        col.query("SELECT * FROM unbound_param WHERE vector NEAR $v LIMIT 5")
+    with pytest.raises(ValueError, match=r"VELES-010.*\$n"):
+        temp_db.execute_query("SELECT * FROM unbound_param WHERE n = $n LIMIT 5")

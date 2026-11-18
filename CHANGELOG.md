@@ -664,6 +664,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `filter` is supplied (core's `search_dense` runs a filtered search at the
   requested quality).
 
+- **Python: the facade no longer truncates float or str ids** (Python,
+  2026-11-18). `Collection.upsert(1.9, v)` stored id 1, `upsert("7", v)`
+  stored id 7 and `1.5 in collection` answered `True`, because the facade
+  coerced ids with `int()` (`Collection`,
+  `GraphCollection.add_node`/`has_edge`/`in`, `GraphStore.has_edge`, the
+  legacy `add_edge` shapes) → every facade id goes through `operator.index`,
+  the conversion the compiled binding applies: a float or str raises
+  `TypeError` and nothing is stored (a pending collection is not created
+  either); `int`, `bool` and numpy integers are accepted as before.
+
+- **Python: `bytes`, `bytearray` and `range` are no longer stored as lists of
+  ints** (Python, 2026-11-18). The JSON conversion behind payloads, filters,
+  VelesQL parameters, graph properties and `MemoryService` metadata accepted
+  any non-`str` sequence, so `{"v": b"ab"}` was stored as `[97, 98]` although
+  the docs said bytes are refused → only a `list`, a `tuple` or a numpy array
+  converts to a JSON array; anything else raises the existing `ValueError:
+  Unsupported payload type`.
+
+- **Python: VelesQL `query` rows report the component scores core tagged**
+  (Python, 2026-11-18). `vector_score` repeated the final score whatever
+  produced it (a BM25-only row claimed a vector score), `graph_score` was
+  always `None` and `component_scores` was dropped →
+  `vector_score`/`graph_score` come from the row's component scores (`None`
+  when a tagged row has none, so a text-only row has no vector score; an
+  untagged row keeps its score as `vector_score`, as core's `ORDER BY
+  vector_score` reads it), and the row carries `component_scores` like
+  `search()` results.
+
+- **Python: `match_query(vector=...)` without a threshold keeps every scored
+  row** (Python, 2026-11-18). The default `threshold=0.0` meant "distance at
+  most 0" under euclidean/hamming, so every row but an exact duplicate of the
+  query was dropped (and negative cosine/dot scores under similarity metrics),
+  and a NaN threshold silently dropped everything → `threshold` defaults to
+  `None` (no bound, in either metric direction) on `Collection.match_query`
+  and `GraphCollection.match_query`; a NaN or infinite threshold raises
+  `ValueError`.
+
+- **Python: `len()` works on a `GraphCollection`** (Python, 2026-11-18). The
+  facade did not forward `__len__`, so `len(graph)` raised `TypeError`
+  although the stub declared it → it returns `graph.count()`.
+
+- **Python: a pending collection's `upsert_from_dataframe` raises the
+  documented `ValueError`** (Python, 2026-11-18). With `dimension=None`, a
+  frame with no `vector` column raised `KeyError`, a `None` first vector
+  `TypeError`, an empty frame `IndexError`, and a `vector_column=` keyword the
+  binding rejects was read → the dimension comes from the first non-null
+  vector, a frame with none raises `ValueError` without creating the
+  collection, and the method takes the binding's own signature (`df, *,
+  backend`).
+
+- **Python: `upsert_bulk_numpy` converts float64 as documented** (Python,
+  2026-11-18). The docs said float64 "forces a conversion" but it raised
+  `TypeError`, and on a `dimension=None` collection the collection was created
+  before that failure → a 2-D float64 array is narrowed to float32 (a value
+  past float32's range becomes infinite and is refused like NaN); other inputs
+  still raise `TypeError`, and a pending collection checks dtype, shape and
+  lengths before it creates anything.
+
+- **Python: `GraphCollection.search_by_embedding` documents the error it
+  raises** (Python, 2026-11-18). The docs said `RuntimeError` for a collection
+  without embeddings; it raises `ValueError` (`VELES-014`) → docstring and
+  stub say `ValueError`.
+
+- **Python: `VelesQLParameterError` is documented as reserved** (Python,
+  2026-11-18). It was documented as raised for invalid parameters but no call
+  raises it: an unbound or mistyped `$name` raises `ValueError` (`VELES-010`),
+  which core reports as a generic query error → stub, binding comment and
+  README say so; the class stays exported.
+
+- **Python: graph `count()`/`len()`/`is_empty()`/`get()` documented as what
+  they read** (Python, 2026-11-18). They were documented as covering "nodes
+  with payload" but read core's vector storage, so a payload-only node is not
+  counted and `get()` returns `None` for it (in a graph without embeddings,
+  every node) → docstrings and stub describe nodes stored with an embedding
+  vector and point to `all_node_ids()`/`get_node_payload()`.
+
+- **Python: `MemoryService(embedder=...)` stub shows the real default**
+  (Python, 2026-11-18). The stub declared `embedder="hash"` while the runtime
+  default is `None`, which defers to `VELESDB_MEMORY_EMBEDDER` → the stub
+  declares `Optional[str] = None` and documents the environment fallback and
+  `"openai"`.
+
+- **Python: `GraphCollection.query` and `add_edge` docs match the code**
+  (Python, 2026-11-18). `query` claimed `params["_collection"]` selects the
+  collection, but the statement is always retargeted to the graph itself; the
+  `add_edge`/`add_edges_batch`/class examples added edges between nodes never
+  created, which raises `KeyError` → `query` documents that `_collection` does
+  not retarget it, and the examples store the endpoint nodes first (with
+  `KeyError`/`EdgeExistsError` documented).
+
+- **Python: `SearchOptions` refuses an out-of-range `ef_search` with
+  `ValueError`** (Python, 2026-11-18). `SearchOptions(ef_search=-1)` raised
+  `OverflowError` where `search_with_ef(ef_search=-1)` raises `ValueError` →
+  the constructor, `with_ef_search` and attribute assignment read `ef_search`
+  through the same validator as `search_with_ef`: an int outside [16, 4096]
+  raises its `ValueError`, a non-int `TypeError`.
+
+- **Python: `get()` output can be upserted back** (Python, 2026-11-18). A
+  point stored without a payload comes back with `"payload": None`, and
+  feeding that dict to `upsert`/`upsert_bulk` raised `payload must be a dict`
+  → `"payload": None` reads as no payload, like an absent key.
+
 - **Python: the type stub documents `hybrid_search`'s `ValueError`**
   (Python, 2026-11-18). The binding refuses a NaN or infinite
   `vector_weight` with `ValueError` since #2847, and its Rust docstring

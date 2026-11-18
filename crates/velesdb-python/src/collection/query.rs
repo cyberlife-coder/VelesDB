@@ -403,6 +403,57 @@ where
         .collect()
 }
 
+/// Refuses a `match_query` threshold that is not finite: NaN passes no
+/// comparison, so it used to drop every row without a word.
+pub(crate) fn validate_match_threshold(threshold: Option<f32>) -> PyResult<Option<f32>> {
+    match threshold {
+        Some(t) if !t.is_finite() => Err(PyValueError::new_err(format!(
+            "threshold must be a finite number, got {t}"
+        ))),
+        other => Ok(other),
+    }
+}
+
+/// Runs the bare MATCH `clause` on `collection` through `db`, as REST
+/// `/match` does — the read gate on the target and every `@collection`, the
+/// annotated nodes' properties, `search.max_results` and the observer's
+/// `on_query` — scoring the rows against `query_vector` when one is given.
+///
+/// Core keeps a scored row whose score is at least the threshold under a
+/// similarity metric and at most it under a distance metric
+/// ([`velesdb_core::MatchScoring`]). An omitted `threshold` is therefore the
+/// bound every score passes in the collection metric's direction, not `0.0`,
+/// which under a distance kept only exact duplicates of the query.
+pub(crate) fn run_match_on(
+    db: &velesdb_core::Database,
+    collection: &str,
+    clause: &velesdb_core::velesql::MatchClause,
+    params: &HashMap<String, serde_json::Value>,
+    query_vector: Option<&[f32]>,
+    threshold: Option<f32>,
+) -> velesdb_core::error::Result<
+    Vec<velesdb_core::collection::search::query::match_exec::MatchResult>,
+> {
+    let scoring = query_vector.map(|vector| velesdb_core::MatchScoring {
+        vector,
+        threshold: threshold.unwrap_or_else(|| no_threshold(db, collection)),
+    });
+    db.match_query(collection, clause, params, scoring)
+}
+
+/// The threshold every score passes under `collection`'s metric. A missing
+/// collection takes either: `match_query` refuses it before scoring.
+fn no_threshold(db: &velesdb_core::Database, collection: &str) -> f32 {
+    let higher_is_better = db
+        .get_any_collection(collection)
+        .is_none_or(|c| c.config().metric.higher_is_better());
+    if higher_is_better {
+        f32::NEG_INFINITY
+    } else {
+        f32::INFINITY
+    }
+}
+
 #[pymethods]
 impl Collection {
     /// Execute a VelesQL query (EPIC-031 US-008).
@@ -452,31 +503,32 @@ impl Collection {
     ///     query_str: VelesQL MATCH query string
     ///     params: Query parameters (default: empty dict)
     ///     vector: Optional query vector for similarity scoring
-    ///     threshold: Similarity threshold (default: 0.0)
+    ///     threshold: Optional score bound for ``vector``: a row scoring below
+    ///         it under a similarity metric (cosine, dot, jaccard), or above
+    ///         it under a distance metric (euclidean, hamming), is dropped.
+    ///         Omitted (the default), every scored row is kept.
     ///
     /// Returns:
     ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
-    #[pyo3(signature = (query_str, params = None, vector = None, threshold = 0.0))]
+    ///
+    /// Raises:
+    ///     ValueError: If ``threshold`` is NaN or infinite.
+    #[pyo3(signature = (query_str, params = None, vector = None, threshold = None))]
     fn match_query(
         &self,
         py: Python<'_>,
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
         vector: Option<Py<PyAny>>,
-        threshold: f32,
+        threshold: Option<f32>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        // Through the owning database, as REST `/match` runs: the read gate
-        // on this collection and on every `@collection` the clause names
-        // (a scope is refused: a MATCH row carries no payload to narrow),
-        // the annotated nodes' properties, `search.max_results`, and the
-        // observer's `on_query`.
+        // Through the owning database (`run_match_on`); a read-gate scope is
+        // refused, since a MATCH row carries no payload to narrow.
+        let threshold = validate_match_threshold(threshold)?;
         let db = &self.db;
         let name = &self.name;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
-            let scoring = qv
-                .as_deref()
-                .map(|vector| velesdb_core::MatchScoring { vector, threshold });
-            db.match_query(name, &mc, &p, scoring)
+            run_match_on(db, name, &mc, &p, qv.as_deref(), threshold)
         })
     }
 
