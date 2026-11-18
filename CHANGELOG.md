@@ -499,6 +499,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Column-store `upsert` refuses a mistyped value for a new key** (core,
+  2026-11-18). It returned `TypeMismatch` only when the key already existed;
+  for a new key it inserted the row with the mismatched value stored as NULL
+  and reported `Inserted`. The type check now runs before either branch.
+
 - **A column-store TTL near `u64::MAX` no longer expires its row at once**
   (core, 2026-11-18). `ColumnStore::set_ttl` added the TTL to the current
   time unchecked: release builds wrapped to a past timestamp, so the next
