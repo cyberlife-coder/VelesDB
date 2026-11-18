@@ -7,11 +7,13 @@ existing SDK consumers.
 
 from __future__ import annotations
 
+import operator
 import re
 import threading
 from typing import Any, Iterable
 
 from . import embed
+from .dataframe_converter import first_vector as _first_vector
 
 from velesdb.velesdb import (  # type: ignore[attr-defined]
     AgentMemory,
@@ -62,6 +64,18 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
 )
 
 
+def _as_id(value: Any) -> int:
+    """Read ``value`` as a point, node or edge id: an integer, never a float
+    or a str truncated or parsed into one.
+
+    ``operator.index`` is the conversion the compiled binding applies to every
+    id it takes, so the facade accepts and refuses exactly what it does: an
+    ``int`` (``bool`` included) or an integer-like object such as a numpy
+    integer, and a ``TypeError`` for anything else.
+    """
+    return operator.index(value)
+
+
 def _normalize_metric(m: str) -> str:
     """Normalize a metric name to its canonical form.
 
@@ -90,7 +104,7 @@ class GraphStore:
         return edge_id
 
     def has_edge(self, edge_id: int) -> bool:
-        return self._inner.has_edge(int(edge_id))
+        return self._inner.has_edge(_as_id(edge_id))
 
     def add_edge(
         self,
@@ -194,16 +208,16 @@ def _legacy_edge_to_dict(
                 "add_edge() got both id= and source=: pass the edge id "
                 "positionally with source=, or the source positionally with id="
             )
-        eid = int(edge_id)
-        edge_source = int(edge_or_source)
+        eid = _as_id(edge_id)
+        edge_source = _as_id(edge_or_source)
     elif source is not None:
         # Explicit-id shape: add_edge(id, source=..., target=..., label=...)
-        eid = int(edge_or_source)
-        edge_source = int(source)
+        eid = _as_id(edge_or_source)
+        edge_source = _as_id(source)
     else:
         # Legacy no-id shape: add_edge(source, target, label, weight=None)
-        eid = int(next_id())
-        edge_source = int(edge_or_source)
+        edge_source = _as_id(edge_or_source)
+        eid = next_id()
 
     if target is None:
         raise ValueError("add_edge() requires a target node id")
@@ -211,7 +225,7 @@ def _legacy_edge_to_dict(
     edge_dict: dict[str, Any] = {
         "id": eid,
         "source": edge_source,
-        "target": int(target),
+        "target": _as_id(target),
         "label": label or "RELATED_TO",
     }
     if props:
@@ -229,8 +243,12 @@ class GraphCollection:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
+    # Dunders are looked up on the type, past __getattr__: forward explicitly.
+    def __len__(self) -> int:
+        return self._inner.__len__()
+
     def __contains__(self, node_id: int) -> bool:
-        return self._inner.__contains__(int(node_id))
+        return self._inner.__contains__(_as_id(node_id))
 
     def __enter__(self) -> "GraphCollection":
         return self
@@ -247,7 +265,7 @@ class GraphCollection:
         return edge_id
 
     def has_edge(self, edge_id: int) -> bool:
-        return self._inner.has_edge(int(edge_id))
+        return self._inner.has_edge(_as_id(edge_id))
 
     def add_edge(
         self,
@@ -292,7 +310,7 @@ class GraphCollection:
         payload: dict[str, Any] | None = None,
         vector: Iterable[float] | None = None,
     ) -> None:
-        self._inner.upsert_node(int(node_id), dict(payload or {}), vector)
+        self._inner.upsert_node(_as_id(node_id), dict(payload or {}), vector)
 
     def bfs(self, start_id: int, max_depth: int = 3, limit: int = 100) -> list[dict[str, Any]]:
         return self._inner.traverse_bfs(start_id, max_depth=max_depth, limit=limit)
@@ -320,7 +338,7 @@ class Collection:
     # CPython resolves dunder methods via slot lookup on type(obj),
     # bypassing __getattr__ delegation.
     def __contains__(self, point_id: int) -> bool:
-        return self._inner.__contains__(int(point_id))
+        return self._inner.__contains__(_as_id(point_id))
 
     def __enter__(self) -> "Collection":
         return self
@@ -345,7 +363,7 @@ class Collection:
         if vector is None:
             return self._inner.upsert(points_or_id)
 
-        point = {"id": int(points_or_id), "vector": list(vector)}
+        point = {"id": _as_id(points_or_id), "vector": list(vector)}
         if payload is not None:
             point["payload"] = payload
         return self._inner.upsert([point])
@@ -521,6 +539,41 @@ def _extract_dimension(points_or_id: Any, vector: Iterable[float] | None) -> int
     return _dimension_from_points(points_or_id)
 
 
+def _bulk_numpy_dimension(name: str, vectors: Any, ids: Any, payloads: Any) -> int:
+    """Return the dimension of an ``upsert_bulk_numpy`` batch for a pending
+    collection, refusing — before the collection is created — the batches
+    ``Collection.upsert_bulk_numpy`` refuses for their shape: anything but a
+    2-D float32/float64 array (``TypeError``), and ids or payloads whose
+    length is not the row count (``ValueError``). The messages are the
+    compiled method's, which still runs every check once the collection
+    exists.
+    """
+    import numpy as np
+
+    if not (
+        isinstance(vectors, np.ndarray)
+        and vectors.ndim == 2
+        and vectors.dtype in (np.float32, np.float64)
+    ):
+        raise TypeError(
+            "vectors must be a 2-D numpy array of float32 or float64, got "
+            f"{type(vectors).__name__}"
+        )
+    rows, dim = vectors.shape
+    if dim == 0:
+        raise ValueError(
+            f"Cannot auto-detect dimension for collection '{name}' "
+            "from upsert_bulk_numpy: vectors array has zero columns."
+        )
+    if len(ids) != rows:
+        raise ValueError(f"ids length ({len(ids)}) must match vectors row count ({rows})")
+    if payloads is not None and len(payloads) != rows:
+        raise ValueError(
+            f"payloads length ({len(payloads)}) must match vectors row count ({rows})"
+        )
+    return dim
+
+
 class _PendingCollection:
     """Deferred vector collection whose dimension is auto-detected from the first upsert.
 
@@ -570,6 +623,10 @@ class _PendingCollection:
         vector: Iterable[float] | None = None,
         payload: dict[str, Any] | None = None,
     ) -> int:
+        if vector is not None:
+            # Refused before the collection exists, as Collection.upsert
+            # refuses it.
+            _as_id(points_or_id)
         # A one-shot iterator is read once, here: measured and written from
         # the same list.
         if vector is not None and not hasattr(vector, "__len__"):
@@ -589,25 +646,18 @@ class _PendingCollection:
         ids: Any,
         payloads: Any = None,
     ) -> int:
-        shape = getattr(vectors, "shape", None)
-        dim = shape[1] if shape and len(shape) >= 2 else None
-        if dim is None and vectors:
-            dim = len(vectors[0])
-        if not dim:
-            raise ValueError(
-                f"Cannot auto-detect dimension for collection '{self._name}' "
-                "from upsert_bulk_numpy: vectors array is empty or has no shape."
-            )
+        dim = _bulk_numpy_dimension(self._name, vectors, ids, payloads)
         return self._materialize(dim).upsert_bulk_numpy(vectors, ids, payloads)
 
-    def upsert_from_dataframe(self, df: Any, **kwargs: Any) -> int:
-        vector_col = kwargs.get("vector_column", "vector")
-        try:
-            first_vec = df[vector_col].iloc[0]  # pandas
-        except AttributeError:
-            first_vec = df[vector_col][0]  # polars
-        dim = len(first_vec)
-        return self._materialize(dim).upsert_from_dataframe(df, **kwargs)
+    def upsert_from_dataframe(self, df: Any, *, backend: str = "pandas") -> int:
+        vec = _first_vector(df)
+        if vec is None:
+            raise ValueError(
+                f"Cannot auto-detect dimension for collection '{self._name}' "
+                "from upsert_from_dataframe: the DataFrame has no 'vector' "
+                "column, or no non-null vector in it."
+            )
+        return self._materialize(len(vec)).upsert_from_dataframe(df, backend=backend)
 
     def __getattr__(self, name: str) -> Any:
         if self._collection is not None:

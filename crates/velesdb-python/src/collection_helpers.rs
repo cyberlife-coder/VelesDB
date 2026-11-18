@@ -209,8 +209,18 @@ pub fn search_result_to_dict(
             result.point.vector.as_slice(),
         )?;
     }
-    // Per-component score breakdown (vector_score / bm25_score / ...) when the
-    // engine tagged it — hybrid and fused searches carry it, plain dense does not.
+    set_component_scores(py, &dict, result)?;
+    Ok(dict.into_any().unbind())
+}
+
+/// Sets `component_scores` on `dict`: the per-component breakdown
+/// (`vector_score`, `bm25_score`, ...) when the engine tagged the result —
+/// hybrid, fused and text searches carry it. An untagged result gets no key.
+fn set_component_scores(
+    py: Python<'_>,
+    dict: &Bound<'_, PyDict>,
+    result: &SearchResult,
+) -> PyResult<()> {
     if let Some(components) = &result.component_scores {
         let comp = PyDict::new(py);
         for (name, value) in components.iter() {
@@ -218,10 +228,37 @@ pub fn search_result_to_dict(
         }
         dict.set_item(PyString::intern(py, "component_scores"), comp)?;
     }
-    Ok(dict.into_any().unbind())
+    Ok(())
+}
+
+/// The score the engine tagged `result` with for component `name`, `None`
+/// when it recorded none (a BM25-only row has no vector score).
+fn component_score(result: &SearchResult, name: &str) -> Option<f32> {
+    result
+        .component_scores
+        .as_ref()?
+        .iter()
+        .find(|(component, _)| *component == name)
+        .map(|(_, value)| *value)
+}
+
+/// The `vector_score` of a multi-model row: the tagged component, or — on a
+/// result core left untagged — its own score, the value core's `ScoreContext`
+/// resolves `vector_score` to on such a row. Some dense paths still return
+/// untagged rows (a `NEAR` with a metadata filter), so dropping the fallback
+/// would blank their vector score.
+fn vector_score(result: &SearchResult) -> Option<f32> {
+    match result.component_scores {
+        Some(_) => component_score(result, "vector_score"),
+        None => Some(result.score),
+    }
 }
 
 /// Convert a `SearchResult` to a multi-model Python dict (EPIC-031).
+///
+/// `vector_score` follows [`vector_score`]; `graph_score` is the tagged
+/// component of that name, `None` when absent (core tags none today);
+/// `fused_score` is the row's final score.
 pub fn search_result_to_multimodel_dict(
     py: Python<'_>,
     result: &SearchResult,
@@ -232,8 +269,11 @@ pub fn search_result_to_multimodel_dict(
 
     // Multi-model fields
     dict.set_item(PyString::intern(py, "node_id"), result.point.id)?;
-    dict.set_item(PyString::intern(py, "vector_score"), result.score)?;
-    dict.set_item(PyString::intern(py, "graph_score"), &none)?;
+    dict.set_item(PyString::intern(py, "vector_score"), vector_score(result))?;
+    dict.set_item(
+        PyString::intern(py, "graph_score"),
+        component_score(result, "graph_score"),
+    )?;
     dict.set_item(PyString::intern(py, "fused_score"), result.score)?;
     dict.set_item(PyString::intern(py, "bindings"), payload_py.clone_ref(py))?;
     dict.set_item(PyString::intern(py, "column_data"), &none)?;
@@ -242,6 +282,7 @@ pub fn search_result_to_multimodel_dict(
     dict.set_item(PyString::intern(py, "id"), result.point.id)?;
     dict.set_item(PyString::intern(py, "score"), result.score)?;
     dict.set_item(PyString::intern(py, "payload"), payload_py)?;
+    set_component_scores(py, &dict, result)?;
 
     Ok(dict.into_any().unbind())
 }
@@ -470,18 +511,22 @@ pub fn parse_point_dicts(
 }
 
 /// Parse an optional payload `Py<PyAny>` into a JSON value.
+///
+/// A `"payload": None` entry reads as no payload, like an absent key — the
+/// shape `get()` returns for a point stored without one, so its output can be
+/// upserted back.
 pub fn parse_payload(
     py: Python<'_>,
     payload_obj: Option<&Py<PyAny>>,
 ) -> PyResult<Option<serde_json::Value>> {
     match payload_obj {
-        Some(p) => {
+        Some(p) if !p.is_none(py) => {
             let dict: HashMap<String, Py<PyAny>> = p
                 .extract(py)
                 .map_err(|_| PyValueError::new_err("payload must be a dict[str, Any]"))?;
             Ok(Some(dict_to_json_map(py, &dict)?))
         }
-        None => Ok(None),
+        _ => Ok(None),
     }
 }
 

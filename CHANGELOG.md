@@ -518,6 +518,263 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
+  SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
+  the binding's VelesQL executor and returned `VectorStore.query`'s own
+  records (`{nodeId, vectorScore, graphScore, fusedScore, bindings,
+  columnData}`), while the same statement with `AND title = 'a'` returned
+  `{id, title}`, the row core's `SELECT *` projection writes and REST
+  returns. The executor now answers the pure `NEAR` shape too; on a binding
+  without one, the backend projects each record to the point `id` and its
+  payload fields.
+
+- **TypeScript SDK: a typed WASM dense + sparse search fuses as deep a
+  branch as core** (TypeScript SDK, WASM, 2026-11-18). `search(…, { k,
+  sparseVector })` fused the `k` best points of each branch, where core's
+  hybrid search and the binding's own `NEAR … AND SPARSE_NEAR` read
+  `dense_sparse_candidate_k(k)` (twice `k`, and at least `k + 10`), so a
+  point ranked second in both branches could lose to one ranked first in
+  one. velesdb-wasm now exports core's rule as `denseSparseCandidateK`, and
+  the SDK reads each branch that deep; a binding without the export keeps
+  `k` per branch.
+
+- **WASM: `multiQuerySearch` fuses as deep a branch as core** (WASM,
+  2026-11-18). `VectorStore.multi_query_search` read `k * 2` points per
+  query vector, where core's `Collection::multi_query_search` and the
+  binding's own `NEAR_FUSED` read `fusion::branch_depth(k)`, so with
+  `average` fusion a point near one query vector could outrank one close to
+  every query vector, which core ranks first. It now reads
+  `branch_depth(k)`; that depth saturates, so the largest `k` answers
+  instead of being refused as an overflow, and the fan-out memory guardrail
+  is unchanged.
+
+- **TypeScript SDK: an invalid WASM collection name is
+  `InvalidCollectionNameError`, and leaks no store** (TypeScript SDK,
+  2026-11-18). `createCollection('bad.name', …)` built the binding's
+  `VectorStore`, then let the executor's raw `Error` (VELES-034) escape, and
+  the store was never freed. The name is now checked with
+  `validateCollectionName` first, refused as REST refuses it; a store the
+  executor still refuses to attach is freed, and the refusal is the typed
+  error of its VELES code (`BAD_REQUEST` without one).
+
+- **TypeScript SDK: a WASM edge without an id is `BAD_REQUEST`**
+  (TypeScript SDK, 2026-11-18). `addEdge(…, { source: 1, target: 2,
+  label: 'L' })` threw a `TypeError` from inside `exactGraphId`. An edge id,
+  source or target that is neither a string nor a number is now refused with
+  `BAD_REQUEST` naming its type, as REST requires the id.
+
+- **WASM: a VelesQL row keeps a point id past 2^53 exact** (WASM,
+  TypeScript SDK, 2026-11-18). The executor wrote every row id as a JSON
+  number (`SELECT *`, a named `id` column, `MATCH` node objects and
+  `alias.id` projections), and the SDK parses the rows with `JSON.parse`,
+  which rounds a number past `Number.MAX_SAFE_INTEGER`: point
+  `9007199254740993` came back as `9007199254740992`, another point. An id
+  past `2^53 - 1` is now its exact decimal string; a smaller one stays a
+  number, as core's `SELECT *` writes it.
+
+- **Node: an argument whose array claims billions of elements is refused
+  instead of killing the process** (Node, 2026-11-18). The JSON reader
+  pre-allocated one slot per claimed element, so `const a = []; a.length =
+  2 ** 32 - 1` passed as metadata, a filter, a compile request, a working
+  context or a `recallWhere` value aborted Node on a failed allocation
+  (SIGABRT, uncatchable). The walk now counts at most 1,000,000 values per
+  argument, checked before anything is allocated, and rejects past it with
+  `INVALID_INPUT`.
+
+- **Node: metadata and filters keep only their own keys** (Node,
+  2026-11-18). The reader listed property names through the prototype
+  chain, so an enumerable key added to `Object.prototype` was stored in
+  every fact and added to every filter (which then matched nothing). Only
+  own enumerable string keys are read now, as `JSON.stringify` reads them.
+
+- **Node: an integer past `2^53` round-trips as a `BigInt`** (Node,
+  2026-11-18). The binding hands such an integer back as a `BigInt`, but
+  refused a `BigInt` on the way in and advised a decimal string, which never
+  equals the stored integer. A `BigInt` in `i64::MIN..=u64::MAX` is now read
+  losslessly as that integer, in metadata, filters and `recallWhere`
+  values; one outside the range is refused with `INVALID_INPUT`.
+
+- **Node: a key holding a NUL character is read like any other**
+  (Node, 2026-11-18). Each value was re-read by its key's text through a C
+  string, so `{ 'a\u0000b': 1 }` rejected with a generic error and no code.
+  Values are now read by the key itself.
+
+- **Node: `recallWhere` filters go through the same JSON reader** (Node,
+  2026-11-18). napi converted them field by field: a missing or `undefined`
+  `value` threw synchronously with no code, and a `Date` or `Map` value
+  became `{}`. Filters are now read as JSON data and checked as
+  `{field, op, value}`, rejecting with `INVALID_INPUT` naming the filter.
+
+- **Graph schema: `{"schemaless": true}` and types without `properties` are
+  accepted** (core, 2026-11-18). `GraphSchema` demanded `node_types` and
+  `edge_types`, and `NodeType`/`EdgeType` demanded `properties`, so the
+  documented short form `{"schemaless": true}` failed with "missing field
+  `node_types`" (REST `graph_schema` and Tauri `graphSchema` alike) → an
+  absent list or `properties` map now means "none declared", the same as `[]`
+  / `{}`; `schemaless` stays required.
+
+- **Tauri plugin: `graphSchema: { schemaless: true }` creates a schemaless
+  graph** (Tauri plugin, 2026-11-18). `create_graph_collection` refused the
+  form its own TypeScript docs show with VELES-009 "missing field
+  `node_types`", and a strict schema whose types omitted `properties` with
+  "missing field `properties`" → both are accepted, through the core fix
+  above.
+
+- **Tauri plugin: `query` takes a `collection` for a top-level `MATCH`**
+  (Tauri plugin, 2026-11-18). A `MATCH` pattern names no collection and the
+  request had no field to supply one (an extra field was dropped), so the
+  documented `MATCH` example failed with VELES-010 unless the caller knew to
+  pass `params._collection` → `QueryRequest.collection` (Rust and TypeScript)
+  is passed to the engine as `params._collection` when that key is not already
+  set, the rule of the REST server's `/query`; an explicit `_collection` keeps
+  precedence and a `FROM` still decides for a `SELECT`. The guest-js example,
+  README "Known limits" and the recipes guide are corrected.
+
+- **Tauri plugin: TypeScript result types match the wire** (Tauri plugin,
+  2026-11-18). `HybridResult.columnData` was typed `Record<string, unknown>`
+  while a `GROUP BY` aggregate sends an array, and `vectorScore`,
+  `graphScore`, `bindings`, `columnData` and
+  `SearchResult`/`PointOutput.payload` were typed optional (`?:`) while the
+  plugin always sends them, as `null` when absent → `columnData` is
+  `Record<string, unknown> | Array<Record<string, unknown>> | null` and the
+  others `T | null`; the serialization is unchanged and pinned by a test for
+  grouped, ungrouped and search rows.
+
+- **Tauri plugin: graph commands on a vector or metadata collection answer
+  VELES-018** (Tauri plugin, 2026-11-18). `add_edge`, `get_edges`,
+  `traverse_graph` and the other graph commands answered VELES-002 "Collection
+  not found" for a collection that existed with another kind → they answer
+  core's `GraphNotSupported` (VELES-018), as core's own graph statements do; a
+  name no collection has is still VELES-002.
+
+- **Tauri plugin: `train_pq` requires `m`** (Tauri plugin, 2026-11-18). `m`
+  was optional in Rust and TypeScript, but core's TRAIN reads an absent `m` as
+  `0` and refuses it, so every call without it failed with VELES-028 "m must
+  be > 0" → `m` is required (`m: usize`, `m: number`), as in the REST server's
+  `TRAIN QUANTIZER ... WITH (m = ...)`; a request without it is refused when
+  it is deserialized. **Breaking** for Rust callers that built `TrainPqRequest
+  { m: Some(..) }`.
+
+- **Tauri plugin: sparse vectors past 65,536 entries are refused** (Tauri
+  plugin, 2026-11-18). `sparse_search`, `hybrid_sparse_search` and
+  `sparse_upsert` parsed sparse vectors with their own copy of the conversion,
+  which skipped core's `MAX_SPARSE_NNZ` cap (65,537 keys were accepted and
+  stored) and its finite-weight check → `helpers::parse_sparse_vector`
+  delegates to core's `SparseVectorInput::into_sparse_vector`, the conversion
+  REST uses, and such a vector is refused with VELES-009.
+
+- **Tauri plugin: README command counts and the `quality` + `filter` note
+  corrected** (Tauri plugin, 2026-11-18). The README said "up to 69 typed
+  commands", "67 under default" and advised `features = ["persistence"]` for
+  the full surface, while `lib.rs` registers 70 (68 common + 2
+  persistence-only) and `default` already includes `persistence` → it states
+  70, and 68 without `persistence`, and a drift test pins both numbers to the
+  registration; the reference guide no longer claims `quality` is ignored when
+  a `filter` is supplied (core's `search_dense` runs a filtered search at the
+  requested quality).
+
+- **Python: the facade no longer truncates float or str ids** (Python,
+  2026-11-18). `Collection.upsert(1.9, v)` stored id 1, `upsert("7", v)`
+  stored id 7 and `1.5 in collection` answered `True`, because the facade
+  coerced ids with `int()` (`Collection`,
+  `GraphCollection.add_node`/`has_edge`/`in`, `GraphStore.has_edge`, the
+  legacy `add_edge` shapes) → every facade id goes through `operator.index`,
+  the conversion the compiled binding applies: a float or str raises
+  `TypeError` and nothing is stored (a pending collection is not created
+  either); `int`, `bool` and numpy integers are accepted as before.
+
+- **Python: `bytes`, `bytearray` and `range` are no longer stored as lists of
+  ints** (Python, 2026-11-18). The JSON conversion behind payloads, filters,
+  VelesQL parameters, graph properties and `MemoryService` metadata accepted
+  any non-`str` sequence, so `{"v": b"ab"}` was stored as `[97, 98]` although
+  the docs said bytes are refused → only a `list`, a `tuple` or a numpy array
+  converts to a JSON array; anything else raises the existing `ValueError:
+  Unsupported payload type`.
+
+- **Python: VelesQL `query` rows report the component scores core tagged**
+  (Python, 2026-11-18). `vector_score` repeated the final score whatever
+  produced it (a BM25-only row claimed a vector score), `graph_score` was
+  always `None` and `component_scores` was dropped →
+  `vector_score`/`graph_score` come from the row's component scores (`None`
+  when a tagged row has none, so a text-only row has no vector score; an
+  untagged row keeps its score as `vector_score`, as core's `ORDER BY
+  vector_score` reads it), and the row carries `component_scores` like
+  `search()` results.
+
+- **Python: `match_query(vector=...)` without a threshold keeps every scored
+  row** (Python, 2026-11-18). The default `threshold=0.0` meant "distance at
+  most 0" under euclidean/hamming, so every row but an exact duplicate of the
+  query was dropped (and negative cosine/dot scores under similarity metrics),
+  and a NaN threshold silently dropped everything → `threshold` defaults to
+  `None` (no bound, in either metric direction) on `Collection.match_query`
+  and `GraphCollection.match_query`; a NaN or infinite threshold raises
+  `ValueError`.
+
+- **Python: `len()` works on a `GraphCollection`** (Python, 2026-11-18). The
+  facade did not forward `__len__`, so `len(graph)` raised `TypeError`
+  although the stub declared it → it returns `graph.count()`.
+
+- **Python: a pending collection's `upsert_from_dataframe` raises the
+  documented `ValueError`** (Python, 2026-11-18). With `dimension=None`, a
+  frame with no `vector` column raised `KeyError`, a `None` first vector
+  `TypeError`, an empty frame `IndexError`, and a `vector_column=` keyword the
+  binding rejects was read → the dimension comes from the first non-null
+  vector, a frame with none raises `ValueError` without creating the
+  collection, and the method takes the binding's own signature (`df, *,
+  backend`).
+
+- **Python: `upsert_bulk_numpy` converts float64 as documented** (Python,
+  2026-11-18). The docs said float64 "forces a conversion" but it raised
+  `TypeError`, and on a `dimension=None` collection the collection was created
+  before that failure → a 2-D float64 array is narrowed to float32 (a value
+  past float32's range becomes infinite and is refused like NaN); other inputs
+  still raise `TypeError`, and a pending collection checks dtype, shape and
+  lengths before it creates anything.
+
+- **Python: `GraphCollection.search_by_embedding` documents the error it
+  raises** (Python, 2026-11-18). The docs said `RuntimeError` for a collection
+  without embeddings; it raises `ValueError` (`VELES-014`) → docstring and
+  stub say `ValueError`.
+
+- **Python: `VelesQLParameterError` is documented as reserved** (Python,
+  2026-11-18). It was documented as raised for invalid parameters but no call
+  raises it: an unbound or mistyped `$name` raises `ValueError` (`VELES-010`),
+  which core reports as a generic query error → stub, binding comment and
+  README say so; the class stays exported.
+
+- **Python: graph `count()`/`len()`/`is_empty()`/`get()` documented as what
+  they read** (Python, 2026-11-18). They were documented as covering "nodes
+  with payload" but read core's vector storage, so a payload-only node is not
+  counted and `get()` returns `None` for it (in a graph without embeddings,
+  every node) → docstrings and stub describe nodes stored with an embedding
+  vector and point to `all_node_ids()`/`get_node_payload()`.
+
+- **Python: `MemoryService(embedder=...)` stub shows the real default**
+  (Python, 2026-11-18). The stub declared `embedder="hash"` while the runtime
+  default is `None`, which defers to `VELESDB_MEMORY_EMBEDDER` → the stub
+  declares `Optional[str] = None` and documents the environment fallback and
+  `"openai"`.
+
+- **Python: `GraphCollection.query` and `add_edge` docs match the code**
+  (Python, 2026-11-18). `query` claimed `params["_collection"]` selects the
+  collection, but the statement is always retargeted to the graph itself; the
+  `add_edge`/`add_edges_batch`/class examples added edges between nodes never
+  created, which raises `KeyError` → `query` documents that `_collection` does
+  not retarget it, and the examples store the endpoint nodes first (with
+  `KeyError`/`EdgeExistsError` documented).
+
+- **Python: `SearchOptions` refuses an out-of-range `ef_search` with
+  `ValueError`** (Python, 2026-11-18). `SearchOptions(ef_search=-1)` raised
+  `OverflowError` where `search_with_ef(ef_search=-1)` raises `ValueError` →
+  the constructor, `with_ef_search` and attribute assignment read `ef_search`
+  through the same validator as `search_with_ef`: an int outside [16, 4096]
+  raises its `ValueError`, a non-int `TypeError`.
+
+- **Python: `get()` output can be upserted back** (Python, 2026-11-18). A
+  point stored without a payload comes back with `"payload": None`, and
+  feeding that dict to `upsert`/`upsert_bulk` raised `payload must be a dict`
+  → `"payload": None` reads as no payload, like an absent key.
+
 - **Python: the type stub documents `hybrid_search`'s `ValueError`**
   (Python, 2026-11-18). The binding refuses a NaN or infinite
   `vector_weight` with `ValueError` since #2847, and its Rust docstring

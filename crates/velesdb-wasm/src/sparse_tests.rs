@@ -203,3 +203,16 @@ fn test_sparse_index_refuses_a_non_finite_weight() {
         .expect_err("a NaN query weight is refused");
     assert!(err.contains("VELES-005"), "{err}");
 }
+
+#[test]
+fn the_hybrid_branch_depth_is_cores() {
+    // A JS client fusing with `hybrid_search_fuse` reads its per-branch depth
+    // here: one rule, core's, as VelesQL's hybrid search reads it.
+    for limit in [0, 1, 5, 10, 11, 100, usize::MAX] {
+        assert_eq!(
+            dense_sparse_candidate_k(limit),
+            velesdb_core::fusion::dense_sparse_candidate_k(limit),
+            "limit {limit}"
+        );
+    }
+}

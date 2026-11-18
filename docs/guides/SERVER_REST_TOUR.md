@@ -81,7 +81,9 @@ curl -X POST http://localhost:8080/v1/collections \
 
 For a strict schema, pass the full `graph_schema` object. `schemaless` is
 required; `node_types` / `edge_types` are typed objects (not bare strings), and
-each `properties` map declares the allowed property types (`{}` for none):
+each `properties` map declares the allowed property types (omit it, or pass
+`{}`, for none), and `{"schemaless": true}` alone is a complete schemaless
+schema. A strict one:
 
 ```bash
 curl -X POST http://localhost:8080/v1/collections \

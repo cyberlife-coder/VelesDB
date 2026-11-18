@@ -203,5 +203,8 @@ fn execute_match_bindings_carry_the_node_id_as_a_string() {
     )
     .expect("test: MATCH");
     assert_eq!(rows[0]["bindings"], json!({"a": "1", "b": BIG_TEXT}));
-    assert_eq!(rows[0]["projected"]["b.id"], json!(BIG));
+    // The projected id past 2^53 is its decimal string too: the SDK reads
+    // these rows with `JSON.parse`, which would round a JSON number there to
+    // another node's id (`js_value::row_id_json`).
+    assert_eq!(rows[0]["projected"]["b.id"], json!(BIG_TEXT));
 }

@@ -46,7 +46,8 @@ console.log(results.results[0].id, results.results[0].payload.title);
 ```
 
 `search` resolves to `{ results: SearchResult[], timingMs: number }`, where each
-result is `{ id, score, payload? }`.
+result is `{ id, score, payload }` and `payload` is `null` for a point stored
+without one.
 
 ---
 
@@ -111,9 +112,12 @@ const mqResults = await invoke('plugin:velesdb|multi_query_search', {
 
 ### VelesQL
 
-The `query` request carries **only** `query` and `params`. There is no
-`collection` field: the target collection comes from the `FROM` clause (or the
-`MATCH` pattern) inside the query itself.
+The `query` request carries `query`, `params` and an optional `collection`. A
+`SELECT` reads the collection in its `FROM` clause. A top-level `MATCH` names
+none, so it needs `collection` — passed to the engine as `params._collection`
+unless you set that key yourself, which then takes precedence (the REST
+server's `/query` rule). Without either, the `MATCH` is refused with
+`VELES-010`.
 
 ```javascript
 const queryResults = await invoke('plugin:velesdb|query', {
@@ -125,6 +129,12 @@ const queryResults = await invoke('plugin:velesdb|query', {
 // { results: [{ nodeId, vectorScore, graphScore, fusedScore, bindings, columnData }], timingMs }
 ```
 
+Absent fields arrive as `null`, never omitted: a `SELECT` row has
+`graphScore: null` and `columnData: null`. An aggregate `SELECT ... FROM`
+(scalar aggregates, or a `GROUP BY` without `NEAR`) returns one row whose
+`columnData` holds the result — an object (`{ "count": 3 }`) without
+`GROUP BY`, an array of one object per group with it.
+
 Cross-collection `MATCH` — nodes annotated with `@collection` in the pattern
 have their payloads looked up from the named collection after traversal:
 
@@ -132,7 +142,8 @@ have their payloads looked up from the named collection after traversal:
 const crossColl = await invoke('plugin:velesdb|query', {
   request: {
     query: "MATCH (p:Product)-[:STORED_IN]->(inv:Inventory@inventory) RETURN p.name, inv.price, inv.stock LIMIT 20",
-    params: {}
+    params: {},
+    collection: 'products'  // the graph the pattern walks
   }
 });
 ```
@@ -146,7 +157,8 @@ More patterns: [Graph patterns](./GRAPH_PATTERNS.md) and
 
 Graph commands operate on a **graph collection**, not on a vector collection:
 `add_edge` and friends resolve the collection through `get_graph_collection`
-and reject anything else with `VELES-002`.
+and reject a vector or metadata collection with `VELES-018` (graph not
+supported); a name no collection has is `VELES-002`.
 
 An edge is refused unless both endpoints already have a stored node payload
 (#1442). No IPC command upserts a graph node payload today, so nodes have to be

@@ -277,24 +277,32 @@ def dataframe_to_points(df: Any) -> list[dict]:
     return [_row_to_point(row) for row in _df_to_records(df)]
 
 
-def _check_vector_dimension(df: Any, dimension: int) -> None:
-    """Validate that the first non-null vector has the expected dimension.
-
-    Note: only the first non-null vector is checked for performance. Later
-    vectors with wrong dimensions surface as errors from the Rust core.
-    """
+def first_vector(df: Any) -> Any:
+    """Return the first non-null entry of the 'vector' column, or None when
+    the DataFrame has no such column or every entry is null (None or NaN)."""
+    if "vector" not in _df_columns(df):
+        return None
     if "polars" in type(df).__module__:
         vectors = df["vector"].to_list()
     else:
         vectors = df["vector"].tolist()
     for vec in vectors:
         if vec is not None and not (isinstance(vec, float) and math.isnan(vec)):
-            if len(vec) != dimension:
-                raise ValueError(
-                    f"Vector dimension mismatch: expected {dimension}, "
-                    f"got {len(vec)}"
-                )
-            return
+            return vec
+    return None
+
+
+def _check_vector_dimension(df: Any, dimension: int) -> None:
+    """Validate that the first non-null vector has the expected dimension.
+
+    Note: only the first non-null vector is checked for performance. Later
+    vectors with wrong dimensions surface as errors from the Rust core.
+    """
+    vec = first_vector(df)
+    if vec is not None and len(vec) != dimension:
+        raise ValueError(
+            f"Vector dimension mismatch: expected {dimension}, got {len(vec)}"
+        )
 
 
 def validate_upsert_dataframe(

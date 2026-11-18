@@ -226,7 +226,9 @@ The typed collection exceptions (`DimensionMismatchError`, `CollectionNotFoundEr
 `velesdb.VelesDBError`. The VelesQL parse exceptions (`VelesQLSyntaxError`,
 `VelesQLParameterError`) do not — they derive from `Exception` directly, so a
 catch-all needs `except (velesdb.VelesDBError, velesdb.VelesQLSyntaxError,
-velesdb.VelesQLParameterError)` or plain `except Exception`.
+velesdb.VelesQLParameterError)` or plain `except Exception`. No call raises
+`VelesQLParameterError` today: an unbound or mistyped `$name` parameter raises
+`ValueError` (`[VELES-010]`).
 
 ---
 

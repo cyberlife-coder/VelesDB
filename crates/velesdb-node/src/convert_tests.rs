@@ -2,37 +2,62 @@
 //! through `ok()`.
 use serde_json::json;
 
-use super::{integral_numbers, json_number, resolve_transcript_input};
+use super::{json_number, resolve_transcript_input, to_filters};
 
-/// What napi hands over for a JS whole number past `u32::MAX`: a float.
-fn napi_float(n: f64) -> serde_json::Value {
-    serde_json::Number::from_f64(n).map_or(serde_json::Value::Null, serde_json::Value::Number)
+/// The `[INVALID_INPUT]` message `to_filters` refuses `filters` with.
+fn refusal(filters: serde_json::Value) -> String {
+    to_filters(filters)
+        .err()
+        .map(|e| e.reason)
+        .unwrap_or_default()
 }
 
 #[test]
-fn a_whole_number_past_u32_is_an_integer_again() {
-    let input = json!({ "ts": napi_float(5_000_000_000.0), "neg": napi_float(-5_000_000_000.0) });
-    assert_eq!(
-        integral_numbers(input),
-        json!({ "ts": 5_000_000_000_i64, "neg": -5_000_000_000_i64 })
-    );
+fn a_well_formed_filter_list_becomes_engine_filters() {
+    let filters = to_filters(json!([{ "field": "ts", "op": "ge", "value": 5_000_000_000_i64 }]))
+        .ok()
+        .unwrap_or_default();
+    let fields: Vec<_> = filters
+        .iter()
+        .map(|f| (f.field.as_str(), f.value.clone()))
+        .collect();
+    assert_eq!(fields, [("ts", json!(5_000_000_000_i64))]);
 }
 
 #[test]
-fn nested_arrays_and_objects_are_restored_too() {
-    let input = json!({ "ids": [napi_float(9_007_199_254_740_991.0)], "o": { "n": napi_float(4_294_967_296.0) } });
-    assert_eq!(
-        integral_numbers(input),
-        json!({ "ids": [9_007_199_254_740_991_i64], "o": { "n": 4_294_967_296_i64 } })
-    );
-}
-
-#[test]
-fn fractions_and_numbers_past_2_pow_53_stay_floats() {
-    let fraction = napi_float(1.5);
-    let unsafe_whole = napi_float(9_007_199_254_740_992.0);
-    assert_eq!(integral_numbers(fraction.clone()), fraction);
-    assert_eq!(integral_numbers(unsafe_whole.clone()), unsafe_whole);
+fn a_malformed_filter_is_refused_naming_where_it_sits() {
+    let cases = [
+        (json!("eq"), "filters must be an array"),
+        (json!([1]), "filters[0] must be an object"),
+        (
+            json!([{ "op": "eq", "value": 1 }]),
+            "filters[0].field must be a string",
+        ),
+        (
+            json!([{ "field": 1, "op": "eq", "value": 1 }]),
+            "filters[0].field must be a string",
+        ),
+        (
+            json!([{ "field": "x", "value": 1 }]),
+            "filters[0].op must be a string",
+        ),
+        (
+            json!([{ "field": "x", "op": "eq" }]),
+            "filters[0].value is missing",
+        ),
+        (
+            json!([{ "field": "x", "op": "near", "value": 1 }]),
+            "invalid op 'near'",
+        ),
+    ];
+    for (filters, expected) in cases {
+        let message = refusal(filters.clone());
+        assert!(
+            message.starts_with("[INVALID_INPUT] "),
+            "{filters} → {message}"
+        );
+        assert!(message.contains(expected), "{filters} → {message}");
+    }
 }
 
 #[test]

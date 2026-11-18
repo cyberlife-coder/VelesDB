@@ -60,6 +60,8 @@ impl PyGraphSchema {
 /// Example:
 ///     >>> db = velesdb.Database("./data")
 ///     >>> graph = db.create_graph_collection("knowledge")
+///     >>> graph.upsert_node_payload(10, {"name": "Alice"})
+///     >>> graph.upsert_node_payload(20, {"name": "Bob"})
 ///     >>> graph.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})
 ///     >>> edges = graph.get_edges()
 #[pyclass(name = "GraphCollection")]
@@ -136,11 +138,22 @@ impl PyGraphCollection {
 
     /// Add an edge between two nodes.
     ///
+    /// Both endpoints must already be stored as nodes (``upsert_node`` or
+    /// ``upsert_node_payload``).
+    ///
     /// Args:
     ///     edge: Dict with keys: id (int), source (int), target (int),
     ///           label (str), properties (dict, optional)
     ///
+    /// Raises:
+    ///     KeyError: If the source or target node is not stored.
+    ///     EdgeExistsError: If an edge with that id already exists.
+    ///
     /// Example:
+    ///     >>> graph.upsert_node_payloads([
+    ///     ...     {"id": 10, "payload": {"name": "Alice"}},
+    ///     ...     {"id": 20, "payload": {"name": "Bob"}},
+    ///     ... ])
     ///     >>> graph.add_edge({
     ///     ...     "id": 1, "source": 10, "target": 20,
     ///     ...     "label": "KNOWS", "properties": {"since": 2020}
@@ -157,12 +170,17 @@ impl PyGraphCollection {
     /// eliminating per-edge rebuild overhead.
     ///
     /// Args:
-    ///     edges: List of edge dicts (same format as add_edge)
+    ///     edges: List of edge dicts (same format as add_edge); every
+    ///         endpoint must already be stored as a node
     ///
     /// Returns:
     ///     Number of edges successfully added
     ///
     /// Example:
+    ///     >>> graph.upsert_node_payloads([
+    ///     ...     {"id": n, "payload": {"name": name}}
+    ///     ...     for n, name in [(10, "Alice"), (20, "Bob"), (30, "Carol")]
+    ///     ... ])
     ///     >>> graph.add_edges_batch([
     ///     ...     {"id": 1, "source": 10, "target": 20, "label": "KNOWS"},
     ///     ...     {"id": 2, "source": 20, "target": 30, "label": "FOLLOWS"},
@@ -649,7 +667,8 @@ impl PyGraphCollection {
     ///     List of result dicts with keys: id, score, payload
     ///
     /// Raises:
-    ///     RuntimeError: If the collection has no embeddings
+    ///     ValueError: If the collection has no embeddings (``VELES-014``)
+    ///         or the query's dimension is not the collection's.
     ///     PermissionError: If the read gate denies the read.
     ///
     /// The `principal` argument is caller-supplied and only meaningful when a
@@ -727,7 +746,11 @@ impl PyGraphCollection {
         py.detach(|| self.inner.flush_full().map_err(core_err))
     }
 
-    /// Returns the number of points (nodes with payload) in the graph.
+    /// Returns the number of nodes stored with an embedding vector (through
+    /// ``upsert_node(..., vector=...)``): core's ``GraphCollection::len``, the
+    /// count of points in vector storage. A payload-only node is not counted —
+    /// in a graph without embeddings that is every node, so this is 0 there;
+    /// ``all_node_ids()`` lists payload nodes.
     ///
     /// Returns:
     ///     int: Point count
@@ -740,8 +763,9 @@ impl PyGraphCollection {
         Ok(self.inner.len())
     }
 
-    /// Returns the number of points (nodes with payload) in the graph,
-    /// through the same read gate as ``__len__``.
+    /// Returns the number of nodes stored with an embedding vector, through the
+    /// same read gate as ``__len__`` (see there: payload-only nodes are not
+    /// counted).
     ///
     /// Returns:
     ///     int: Point count
@@ -754,7 +778,8 @@ impl PyGraphCollection {
         Ok(self.inner.len())
     }
 
-    /// Check if the graph collection has no stored points.
+    /// Check if the graph collection has no node stored with an embedding
+    /// vector (``count() == 0``): a graph holding only payload nodes is empty.
     ///
     /// Returns:
     ///     bool: True if empty
@@ -767,13 +792,16 @@ impl PyGraphCollection {
         Ok(self.inner.is_empty())
     }
 
-    /// Get points by their IDs.
+    /// Get the nodes stored with an embedding vector, by id.
+    ///
+    /// A payload-only node reads as ``None``, as a missing one does; read its
+    /// properties with ``get_node_payload``.
     ///
     /// Args:
     ///     ids: List of point IDs to retrieve
     ///
     /// Returns:
-    ///     List of point dicts (or None for missing IDs)
+    ///     List of point dicts (or None for missing and payload-only IDs)
     #[pyo3(signature = (ids))]
     fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<Py<PyAny>>>> {
         self.authorize("get")?;

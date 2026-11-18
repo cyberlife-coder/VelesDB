@@ -69,11 +69,28 @@ VELESQL_CONTRACT_VERSION: str
 
 
 class SearchResultDict(TypedDict, total=False):
-    """Shape of a search result returned by VelesQL ``query`` and graph search."""
+    """Shape of a search result returned by VelesQL ``query`` and graph search.
+
+    ``component_scores`` is the per-component breakdown (``vector_score``,
+    ``bm25_score``, ...) core tagged the result with, absent when it tagged
+    none. A VelesQL ``query`` row adds the multi-model fields: ``node_id``
+    (the id), ``vector_score`` (the tagged component; ``None`` when a tagged
+    row has none, as a BM25-only row; the row's score when it carries no
+    breakdown), ``graph_score`` (the tagged component, ``None`` otherwise —
+    no search tags one today), ``fused_score`` (the final score),
+    ``bindings`` (the payload) and ``column_data`` (``None``).
+    """
 
     id: int
     score: float
     payload: Optional[Dict[str, Any]]
+    component_scores: Dict[str, float]
+    node_id: int
+    vector_score: Optional[float]
+    graph_score: Optional[float]
+    fused_score: float
+    bindings: Optional[Dict[str, Any]]
+    column_data: None
 
 
 class GraphEdgeDict(TypedDict, total=False):
@@ -306,7 +323,10 @@ class SearchOptions:
         ef_search: Optional HNSW ef override in [16, 4096] for a dense-only
             search; wins over ``quality``. ``search_request`` refuses it with
             ``ValueError`` when ``sparse_vector`` is set: core's sparse and
-            hybrid searches take no ef.
+            hybrid searches take no ef. An int outside the range raises
+            ``ValueError`` (a non-int ``TypeError``) as soon as it is given —
+            here, to ``with_ef_search`` or by assignment — as
+            ``search_with_ef`` raises it.
         quality: Optional search-quality profile for a dense-only search
             (``"fast"``, ``"balanced"``, ``"accurate"``, ``"perfect"``,
             ``"autotune"``, ``"custom:<ef>"``, ``"adaptive:<min>:<max>"``);
@@ -496,8 +516,9 @@ class Collection:
         core engine without per-row Vec<f32> allocation. For 100K vectors
         at 768D this saves ~293 MB of intermediate copies.
 
-        The numpy array must be C-contiguous (row-major). If not,
-        a ValueError is raised.
+        A float32 array must be C-contiguous (row-major); if not, a
+        ValueError is raised. A float64 array is converted to float32
+        element by element, in any layout.
 
         Performance ranking, slowest first, by the copies each makes (no
         recorded run measures their rates)::
@@ -507,9 +528,11 @@ class Collection:
             upsert_bulk_numpy            <-- this method
 
         Best practices:
-            * Always pass float32 numpy arrays (float64 forces a conversion).
-            * Use C-contiguous arrays (the default; ``np.ascontiguousarray()``
-              to fix non-contiguous slices).
+            * Pass float32 numpy arrays: float64 is accepted but converted
+              first (a value past float32's range becomes infinite and is
+              refused like NaN).
+            * Use C-contiguous float32 arrays (the default;
+              ``np.ascontiguousarray()`` to fix non-contiguous slices).
             * Chunk batches into 5 000-row sub-batches when ``n > 50 000`` to
               keep peak RSS bounded by ``~5 000 * dim * 4 bytes``.
             * For payload-heavy data, prefer :py:meth:`upsert_bulk_numpy_json`
@@ -520,12 +543,18 @@ class Collection:
         profile.
 
         Args:
-            vectors: numpy.ndarray of shape (n, dimension), dtype float32, C-contiguous
+            vectors: numpy.ndarray of shape (n, dimension), dtype float32
+                (C-contiguous) or float64
             ids: list of int or numpy uint64 array (length n)
             payloads: Optional list of payload dicts (length n)
 
         Returns:
             Number of inserted points
+
+        Raises:
+            TypeError: If ``vectors`` is not a 2-D float32 or float64 array.
+            ValueError: If the lengths disagree, a float32 array is not
+                C-contiguous, or a value is NaN or infinite.
         """
         ...
 
@@ -1073,12 +1102,24 @@ class Collection:
         query_str: str,
         params: Optional[Dict[str, Any]] = None,
         vector: Optional[Union[List[float], "np.ndarray"]] = None,
-        threshold: float = 0.0,
+        threshold: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """Execute a MATCH graph query.
 
         ``RETURN ... ORDER BY`` and a post-sort ``LIMIT`` are honored,
         ranking results identically to the SQL ``execute_query`` path.
+
+        Args:
+            query_str: VelesQL MATCH query (Cypher-like syntax)
+            params: Query parameters
+            vector: Optional query vector each row's node is scored against
+            threshold: Optional score bound for ``vector``: a row scoring
+                below it under a similarity metric (cosine, dot, jaccard), or
+                above it under a distance metric (euclidean, hamming), is
+                dropped. Omitted (the default), every scored row is kept.
+
+        Raises:
+            ValueError: If ``threshold`` is NaN or infinite.
         """
         ...
 
@@ -1743,7 +1784,12 @@ class VelesQLSyntaxError(Exception):
 
 
 class VelesQLParameterError(Exception):
-    """Raised when VelesQL query parameters are invalid."""
+    """Reserved: no call raises it in this release.
+
+    An unbound ``$name`` parameter, or one bound to a value its operand
+    cannot take, raises ``ValueError`` (``[VELES-010]``): core reports it as
+    a generic query error the binding cannot tell apart from the others.
+    """
     ...
 
 
@@ -2082,7 +2128,8 @@ class _GraphCollectionMembers:
         """Add multiple edges in batch (faster than add_edge in a loop).
 
         Args:
-            edges: List of edge dicts (same format as add_edge)
+            edges: List of edge dicts (same format as add_edge); every
+                endpoint must already be stored as a node
 
         Returns:
             Number of edges successfully added
@@ -2244,7 +2291,8 @@ class _GraphCollectionMembers:
         ``principal`` / ``tenant`` are forwarded to the read gate.
 
         Raises:
-            RuntimeError: If the collection has no embeddings.
+            ValueError: If the collection has no embeddings (``VELES-014``)
+                or the query's dimension is not the collection's.
             PermissionError: If the read gate denies the read.
         """
         ...
@@ -2255,6 +2303,12 @@ class _GraphCollectionMembers:
         params: Optional[Dict[str, Any]] = None,
     ) -> List[SearchResultDict]:
         """Execute a VelesQL query (SELECT or MATCH).
+
+        The statement always runs on this collection: its ``FROM`` is
+        rewritten to this collection's name, and a ``_collection`` key in
+        ``params`` (which picks a bare MATCH's target in
+        ``Database.execute_query``) does not retarget it. A MATCH node
+        annotated ``@collection`` reads its properties from that collection.
 
         Args:
             query_str: VelesQL query string
@@ -2275,7 +2329,7 @@ class _GraphCollectionMembers:
         query_str: str,
         params: Optional[Dict[str, Any]] = None,
         vector: Optional[List[float]] = None,
-        threshold: float = 0.0,
+        threshold: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """Execute a MATCH graph traversal query.
 
@@ -2286,10 +2340,16 @@ class _GraphCollectionMembers:
             query_str: VelesQL MATCH query (Cypher-like syntax)
             params: Query parameters
             vector: Optional query vector for similarity scoring
-            threshold: Similarity threshold (default: 0.0)
+            threshold: Optional score bound for ``vector``: a row scoring
+                below it under a similarity metric (cosine, dot, jaccard), or
+                above it under a distance metric (euclidean, hamming), is
+                dropped. Omitted (the default), every scored row is kept.
 
         Returns:
             List of dicts with keys: node_id, depth, path, bindings, score, projected
+
+        Raises:
+            ValueError: If ``threshold`` is NaN or infinite.
         """
         ...
 
@@ -2368,25 +2428,36 @@ class _GraphCollectionMembers:
         ...
 
     def __len__(self) -> int:
-        """Return the number of points (nodes with payload) in the graph."""
+        """Return the number of nodes stored with an embedding vector.
+
+        That is core's ``GraphCollection::len``, the points in vector storage:
+        a node written by ``upsert_node(..., vector=...)``. A payload-only node
+        (``upsert_node_payload``, or any node of a graph without embeddings) is
+        not counted — ``all_node_ids()`` lists those.
+        """
         ...
 
     def count(self) -> int:
-        """Return the number of points (nodes with payload) in the graph."""
+        """Return the number of nodes stored with an embedding vector
+        (``len()``; payload-only nodes are not counted)."""
         ...
 
     def is_empty(self) -> bool:
-        """Check if the graph collection has no stored points."""
+        """Return True when no node is stored with an embedding vector
+        (``count() == 0``), even if payload-only nodes exist."""
         ...
 
     def get(self, ids: List[int]) -> List[Optional[Dict[str, Any]]]:
-        """Get points by their IDs.
+        """Get the nodes stored with an embedding vector, by id.
+
+        A payload-only node reads as ``None``, as a missing one does; read
+        its properties with ``get_node_payload``.
 
         Args:
             ids: List of point IDs to retrieve
 
         Returns:
-            List of point dicts (or None for missing IDs)
+            List of point dicts (or None for missing and payload-only IDs)
         """
         ...
 
@@ -2474,9 +2545,16 @@ class PyGraphCollection(_GraphCollectionMembers):
     def add_edge(self, edge: Dict[str, Any]) -> None:
         """Add an edge between two nodes.
 
+        Both endpoints must already be stored as nodes (``upsert_node`` or
+        ``upsert_node_payload``).
+
         Args:
             edge: Dict with keys: id (int), source (int), target (int),
                   label (str), properties (dict, optional)
+
+        Raises:
+            KeyError: If the source or target node is not stored.
+            EdgeExistsError: If an edge with that id already exists.
         """
         ...
 
@@ -3021,7 +3099,7 @@ class MemoryService:
     def __init__(
         self,
         path: str,
-        embedder: str = "hash",
+        embedder: Optional[str] = None,
         ollama_url: Optional[str] = None,
         ollama_model: Optional[str] = None,
         search_quality: Optional[str] = None,
@@ -3030,8 +3108,12 @@ class MemoryService:
 
         Args:
             path: Store directory (created if missing; memory never leaves it).
-            embedder: ``"hash"`` (default, offline/deterministic) or
-                ``"ollama"`` (real semantic recall via a local model).
+            embedder: ``"hash"`` (offline/deterministic), ``"ollama"`` (real
+                semantic recall via a local model) or ``"openai"`` (an
+                OpenAI-compatible endpoint configured from the environment).
+                Omitted (``None``), ``VELESDB_MEMORY_EMBEDDER`` decides, and
+                ``"hash"`` applies when it is unset; an explicit value wins
+                over the environment.
             ollama_url: Ollama server URL (used when ``embedder="ollama"``).
             ollama_model: Ollama model name (used when ``embedder="ollama"``).
             search_quality: Recall quality: ``"fast"``, ``"balanced"``,

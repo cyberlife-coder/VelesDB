@@ -318,6 +318,31 @@ fn weighted_weights_from_slice(
     }
 }
 
+/// One ranked branch per query vector of `vectors` (`num_vectors` of
+/// `dimension` components each): its `branch_depth(k)` best points, best
+/// first — the depth core's `Collection::multi_query_search` and the
+/// `NEAR_FUSED` executor (`velesql_fused.rs`) read from
+/// [`velesdb_core::fusion::branch_depth`].
+pub(crate) fn query_branches(
+    vectors: &[f32],
+    num_vectors: usize,
+    ids: &[u64],
+    data: &[f32],
+    dimension: usize,
+    metric: DistanceMetric,
+    k: usize,
+) -> Result<Vec<Vec<(u64, f32)>>, velesdb_core::Error> {
+    // `branch_depth` saturates rather than wraps; the retained
+    // `num_vectors × depth` fan-out is caller-controlled — bounded up front
+    // by the browser guardrails (#2679).
+    let depth = velesdb_core::fusion::branch_depth(k);
+    crate::guardrails::check_fanout_memory(num_vectors, depth.min(ids.len()))?;
+    Ok(vectors
+        .chunks_exact(dimension)
+        .map(|query| top_k(query, ids, data, dimension, metric, depth))
+        .collect())
+}
+
 /// Multi-query search with fusion.
 #[allow(clippy::too_many_arguments)]
 pub fn multi_query_search_impl(
@@ -360,19 +385,8 @@ pub fn multi_query_search_impl(
         (weighted_weights_from_slice(weights)?, None)
     };
 
-    // `k * 2` wraps silently in release / panics in debug, and the retained
-    // `num_vectors × k` fan-out is caller-controlled — both bounded up front
-    // by the browser guardrails (#2679).
-    let fanout_k =
-        crate::guardrails::checked_fanout_k(k).map_err(|e| WasmError::from(e).into_js_value())?;
-    crate::guardrails::check_fanout_memory(num_vectors, fanout_k.min(ids.len()))
+    let all_results = query_branches(vectors, num_vectors, ids, data, dimension, metric, k)
         .map_err(|e| WasmError::from(e).into_js_value())?;
-
-    let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
-
-    for query in vectors.chunks_exact(dimension) {
-        all_results.push(top_k(query, ids, data, dimension, metric, fanout_k));
-    }
 
     let fused = fusion::fuse_results(
         &all_results,
@@ -481,3 +495,9 @@ pub fn batch_search_impl(
 #[cfg(test)]
 #[path = "store_guards_tests.rs"]
 mod guards_tests;
+
+// Host-only: compares against a `velesdb-core` collection, which needs core's
+// `persistence` feature (see `Cargo.toml`).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "store_search_tests.rs"]
+mod tests;

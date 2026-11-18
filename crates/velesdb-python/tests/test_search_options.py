@@ -176,3 +176,32 @@ def test_knobs_on_their_own_path_still_run(sparse_collection):
         vector=DENSE, sparse_vector=SPARSE, k=3, fusion=FusionStrategy.rrf(60)
     )
     assert sparse_collection.search_request(hybrid)
+
+
+@pytest.mark.parametrize("ef", [-1, 15, 4097, 2**64])
+def test_search_options_refuses_an_out_of_range_ef_search_like_search_with_ef(ef):
+    """``SearchOptions(ef_search=-1)`` raised OverflowError where
+    ``search_with_ef(ef_search=-1)`` raises ValueError: one refusal, one
+    message, on every entry point."""
+    expected = f"ef_search must be an integer between 16 and 4096, got {ef}"
+    with pytest.raises(ValueError) as built:
+        SearchOptions(ef_search=ef)
+    assert str(built.value) == expected
+    with pytest.raises(ValueError) as chained:
+        SearchOptions().with_ef_search(ef)
+    assert str(chained.value) == expected
+    opts = SearchOptions()
+    with pytest.raises(ValueError) as assigned:
+        opts.ef_search = ef
+    assert str(assigned.value) == expected
+    assert opts.ef_search is None
+
+
+def test_search_options_ef_search_accepts_its_range_and_none():
+    opts = SearchOptions(ef_search=16)
+    assert opts.ef_search == 16
+    assert opts.with_ef_search(4096).ef_search == 4096
+    opts.ef_search = None
+    assert opts.ef_search is None
+    with pytest.raises(TypeError):
+        SearchOptions(ef_search=1.5)

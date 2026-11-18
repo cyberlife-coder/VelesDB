@@ -209,6 +209,18 @@ pub fn hybrid_search_fuse(
         .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
 }
 
+/// How many of each branch's best points a hybrid dense + sparse search
+/// fuses when `limit` results are wanted: core's
+/// [`velesdb_core::fusion::dense_sparse_candidate_k`], the depth VelesQL's
+/// `NEAR … AND SPARSE_NEAR` reads too (`velesql_sparse.rs`). A caller that
+/// fuses its own branches with [`hybrid_search_fuse`] fetches each this deep
+/// to rank as core does.
+#[wasm_bindgen(js_name = denseSparseCandidateK)]
+#[must_use]
+pub fn dense_sparse_candidate_k(limit: usize) -> usize {
+    velesdb_core::fusion::dense_sparse_candidate_k(limit)
+}
+
 /// The fusion behind [`hybrid_search_fuse`], without the `JsValue` boundary.
 pub(crate) fn fuse_scored(
     dense: Vec<(PointId, f32)>,

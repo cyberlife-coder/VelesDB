@@ -178,3 +178,43 @@ def test_bfs_and_match_agree(graph_db):
     assert 20 in bfs_targets, f"BFS should reach Bob(20) via KNOWS, got {bfs_targets}"
     assert 20 in match_nodes, f"MATCH should reach Bob(20) via KNOWS, got {match_nodes}"
     assert bfs_targets & match_nodes, "BFS and MATCH must agree on at least one reached node"
+
+
+def test_search_by_embedding_without_embeddings_raises_value_error(tmp_path):
+    db = velesdb.Database(str(tmp_path))
+    graph = db.create_graph_collection("no_emb")
+    with pytest.raises(ValueError, match="VELES-014"):
+        graph.search_by_embedding([1.0, 0.0, 0.0, 0.0])
+
+
+def test_count_len_and_get_see_only_nodes_stored_with_a_vector(tmp_path):
+    """What the docs now say: ``count``/``len``/``is_empty``/``get`` read the
+    points stored with a vector; a payload-only node is listed by
+    ``all_node_ids`` and ``in``, and read by ``get_node_payload``."""
+    db = velesdb.Database(str(tmp_path))
+    graph = db.create_graph_collection("vec_nodes", dimension=3)
+    graph.upsert_node_payload(1, {"name": "payload only"})
+    assert graph.count() == len(graph) == 0 and graph.is_empty()
+    assert graph.get([1]) == [None]
+    assert 1 in graph and graph.all_node_ids() == [1]
+    assert graph.get_node_payload(1) == {"name": "payload only"}
+
+    graph.upsert_node(2, {"name": "with vector"}, [1.0, 0.0, 0.0])
+    assert graph.count() == len(graph) == 1 and not graph.is_empty()
+    assert graph.get([2])[0]["payload"] == {"name": "with vector"}
+
+    plain = db.create_graph_collection("no_vec_nodes")
+    plain.upsert_node_payload(1, {"name": "payload only"})
+    assert plain.count() == 0 and plain.get([1]) == [None] and 1 in plain
+
+
+def test_query_runs_on_its_own_collection_whatever_params_collection_says(graph_db, tmp_path):
+    """``GraphCollection.query`` always reads its own collection: a
+    ``_collection`` parameter does not retarget it."""
+    expected = graph_db.query("MATCH (a)-[:KNOWS]->(b) RETURN a, b LIMIT 10")
+    assert expected
+    redirected = graph_db.query(
+        "MATCH (a)-[:KNOWS]->(b) RETURN a, b LIMIT 10",
+        params={"_collection": "some_other_graph"},
+    )
+    assert [r["id"] for r in redirected] == [r["id"] for r in expected]

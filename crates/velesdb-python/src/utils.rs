@@ -5,7 +5,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList, PyTuple};
 use pyo3::IntoPyObjectExt;
 use std::collections::HashMap;
 use velesdb_core::{DistanceMetric, StorageMode, MAX_JSON_NESTING};
@@ -112,7 +112,10 @@ pub fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
 /// Convert a Python object to a `serde_json::Value`.
 ///
 /// Returns `Err` for unsupported Python types (datetime, UUID, bytes, custom objects)
-/// instead of silently dropping them.
+/// instead of silently dropping them. A JSON array comes from a `list`, a
+/// `tuple` or a numpy array only ([`is_json_array_source`]): any other
+/// sequence — `bytes`, `bytearray`, `range` — is refused rather than stored
+/// as a list of its items.
 ///
 /// Lists and dicts nest at most [`MAX_JSON_NESTING`] deep, the depth
 /// `serde_json` reads back, the outermost container counting as the first
@@ -175,7 +178,8 @@ pub(crate) fn python_to_json_within(
     if obj.is_none(py) {
         return Ok(serde_json::Value::Null);
     }
-    if let Ok(list) = obj.extract::<Vec<Py<PyAny>>>(py) {
+    if is_json_array_source(obj.bind(py)) {
+        let list = obj.extract::<Vec<Py<PyAny>>>(py)?;
         let depth = container_depth(enclosing)?;
         let arr: Vec<serde_json::Value> = list
             .iter()
@@ -198,8 +202,18 @@ pub(crate) fn python_to_json_within(
         .map(|n| n.to_string())
         .unwrap_or_else(|_| "<unknown>".to_string());
     Err(PyValueError::new_err(format!(
-        "Unsupported payload type '{type_name}'. Supported: str, int, float, bool, None, list, dict"
+        "Unsupported payload type '{type_name}'. Supported: str, int, float, bool, None, \
+         list, tuple, numpy array, dict"
     )))
+}
+
+/// Whether `obj` converts to a JSON array: a `list`, a `tuple`, or a numpy
+/// array (VelesQL vector parameters are documented to take one, read through
+/// the sequence protocol as nested lists).
+fn is_json_array_source(obj: &Bound<'_, PyAny>) -> bool {
+    obj.is_instance_of::<PyList>()
+        || obj.is_instance_of::<PyTuple>()
+        || obj.is_instance_of::<numpy::PyUntypedArray>()
 }
 
 /// The depth of a list or dict inside `enclosing` containers, refused past
@@ -225,8 +239,6 @@ fn container_depth(enclosing: usize) -> PyResult<usize> {
 /// Propagates any Python error raised while building a value, so a failed
 /// conversion raises instead of coming back as a silently missing key.
 pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
-    use pyo3::types::{PyDict, PyList};
-
     match value {
         serde_json::Value::Null => Ok(py.None()),
         serde_json::Value::Bool(b) => (*b).into_py_any(py),

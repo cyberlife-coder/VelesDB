@@ -361,3 +361,33 @@ class Facade(_Shared):
     ]
     assert _class_drift(_classes(shared_base), "Facade", Facade, Raw) == []
     assert _class_drift(_classes(shared_base), "Raw", Raw, None) == []
+
+
+def _stub_default(class_name: str, method: str, param: str) -> Any:
+    """The literal default the stub declares for ``param`` of ``method``."""
+    for node in _stub_members(_classes(), class_name)[method]:
+        args = node.args
+        named = list(zip(args.args[len(args.args) - len(args.defaults):], args.defaults))
+        named += [(a, d) for a, d in zip(args.kwonlyargs, args.kw_defaults) if d is not None]
+        for arg, default in named:
+            if arg.arg == param:
+                return ast.literal_eval(default)
+    raise AssertionError(f"stub declares no default for {class_name}.{method}({param})")
+
+
+@pytest.mark.parametrize(
+    ("class_name", "method", "param"),
+    [
+        ("MemoryService", "__init__", "embedder"),
+        ("Collection", "match_query", "threshold"),
+        ("GraphCollection", "match_query", "threshold"),
+    ],
+)
+def test_stub_default_is_the_runtime_default(class_name: str, method: str, param: str) -> None:
+    """A default whose meaning the runtime decides (``None``: read the
+    environment, or apply no threshold) must not be shown as a value."""
+    velesdb = pytest.importorskip("velesdb")
+    target = _facade_targets(velesdb).get(class_name) or getattr(velesdb, class_name)
+    runtime = target if method == "__init__" else getattr(target, method)
+    expected = inspect.signature(runtime).parameters[param].default
+    assert _stub_default(class_name, method, param) == expected

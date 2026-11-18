@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use crate::collection::query::{
     build_explain_analyze_dict, build_explain_dict, convert_params, parse_read_only_velesql,
-    parse_velesql, retarget_to_collection, run_velesql_match, run_velesql_select,
-    run_velesql_select_ids, validate_query,
+    parse_velesql, retarget_to_collection, run_match_on, run_velesql_match, run_velesql_select,
+    run_velesql_select_ids, validate_match_threshold, validate_query,
 };
 use crate::collection_helpers::core_err;
 use crate::graph_collection::PyGraphCollection;
@@ -31,23 +31,26 @@ impl PyGraphCollection {
     ///         write names its own target, so it goes through
     ///         ``Database.execute_query``.
     ///
+    /// The statement always runs on this collection: its ``FROM`` is
+    /// rewritten to this collection's name, and a ``_collection`` key in
+    /// ``params`` (which picks a bare MATCH's target in
+    /// ``Database.execute_query``) does not retarget it.
+    ///
     /// # Cross-Collection MATCH
     ///
-    /// For MATCH queries that reference nodes from other collections via
-    /// the ``@collection`` annotation, pass ``_collection`` in ``params``
-    /// to specify the primary collection (the one with graph edges).
-    /// Annotated nodes will have their payloads enriched from the named
-    /// collection after traversal.
+    /// A MATCH node annotated ``@collection`` reads its properties from the
+    /// named collection during the walk, while the edges are this
+    /// collection's.
     ///
     /// Example:
     ///     >>> results = graph.query(
     ///     ...     "SELECT * FROM kg WHERE category = 'person' LIMIT 10"
     ///     ... )
-    ///     >>> # Cross-collection MATCH
+    ///     >>> # Cross-collection MATCH: edges here, Category nodes' properties
+    ///     >>> # from the 'categories' collection
     ///     >>> results = graph.query(
     ///     ...     "MATCH (p:Product)-[:IN]->(c:Category@categories) "
-    ///     ...     "RETURN p.name, c.label LIMIT 20",
-    ///     ...     params={"_collection": "product_graph"},
+    ///     ...     "RETURN p.name, c.label LIMIT 20"
     ///     ... )
     #[pyo3(signature = (query_str, params=None))]
     fn query(
@@ -79,36 +82,37 @@ impl PyGraphCollection {
     ///     query_str: VelesQL MATCH query string
     ///     params: Query parameters (default: empty dict)
     ///     vector: Optional query vector for similarity scoring
-    ///     threshold: Similarity threshold (default: 0.0)
+    ///     threshold: Optional score bound for ``vector``: a row scoring below
+    ///         it under a similarity metric (cosine, dot, jaccard), or above
+    ///         it under a distance metric (euclidean, hamming), is dropped.
+    ///         Omitted (the default), every scored row is kept.
     ///
     /// Returns:
     ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
+    ///
+    /// Raises:
+    ///     ValueError: If ``threshold`` is NaN or infinite.
     ///
     /// Example:
     ///     >>> results = graph.match_query(
     ///     ...     "MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10"
     ///     ... )
-    #[pyo3(signature = (query_str, params = None, vector = None, threshold = 0.0))]
+    #[pyo3(signature = (query_str, params = None, vector = None, threshold = None))]
     fn match_query(
         &self,
         py: Python<'_>,
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
         vector: Option<Py<PyAny>>,
-        threshold: f32,
+        threshold: Option<f32>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        // Through the owning database, as REST `/match` runs: the read gate
-        // on this collection and on every `@collection` the clause names
-        // (a scope is refused: a MATCH row carries no payload to narrow),
-        // the annotated nodes' properties, `search.max_results`, and the
-        // observer's `on_query`.
+        // Through the owning database (`run_match_on`); a read-gate scope is
+        // refused, since a MATCH row carries no payload to narrow.
+        let threshold = validate_match_threshold(threshold)?;
         let db = &self.db;
         let name = &self.name;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
-            let scoring = qv
-                .as_deref()
-                .map(|vector| velesdb_core::MatchScoring { vector, threshold });
-            db.match_query(name, &mc, &p, scoring)
+            run_match_on(db, name, &mc, &p, qv.as_deref(), threshold)
         })
     }
 

@@ -59,6 +59,22 @@ impl<'de> Deserialize<'de> for PointId {
     }
 }
 
+/// The largest integer a JS `number` holds exactly (`2^53 - 1`).
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
+/// A point or node id as it sits in a VelesQL row the TypeScript SDK parses
+/// with `JSON.parse`: a number up to `Number.MAX_SAFE_INTEGER`, as core's
+/// `SELECT *` writes it, and past that its exact decimal string — a JSON
+/// number there would come back rounded to another point's id. The SDK's
+/// `RestPointId` is the same `number | string`.
+pub(crate) fn row_id_json(id: u64) -> serde_json::Value {
+    if id <= MAX_SAFE_INTEGER {
+        serde_json::Value::from(id)
+    } else {
+        serde_id::id_to_json(id)
+    }
+}
+
 // Reads the source tree with `std::fs`, which a wasm32 test run cannot.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "js_value_tests.rs"]

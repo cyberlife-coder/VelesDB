@@ -80,8 +80,8 @@ use crate::factory::{
 pub use crate::factory::NodeMemoryService;
 
 use crate::dto::{
-    AnchoredRecollectionJs, ColumnFilterJs, CompileTranscriptJs, CompiledContextJs, DatedRecallJs,
-    EntityProfileJs, ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs, RememberOutcomeJs,
+    AnchoredRecollectionJs, CompileTranscriptJs, CompiledContextJs, DatedRecallJs, EntityProfileJs,
+    ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs, RememberOutcomeJs,
     RememberedExtractionJs, UnrelateJs,
 };
 use crate::error::{internal, invalid_input, setting_error, to_napi_err};
@@ -149,10 +149,14 @@ impl NodeMemoryService {
     }
 
     // Every method returns an `AsyncTask` (a Promise) and does ALL validation +
-    // marshalling inside the task closure, so there is exactly one error channel:
-    // a rejected Promise (never a synchronous throw). The cheap DoS/size checks
-    // still run as the closure's first lines, before any embedding or search, so
-    // an oversized input never triggers real work.
+    // marshalling inside the task closure, so a malformed value has exactly one
+    // error channel: a rejected Promise. Two things still throw synchronously,
+    // before the method body runs or by the caller's own code: napi's check of
+    // a typed parameter's JS type (a number passed for a `string` throws a
+    // `TypeError`), and an exception the caller's value raises while it is
+    // read (a throwing getter, a Proxy trap), which propagates unchanged. The
+    // cheap DoS/size checks run as the closure's first lines, before any
+    // embedding or search, so an oversized input never triggers real work.
 
     /// Store a fact; resolves to `{id, similar}` — the decimal-string id plus
     /// the at-most-5 pre-existing memories nearest to it (`{id, score}`, the
@@ -264,20 +268,27 @@ impl NodeMemoryService {
     /// their index) are internal scaffolding and never come back, whatever
     /// the predicate — including a `ne` one, which matches facts lacking the
     /// field entirely.
+    ///
+    /// `filters` is read as JSON data like every other structured argument
+    /// ([`json_arg`]), so a `BigInt` compares as the integer it holds and a
+    /// malformed filter rejects with `INVALID_INPUT`.
     #[napi(
         js_name = "recallWhere",
+        ts_args_type = "query: string, filters: Array<ColumnFilterJs>, k?: number | undefined | null",
         ts_return_type = "Promise<Array<RecollectionJs>>"
     )]
     pub fn recall_where(
         &self,
         query: String,
-        filters: Vec<ColumnFilterJs>,
+        filters: Unknown,
         k: Option<f64>,
     ) -> AsyncTask<Job<Vec<RecollectionJs>>> {
+        // Read on the JS thread, refused in the Promise.
+        let filters = json_arg::to_json(&filters, "filters");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
-            let filters = convert::to_filters(filters)?;
+            let filters = convert::to_filters(filters?)?;
             let hits = svc.recall_where(&query, k, &filters).map_err(to_napi_err)?;
             Ok(hits.into_iter().map(RecollectionJs::from).collect())
         }))

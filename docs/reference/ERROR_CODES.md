@@ -480,7 +480,7 @@ VelesDB Python SDK maps core error codes to typed Python exceptions:
 | `CollectionNotFoundError` | `VelesDBError` | VELES-002 | Collection name not found |
 | `PermissionError` (built-in) | `Exception` | VELES-037 | The observer denied a read or vetoed a DDL/DML statement |
 | `VelesQLSyntaxError` | `Exception` | — | VelesQL parse error |
-| `VelesQLParameterError` | `Exception` | — | Missing or wrong-type parameter |
+| `VelesQLParameterError` | `Exception` | — | Reserved, not raised today: a missing or wrong-type parameter raises `ValueError` (VELES-010) |
 
 ### Usage
 

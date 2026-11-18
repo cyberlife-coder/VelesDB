@@ -278,6 +278,12 @@ pub struct QueryRequest {
     /// Query parameters.
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
+    /// Collection a statement without `FROM` (a top-level `MATCH`, an
+    /// aggregate) runs on, as the REST server's `/query` body field: it is
+    /// passed as `params._collection` unless that is already set, and a
+    /// statement with a `FROM` reads its `FROM`.
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
 /// Request for multi-query fusion search.
@@ -365,9 +371,12 @@ pub struct SparseUpsertRequest {
 pub struct TrainPqRequest {
     /// Collection name.
     pub collection: String,
-    /// Number of sub-quantizers.
-    #[serde(default)]
-    pub m: Option<usize>,
+    /// Number of sub-quantizers (the dimension must be divisible by it).
+    ///
+    /// Required, as in the `TRAIN QUANTIZER ... WITH (m = ...)` statement the
+    /// REST server runs: core's TRAIN reads an absent `m` as `0` and refuses
+    /// it (VELES-028), so an optional `m` could only ever fail.
+    pub m: usize,
     /// Number of centroids per sub-quantizer.
     #[serde(default)]
     pub k: Option<usize>,
@@ -458,7 +467,10 @@ pub struct HybridResult {
     pub fused_score: f32,
     /// Variable bindings/payload.
     pub bindings: Option<serde_json::Value>,
-    /// Column data from JOIN (if applicable).
+    /// Result of an aggregate `SELECT ... FROM` (scalar aggregates or a
+    /// `GROUP BY` without `NEAR`), on the single row such a query returns: an
+    /// object without `GROUP BY`, an array of one object per group with it.
+    /// `null` on every other row.
     pub column_data: Option<serde_json::Value>,
 }
 

@@ -151,6 +151,18 @@ describe('exactGraphId', () => {
       expect(() => exactGraphId(bad, 'Edge source')).toThrow(/Edge source/);
     }
   });
+
+  it('refuses a missing id, or one that is neither a string nor a number, as BAD_REQUEST naming its type', () => {
+    // An untyped caller can leave `id` out (REST requires it) or pass any value.
+    for (const [bad, type] of [[undefined, 'undefined'], [null, 'null'], [{}, 'object'], [7n, 'bigint'], [true, 'boolean']] as const) {
+      const outcome = (() => {
+        try { return exactGraphId(bad as unknown as string, 'Edge id'); } catch (err) { return err; }
+      })();
+      expect(outcome, type).toBeInstanceOf(VelesDBError);
+      expect(outcome, type).toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining(type) });
+      expect((outcome as VelesDBError).message, type).toContain('Edge id');
+    }
+  });
 });
 
 describe('sparseVectorToArrays', () => {

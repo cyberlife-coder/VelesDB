@@ -14,11 +14,12 @@ embedded vector store onto the frontend and hand-roll the IPC, the permissions,
 and the persistence path.
 
 This plugin removes that choice. Registering it in your `tauri::Builder` opens a
-VelesDB database inside the app process and exposes up to 69 typed commands
+VelesDB database inside the app process and exposes 70 typed commands
 to the webview — vector search, BM25, hybrid fusion, VelesQL, knowledge
 graph, agent memory — under Tauri's own capability model. Two of them
-(`stream_insert`, `enable_streaming`) sit behind the `persistence` feature;
-the default surface is 67. Nothing leaves the device.
+(`stream_insert`, `enable_streaming`) sit behind the `persistence` feature,
+which `default` includes; without it the surface is 68. Nothing leaves the
+device.
 
 It is the desktop face of **VelesDB, the explainable, local-first memory engine
 for AI agents**: one engine fusing vector, graph and columnar data under
@@ -192,11 +193,12 @@ dimension mismatch rather than mixing sizes.
 
 ### Cargo features
 
-`default` pulls in `velesdb-core/default`, which includes `persistence` —
-mmap storage and WAL. The `stream_insert`/`enable_streaming` commands and the
-`quality` argument on `search`/`search_ids` are gated on the plugin's own
-`persistence` feature — pass `features = ["persistence"]` for the full
-69-command surface (67 under `default`). The other features
+`default` pulls in `velesdb-core/default` and the plugin's own `persistence`
+feature — mmap storage and WAL. The `stream_insert`/`enable_streaming` commands
+and the `quality` argument on `search`/`search_ids` are gated on that
+`persistence` feature, so the default build has the full 70-command surface; a
+build with `default-features = false` and no `persistence` has 68. The other
+features
 (`gpu`, `openapi`, `update-check`, `loom`, `internal-bench`, `bench-sift1m`,
 `test-fault-injection`) forward to the matching `velesdb-core` feature; the last
 two must never be enabled in a shipping bundle.
@@ -233,9 +235,10 @@ two must never be enabled in a shipping bundle.
   endpoints have no stored node payload (#1442). No IPC command upserts a node
   payload — do it from Rust through `VelesDbState::with_db`
   ([recipe](../../docs/guides/TAURI_PLUGIN_RECIPES.md#knowledge-graph)).
-- **`query` has no `collection` field.** The target collection comes from the
-  `FROM` clause or the `MATCH` pattern inside the VelesQL string; any extra
-  field in the request is silently dropped.
+- **A top-level `MATCH` needs `collection`.** A `SELECT` reads its `FROM`, but
+  a `MATCH` pattern names no collection: pass `collection` in the `query`
+  request (or `params._collection`, which takes precedence), as on the REST
+  server's `/query`. Without either it is refused with `VELES-010`.
 - **No embedding model.** The plugin stores and searches vectors; producing
   them is your app's job (the demo uses `fastembed`).
 - **Desktop only.** The plugin ships no Android/iOS bindings, and the

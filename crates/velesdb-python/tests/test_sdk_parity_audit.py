@@ -340,6 +340,47 @@ def test_hybrid_search_rrf_k_and_component_scores(temp_db):
     assert len(r2) == 3
 
 
+def test_velesql_query_rows_report_the_component_scores_core_tagged(temp_db):
+    # `vector_score` used to repeat the final score whatever produced it, so a
+    # BM25-only row claimed a vector score it never had.
+    col = temp_db.create_collection("mm_scores", dimension=4, metric="cosine")
+    _seed_docs(col)
+
+    text_rows = col.query("SELECT * FROM mm_scores WHERE text MATCH 'learning' LIMIT 5")
+    assert text_rows
+    for row in text_rows:
+        assert row["vector_score"] is None
+        assert row["graph_score"] is None
+        assert row["component_scores"] == {"bm25_score": row["score"]}
+        assert row["fused_score"] == row["score"]
+
+    hybrid_rows = col.query(
+        "SELECT * FROM mm_scores WHERE vector NEAR $v AND text MATCH 'learning' LIMIT 5",
+        params={"v": [1.0, 0.0, 0.0, 0.0]},
+    )
+    expected = {
+        r["id"]: r["component_scores"]
+        for r in col.hybrid_search([1.0, 0, 0, 0], "learning", top_k=5)
+    }
+    assert hybrid_rows
+    for row in hybrid_rows:
+        assert row["component_scores"] == pytest.approx(expected[row["id"]])
+        assert row["vector_score"] == pytest.approx(expected[row["id"]]["vector_score"])
+
+    # A filtered NEAR comes back without a component breakdown; its score is
+    # still the vector score, as core's ORDER BY reads it.
+    dense_rows = col.query(
+        "SELECT * FROM mm_scores WHERE vector NEAR $v LIMIT 5",
+        params={"v": [1.0, 0.0, 0.0, 0.0]},
+    ) + col.query(
+        "SELECT * FROM mm_scores WHERE vector NEAR $v AND text = 'deep learning' LIMIT 5",
+        params={"v": [1.0, 0.0, 0.0, 0.0]},
+    )
+    assert len(dense_rows) == 4
+    for row in dense_rows:
+        assert row["vector_score"] == pytest.approx(row["score"])
+
+
 @pytest.mark.parametrize("weight", [float("nan"), float("inf"), float("-inf")])
 def test_hybrid_search_refuses_a_non_finite_vector_weight(temp_db, weight):
     # NaN survived core's clamp, so every fused score was NaN and the order

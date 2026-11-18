@@ -540,17 +540,19 @@ fn batch_search_refuses_caller_sized_fanout() {
 }
 
 #[wasm_bindgen_test]
-fn multi_query_search_refuses_wrapping_k() {
+fn multi_query_search_takes_the_largest_k_without_wrapping() {
     // `k = usize::MAX` made the fused `k * 2` over-fetch wrap (wasm32) or
-    // panic (debug) before #2679; now refused as VELES-023.
+    // panic (debug) before #2679. Each branch now reads core's
+    // `branch_depth(k)`, which saturates, so the search answers as core's
+    // `multi_query_search` does: every point, once.
     let mut store = VectorStore::new(4, "cosine").unwrap();
     store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
 
     let queries = vec![1.0_f32, 0.0, 0.0, 0.0];
-    let err = store
+    let hits = store
         .multi_query_search(&queries, 1, usize::MAX, "rrf", None, None)
-        .unwrap_err();
-    assert_eq!(js_error_code(&err).as_deref(), Some("VELES-023"));
+        .expect("a saturated depth is no refusal");
+    assert_eq!(js_sys::Array::from(&hits).length(), 1);
 }
 
 #[wasm_bindgen_test]

@@ -737,8 +737,9 @@ impl Collection {
 /// no `i64` holds (`2**64`, say) is outside that range too, so pyo3's
 /// `OverflowError` for it becomes the `ValueError` every other out-of-range
 /// value raises, with the one message naming the value as Python prints it
-/// (#2274); a value that is not an `int` keeps its `TypeError`.
-fn ef_search_from_py(ef_search: &Bound<'_, PyAny>) -> PyResult<usize> {
+/// (#2274); a value that is not an `int` keeps its `TypeError`. `SearchOptions`
+/// reads its `ef_search` through it too, at construction and assignment.
+pub(crate) fn ef_search_from_py(ef_search: &Bound<'_, PyAny>) -> PyResult<usize> {
     let ef = ef_search.extract::<i64>().map_err(|err| {
         if err.is_instance_of::<PyOverflowError>(ef_search.py()) {
             PyValueError::new_err(velesdb_core::api_types::ef_search_out_of_range(ef_search))

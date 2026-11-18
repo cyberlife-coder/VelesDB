@@ -442,6 +442,22 @@ describe('wasmSearch — filter / sparse / hybrid branches', () => {
     expect(result[0]!.id).toBe('10');
   });
 
+  it("hybrid fusion reads each branch as deep as the binding's denseSparseCandidateK says, and keeps k", async () => {
+    const search_with_quality = vi.fn(() => []);
+    const sparse_search = vi.fn(() => []);
+    const fuse = vi.fn(() => []);
+    const denseSparseCandidateK = vi.fn(() => 11);
+    const store = buildStore({ search_with_quality, sparse_search });
+    const ctx = buildCtx('docs', store, { wasmModule: { hybrid_search_fuse: fuse, denseSparseCandidateK } });
+
+    await wasmSearch(ctx, 'docs', [0.1, 0.2], { k: 1, sparseVector: { 1: 0.5 } });
+
+    expect(denseSparseCandidateK).toHaveBeenCalledWith(1);
+    expect(search_with_quality).toHaveBeenCalledWith(expect.any(Float32Array), 11, 'balanced');
+    expect(sparse_search).toHaveBeenCalledWith(expect.any(Uint32Array), expect.any(Float32Array), 11);
+    expect(fuse).toHaveBeenCalledWith([], [], 60, 1);
+  });
+
   it('hybrid fusion hands the dense ids back to the binding exactly, past 2^53', async () => {
     // The binding returns a point id as its decimal string; `Number(id)`
     // rounded 9007199254740993 to ...992, another point.
@@ -666,8 +682,16 @@ describe('wasmQuery', () => {
     expect(query).toHaveBeenLastCalledWith(expect.any(Float32Array), 10);
   });
 
-  it('returns raw results with wasm-query stats', async () => {
-    const raw = [{ id: 1, title: 'a' }, { id: 2, title: 'b' }];
+  it("returns core's SELECT * rows, the id and the payload columns, with wasm-query stats", async () => {
+    // `VectorStore.query`'s own rows, as velesdb-wasm returns them.
+    const row = (nodeId: string, bindings: unknown) => ({
+      nodeId, vectorScore: 0.9, graphScore: null, fusedScore: 0.9, bindings, columnData: null,
+    });
+    const raw = [
+      row('1', { title: 'a', id: 'from-payload' }),
+      row('2', null),
+      row('9007199254740993', { title: 'c' }),
+    ];
     const store = buildStore({ query: vi.fn(() => raw) });
     const ctx = buildCtx('docs', store);
 
@@ -675,9 +699,15 @@ describe('wasmQuery', () => {
     if (!('results' in out)) {
       throw new Error('expected a QueryResponse carrying results');
     }
-    expect(out.results).toBe(raw);
+    // As core's `project_wildcard`: the point id, then every payload field
+    // but `id`; an id past 2^53 stays its exact decimal string.
+    expect(out.results).toEqual([
+      { id: 1, title: 'a' },
+      { id: 2 },
+      { id: '9007199254740993', title: 'c' },
+    ]);
     expect(out.stats.strategy).toBe('wasm-query');
-    expect(out.stats.scannedNodes).toBe(2);
+    expect(out.stats.scannedNodes).toBe(3);
     expect(out.stats.executionTimeMs).toBe(0);
   });
 });

@@ -37,15 +37,6 @@ fn fanout_memory_refuses_usize_overflow_with_veles_023() {
 }
 
 #[test]
-fn fanout_k_doubles_and_refuses_wrap() {
-    assert_eq!(checked_fanout_k(10).ok(), Some(20));
-    let err = checked_fanout_k(usize::MAX).unwrap_err();
-    assert_eq!(err.code(), "VELES-023");
-    let err = checked_fanout_k(usize::MAX / 2 + 1).unwrap_err();
-    assert_eq!(err.code(), "VELES-023");
-}
-
-#[test]
 fn fanout_memory_prices_retained_rows_not_scores() {
     // The bound is on what `all_results` keeps — the post-truncation row
     // count — so a huge store queried with small k stays cheap: callers

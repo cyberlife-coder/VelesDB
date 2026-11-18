@@ -1,6 +1,6 @@
 //! Mutation methods for Collection (upsert, delete, flush, stream_insert).
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use velesdb_core::{Point, QueryOperationKind};
@@ -114,8 +114,11 @@ impl Collection {
     ///     upsert_bulk_numpy        <-- this method
     ///
     /// Best practices:
-    ///     - Always pass float32 numpy arrays (float64 forces a conversion).
-    ///     - Use C-contiguous arrays (the default; `np.ascontiguousarray()` to fix).
+    ///     - Pass float32 numpy arrays: a float64 array is accepted but converted
+    ///       to float32 element by element first (a value past float32's range
+    ///       becomes infinite and is refused like NaN).
+    ///     - Use C-contiguous float32 arrays (the default; `np.ascontiguousarray()`
+    ///       to fix): a non-contiguous one raises ValueError.
     ///     - Chunk batches into 5 000-row sub-batches when n > 50 000 to
     ///       keep peak RSS bounded.
     ///     - For payload-heavy data, prefer `upsert_bulk_from_json` (pre-
@@ -125,12 +128,18 @@ impl Collection {
     /// insert method") for the full comparison table and memory profile.
     ///
     /// Args:
-    ///     vectors: numpy.ndarray of shape (n, dimension), dtype float32, C-contiguous
+    ///     vectors: numpy.ndarray of shape (n, dimension), dtype float32
+    ///         (C-contiguous) or float64
     ///     ids: numpy.ndarray of shape (n,), dtype uint64 (or list of int)
     ///     payloads: Optional list of payload dicts (same length as ids)
     ///
     /// Returns:
     ///     Number of inserted points
+    ///
+    /// Raises:
+    ///     TypeError: If ``vectors`` is not a 2-D float32 or float64 array.
+    ///     ValueError: If the lengths disagree, a float32 array is not
+    ///         C-contiguous, or a value is NaN or infinite.
     ///
     /// Example:
     ///     >>> import numpy as np
@@ -141,25 +150,20 @@ impl Collection {
     fn upsert_bulk_numpy(
         &self,
         py: Python<'_>,
-        vectors: numpy::PyReadonlyArray2<f32>,
+        vectors: &Bound<'_, PyAny>,
         ids: Vec<u64>,
         payloads: NumpyPayloadBatch,
     ) -> PyResult<usize> {
-        let array = vectors.as_array();
-        let n = array.nrows();
-        let dimension = array.ncols();
+        let NumpyRows {
+            flat: flat_owned,
+            rows: n,
+            dimension,
+        } = numpy_rows(vectors)?;
         validate_numpy_lengths(n, &ids, &payloads)?;
-
-        // Zero-copy: get flat &[f32] directly from the numpy buffer.
-        let flat = array
-            .as_slice()
-            .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
 
         // Convert Python payload dicts to serde_json::Value (GIL required).
         let json_payloads = convert_payloads(py, &payloads)?;
 
-        // Copy the flat data so we can release the GIL (numpy buffer is Py<PyAny>-backed).
-        let flat_owned: Vec<f32> = flat.to_vec();
         // Same finiteness gate as the dict-based paths (`extract_vector`): the raw
         // path must not store a NaN/Inf the other ingest paths reject.
         reject_nan_vector(&flat_owned)?;
@@ -359,6 +363,50 @@ impl Collection {
         })?;
         Ok(queued)
     }
+}
+
+/// A 2-D numpy array of vectors read into one owned row-major `f32` buffer,
+/// so the GIL can be released while the engine writes it.
+struct NumpyRows {
+    flat: Vec<f32>,
+    rows: usize,
+    dimension: usize,
+}
+
+/// Reads `vectors`, a 2-D float32 or float64 numpy array, into [`NumpyRows`].
+///
+/// A float32 array is copied from its buffer, which must be C-contiguous; a
+/// float64 array is narrowed element by element in row-major order, whatever
+/// its layout. Anything else raises `TypeError`.
+fn numpy_rows(vectors: &Bound<'_, PyAny>) -> PyResult<NumpyRows> {
+    if let Ok(array) = vectors.extract::<numpy::PyReadonlyArray2<'_, f32>>() {
+        let view = array.as_array();
+        let flat = view
+            .as_slice()
+            .ok_or_else(|| PyValueError::new_err("numpy array must be C-contiguous"))?;
+        return Ok(NumpyRows {
+            flat: flat.to_vec(),
+            rows: view.nrows(),
+            dimension: view.ncols(),
+        });
+    }
+    if let Ok(array) = vectors.extract::<numpy::PyReadonlyArray2<'_, f64>>() {
+        let view = array.as_array();
+        // Reason: the engine stores f32; narrowing float64 is the documented
+        // conversion, as `extract_vector` does for one vector. A value past
+        // f32's range becomes infinite, which the caller's finiteness gate refuses.
+        #[allow(clippy::cast_possible_truncation)]
+        let flat = view.iter().map(|&x| x as f32).collect();
+        return Ok(NumpyRows {
+            flat,
+            rows: view.nrows(),
+            dimension: view.ncols(),
+        });
+    }
+    Err(PyTypeError::new_err(format!(
+        "vectors must be a 2-D numpy array of float32 or float64, got {}",
+        vectors.get_type().name()?
+    )))
 }
 
 /// Validate that ids and optional payloads lengths match the vector row count.

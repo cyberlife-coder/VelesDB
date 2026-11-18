@@ -252,3 +252,41 @@ fn test_python_to_json_nests_at_most_max_json_nesting() {
         assert!(err.to_string().contains("127 levels"), "{err}");
     });
 }
+
+/// Only a `list`, a `tuple` or a numpy array converts to a JSON array:
+/// `bytes`, `bytearray` and `range` are sequences too, and used to be stored
+/// as lists of ints.
+#[test]
+fn test_python_to_json_takes_only_list_tuple_and_numpy_arrays() {
+    pyo3::Python::initialize();
+    Python::attach(|py| {
+        let eval = |code: &str| -> Py<PyAny> {
+            let code = std::ffi::CString::new(code).expect("test: no NUL in code");
+            py.eval(&code, None, None)
+                .expect("test: evaluate a Python literal")
+                .unbind()
+        };
+
+        for refused in ["b'ab'", "bytearray(b'ab')", "range(3)", "{1, 2}"] {
+            let err = python_to_json(py, &eval(refused)).unwrap_err();
+            assert!(
+                err.to_string().contains("Unsupported payload type"),
+                "{refused}: {err}"
+            );
+        }
+
+        let expected = serde_json::json!([1, 2]);
+        assert_eq!(
+            python_to_json(py, &eval("[1, 2]")).ok(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            python_to_json(py, &eval("(1, 2)")).ok(),
+            Some(expected.clone())
+        );
+        let array = numpy::PyArray1::from_slice(py, &[1_i64, 2])
+            .into_any()
+            .unbind();
+        assert_eq!(python_to_json(py, &array).ok(), Some(expected));
+    });
+}

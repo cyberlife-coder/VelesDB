@@ -126,6 +126,12 @@ export function sparseVectorToArrays(sv: SparseVector): { indices: number[]; val
  * edge. Anything but a non-negative integer is refused.
  */
 export function exactGraphId(id: string | number, what: string): string {
+  // An untyped caller can leave the id out (REST requires it) or pass any
+  // value: only a string or a number can name a u64.
+  if (typeof id !== 'string' && typeof id !== 'number') {
+    const type = id === null ? 'null' : typeof id;
+    throw new VelesDBError(`${what} must be a string or number id, got ${type}`, 'BAD_REQUEST');
+  }
   if (typeof id === 'number') {
     if (isExactU64Number(id)) { return String(id); }
   } else {
@@ -236,4 +242,26 @@ export function paramsJson(params: Record<string, unknown> | undefined): string 
       ? Array.from(value as unknown as ArrayLike<number>)
       : value
   );
+}
+
+/**
+ * A `VectorStore.query()` row (`{nodeId, vectorScore, …, bindings}`, the
+ * point's payload in `bindings`) as core's `SELECT *` row — the one the
+ * executor and REST return: the point id, then every payload field but
+ * `id` (`project_wildcard`, `collection/search/query/projection.rs`). The
+ * id is a number, as core writes it, or its exact decimal string past 2^53.
+ */
+export function selectStarRow(row: Record<string, unknown>): Record<string, unknown> {
+  const nodeId = String(row.nodeId);
+  const asNumber = Number(nodeId);
+  const projected: Record<string, unknown> = {
+    id: Number.isSafeInteger(asNumber) ? asNumber : nodeId,
+  };
+  const payload = row.bindings;
+  if (payload !== null && typeof payload === 'object' && !Array.isArray(payload)) {
+    for (const [field, value] of Object.entries(payload)) {
+      if (field !== 'id') { projected[field] = value; }
+    }
+  }
+  return projected;
 }

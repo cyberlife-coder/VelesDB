@@ -29,6 +29,7 @@
 
 use pyo3::prelude::*;
 
+use super::search::ef_search_from_py;
 use crate::FusionStrategy;
 
 /// Options for a vector search request.
@@ -90,8 +91,11 @@ pub struct SearchOptions {
     /// ``[16, 4096]`` (core's `MIN_EF_SEARCH`/`MAX_EF_SEARCH`). Wins over
     /// ``quality`` when both are set, exactly like core's gate. A search
     /// with ``sparse_vector`` (sparse-only or hybrid) refuses it with
-    /// ``ValueError``: core's sparse and hybrid searches take no ef.
-    #[pyo3(get, set)]
+    /// ``ValueError``: core's sparse and hybrid searches take no ef. A value
+    /// outside the range raises that ``ValueError`` as soon as it is given —
+    /// to the constructor, ``with_ef_search`` or by assignment — exactly as
+    /// ``search_with_ef`` raises it.
+    #[pyo3(get)]
     pub ef_search: Option<usize>,
     /// Optional named search-quality profile for dense search
     /// (``"fast"``, ``"balanced"``, ``"accurate"``, ``"perfect"``,
@@ -126,6 +130,10 @@ impl SearchOptions {
     ///         search; ``search_request`` refuses it with ``sparse_vector``.
     ///     quality: Optional search-quality profile name for a dense-only
     ///         search; refused with ``sparse_vector`` like ``ef_search``.
+    ///
+    /// Raises:
+    ///     ValueError: If ``ef_search`` is an int outside [16, 4096].
+    ///     TypeError: If ``ef_search`` is not an int.
     #[new]
     #[pyo3(signature = (
         vector = None,
@@ -152,10 +160,10 @@ impl SearchOptions {
         fusion: Option<FusionStrategy>,
         principal: Option<String>,
         tenant: Option<String>,
-        ef_search: Option<usize>,
+        ef_search: Option<&Bound<'_, PyAny>>,
         quality: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> PyResult<Self> {
+        Ok(Self {
             vector,
             sparse_vector,
             k,
@@ -165,9 +173,17 @@ impl SearchOptions {
             fusion,
             principal,
             tenant,
-            ef_search,
+            ef_search: ef_search.map(ef_search_from_py).transpose()?,
             quality,
-        }
+        })
+    }
+
+    /// Assigns ``ef_search``, refusing a value outside [16, 4096] with the
+    /// constructor's ``ValueError``; ``None`` clears it.
+    #[setter]
+    fn set_ef_search(&mut self, ef_search: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.ef_search = ef_search.map(ef_search_from_py).transpose()?;
+        Ok(())
     }
 
     fn __repr__(&self) -> String {
@@ -250,10 +266,15 @@ impl SearchOptions {
         slf
     }
 
-    /// Sets the HNSW ``ef_search`` override (dense search) and returns `self`.
-    pub fn with_ef_search(slf: Py<Self>, py: Python<'_>, ef_search: Option<usize>) -> Py<Self> {
-        slf.bind(py).borrow_mut().ef_search = ef_search;
-        slf
+    /// Sets the HNSW ``ef_search`` override (dense search) and returns `self`;
+    /// a value outside [16, 4096] raises ``ValueError``.
+    pub fn with_ef_search(
+        slf: Py<Self>,
+        py: Python<'_>,
+        ef_search: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<Self>> {
+        slf.bind(py).borrow_mut().ef_search = ef_search.map(ef_search_from_py).transpose()?;
+        Ok(slf)
     }
 
     /// Sets the search-quality profile (dense search) and returns `self`.
