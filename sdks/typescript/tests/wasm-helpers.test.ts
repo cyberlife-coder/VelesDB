@@ -121,6 +121,19 @@ describe('toPointId', () => {
     expect(() => toPointId('18446744073709551616')).toThrow(VelesDBError);
     expect(() => toPointId('18446744073709551616')).toThrow(/u64::MAX/);
   });
+
+  it('refuses a number that is not a non-negative safe integer instead of wrapping it', () => {
+    // wasm-bindgen passes a u64 as raw i64 bits: -1 would address
+    // u64::MAX, 2^64 would address 0, and 1.5 throws a native RangeError.
+    for (const bad of [-1, 2 ** 64, 2 ** 53, 1.5, Number.NaN, Infinity, -Infinity]) {
+      const outcome = (() => {
+        try { return toPointId(bad); } catch (err) { return err; }
+      })();
+      expect(outcome, String(bad)).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+    }
+    expect(toPointId(Number.MAX_SAFE_INTEGER)).toBe(BigInt(Number.MAX_SAFE_INTEGER));
+  });
 });
 
 describe('exactGraphId', () => {

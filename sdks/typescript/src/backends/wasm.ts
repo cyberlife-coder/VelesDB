@@ -345,12 +345,14 @@ export class WasmBackend implements IVelesDBBackend {
         );
       }
     }
+    // Every id is checked before any point is written.
+    const ids = docs.map((doc) => toPointId(doc.id));
 
     this.replacePoints(collection, docs, () => {
       collection.store.reserve(docs.length);
       const batch: Array<[bigint, number[]]> = [];
-      for (const doc of docs) {
-        const id = toPointId(doc.id);
+      docs.forEach((doc, i) => {
+        const id = ids[i]!;
         const vector = doc.vector instanceof Float32Array
           ? doc.vector
           : new Float32Array(doc.vector);
@@ -359,7 +361,7 @@ export class WasmBackend implements IVelesDBBackend {
         } else {
           batch.push([id, Array.from(vector)]);
         }
-      }
+      });
       if (batch.length > 0) { collection.store.insert_batch(batch); }
     });
   }

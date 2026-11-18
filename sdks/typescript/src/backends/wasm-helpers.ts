@@ -105,12 +105,22 @@ export function sparseVectorToArrays(sv: SparseVector): { indices: number[]; val
  */
 export function exactGraphId(id: string | number, what: string): string {
   if (typeof id === 'number') {
-    if (Number.isSafeInteger(id) && id >= 0) { return String(id); }
+    if (isExactU64Number(id)) { return String(id); }
   } else {
     const normalized = normalizeIdString(id);
     if (normalized !== null) { return normalized; }
   }
   throw new VelesDBError(`${what} must be a non-negative integer id, got ${JSON.stringify(id)}`, 'BAD_REQUEST');
+}
+
+/**
+ * Whether a number names exactly one `u64`: a non-negative safe integer.
+ * Past 2^53 a number no longer names one integer, a negative or fractional
+ * one names none — and wasm-bindgen would pass it as raw `i64` bits anyway
+ * (`-1` arrives as `u64::MAX`, 2^64 as 0) or throw a native `RangeError`.
+ */
+function isExactU64Number(id: number): boolean {
+  return Number.isSafeInteger(id) && id >= 0;
 }
 
 /** The largest id a `u64` holds. */
@@ -120,7 +130,8 @@ const U64_MAX = 2n ** 64n - 1n;
  * A document id as the binding takes it: the exact `u64` it names, as a
  * `BigInt`.
  *
- * A number is that integer. A decimal string is its exact value, past
+ * A number is that integer, and must be a non-negative safe integer
+ * (`BAD_REQUEST` otherwise, as on REST). A decimal string is its exact value, past
  * `Number.MAX_SAFE_INTEGER` too: the binding returns every point id as its
  * decimal string, so such an id comes back from a search or a `get` as it
  * went in, as on REST. One past `u64::MAX` names no point and is refused
@@ -129,7 +140,11 @@ const U64_MAX = 2n ** 64n - 1n;
  */
 export function toPointId(id: string | number): bigint {
   if (typeof id === 'number') {
-    return BigInt(id);
+    if (isExactU64Number(id)) { return BigInt(id); }
+    throw new VelesDBError(
+      `Point id must be a non-negative integer no larger than Number.MAX_SAFE_INTEGER (or its decimal string, up to u64::MAX), got ${String(id)}`,
+      'BAD_REQUEST'
+    );
   }
   const normalized = normalizeIdString(id);
   if (normalized === null) {

@@ -518,6 +518,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: the WASM backend refuses a numeric point id it used to
+  wrap** (TypeScript SDK, 2026-11-18). `toPointId` handed any number to
+  `BigInt` and on to the binding, which passes a `u64` as raw `i64` bits:
+  `-1` addressed point `18446744073709551615`, `2 ** 64` addressed point 0,
+  and `1.5` escaped as a native `RangeError`. A numeric id that is not a
+  non-negative safe integer is now refused with `BAD_REQUEST` on `upsert`,
+  `upsertBatch` (before any point is written), `get`, `delete` and
+  `bulkDelete`, the rule `exactGraphId` already applied and REST's
+  `parseRestPointId` enforces. Decimal-string ids up to `u64::MAX` are
+  unchanged.
+
 - **WASM: the memory e2e spec and the agent-memory example match
   `remember()`** (WASM, 2026-11-18). The Playwright spec read `remember()`'s
   `{id, similar}` as a bare id string, so every assertion compared objects

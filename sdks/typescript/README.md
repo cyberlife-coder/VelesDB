@@ -874,7 +874,9 @@ await db.alterCollection('docs', { autoReindex: false });
 > `bulkDelete` remove a point's edges with it, as the server does. A decimal point id past
 > `Number.MAX_SAFE_INTEGER` (up to `u64::MAX`) is addressed exactly, as on REST: the binding
 > returns every point id as its decimal string, so `search`, `get` and the other reads give it
-> back as it went in; one past `u64::MAX` is refused with `BAD_REQUEST`. `matchQuery` names the
+> back as it went in; one past `u64::MAX` is refused with `BAD_REQUEST`, and so is a numeric
+> point id that is not a non-negative integer up to `Number.MAX_SAFE_INTEGER` (`-1`, `1.5`,
+> `2 ** 64`), which would otherwise reach the binding wrapped into another id. `matchQuery` names the
 > collection for the MATCH and returns REST's `{ bindings, depth, projected, score? }` rows,
 > each binding's node id a decimal string as on REST: the points' vectors score `similarity()` as on the server,
 > and `options.vector` / `threshold` behave as on REST `/match`. Traversal (`traverseGraph`, `traverseParallel`)

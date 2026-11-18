@@ -404,6 +404,27 @@ describe('WasmBackend', () => {
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     });
 
+    it('refuses an out-of-range numeric id on upsert, upsertBatch, get and delete before touching the store', async () => {
+      const { collections } = backend as unknown as { collections: Map<string, { store: MockVectorStore }> };
+      const store = collections.get('vectors')!.store;
+      for (const bad of [-1, 2 ** 64, 1.5]) {
+        const vector = [1.0, 0.0, 0.0, 0.0];
+        await expect(backend.upsert('vectors', { id: bad, vector }), String(bad))
+          .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(
+          backend.upsertBatch('vectors', [{ id: 1, vector }, { id: bad, vector, payload: { p: 1 } }]),
+          String(bad)
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(backend.get('vectors', bad), String(bad)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(backend.delete('vectors', bad), String(bad)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      }
+      expect(store.insert).not.toHaveBeenCalled();
+      expect(store.insert_with_payload).not.toHaveBeenCalled();
+      expect(store.insert_batch).not.toHaveBeenCalled();
+      expect(store.get).not.toHaveBeenCalled();
+      expect(store.remove).not.toHaveBeenCalled();
+    });
+
     it('should not use partial numeric parsing for mixed string IDs', async () => {
       await backend.upsert('vectors', {
         id: '123abc',
