@@ -101,7 +101,7 @@ pub(crate) fn match_candidates(
 /// rows before it applies — no RETURN `ORDER BY`, and no REST `/match`
 /// query vector, whose score sort runs first. [`order_and_limit`] then keeps
 /// the first `LIMIT` rows in walk order, which are exactly the rows the walk
-/// stopped at. Core's `traversal_limit` stops its walk at `LIMIT` on the
+/// stopped at. Core's MATCH walk (its `RowBound`) stops at `LIMIT` on the
 /// same condition. Under an order every row is a candidate, so the walk runs
 /// to the end, bounded by [`crate::guardrails::check_cardinality`].
 fn row_cap(
@@ -695,3 +695,9 @@ mod rank_tests;
 #[cfg(test)]
 #[path = "velesql_match_guard_tests.rs"]
 mod guard_tests;
+
+// Host-only: compares against a `velesdb-core` database, which needs core's
+// `persistence` feature (see `Cargo.toml`).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "velesql_match_guard_parity_tests.rs"]
+mod guard_parity_tests;

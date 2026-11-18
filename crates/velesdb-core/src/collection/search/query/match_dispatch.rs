@@ -209,9 +209,14 @@ impl Collection {
             crate::velesql::match_planner::MatchExecutionStrategy::VectorFirst {
                 top_k, ..
             } => self.execute_match_vector_first(match_clause, params, ctx, *top_k, sources),
-            crate::velesql::match_planner::MatchExecutionStrategy::GraphFirst { .. } => {
-                self.execute_match_reading(match_clause, params, Some(ctx), sources)
-            }
+            crate::velesql::match_planner::MatchExecutionStrategy::GraphFirst { .. } => self
+                .execute_match_reading(
+                    match_clause,
+                    params,
+                    Some(ctx),
+                    sources,
+                    super::match_exec::RowOrder::Clause,
+                ),
         }
     }
 
@@ -345,7 +350,7 @@ fn count_guard_rail_stop<T>(result: Result<T>) -> Result<T> {
 
 /// Computes the effective RETURN `LIMIT` for a MATCH query, clamped to the
 /// server-wide `MAX_LIMIT` ceiling. `None` means no LIMIT was specified, so the
-/// caller leaves the result set unbounded (subject only to `MAX_LIMIT` upstream).
+/// caller leaves the result set to the walk's cardinality bound (`RowBound`).
 pub(in crate::collection::search::query) fn match_return_limit(
     match_clause: &crate::velesql::MatchClause,
 ) -> Option<usize> {

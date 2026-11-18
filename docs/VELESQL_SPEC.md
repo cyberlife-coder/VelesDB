@@ -1701,8 +1701,11 @@ is a top-k retrieval, so an unbounded default would defeat top-k vector search.
 
 Exceptions (no implicit `LIMIT 10`):
 
-- `MATCH ... RETURN` graph queries return all matching rows, bounded only by
-  the server-wide ceiling of 100 000 rows per query;
+- `MATCH ... RETURN` graph queries return all matching rows, bounded by the
+  cardinality guard-rail (`max_cardinality`, 100 000 rows by default): a walk
+  that would hold more rows is refused with `VELES-027`, never cut short. A
+  `LIMIT` stops the walk early only when no `ORDER BY` reorders the rows;
+  under an `ORDER BY` every row is ranked before the `LIMIT` applies;
 - compound queries (`UNION` / `INTERSECT` / `EXCEPT`) evaluate their operands
   up to the same 100 000-row ceiling; only an explicit outer `LIMIT` caps the
   merged result.

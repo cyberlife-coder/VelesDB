@@ -480,6 +480,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A MATCH `ORDER BY` ranks every row, or refuses past the cardinality
+  bound, instead of sorting the first 100 000** (core, WASM, 2026-11-18).
+  Under a RETURN `ORDER BY` the MATCH walk stopped at the 100 000-row
+  `MAX_LIMIT` ceiling, which equals the default `max_cardinality`, so the
+  cardinality check could not fire first: a pattern producing more rows sorted
+  a truncated set and could return the wrong top rows (a single-node pattern
+  always did; a traversal was refused only because its rows were counted
+  twice, once by the walk's periodic check and again by the final one, which
+  also refused a traversal holding just over half the bound). The walk now holds
+  at most `max_cardinality` rows and refuses the first row past it with
+  `VELES-027` and the count the WASM walk reports for the same statement; it
+  stops early at `LIMIT` only when nothing reorders the rows. Each row is
+  counted once. REST `/match` with a query vector (and Python `match_query`
+  with one) read only the first `LIMIT` rows of the walk before sorting them
+  by score; that walk now reads every row too. A configured `max_cardinality`
+  above 100 000 lets an `ORDER BY` rank that many rows. A MATCH with no
+  `LIMIT` whose walk passes the bound is refused rather than cut to its first
+  100 000 rows; the guard-rail-free `execute_match` applies the collection's
+  configured bound.
+
 - **TypeScript SDK: `streamTraverse` times the connection and each event,
   not the whole stream** (TypeScript SDK, 2026-11-17). The client `timeout`
   was armed once and cleared only when the stream ended, so a traversal (or a
