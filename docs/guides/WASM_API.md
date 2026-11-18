@@ -337,7 +337,14 @@ Contract details:
 - Every method is **synchronous** — no `Promise` to await.
 - Failures throw a JS `Error` carrying a `.code` field: `INVALID_INPUT`,
   `NOT_FOUND`, or `INTERNAL`.
-- `ttlSeconds` makes a fact expire; omit it or pass `0` for a permanent memory.
+- `ttlSeconds` makes a fact expire; omit it for a permanent memory. `0` is
+  refused (`INVALID_INPUT`): it reads as "expire now", not "never".
+- Every count — `k`, `maxHops`, `ttlSeconds`, `fragmentIndex`,
+  `reserveTokens`, and `recallFused`'s `hops` / `pool` — is a whole JS number
+  in `0..=4294967295`, checked by the same validator as the Node binding; a
+  fraction, a negative, `NaN` or `Infinity` throws `INVALID_INPUT` instead of
+  being wrapped. `ttlSeconds` and `reserveTokens` also accept a `BigInt`, the
+  type their earlier `u64` signature required.
 - `metadata` marshals as a **plain JS object**, not an ES2015 `Map` — this is
   pinned by a regression test (`tests/memory_wedge_web.rs`).
 - A fact larger than `velesdb_memory::limits::MAX_FACT_BYTES` is rejected with

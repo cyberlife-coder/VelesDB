@@ -29,7 +29,7 @@ fn recall_metadata_is_a_plain_js_object_not_a_map() {
     .unwrap();
 
     let hits = svc
-        .recall("parking_lot", Some(5), JsValue::UNDEFINED)
+        .recall("parking_lot", Some(5.0), JsValue::UNDEFINED)
         .unwrap();
     let first = js_sys::Reflect::get(&hits, &0.into()).unwrap();
     let metadata = js_sys::Reflect::get(&first, &"metadata".into()).unwrap();
@@ -63,7 +63,7 @@ fn recall_metadata_preserves_null_values() {
     .unwrap();
 
     let hits = svc
-        .recall("null-valued metadata", Some(5), JsValue::UNDEFINED)
+        .recall("null-valued metadata", Some(5.0), JsValue::UNDEFINED)
         .unwrap();
     let first = js_sys::Reflect::get(&hits, &0.into()).unwrap();
     let metadata = js_sys::Reflect::get(&first, &"metadata".into()).unwrap();
@@ -91,7 +91,7 @@ fn recall_of_a_bare_fact_carries_only_the_auto_stamped_date() {
     .unwrap();
 
     let hits = svc
-        .recall("bare fact", Some(5), JsValue::UNDEFINED)
+        .recall("bare fact", Some(5.0), JsValue::UNDEFINED)
         .unwrap();
     let first = js_sys::Reflect::get(&hits, &0.into()).unwrap();
     let metadata = js_sys::Reflect::get(&first, &"metadata".into()).unwrap();
@@ -940,4 +940,52 @@ fn remember_extracted_refuses_a_backend_this_bundle_does_not_carry() {
         message.contains("unknown extractor 'ollama'"),
         "the refusal names the backend that was asked for, got: {message}"
     );
+}
+
+/// Counts cross as JS numbers and are checked by the validator the Node
+/// binding shares (`velesdb_memory::limits::whole_count`). As `usize`/`u64`
+/// parameters `wasm-bindgen` coerced them silently: `Infinity` and `NaN`
+/// became `k = 0` (an empty recall), `-1` became 4294967295, and a `-1n` TTL
+/// `u64::MAX` — a fact that never expires.
+#[wasm_bindgen_test]
+fn a_count_the_boundary_used_to_wrap_is_refused() {
+    let svc = WasmMemoryService::new(16);
+    let code = |r: Result<JsValue, JsValue>| {
+        r.err()
+            .and_then(|e| js_sys::Reflect::get(&e, &"code".into()).ok())
+            .and_then(|c| c.as_string())
+    };
+    for bad in [f64::INFINITY, f64::NAN, -1.0, 2.9] {
+        let refused = code(svc.recall("x", Some(bad), JsValue::UNDEFINED));
+        assert_eq!(refused.as_deref(), Some("INVALID_INPUT"), "k = {bad}");
+        let refused = code(svc.why("x", Some(bad), JsValue::UNDEFINED));
+        assert_eq!(refused.as_deref(), Some("INVALID_INPUT"), "maxHops = {bad}");
+    }
+    for bad in [JsValue::from_f64(-1.0), JsValue::from(-1_i64), "60".into()] {
+        let refused =
+            code(svc.remember("a fact", JsValue::UNDEFINED, JsValue::UNDEFINED, Some(bad)));
+        assert_eq!(refused.as_deref(), Some("INVALID_INPUT"));
+    }
+}
+
+/// `ttlSeconds` and `reserveTokens` take a number, as on Node, and still the
+/// `BigInt` their former `u64` signature required.
+#[wasm_bindgen_test]
+fn ttl_and_reserve_take_a_number_or_a_bigint() {
+    let svc = WasmMemoryService::new(16);
+    for ttl in [JsValue::from_f64(60.0), JsValue::from(60_u64)] {
+        assert!(svc
+            .remember(
+                "an expiring fact",
+                JsValue::UNDEFINED,
+                JsValue::UNDEFINED,
+                Some(ttl)
+            )
+            .is_ok());
+    }
+    for reserve in [JsValue::from_f64(512.0), JsValue::from(512_u64)] {
+        assert!(svc
+            .suggest_budget("claude-sonnet-4-5", Some(reserve))
+            .is_ok());
+    }
 }

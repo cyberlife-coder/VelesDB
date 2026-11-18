@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`MemoryService` refuses a count it used to wrap.** `k`, `maxHops`,
+  `ttlSeconds`, `fragmentIndex`, `reserveTokens` and `recallFused`'s `hops` /
+  `pool` were `usize`/`u64` parameters, which `wasm-bindgen` coerces silently:
+  `Infinity` or `NaN` became `k = 0` (an empty recall), `-1` became
+  4294967295, and a `-1n` TTL became `u64::MAX` — a fact that never expires.
+  They now take a JS number checked by the validator the Node binding uses
+  (`velesdb_memory::limits::whole_count`) and throw `INVALID_INPUT`, with the
+  Node binding's message. `ttlSeconds` and `reserveTokens` take a number, as
+  on Node, and still a `BigInt`; `recallFused`'s `pool` is now clamped to the
+  recall cap, as on every other surface.
+
 - **`WasmDatabase.addEdge` reads `source` and `target` as REST does: a
   decimal string or a number, and `getEdges` lists them as decimal
   strings.** They took and gave numbers only, so a node id past 2^53 could

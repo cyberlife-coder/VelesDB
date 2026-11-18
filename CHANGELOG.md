@@ -466,6 +466,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM `MemoryService` refuses a count it used to wrap** (WASM, Node,
+  2026-11-18). Its counts — `k`, `maxHops`, `ttlSeconds`, `fragmentIndex`,
+  `reserveTokens`, `recallFused`'s `hops` / `pool` — were `usize`/`u64`
+  parameters that `wasm-bindgen` coerces silently: `Infinity` or `NaN` became
+  `k = 0` (an empty recall), `-1` became 4294967295, and a `-1n` TTL became
+  `u64::MAX`, a fact that never expires. The Node binding already refused
+  these with `INVALID_INPUT`; its check moved into `velesdb-memory`
+  (`limits::whole_count`, `MemoryError::InvalidCount`) and both bindings call
+  it, with Node's messages unchanged. `ttlSeconds` and `reserveTokens` accept
+  a number, as on Node, or the `BigInt` their old signature required.
+
 - **Hybrid search refuses a non-finite `vector_weight`** (Core, Python, WASM,
   2026-11-18). The blend was clamped to `0..1`, but `NaN.clamp(0.0, 1.0)` is
   `NaN`: every fused score became `NaN` and the ranking arbitrary (Python
