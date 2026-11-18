@@ -11,24 +11,29 @@
 //! here: the parser refuses it, and the validator refuses out-of-range
 //! weights; a refusal of the strategy itself surfaces as an error.
 
-use velesdb_core::fusion::FusionStrategy;
+use velesdb_core::fusion::{FusionStrategy, ScoreDirection};
 use velesdb_core::velesql::{FusionClause, FusionStrategyType};
 
 /// Represents a single ranked branch: `(id, score)` pairs sorted descending.
 pub(crate) type RankedBranch = Vec<(u64, f32)>;
 
-/// Applies the clause's fusion strategy to the given branches.
+/// Applies the clause's fusion strategy to the given branches, each read in
+/// its own score direction (`directions[i]` for `branches[i]`): a distance
+/// branch is lower-is-better, and a score-level strategy that combined it as
+/// if higher were better would rank the farthest point first.
 ///
 /// # Errors
 ///
 /// Returns the strategy's refusal (e.g. a branch count its weights do not
-/// cover) rather than an empty ranking that would read as "no match".
+/// cover, or a direction per branch missing) rather than an empty ranking
+/// that would read as "no match".
 pub(crate) fn apply(
     clause: &FusionClause,
     branches: Vec<RankedBranch>,
+    directions: &[ScoreDirection],
 ) -> Result<Vec<(u64, f32)>, String> {
     build_strategy(clause)
-        .fuse(branches)
+        .fuse_with_directions(branches, directions)
         .map_err(|e| format!("USING FUSION: {e}"))
 }
 

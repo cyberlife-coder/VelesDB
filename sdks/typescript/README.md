@@ -60,7 +60,7 @@ The WASM backend runs entirely in-process -- no server required. Ideal for brows
 
 > **Binding version:** the WASM backend reads its results from `@wiscale/velesdb-wasm` since 8.0.0, the floor this SDK release pins (`^8.0.0` in `package.json`). velesdb-wasm 6.x and 7.x return `textSearch`, `hybridSearch`, filtered `search` and `get` records as ES2015 `Map`s, which the SDK cannot read: those calls throw on any row (#2332, fixed in velesdb-wasm 8.0.0).
 
-A point id past `Number.MAX_SAFE_INTEGER` needs a binding that returns point ids as decimal strings (the one released with this SDK): earlier bindings throw inside a search, `get` or `query` over such a point.
+The package published to npm depends on the `@wiscale/velesdb-wasm` of its own release, and needs it. That binding returns point ids as decimal strings: earlier ones throw inside a search, `get` or `query` over a point id past `Number.MAX_SAFE_INTEGER`. Its VelesQL executor also runs `SPARSE_NEAR` over the sparse vectors the SDK keeps in each collection's store, which earlier ones cannot.
 
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
@@ -367,7 +367,7 @@ await db.upsert('docs', {
 });
 ```
 
-> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. A later `sparseVector` for the same id replaces it, an upsert without one keeps it (as core does), and a deleted point never comes back in sparse results. Replaced and deleted sparse vectors are purged from the index once they outnumber the live ones.
+> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. An upsert replaces the whole point, as core does: a later `sparseVector` for the same id replaces it, an upsert without one drops it — and its payload too when it carries none — and a deleted point never comes back in sparse results. A sparse vector the binding refuses (a non-finite weight) fails the upsert before the point is written. The sparse vector lives in the collection's own store, under the point's id, so VelesQL `SPARSE_NEAR` in `query()` ranks the same points as sparse search.
 
 #### `db.upsertBatch(collection, documents)`
 
@@ -692,8 +692,11 @@ Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, 
 > - pure top-k vector queries, `SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]`
 >   (`vector` is the grammar keyword, not a column name), on every binding;
 > - with a velesdb-wasm binding that has `WasmDatabase.attachStore`,
->   any other read-only `SELECT` — `WHERE` predicates, `ORDER BY`, and the rest of what
+>   any other read-only `SELECT` — `WHERE` predicates, `vector SPARSE_NEAR` alone or fused with
+>   `NEAR` (RRF, or the `USING FUSION` strategy core maps), `ORDER BY`, and the rest of what
 >   velesdb-wasm's executor evaluates — over the points the SDK wrote, in REST's `/query` shape.
+>   A `SPARSE_NEAR` on a collection that was never given a sparse vector, or naming an index
+>   (`USING '<name>'`: WASM keeps only the default one), is refused as core refuses a missing index.
 >
 > Aggregations (`GROUP BY`, `COUNT`, …), `MATCH`, DDL and mutations through `query()`, and
 > every non-`NEAR` statement on a binding shipped before `attachStore`, throw `NOT_SUPPORTED`
@@ -982,7 +985,10 @@ A traversal has no cursor: `result.hasMore` is `true` when it stopped at
 Stream a graph traversal over SSE (`GET .../graph/traverse/stream`) as an
 async iterable of `TraverseStreamEvent` — `node` (one per visited node, with
 `depth` and `path`), `stats` (progress), `done` (totals), and `error`.
-**REST backend only** (the WASM backend throws `NOT_SUPPORTED`).
+**REST backend only** (the WASM backend throws `NOT_SUPPORTED`). The client
+`timeout` bounds the wait for the response, then each wait for the next
+event, not the length of the stream; a stream silent for longer fails with
+`ConnectionError('Request timeout')`.
 
 ```typescript
 for await (const event of db.streamTraverse('social', {

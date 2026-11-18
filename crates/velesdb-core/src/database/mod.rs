@@ -74,6 +74,8 @@ mod query_engine_tests;
 mod query_join_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod stats_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod training_tests;
 
 pub use gated_search::GatedRead;
 pub use match_query::MatchScoring;

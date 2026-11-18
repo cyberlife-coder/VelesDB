@@ -14,7 +14,7 @@ use crate::index::sparse::{
 };
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
-use crate::velesql::{Condition, SparseVectorExpr, SparseVectorSearch};
+use crate::velesql::{Condition, SparseVectorSearch};
 
 /// The two ranked branches of a hybrid search, before fusion: the dense hits
 /// as `(id, score)` pairs, the sparse hits as scored documents.
@@ -44,107 +44,6 @@ impl Collection {
             }
             _ => None,
         }
-    }
-
-    /// Resolve a `SparseVectorExpr` to a concrete `SparseVector`.
-    ///
-    /// Accepts two JSON formats:
-    /// - Structured: `{"indices": [1,2,3], "values": [0.5, 0.3, 0.1]}`
-    /// - Shorthand:  `{"12": 0.8, "45": 0.3}`
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the bind parameter is missing or has the wrong
-    /// type, or [`Error::InvalidVector`] for a weight that is not finite.
-    pub(crate) fn resolve_sparse_vector(
-        expr: &SparseVectorExpr,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<SparseVector> {
-        let vector = Self::parse_sparse_vector(expr, params)?;
-        // A JSON weight past f32 (`1e300`) narrows to infinity: the same
-        // finite check every typed sparse search runs.
-        crate::validation::validate_sparse_vector_is_finite(&vector)?;
-        Ok(vector)
-    }
-
-    /// Reads the sparse vector `expr` names, unchecked.
-    fn parse_sparse_vector(
-        expr: &SparseVectorExpr,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<SparseVector> {
-        match expr {
-            SparseVectorExpr::Literal(sv) => Ok(sv.clone()),
-            SparseVectorExpr::Parameter(name) => {
-                let val = params.get(name).ok_or_else(|| {
-                    Error::Query(format!("Missing sparse vector parameter: ${name}"))
-                })?;
-                let obj = val.as_object().ok_or_else(|| {
-                    Error::Query(format!(
-                        "Invalid sparse vector parameter ${name}: expected object with \
-                         indices/values or {{index: weight}} map"
-                    ))
-                })?;
-
-                // Try structured format first: {"indices": [...], "values": [...]}
-                if let Some(sv) = Self::try_parse_structured_sparse(obj, name)? {
-                    return Ok(sv);
-                }
-
-                // Shorthand: {"12": 0.8, "45": 0.3}
-                Self::parse_shorthand_sparse(obj, name)
-            }
-        }
-    }
-
-    /// Tries to parse a structured sparse vector format with `indices` and `values` arrays.
-    fn try_parse_structured_sparse(
-        obj: &serde_json::Map<String, serde_json::Value>,
-        name: &str,
-    ) -> Result<Option<SparseVector>> {
-        let (Some(indices_val), Some(values_val)) = (obj.get("indices"), obj.get("values")) else {
-            return Ok(None);
-        };
-        let indices: Vec<u32> = serde_json::from_value(indices_val.clone()).map_err(|e| {
-            Error::Query(format!(
-                "Invalid sparse vector parameter ${name}.indices: {e}"
-            ))
-        })?;
-        let values: Vec<f32> = serde_json::from_value(values_val.clone()).map_err(|e| {
-            Error::Query(format!(
-                "Invalid sparse vector parameter ${name}.values: {e}"
-            ))
-        })?;
-        if indices.len() != values.len() {
-            return Err(Error::Query(format!(
-                "Sparse vector parameter ${name}: indices and values must have equal length"
-            )));
-        }
-        Ok(Some(SparseVector::new(
-            indices.into_iter().zip(values).collect(),
-        )))
-    }
-
-    /// Parses shorthand sparse vector format: `{"12": 0.8, "45": 0.3}`.
-    fn parse_shorthand_sparse(
-        obj: &serde_json::Map<String, serde_json::Value>,
-        name: &str,
-    ) -> Result<SparseVector> {
-        let mut pairs = Vec::with_capacity(obj.len());
-        for (k, v) in obj {
-            let idx: u32 = k.parse().map_err(|_| {
-                Error::Query(format!(
-                    "Invalid sparse vector parameter ${name}: key '{k}' is not a valid u32 index"
-                ))
-            })?;
-            #[allow(clippy::cast_possible_truncation)]
-            let weight = v.as_f64().ok_or_else(|| {
-                Error::Query(format!(
-                    "Invalid sparse vector parameter ${name}: value for key '{k}' is not a number"
-                ))
-            })? as f32;
-            pairs.push((idx, weight));
-        }
-        Ok(SparseVector::new(pairs))
     }
 
     // ------------------------------------------------------------------
@@ -180,7 +79,7 @@ impl Collection {
         limit: usize,
         anchors: Option<&std::collections::HashSet<u64>>,
     ) -> Result<Vec<SearchResult>> {
-        let query_vec = Self::resolve_sparse_vector(&svs.vector, params)?;
+        let query_vec = svs.vector.resolve(params)?;
         let index_name = svs
             .index_name
             .as_deref()
@@ -272,22 +171,12 @@ impl Collection {
         limit: usize,
         strategy: &FusionStrategy,
     ) -> Result<Vec<SearchResult>> {
-        let sparse_query = Self::resolve_sparse_vector(&svs.vector, params)?;
+        let sparse_query = svs.vector.resolve(params)?;
         let index_name = svs
             .index_name
             .as_deref()
             .unwrap_or(DEFAULT_SPARSE_INDEX_NAME);
-        // Oversampling factor: 2× the requested limit.
-        //
-        // Both the dense (HNSW) and sparse branches can independently miss the
-        // globally optimal result; fetching more candidates from each branch
-        // compensates for the blind spots of the other. 2× is chosen to be
-        // conservative: `sparse_search_filtered` internally uses a higher
-        // oversampling factor (4×–8×) to account for payload-filter selectivity,
-        // so the 2× here operates at the fusion level — not the per-branch level.
-        // Increasing this beyond 2× improves recall marginally at the cost of
-        // more fusion work; it can be tuned per query via strategy configuration.
-        let candidate_k = limit.saturating_mul(2).max(limit + 10);
+        let candidate_k = crate::fusion::dense_sparse_candidate_k(limit);
 
         // Pre-build metadata filter for the sparse branch.
         let metadata_filter = filter_condition

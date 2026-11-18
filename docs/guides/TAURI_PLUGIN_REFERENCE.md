@@ -170,7 +170,9 @@ test keeps free of any command that writes:
 
 - `velesdb:read-only` — listing, point reads, every search, graph reads, and
   VelesQL through `read_query` (`readQuery` in guest-js). It does **not**
-  grant `query`, which runs DDL and DML.
+  grant `query`, which runs DDL and DML. Its memory reads (`semantic_query`,
+  `episodic_recent`, `procedural_recall`) create nothing: on a database that
+  holds no agent memory yet they return an empty list.
 - `velesdb:search-only` — dense, ids, text and hybrid search.
 
 ```json

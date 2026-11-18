@@ -65,14 +65,24 @@ pub(super) fn validate_dimension(expected: usize, actual: usize) -> Result<(), A
     Ok(())
 }
 
-/// Opens an existing collection or creates a new one with cosine distance.
-///
-/// If the collection already exists, verifies that dimensions match and returns
-/// the existing dimension. If it does not exist, creates it with `dimension`.
-pub(super) fn open_or_create_collection(
+/// What opening a memory collection does when the collection is absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OnMissing {
+    /// Create it, with cosine distance: the write path.
+    Create,
+    /// Refuse with [`AgentMemoryError::NotFound`]: the read path, which must
+    /// not write (`AgentMemory::open_existing`).
+    Refuse,
+}
+
+/// Opens an existing collection, verifying that its dimension matches and
+/// returning it; an absent one is created with `dimension` and cosine
+/// distance, or refused, as `on_missing` says.
+pub(super) fn open_collection(
     db: &Database,
     collection_name: &str,
     dimension: usize,
+    on_missing: OnMissing,
 ) -> Result<usize, AgentMemoryError> {
     let actual_dimension = if let Some(collection) = db.get_vector_collection(collection_name) {
         let existing_dim = collection.config().dimension;
@@ -83,6 +93,10 @@ pub(super) fn open_or_create_collection(
             });
         }
         existing_dim
+    } else if on_missing == OnMissing::Refuse {
+        return Err(AgentMemoryError::NotFound(format!(
+            "memory collection '{collection_name}'"
+        )));
     } else {
         db.create_collection(collection_name, dimension, DistanceMetric::Cosine)?;
         dimension
@@ -369,9 +383,10 @@ pub(super) fn init_tracked_memory(
     db: &Database,
     collection_name: &str,
     dimension: usize,
+    on_missing: OnMissing,
 ) -> Result<(String, usize, RwLock<HashSet<u64>>), AgentMemoryError> {
     let name = collection_name.to_string();
-    let actual_dimension = open_or_create_collection(db, &name, dimension)?;
+    let actual_dimension = open_collection(db, &name, dimension, on_missing)?;
     let stored_ids = RwLock::new(load_stored_ids(db, &name));
     Ok((name, actual_dimension, stored_ids))
 }

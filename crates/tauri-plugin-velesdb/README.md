@@ -173,6 +173,22 @@ Only the engine sections of the file are read (`[search]`, `[hnsw]`,
 belonging to another VelesDB component in a shared file is ignored, not
 rejected. Field reference: [configuration guide](../../docs/guides/CONFIGURATION.md).
 
+### Agent memory dimension
+
+The agent memory (`semantic_*`, `episodic_*`, `procedural_*` and `memory_*`
+commands) takes embeddings of 384 dimensions by default. For another model, set
+its size on the builder:
+
+```rust
+let plugin = tauri_plugin_velesdb::Builder::new("./my_data")
+    .with_memory_dimension(768)
+    .build();
+```
+
+The three memory collections are created with that dimension on first use. If
+they already exist with another one, the first memory command fails with a
+dimension mismatch rather than mixing sizes.
+
 ### Cargo features
 
 `default` pulls in `velesdb-core/default`, which includes `persistence` —

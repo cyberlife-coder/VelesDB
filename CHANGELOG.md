@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **TypeScript SDK: the WASM backend needs the `@wiscale/velesdb-wasm` of its
+  own release, and keeps sparse vectors in each collection's store**
+  (TypeScript SDK, 2026-11-17). The backend indexed sparse vectors in a
+  separate store under ids of its own, with tombstones and periodic rebuilds,
+  only so that velesdb-wasm 8.0.0, which cannot remove a sparse vector, kept
+  working. VelesQL runs in the collection's store, so `SPARSE_NEAR` through the
+  SDK found no sparse index there. Sparse vectors now go into the collection's
+  store under the point's own id, replaced by `sparse_insert` and removed by
+  `sparse_remove` on upsert and delete; sparse and hybrid `search` read that
+  store and rank as before. The SDK's in-repo dependency range therefore
+  starts at 8.2.0, the first binding with `sparse_remove`; the package
+  published to npm already depended on the binding of its own release, which
+  the publish step pins, and needs it for string point ids and `SPARSE_NEAR`.
+
 - **BREAKING (WASM, TypeScript SDK): point ids leave every WASM search and
   read surface as decimal strings, as REST sends them** (WASM, TypeScript
   SDK, 2026-11-17). The binding serialized point ids as JavaScript numbers:
@@ -511,6 +525,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   REST and WASM backends, the backend port and `VelesDB` — now returns
   `SearchIdResult[]`, which is `Pick<SearchResult, 'id' | 'score'>`: one id
   contract with the full search results instead of a narrower copy.
+
+- **A MATCH `ORDER BY` ranks every row, or refuses past the cardinality
+  bound, instead of sorting the first 100 000** (core, WASM, 2026-11-18).
+  Under a RETURN `ORDER BY` the MATCH walk stopped at the 100 000-row
+  `MAX_LIMIT` ceiling, which equals the default `max_cardinality`, so the
+  cardinality check could not fire first: a pattern producing more rows sorted
+  a truncated set and could return the wrong top rows (a single-node pattern
+  always did; a traversal was refused only because its rows were counted
+  twice, once by the walk's periodic check and again by the final one, which
+  also refused a traversal holding just over half the bound). The walk now holds
+  at most `max_cardinality` rows and refuses the first row past it with
+  `VELES-027` and the count the WASM walk reports for the same statement; it
+  stops early at `LIMIT` only when nothing reorders the rows. Each row is
+  counted once. REST `/match` with a query vector (and Python `match_query`
+  with one) read only the first `LIMIT` rows of the walk before sorting them
+  by score; that walk now reads every row too. A configured `max_cardinality`
+  above 100 000 lets an `ORDER BY` rank that many rows. A MATCH with no
+  `LIMIT` whose walk passes the bound is refused rather than cut to its first
+  100 000 rows; the guard-rail-free `execute_match` applies the collection's
+  configured bound.
+
+- **TypeScript SDK: `streamTraverse` times the connection and each event,
+  not the whole stream** (TypeScript SDK, 2026-11-17). The client `timeout`
+  was armed once and cleared only when the stream ended, so a traversal (or a
+  consumer) taking longer than it was aborted mid-stream with "Request
+  timeout". It now bounds the wait for the response headers, then each wait
+  for the next body chunk; the consumer's own time between events is not
+  counted, and a stream silent for longer than the timeout still fails.
+
+- **Tauri plugin: memory reads no longer create the memory collections**
+  (Tauri plugin, core, 2026-11-17). The agent-memory handle was built on the
+  first memory command of any kind, and building it created
+  `_semantic_memory`, `_episodic_memory` and `_procedural_memory`, so under
+  the `read-only` permission set a first `semantic_query` wrote three
+  collections. `semantic_query`, `episodic_recent`, `episodic_recall_similar`,
+  `episodic_older_than`, `procedural_recall`, `procedural_list_all` and
+  `semantic_dimension` now open only memory that exists: on a database
+  without it they return an empty list (the dimension: the configured one),
+  still refusing an embedding of the wrong size. Core gains
+  `AgentMemory::open_existing`, which never creates a collection: `None` when
+  no memory exists, the memory when all three collections do, and
+  `NotFound` when only some do.
+
+- **Tauri plugin: the agent-memory embedding dimension is configurable**
+  (Tauri plugin, 2026-11-17). The memory handle was always built with core's
+  default of 384 dimensions, so every memory command with another model's
+  embeddings failed with a dimension mismatch. `Builder::with_memory_dimension`
+  (and `VelesDbState::with_memory_dimension`) sets it; the default stays 384,
+  as in the Python binding's `AgentMemory(db, dimension=…)`.
+
+- **WASM: a `MATCH` walk is bounded, and stops at `LIMIT` when nothing
+  orders its rows** (WASM, core, 2026-11-17). The walk collected every row
+  before ORDER BY and LIMIT, with no bound, so a fan-out pattern grew one
+  array until the tab ran out of memory. The row past core's
+  `DEFAULT_MAX_CARDINALITY` (100 000) is now refused with the error core
+  raises for the same violation (`VELES-027`, "Cardinality exceeded"), and
+  without ORDER BY or a `/match` query vector the walk stops at `LIMIT` rows
+  — the rows the truncation kept before. The WHERE scan's refusal now carries
+  core's message too. Core's guard-rail limits and `GuardRailViolation`
+  build without the `persistence` feature, so the binding reads them instead
+  of keeping copies.
+
+- **TypeScript SDK: `trainPq({ opq: true })` over REST trains OPQ; core
+  refuses an unknown `TRAIN QUANTIZER` parameter** (TypeScript SDK, core,
+  2026-11-17). The REST backend sent `WITH (m=…, k=…, opq=true)`, and core
+  read only `m`, `k`, `type`, `oversampling`, `sample` and `force`, ignoring
+  any other key, so the statement trained plain PQ and reported success. The
+  SDK now sends `type=opq`, as the Tauri plugin, the Python binding and the
+  mobile binding already did. Core now refuses any other `WITH` key with
+  `VELES-028`, naming the key and the supported list, so a misspelt parameter
+  fails on every surface instead of falling back to its default.
+
+- **Core: a `similarity()` threshold beside `SPARSE_NEAR` is applied** (core,
+  2026-11-17). Under `AND` the sparse and hybrid search pushed down only the
+  metadata part of the WHERE clause, so `vector SPARSE_NEAR {…} AND
+  similarity(vector, $q) > t` returned points failing the threshold; under
+  `OR` or `NOT` the query ran the exact `similarity()` scan instead, which
+  dropped the `SPARSE_NEAR` leaf and scored by similarity. Both branches now
+  keep only the points the whole clause holds for, the threshold evaluated as
+  the scan evaluates it (three-valued, on each point's own vector), and the
+  rows rank by the sparse or fused score — the same rows as the WASM
+  executor.
+
+- **WASM: a `similarity()` threshold beside `SPARSE_NEAR` filters instead of
+  failing** (WASM, 2026-11-17). `vector SPARSE_NEAR {…} AND similarity(vector,
+  $q) > t`, alone or beside a `NEAR`, failed with "similarity() threshold
+  filters are not supported in WASM", though the dense path evaluates the same
+  threshold. The rest of the WHERE clause now bounds both branches, its
+  `similarity()` leaves evaluated as on the dense path, under `AND`, `OR` and
+  `NOT`, and the survivors rank by the sparse or fused score, as in core.
+
+- **Core and WASM: `DISTINCT` and a vector `GROUP BY` read every candidate;
+  beside `SPARSE_NEAR` or `NEAR_FUSED` a vector `GROUP BY` groups** (core,
+  WASM, 2026-11-17). A search's fetch was cut at `LIMIT` + `OFFSET` before
+  `DISTINCT` deduplicated it, so `SELECT DISTINCT cat … WHERE vector NEAR $q
+  LIMIT 2` (or `SPARSE_NEAR`, or both) returned one row when the two best hits
+  shared a category. The fetch is now sized as a vector `GROUP BY`'s already
+  was, at core's ceiling, on both engines; `SelectStatement::reshapes_rows_before_window`
+  is the test both size it by. In core, a vector `GROUP BY` beside
+  `SPARSE_NEAR` or `NEAR_FUSED` returned the hits ungrouped, cut at the
+  `LIMIT`; the paths that rank their own rows now group them as the `NEAR`
+  path does. WASM grouped only the hits inside the window.
+
+- **WASM: VelesQL runs `SPARSE_NEAR`, alone or fused with a `NEAR`, as core
+  does** (core, WASM, 2026-11-17). Beside a `NEAR` the sparse leaf was
+  dropped without a word, so `vector NEAR $d AND vector SPARSE_NEAR {…}`
+  returned the dense ranking alone; a lone `SPARSE_NEAR` failed with a
+  message about the SELECT dispatcher. The executor now runs core's hybrid
+  search over the store's sparse index: both branches bounded by the metadata
+  filter, core's candidate depth, the strategy core maps from `USING FUSION`
+  (RRF without one) and each branch read in its score direction — same ids
+  and scores as a core `Database`. Through the TypeScript SDK's WASM backend
+  it runs the same way, over the sparse vectors `upsert` wrote, alone, fused
+  with a `NEAR` (RRF or any `USING FUSION` strategy), under a `WHERE` filter,
+  with a `$param` operand and on a collection without dense vectors. Only a
+  collection never given a sparse vector, or a named sparse index (WASM keeps
+  the default one only), is refused, as core refuses a missing index. A
+  score-level `USING FUSION` over two `NEAR`s also reads a Euclidean or
+  Hamming branch closest-first. Core exposes the pieces both engines share:
+  `SparseVectorExpr::resolve`, `FusionClause::dense_sparse_strategy` and
+  `fusion::dense_sparse_candidate_k`.
+
+- **TypeScript SDK, WASM backend: an upsert replaces the whole point** (TypeScript
+  SDK, 2026-11-17). Re-upserting a point without a `payload` left the old one
+  in the SDK's payload map, so `get()` and dense `search()` kept returning it
+  while VelesQL returned none; re-upserting without a `sparseVector` kept the
+  point in sparse and hybrid results, where core drops the sparse vector a new
+  version leaves out. Both now follow the new version. A sparse vector the
+  binding refuses (a non-finite weight) now fails the upsert before the point
+  is written, instead of after its dense vector was stored.
+
+- **WASM: IndexedDB persistence works in a Web Worker** (WASM, 2026-11-17).
+  `VectorStore` and `GraphPersistence` looked the IndexedDB factory up on
+  `window`, which a worker does not have, so every save, load and delete
+  inside one failed with "No window object" although the README lists Web
+  Workers as supported. The factory is now read from the global scope, which
+  a window and a `WorkerGlobalScope` both carry.
+
+- **WASM: the `SemanticMemory` docs no longer promise a `save()` it does not
+  have** (WASM, 2026-11-17). Its documentation, copied into the generated
+  TypeScript typings, told users to call `save()` to keep facts across
+  reloads; the class has no save, export or load. It now states that the
+  memory is in-memory only.
+
+- **Tauri: `add_edge` / `add_edges_batch` refuse properties that are not an
+  object** (Tauri, 2026-11-17). A `properties` of `[1, 2]`, `"x"` or a number
+  was stored as an empty map without a word, while REST refuses it with
+  "Properties must be an object or null". The plugin now refuses it the same
+  way, as an `InvalidConfig` error (VELES-009); an object, `null` or an
+  absent field are accepted as before.
+
+- **Tauri: `traverse_graph` refuses an unknown `algorithm` instead of running
+  BFS** (Tauri, 2026-11-17). Any value but `"dfs"` — `"DFS"` and
+  `"dijkstra"` included — silently ran a breadth-first traversal. The name is
+  now matched case-insensitively against `bfs` / `dfs`, as REST's traverse
+  endpoint does, and anything else is an `InvalidConfig` error (VELES-009).
 
 - **Python: the type stub declares every runtime member and keyword**
   (Python, 2026-11-17). `__init__.pyi` lacked dozens of methods and

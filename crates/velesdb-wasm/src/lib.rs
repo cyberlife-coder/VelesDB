@@ -113,6 +113,7 @@ mod velesql_scan;
 mod velesql_select;
 mod velesql_setops;
 mod velesql_similarity;
+mod velesql_sparse;
 mod velesql_update;
 mod velesql_value;
 mod velesql_vector_group;

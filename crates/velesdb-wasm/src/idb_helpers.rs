@@ -202,14 +202,17 @@ fn outcome_promise(transaction: &web_sys::IdbTransaction) -> js_sys::Promise {
     })
 }
 
-/// Gets the `IdbFactory` from the current window context.
+/// Gets the `IdbFactory` from the global scope.
+///
+/// Both a `Window` and a Web Worker's `WorkerGlobalScope` expose `indexedDB`
+/// on the global object, so reading it there serves both; a worker has no
+/// `window`. A throwing getter (e.g. an opaque origin) propagates its error.
 ///
 /// Shared by both vector and graph persistence open functions.
 pub fn idb_factory() -> Result<web_sys::IdbFactory, JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window object"))?;
-    window
-        .indexed_db()?
-        .ok_or_else(|| JsValue::from_str("IndexedDB not available"))
+    js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("indexedDB"))?
+        .dyn_into::<web_sys::IdbFactory>()
+        .map_err(|_| JsValue::from_str("IndexedDB not available"))
 }
 
 /// Ensures that every store name in `names` exists in the given `IdbDatabase`.
@@ -228,3 +231,7 @@ pub fn ensure_stores(db: &web_sys::IdbDatabase, names: &[&str]) {
         }
     }
 }
+
+#[cfg(all(test, target_arch = "wasm32"))]
+#[path = "idb_helpers_tests.rs"]
+mod tests;

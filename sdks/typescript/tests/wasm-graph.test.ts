@@ -16,6 +16,7 @@ import { VelesDBError } from '../src/types';
 class MockVectorStore {
   insert = vi.fn();
   insert_with_payload = vi.fn();
+  sparse_remove = vi.fn(() => false);
   free = vi.fn();
   len = 0;
   is_empty = true;

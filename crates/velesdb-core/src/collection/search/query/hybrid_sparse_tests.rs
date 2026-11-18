@@ -391,7 +391,7 @@ fn test_resolve_sparse_vector_structured() {
     );
 
     let expr = crate::velesql::SparseVectorExpr::Parameter("sv".to_string());
-    let sv = Collection::resolve_sparse_vector(&expr, &params).expect("resolve failed");
+    let sv = expr.resolve(&params).expect("resolve failed");
     assert_eq!(sv.indices, vec![1, 2, 3]);
     assert_eq!(sv.values, vec![0.5, 0.3, 0.1]);
 }
@@ -405,7 +405,7 @@ fn test_resolve_sparse_vector_shorthand() {
     );
 
     let expr = crate::velesql::SparseVectorExpr::Parameter("sv".to_string());
-    let sv = Collection::resolve_sparse_vector(&expr, &params).expect("resolve failed");
+    let sv = expr.resolve(&params).expect("resolve failed");
     assert_eq!(sv.nnz(), 2);
     // Values should be present (order from BTreeMap is sorted by string key)
     assert!(sv.indices.contains(&10));
@@ -424,7 +424,7 @@ fn test_resolve_sparse_vector_shorthand() {
 fn test_resolve_sparse_vector_missing_param() {
     let params = HashMap::new();
     let expr = crate::velesql::SparseVectorExpr::Parameter("missing".to_string());
-    let result = Collection::resolve_sparse_vector(&expr, &params);
+    let result = expr.resolve(&params);
     assert!(result.is_err());
 }
 
@@ -438,7 +438,8 @@ fn test_resolve_sparse_vector_refuses_a_weight_past_f32() {
         serde_json::json!({ "indices": [10], "values": [1e300] }),
     ] {
         let params = HashMap::from([("sv".to_string(), shape.clone())]);
-        let err = Collection::resolve_sparse_vector(&expr, &params)
+        let err = expr
+            .resolve(&params)
             .expect_err("an infinite weight is refused");
         assert_eq!(err.code(), "VELES-005", "{shape}: {err}");
     }

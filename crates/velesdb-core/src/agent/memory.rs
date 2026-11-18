@@ -19,6 +19,7 @@
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::cast_sign_loss)]
 
+use super::memory_helpers::OnMissing;
 use crate::Database;
 use std::sync::Arc;
 
@@ -79,16 +80,61 @@ impl AgentMemory {
     ///
     /// Returns an error when one of the underlying memory subsystems cannot be initialized.
     pub fn with_dimension(db: Arc<Database>, dimension: usize) -> Result<Self, AgentMemoryError> {
+        Self::open(db, dimension, OnMissing::Create)
+    }
+
+    /// Opens the memory a database already holds, creating nothing — the
+    /// constructor for a read, which must not write.
+    ///
+    /// Returns `Ok(None)` when none of the three memory collections exists
+    /// (nothing was ever stored, so every read finds nothing), and the
+    /// memory when all three do. [`Self::with_dimension`] creates whichever
+    /// is missing; this never does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentMemoryError::NotFound`] when only some of the three
+    /// exist — the absent ones are refused, not created — and
+    /// [`AgentMemoryError::DimensionMismatch`] when they hold another
+    /// dimension than `dimension`.
+    pub fn open_existing(
+        db: Arc<Database>,
+        dimension: usize,
+    ) -> Result<Option<Self>, AgentMemoryError> {
+        let names = [
+            SemanticMemory::COLLECTION_NAME,
+            EpisodicMemory::COLLECTION_NAME,
+            ProceduralMemory::COLLECTION_NAME,
+        ];
+        if names
+            .iter()
+            .all(|name| db.get_vector_collection(name).is_none())
+        {
+            return Ok(None);
+        }
+        Self::open(db, dimension, OnMissing::Refuse).map(Some)
+    }
+
+    /// Builds the three subsystems, creating or refusing an absent
+    /// collection as `on_missing` says.
+    fn open(
+        db: Arc<Database>,
+        dimension: usize,
+        on_missing: OnMissing,
+    ) -> Result<Self, AgentMemoryError> {
         let ttl = Arc::new(MemoryTtl::new());
 
-        let semantic = SemanticMemory::new(Arc::clone(&db), dimension, Arc::clone(&ttl))?;
-        let episodic = EpisodicMemory::new(
+        let semantic =
+            SemanticMemory::open(Arc::clone(&db), dimension, Arc::clone(&ttl), on_missing)?;
+        let episodic = EpisodicMemory::open(
             Arc::clone(&db),
             dimension,
             Arc::clone(&ttl),
             Arc::new(TemporalIndex::new()),
+            on_missing,
         )?;
-        let procedural = ProceduralMemory::new(Arc::clone(&db), dimension, Arc::clone(&ttl))?;
+        let procedural =
+            ProceduralMemory::open(Arc::clone(&db), dimension, Arc::clone(&ttl), on_missing)?;
 
         Ok(Self {
             db,

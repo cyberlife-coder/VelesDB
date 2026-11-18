@@ -22,7 +22,6 @@ import {
 } from '../src/backends/wasm-search';
 import { NotFoundError, ValidationError, VelesDBError } from '../src/types';
 import type { SearchQuality } from '../src/types';
-import { newSparseIds, sparseHits } from '../src/backends/wasm-sparse';
 import type {
   CollectionData,
   WasmContext,
@@ -95,7 +94,6 @@ function buildCtx(
     config: { dimension: opts.dimension ?? 2, metric: 'cosine' },
     store,
     payloads: opts.payloads ?? new Map(),
-    sparseIds: newSparseIds(),
     createdAt: new Date(),
   };
   const module: WasmModule = {
@@ -245,7 +243,6 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
     const ctx = buildCtx('docs', store, {
       wasmModule: { hybrid_search_fuse: vi.fn(() => []) },
     });
-    ctx.getCollection('docs')!.sparseIds.store = store;
 
     await wasmSearch(ctx, 'docs', [0.1, 0.2], {
       k: 2,
@@ -410,12 +407,8 @@ describe('wasmSearch — filter / sparse / hybrid branches', () => {
   it('sparse-only branch activates when dimension=0 and sparseVector provided', async () => {
     const sparse_search = vi.fn(() => [{ doc_id: '5', score: 0.7 }]);
     const store = buildStore({ sparse_search });
+    // Point 5's sparse vector, in the collection's own store (wasm-sparse.ts).
     const ctx = buildCtx('docs', store, { dimension: 0 });
-    // Sparse id 5 is point 5's live sparse vector, in the collection's
-    // sparse store (see wasm-sparse.ts).
-    const sparseIds = ctx.getCollection('docs')!.sparseIds;
-    sparseIds.store = buildStore({ sparse_search });
-    sparseIds.byId.set(5n, 5n);
 
     const result = await wasmSearch(ctx, 'docs', [], {
       sparseVector: { 1: 0.5, 2: 0.3 },
@@ -456,7 +449,6 @@ describe('wasmSearch — filter / sparse / hybrid branches', () => {
     const fuse = vi.fn(() => [{ doc_id: '9007199254740993', score: 0.9 }]);
     const store = buildStore({ search_with_quality, sparse_search: vi.fn(() => []) });
     const ctx = buildCtx('docs', store, { wasmModule: { hybrid_search_fuse: fuse } });
-    ctx.getCollection('docs')!.sparseIds.store = store;
 
     const result = await wasmSearch(ctx, 'docs', [0.1, 0.2], { k: 1, sparseVector: { 1: 0.5 } });
 
@@ -1147,10 +1139,11 @@ describe('wasmMultiQuerySearch — the weighted triple matters only under `weigh
 describe('WASM search — k = 0 returns nothing, before any binding call (#2095)', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  /** A collection whose binding would return a hit on every path, with one retired sparse id. */
+  /** A collection whose binding would return a hit on every path. */
   function collectionWithHits(dimension: number) {
     const store = buildStore({
       search: vi.fn(() => [['1', 0.9]]),
+      sparse_search: vi.fn(() => [{ doc_id: '1', score: 1 }]),
       search_with_filter: vi.fn(() => [{ id: '1', score: 0.9 }]),
       text_search: vi.fn(() => [{ id: '1', payload: {} }]),
       hybrid_search: vi.fn(() => [{ id: '1', score: 0.9 }]),
@@ -1159,13 +1152,8 @@ describe('WASM search — k = 0 returns nothing, before any binding call (#2095)
     });
     const fuse = vi.fn(() => [{ doc_id: '1', score: 0.9 }]);
     const ctx = buildCtx('docs', store, { dimension, wasmModule: { hybrid_search_fuse: fuse } });
-    const sparseIds = ctx.getCollection('docs')!.sparseIds;
-    const sparseStore = buildStore({ sparse_search: vi.fn(() => [{ doc_id: '1', score: 1 }]) });
-    sparseIds.store = sparseStore;
-    sparseIds.byId.set(1n, 1n);
-    sparseIds.dead = 1;
     const bindingCalls = () =>
-      [store, sparseStore]
+      [store]
         .flatMap((s) => Object.values(s))
         .filter((f): f is ReturnType<typeof vi.fn> => typeof f === 'function' && 'mock' in f)
         .reduce((total, f) => total + f.mock.calls.length, fuse.mock.calls.length);
@@ -1203,19 +1191,6 @@ describe('WASM search — k = 0 returns nothing, before any binding call (#2095)
     }
     expect(response.results).toEqual([]);
     expect(bindingCalls()).toBe(0);
-  });
-});
-
-describe('sparseHits — a k that is not a positive integer fetches nothing (#2095)', () => {
-  it.each([0, -1, 0.5])('returns [] for k = %s without calling the sparse store', (k) => {
-    const sparse_search = vi.fn(() => [{ doc_id: '1', score: 1 }]);
-    const ids = newSparseIds();
-    ids.store = buildStore({ sparse_search });
-    ids.byId.set(1n, 1n);
-    ids.dead = 1;
-
-    expect(sparseHits(ids, [7], [1], k)).toEqual([]);
-    expect(sparse_search).not.toHaveBeenCalled();
   });
 });
 
@@ -1286,11 +1261,8 @@ describe("WASM search — a search's inputs are validated before any early retur
     async (k) => {
       const denseStore = buildStore({ search: vi.fn(() => [['1', 0.9]]) });
       const dense = buildCtx('docs', denseStore, { dimension: 2 });
-      const sparseOnly = buildCtx('docs', buildStore(), { dimension: 0 });
-      const sparseIds = sparseOnly.getCollection('docs')!.sparseIds;
       const sparse_search = vi.fn(() => [{ doc_id: '1', score: 1 }]);
-      sparseIds.store = buildStore({ sparse_search });
-      sparseIds.byId.set(1n, 1n);
+      const sparseOnly = buildCtx('docs', buildStore({ sparse_search }), { dimension: 0 });
 
       const calls: Array<() => Promise<unknown>> = [
         () => wasmSearch(dense, 'docs', [0.1, 0.2], { k }),

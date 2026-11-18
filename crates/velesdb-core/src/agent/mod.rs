@@ -38,6 +38,8 @@ mod error;
 mod memory;
 pub(crate) mod memory_helpers;
 #[cfg(test)]
+mod memory_open_tests;
+#[cfg(test)]
 mod memory_tests;
 mod procedural_memory;
 #[cfg(test)]

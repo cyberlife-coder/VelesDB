@@ -48,7 +48,7 @@ pub struct AddEdgeRequest {
     pub target: u64,
     /// Edge label (relationship type).
     pub label: String,
-    /// Optional edge properties.
+    /// Optional edge properties: an object, or null. Anything else is refused.
     #[serde(default)]
     pub properties: Option<serde_json::Value>,
 }
@@ -68,7 +68,7 @@ pub struct BatchEdgeInput {
     pub target: u64,
     /// Edge label (relationship type).
     pub label: String,
-    /// Optional edge properties.
+    /// Optional edge properties: an object, or null. Anything else is refused.
     #[serde(default)]
     pub properties: Option<serde_json::Value>,
 }

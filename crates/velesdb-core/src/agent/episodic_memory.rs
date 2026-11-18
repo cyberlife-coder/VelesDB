@@ -26,7 +26,7 @@ pub struct EpisodicMemory {
 }
 
 impl EpisodicMemory {
-    const COLLECTION_NAME: &'static str = "_episodic_memory";
+    pub(super) const COLLECTION_NAME: &'static str = "_episodic_memory";
 
     /// Returns the embedding dimension for this collection.
     #[must_use]
@@ -53,9 +53,27 @@ impl EpisodicMemory {
         ttl: Arc<MemoryTtl>,
         temporal_index: Arc<TemporalIndex>,
     ) -> Result<Self, AgentMemoryError> {
+        Self::open(
+            db,
+            dimension,
+            ttl,
+            temporal_index,
+            memory_helpers::OnMissing::Create,
+        )
+    }
+
+    /// Opens the collection, creating or refusing it when absent as
+    /// `on_missing` says.
+    pub(super) fn open(
+        db: Arc<Database>,
+        dimension: usize,
+        ttl: Arc<MemoryTtl>,
+        temporal_index: Arc<TemporalIndex>,
+        on_missing: memory_helpers::OnMissing,
+    ) -> Result<Self, AgentMemoryError> {
         let collection_name = Self::COLLECTION_NAME.to_string();
         let actual_dimension =
-            memory_helpers::open_or_create_collection(&db, &collection_name, dimension)?;
+            memory_helpers::open_collection(&db, &collection_name, dimension, on_missing)?;
 
         if temporal_index.is_empty() {
             if let Some(collection) = db.get_vector_collection(&collection_name) {

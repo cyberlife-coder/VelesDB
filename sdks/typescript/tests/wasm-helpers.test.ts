@@ -21,7 +21,6 @@ import {
   buildCollectionInfo,
   describeWasmThrow,
 } from '../src/backends/wasm-helpers';
-import { newSparseIds } from '../src/backends/wasm-sparse';
 import { VelesDBError } from '../src/types';
 import type {
   CollectionData,
@@ -167,7 +166,6 @@ describe('buildWasmContext', () => {
       config: { dimension: 128, metric: 'cosine' },
       store,
       payloads: new Map(),
-      sparseIds: newSparseIds(),
       createdAt: new Date(),
     };
     collections.set('docs', data);
@@ -196,7 +194,6 @@ describe('buildCollectionInfo', () => {
       // store only needs `len` for this helper
       store: { len: 42 } as unknown as WasmVectorStore,
       payloads: new Map(),
-      sparseIds: newSparseIds(),
       createdAt,
     };
 
@@ -215,7 +212,6 @@ describe('buildCollectionInfo', () => {
       config: {} as CollectionData['config'],
       store: { len: 0 } as unknown as WasmVectorStore,
       payloads: new Map(),
-      sparseIds: newSparseIds(),
       createdAt: new Date(),
     };
 

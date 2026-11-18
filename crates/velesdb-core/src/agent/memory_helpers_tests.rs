@@ -159,7 +159,7 @@ fn filter_live_far_end_scopes_expiry_to_the_given_kind() {
     assert_eq!(kept, edges);
 }
 
-// --- open_or_create_collection (requires persistence + tempdir) ---
+// --- open_collection (requires persistence + tempdir) ---
 
 #[cfg(feature = "persistence")]
 mod persistence_tests {
@@ -171,11 +171,22 @@ mod persistence_tests {
         let tmp = TempDir::new().unwrap();
         let db = Database::open(tmp.path()).unwrap();
 
-        let dim = open_or_create_collection(&db, "test_coll", 64).unwrap();
+        let dim = open_collection(&db, "test_coll", 64, OnMissing::Create).unwrap();
         assert_eq!(dim, 64);
 
         // Collection should now be retrievable.
         assert!(db.get_vector_collection("test_coll").is_some());
+    }
+
+    #[test]
+    fn open_refuses_an_absent_collection_without_creating_it() {
+        let tmp = TempDir::new().unwrap();
+        let db = Database::open(tmp.path()).unwrap();
+
+        let err = open_collection(&db, "absent", 64, OnMissing::Refuse).unwrap_err();
+
+        assert!(matches!(err, AgentMemoryError::NotFound(_)), "{err:?}");
+        assert!(db.get_vector_collection("absent").is_none());
     }
 
     #[test]
@@ -184,10 +195,10 @@ mod persistence_tests {
         let db = Database::open(tmp.path()).unwrap();
 
         // First call creates.
-        open_or_create_collection(&db, "my_coll", 128).unwrap();
+        open_collection(&db, "my_coll", 128, OnMissing::Create).unwrap();
 
         // Second call with same dim should succeed.
-        let dim = open_or_create_collection(&db, "my_coll", 128).unwrap();
+        let dim = open_collection(&db, "my_coll", 128, OnMissing::Create).unwrap();
         assert_eq!(dim, 128);
     }
 
@@ -196,9 +207,9 @@ mod persistence_tests {
         let tmp = TempDir::new().unwrap();
         let db = Database::open(tmp.path()).unwrap();
 
-        open_or_create_collection(&db, "dim_coll", 64).unwrap();
+        open_collection(&db, "dim_coll", 64, OnMissing::Create).unwrap();
 
-        let err = open_or_create_collection(&db, "dim_coll", 128).unwrap_err();
+        let err = open_collection(&db, "dim_coll", 128, OnMissing::Create).unwrap_err();
         assert!(
             matches!(
                 err,
