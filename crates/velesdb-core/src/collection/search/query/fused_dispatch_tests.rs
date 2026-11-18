@@ -107,3 +107,40 @@ fn a_near_fused_query_returns_the_fused_hits_best_first() {
     let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
     assert_eq!(ids, [30, 10, 20, 40]);
 }
+
+/// A scalar `ORDER BY` on a `NEAR_FUSED` query ranks every fused hit, not the
+/// `LIMIT` best: fusion ranks id 40 last, yet its `rank` is the lowest, so
+/// `ORDER BY rank LIMIT 1` must return it rather than the fused top hit (30).
+#[test]
+fn a_near_fused_query_with_a_scalar_order_by_ranks_every_hit() {
+    let dir = TempDir::new().expect("test: temp dir");
+    let col = Collection::create(dir.path().join("fused"), 2, DistanceMetric::Cosine)
+        .expect("test: create collection");
+    let point = |id: u64, vector: [f32; 2], rank: u64| Point {
+        id,
+        vector: vector.to_vec(),
+        payload: Some(serde_json::json!({ "rank": rank })),
+        sparse_vectors: None,
+    };
+    col.upsert(vec![
+        point(10, [1.0, 0.0], 3),
+        point(20, [0.0, 1.0], 2),
+        point(30, [1.0, 1.0], 4),
+        point(40, [-1.0, 0.0], 1),
+    ])
+    .expect("test: upsert");
+    let params = HashMap::from([
+        ("a".to_string(), serde_json::json!([1.0, 0.0])),
+        ("b".to_string(), serde_json::json!([0.5, 1.0])),
+    ]);
+
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] ORDER BY rank ASC LIMIT 1",
+            &params,
+        )
+        .expect("test: the fused query runs");
+
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, [40]);
+}

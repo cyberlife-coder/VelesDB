@@ -208,6 +208,21 @@ fn match_unbounded_variable_length_is_refused() {
     }
 }
 
+/// A hop bound past `u32::MAX` is refused. It used to be read as the default
+/// it replaced: `*5000000000..3` ran as `*1..3`, and `*5000000000` as an
+/// unbounded expansion.
+#[test]
+fn match_hop_bound_past_u32_is_refused() {
+    for pattern in ["*5000000000..3", "*1..5000000000", "*5000000000"] {
+        let err = Parser::parse(&format!("MATCH (a)-[{pattern}]->(b) RETURN a"))
+            .expect_err("an out-of-range hop count must be refused");
+        assert!(
+            err.to_string().contains("invalid hop count"),
+            "[{pattern}]: {err}"
+        );
+    }
+}
+
 #[test]
 fn match_relationship_with_type_range_and_properties() {
     let rel = first_rel("MATCH (a)-[r:KNOWS*1..3 {since: 2020}]->(b) RETURN a");
