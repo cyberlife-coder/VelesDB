@@ -18,10 +18,12 @@ import type { BaseTransport } from './shared';
 import {
   throwOnError,
   returnNullOnNotFound,
+  isAddressedResourceAbsent,
   collectionPath,
   toNumberArray,
   safeJsonParse,
 } from './shared';
+import { PointNotFoundError } from '../errors';
 
 /** Minimal transport interface for CRUD operations. */
 export type CrudTransport = BaseTransport;
@@ -303,20 +305,23 @@ export async function upsertBatch(
   throwOnError(response, `Collection '${collection}'`);
 }
 
+/**
+ * `DELETE /collections/{name}/points/{id}`: `true` when the server removed
+ * the point (200 `{ message, id }`), `false` when no point was stored under
+ * the id (404 `VELES-003`). A missing collection (404 `VELES-002`) throws, as
+ * it does on the WASM backend.
+ */
 export async function deletePoint(
   transport: CrudTransport,
   collection: string,
   id: string | number
 ): Promise<boolean> {
   const restId = parseRestPointId(id);
-  const response = await transport.requestJson<{ deleted: boolean }>(
+  const response = await transport.requestJson<{ message: string; id: string }>(
     'DELETE',
     `${collectionPath(collection)}/points/${encodeURIComponent(String(restId))}`
   );
-  if (returnNullOnNotFound(response)) {
-    return false;
-  }
-  return response.data?.deleted ?? false;
+  return !isAddressedResourceAbsent(response, PointNotFoundError);
 }
 
 export async function bulkDeletePoints(
@@ -346,7 +351,9 @@ export async function get(
     'GET',
     `${collectionPath(collection)}/points/${encodeURIComponent(String(restId))}`
   );
-  if (returnNullOnNotFound(response)) {
+  // Only the point's own miss (`VELES-003`) is `null`; a missing collection
+  // (`VELES-002`) is thrown.
+  if (isAddressedResourceAbsent(response, PointNotFoundError)) {
     return null;
   }
   return response.data ?? null;

@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (REST server): a point delete reports what it removed** (REST
+  server, TypeScript SDK, core, 2026-11-18).
+  `DELETE /collections/{name}/points/{id}` answered `200` whether or not a point was
+  stored under the id, and `POST /collections/{name}/points/delete` counted
+  every id it was sent in `deleted_count`, missing and repeated ones included,
+  because core's `delete` returns nothing. The single delete of an absent
+  point now answers what its OpenAPI entry already documented and `GET`
+  answers: `404` `VELES-003` (a missing collection stays `VELES-002`);
+  `deleted_count` is the number of points removed, each counted once. Core
+  gains `delete_counted` on `VectorCollection`, `GraphCollection` and
+  `MetadataCollection`, taken under the delete's own write locks; `delete` is
+  unchanged. The TypeScript SDK's REST `delete()` read a `deleted` field the
+  server never sent and so always returned `false`: it now returns `true` on
+  the server's `200` and `false` on `VELES-003`, and `delete()` and `get()`
+  throw `CollectionNotFoundError` for a missing collection instead of
+  answering `false` / `null`, as the WASM backend does.
+  `AgentMemoryClient.deleteMemory` follows. Migration: a REST client that
+  deletes ids it is not sure exist handles a `404` `VELES-003`.
+
 - **BREAKING (Tauri IPC): point ids cross the IPC boundary as decimal
   strings** (Tauri, 2026-11-18). Search hits already carried a string id
   (core's `SearchResultResponse`), but every other point id the plugin wrote

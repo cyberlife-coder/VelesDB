@@ -405,11 +405,11 @@ await db.streamInsert('docs', largeDocumentArray);
 
 #### `db.get(collection, id)`
 
-Get a document by ID. Returns `null` if not found.
+Get a document by ID. Returns `null` if not found. A missing collection throws on both backends (`CollectionNotFoundError` on REST).
 
 #### `db.delete(collection, id)`
 
-Delete a document by ID. Returns `true` if deleted, `false` if not found.
+Delete a document by ID. Returns `true` if deleted, `false` if not found. A missing collection throws on both backends (`CollectionNotFoundError` on REST). Over REST, `false` needs a server that answers a delete of an absent point with `404 VELES-003`, which it does since the release after 8.2.0; an older server answers `200`, read as `true`.
 
 ---
 
