@@ -144,6 +144,38 @@ fn test_weighted_fusion_single_branch_does_not_leak_filtered_rows() {
     }
 }
 
+/// A score-level FUSION reads a distance branch in its direction: on a
+/// Euclidean collection the nearest point is the best, not the farthest.
+#[test]
+fn test_score_level_fusion_reads_a_distance_branch_in_its_direction() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("l2", 2, "euclidean")
+        .expect("test: create");
+    for (id, v) in [(1u64, "[0.0, 0.0]"), (2, "[1.0, 0.0]"), (3, "[3.0, 0.0]")] {
+        execute(
+            &mut db,
+            &format!("INSERT INTO l2 (id, vector) VALUES ({id}, $v)"),
+            Some(&format!("{{\"v\": {v}}}")),
+        )
+        .expect("test: seed");
+    }
+    for strategy in ["maximum", "average"] {
+        let r = execute(
+            &mut db,
+            &format!(
+                "SELECT * FROM l2 WHERE vector NEAR $q AND vector NEAR $q LIMIT 3 \
+                 USING FUSION (strategy = '{strategy}')"
+            ),
+            Some(r#"{"q": [0.0, 0.0]}"#),
+        )
+        .expect("test: fused");
+        let ids: Vec<u64> = (0..r.row_count() as usize)
+            .map(|i| r.row(i).expect("test: row").id())
+            .collect();
+        assert_eq!(ids, vec![1, 2, 3], "{strategy}: nearest first");
+    }
+}
+
 // =========================================================================
 // EXPLAIN — nominal
 // =========================================================================

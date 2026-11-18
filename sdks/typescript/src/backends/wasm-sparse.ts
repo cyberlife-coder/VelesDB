@@ -1,144 +1,87 @@
 /**
- * WASM Backend — sparse vector bookkeeping
+ * WASM Backend — sparse vectors
  *
- * velesdb-wasm's sparse index keys postings by a document id. A binding that
- * exposes `sparse_remove` (after 8.0.0, #2287) deletes a document's postings
- * outright; 8.0.0, the oldest release the SDK's dependency range admits, has
- * no way to delete them, nor to drop the terms a re-insert leaves out: an
- * insert there overwrites only the terms it repeats. Indexed under the
- * point's own id, a deleted point, or a term a point no longer has, would
- * keep matching sparse queries.
+ * A point's sparse vector lives in its collection's own velesdb-wasm store,
+ * under the point's own id: `sparse_insert` replaces the document's postings
+ * and `sparse_remove` deletes them. VelesQL's `SPARSE_NEAR` runs over that
+ * same store (`wasm-velesql.ts` shares it with the executor), so it sees
+ * exactly what the typed sparse and hybrid searches see.
  *
- * Each sparse upsert is therefore indexed under a fresh sparse id on every
- * binding generation. Replacing or deleting the point retires that id, and
- * `retireId` does what the binding allows: on a `sparse_remove` binding it
- * deletes the id's postings — `dead` never grows, searches fetch exactly
- * `k`, and the index holds live entries only; on 8.0.0 the postings stay but
- * map to no point, searches skip them and over-fetch by the number of
- * retired ids so the dead cannot crowd live points out of the top `k`. As in
- * core, an upsert without a sparse vector keeps the point's current one.
- *
- * Without `sparse_remove`, retired postings would pile up for good and every
- * search would over-fetch by their number, so the cost of a search would
- * grow with the replacements a collection has seen. The sparse index
- * therefore lives in a store of its own, a metadata-only velesdb-wasm store
- * beside the collection's vector store, and once retired ids outnumber live
- * ones it is rebuilt from the live sparse vectors the SDK keeps: the index
- * then never holds more than twice the live entries, and a rebuild costs
- * O(live) once per `live` retirements, O(1) amortized. The collection's
- * vectors and payloads are never touched. Once the dependency floor passes
- * the release carrying `sparse_remove`, the tombstone path — and the
- * fresh-id scheme itself — can go.
+ * As in core (`dropped_sparse_entries`, #2834), an upsert replaces the whole
+ * point: one without a sparse vector removes the point's current one. The
+ * binding validates every sparse vector of an upsert before any point is
+ * written ({@link validateSparse}), so a refused one leaves the point as it
+ * was.
  */
 
 import type { SparseVector } from '../types';
-import type { SparseIds, WasmSparseResult, WasmVectorStore } from './wasm-types';
+import type { WasmSparseResult, WasmVectorStore } from './wasm-types';
 import { sparseVectorToArrays } from './wasm-helpers';
 
-/** Creates an empty store to hold a collection's sparse index. */
-export type NewSparseStore = () => WasmVectorStore;
+/** Creates an empty, metadata-only store. */
+export type NewScratchStore = () => WasmVectorStore;
 
-/** Empty bookkeeping for a new collection: its sparse store is created on first use. */
-export function newSparseIds(): SparseIds {
-  return { store: null, byPoint: new Map(), byId: new Map(), vectors: new Map(), dead: 0, next: 1n };
-}
-
-/** Index `vector` as `pointId`'s sparse vector, retiring the one it had. */
-export function indexSparse(
-  ids: SparseIds,
-  newStore: NewSparseStore,
-  pointId: bigint,
-  vector: SparseVector
-): void {
+function toArrays(vector: SparseVector): [Uint32Array, Float32Array] {
   const { indices, values } = sparseVectorToArrays(vector);
-  const entry = { indices: new Uint32Array(indices), values: new Float32Array(values) };
-  const sparseId = ids.next;
-  (ids.store ??= newStore()).sparse_insert(sparseId, entry.indices, entry.values);
-  ids.next += 1n;
-  const previous = ids.byPoint.get(pointId);
-  ids.byPoint.set(pointId, sparseId);
-  ids.byId.set(sparseId, pointId);
-  ids.vectors.set(sparseId, entry);
-  if (previous !== undefined) {
-    retireId(ids, newStore, previous);
-  }
-}
-
-/** Retire `pointId`'s sparse id, if it has one: its postings stop matching. */
-export function retireSparse(ids: SparseIds, newStore: NewSparseStore, pointId: bigint): void {
-  const current = ids.byPoint.get(pointId);
-  if (current === undefined) {
-    return;
-  }
-  ids.byPoint.delete(pointId);
-  retireId(ids, newStore, current);
-}
-
-/** Release the collection's sparse store. */
-export function freeSparse(ids: SparseIds): void {
-  ids.store?.free();
-  ids.store = null;
+  return [new Uint32Array(indices), new Float32Array(values)];
 }
 
 /**
- * The top `k` sparse hits as `[pointId, score]`, live points only, each
- * point id the exact `BigInt` it was upserted under. `k` must
- * be a positive integer, as the search boundary guarantees
- * (`validateSearchInputs`); anything else fetches nothing, since the
- * over-fetch by `dead` would otherwise return live hits the `k` cap never
- * trims.
+ * Throw the binding's refusal of the first of `vectors` it would refuse
+ * (`undefined` entries are skipped), touching no collection: each is
+ * inserted into a scratch store, freed afterwards, so the check is the
+ * binding's own and the SDK keeps no copy of it.
  */
+export function validateSparse(
+  newScratch: NewScratchStore,
+  vectors: ReadonlyArray<SparseVector | undefined>
+): void {
+  if (vectors.every((vector) => vector === undefined)) {
+    return;
+  }
+  const scratch = newScratch();
+  try {
+    for (const vector of vectors) {
+      if (vector !== undefined) {
+        scratch.sparse_insert(0n, ...toArrays(vector));
+      }
+    }
+  } finally {
+    scratch.free();
+  }
+}
+
+/**
+ * Give each point of `pointIds` the vector at the same position of
+ * `vectors`, or none where that is `undefined`. A point listed twice keeps
+ * the last.
+ */
+export function writeSparse(
+  store: WasmVectorStore,
+  pointIds: readonly bigint[],
+  vectors: ReadonlyArray<SparseVector | undefined>
+): void {
+  pointIds.forEach((pointId, i) => {
+    const vector = vectors[i];
+    if (vector === undefined) {
+      store.sparse_remove(pointId);
+    } else {
+      store.sparse_insert(pointId, ...toArrays(vector));
+    }
+  });
+}
+
+/** The top `k` sparse hits of `store` as `[pointId, score]`, best first. */
 export function sparseHits(
-  ids: SparseIds,
+  store: WasmVectorStore,
   indices: number[],
   values: number[],
   k: number
 ): Array<[bigint, number]> {
-  if (!Number.isInteger(k) || k <= 0 || ids.store === null) {
-    return [];
-  }
-  const raw: WasmSparseResult[] = ids.store.sparse_search(
+  const raw: WasmSparseResult[] = store.sparse_search(
     new Uint32Array(indices),
     new Float32Array(values),
-    k + ids.dead
+    k
   );
-  const hits: Array<[bigint, number]> = [];
-  for (const { doc_id, score } of raw) {
-    const pointId = ids.byId.get(BigInt(doc_id));
-    if (pointId !== undefined) {
-      hits.push([pointId, score]);
-      if (hits.length === k) {
-        break;
-      }
-    }
-  }
-  return hits;
-}
-
-function retireId(ids: SparseIds, newStore: NewSparseStore, sparseId: bigint): void {
-  ids.byId.delete(sparseId);
-  ids.vectors.delete(sparseId);
-  const store = ids.store;
-  if (store !== null && typeof store.sparse_remove === 'function') {
-    store.sparse_remove(sparseId);
-    return;
-  }
-  ids.dead += 1;
-  if (ids.dead > ids.byId.size) {
-    rebuildSparse(ids, newStore);
-  }
-}
-
-/** Re-index the live sparse vectors into a fresh store, dropping every retired id with the old one. */
-function rebuildSparse(ids: SparseIds, newStore: NewSparseStore): void {
-  let fresh: WasmVectorStore | null = null;
-  if (ids.vectors.size > 0) {
-    fresh = newStore();
-    for (const [sparseId, entry] of ids.vectors) {
-      fresh.sparse_insert(sparseId, entry.indices, entry.values);
-    }
-  }
-  ids.store?.free();
-  ids.store = fresh;
-  ids.dead = 0;
+  return raw.map(({ doc_id, score }) => [BigInt(doc_id), score]);
 }

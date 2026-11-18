@@ -317,7 +317,15 @@ impl Collection {
         super::super::match_dispatch::validate_match_clause(match_clause)?;
         // Raw traversal results (no ORDER BY/LIMIT yet): the similarity score is
         // computed below, then the shared finalize step applies ORDER BY + LIMIT.
-        let results = self.execute_match_reading(match_clause, params, None, sources)?;
+        // The score sort reorders the rows, so the walk reads every one of them
+        // instead of stopping at LIMIT.
+        let results = self.execute_match_reading(
+            match_clause,
+            params,
+            None,
+            sources,
+            super::RowOrder::Rescored,
+        )?;
 
         if results.is_empty() {
             return Ok(results);

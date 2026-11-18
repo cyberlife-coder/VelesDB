@@ -49,7 +49,7 @@ function searchSparseOnly(
   values: number[],
   k: number
 ): SearchResult[] {
-  return sparseHits(collection!.sparseIds, indices, values, k).map(
+  return sparseHits(collection!.store, indices, values, k).map(
     ([id, score]) => ({
       id: String(id),
       score,
@@ -75,7 +75,7 @@ function searchHybridFusion(
   const denseForFuse: Array<[bigint, number]> = denseResults.map(
     ([id, score]) => [BigInt(id), score]
   );
-  const sparseForFuse = sparseHits(collection!.sparseIds, indices, values, k);
+  const sparseForFuse = sparseHits(collection!.store, indices, values, k);
 
   const fused: WasmSparseResult[] = ctx.wasmModule.hybrid_search_fuse(
     denseForFuse, sparseForFuse, 60, k

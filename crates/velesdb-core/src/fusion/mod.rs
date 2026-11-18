@@ -36,7 +36,7 @@ mod strategy_tests;
 mod weight_validation_tests;
 
 mod branches;
-pub use branches::{branch_depth, MAX_FUSED_VECTORS};
+pub use branches::{branch_depth, dense_sparse_candidate_k, MAX_FUSED_VECTORS};
 pub use name::FusionParams;
 pub use strategy::{
     min_max_normalize, sort_fused_results, FusionError, FusionStrategy, ScoreDirection,

@@ -13,7 +13,7 @@
 //! node beyond it is farther still, so none of them can start a row.
 
 use super::where_eval::resolve_query_vector;
-use super::{MatchResult, MatchSources, StartNodes};
+use super::{MatchResult, MatchSources, RowOrder, StartNodes};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::guardrails::QueryContext;
@@ -61,6 +61,7 @@ impl Collection {
                 Some(ctx),
                 sources,
                 StartNodes::Seeded(&ids),
+                RowOrder::Clause,
             )?;
             let exhausted = seeds.len() < wanted || wanted >= total;
             let past_threshold = seeds.last().is_some_and(|farthest| {

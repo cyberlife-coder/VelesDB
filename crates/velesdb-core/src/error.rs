@@ -374,7 +374,6 @@ impl From<crate::velesql::ParseError> for Error {
 
 /// Conversion from `GuardRailViolation` — surfaces limit violations as
 /// [`Error::GuardRail`], keeping which limit was crossed.
-#[cfg(feature = "persistence")]
 impl From<crate::guardrails::GuardRailViolation> for Error {
     fn from(v: crate::guardrails::GuardRailViolation) -> Self {
         Self::GuardRail {

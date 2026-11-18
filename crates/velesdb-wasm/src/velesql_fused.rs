@@ -142,9 +142,15 @@ fn branch_depth(stmt: &SelectStatement) -> usize {
     }
 }
 
-/// The rows a SELECT window needs: `LIMIT` (core's default when absent) plus
-/// `OFFSET` (core's `compute_fetch_limit`).
-fn fetch_limit(stmt: &SelectStatement) -> usize {
+/// The rows a search must fetch for a SELECT: `LIMIT` (core's default when
+/// absent) plus `OFFSET` (core's `compute_fetch_limit`), or core's ceiling
+/// when DISTINCT or a vector GROUP BY reshapes the rows before that window
+/// ([`SelectStatement::reshapes_rows_before_window`]), as core's pipeline
+/// sizes it.
+pub(crate) fn fetch_limit(stmt: &SelectStatement) -> usize {
+    if stmt.reshapes_rows_before_window() {
+        return usize::try_from(velesdb_core::velesql::MAX_SELECT_LIMIT).unwrap_or(usize::MAX);
+    }
     let limit = stmt
         .limit
         .unwrap_or(velesdb_core::velesql::DEFAULT_SELECT_LIMIT);
@@ -154,7 +160,7 @@ fn fetch_limit(stmt: &SelectStatement) -> usize {
 
 /// Returns the set of ids passing the residual metadata predicate, or `None`
 /// when there is no residual (no filtering required).
-fn passing_ids(
+pub(crate) fn passing_ids(
     store: &crate::store_state::StoreState,
     residual: Option<&Condition>,
     params: &Params,
@@ -178,7 +184,7 @@ fn passing_ids(
 ///
 /// `push_not_inward` runs first so `NOT` is De-Morgan-distributed before the
 /// strip — symmetric with the single-vector path in `velesql_select`.
-fn residual_metadata_filter(cond: Option<&Condition>) -> Option<Condition> {
+pub(crate) fn residual_metadata_filter(cond: Option<&Condition>) -> Option<Condition> {
     let normalized = cond.cloned().map(crate::velesql_logic::push_not_inward);
     crate::velesql_similarity::strip_condition_if(normalized.as_ref(), &|c| {
         matches!(

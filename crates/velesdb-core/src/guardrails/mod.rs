@@ -7,24 +7,37 @@
 //! - **Memory Limit**: Memory budget per query (US-004)
 //! - **Rate Limiting**: Queries per second per client (US-005)
 //! - **Circuit Breaker**: Auto-disable on repeated failures (US-006)
+//!
+//! The limits, their defaults and [`GuardRailViolation`] build without the
+//! `persistence` feature: `velesdb-wasm` bounds its own executor with these
+//! numbers and refuses with this error, rather than keeping copies of them.
+//! The enforcement machinery — `QueryContext`, the rate limiter and the
+//! circuit breaker — reads `std::time::Instant`, which aborts on
+//! `wasm32-unknown-unknown`, and stays behind `persistence`.
 
+#[cfg(feature = "persistence")]
 mod context;
+#[cfg(feature = "persistence")]
 pub(crate) use context::ExecutedStrategyCell;
 mod limits;
+#[cfg(feature = "persistence")]
 mod resilience;
-#[cfg(test)]
+#[cfg(all(test, feature = "persistence"))]
 mod resilience_tests;
 
-#[cfg(any(test, feature = "test-fault-injection"))]
+#[cfg(all(feature = "persistence", any(test, feature = "test-fault-injection")))]
 pub use context::QueryClockSkewGuard;
+#[cfg(feature = "persistence")]
 pub use context::QueryContext;
 pub use limits::{
     GuardRailViolation, QueryLimits, DEFAULT_CIRCUIT_FAILURE_THRESHOLD,
     DEFAULT_CIRCUIT_RECOVERY_SECONDS, DEFAULT_MAX_CARDINALITY, DEFAULT_MAX_DEPTH,
     DEFAULT_MEMORY_LIMIT_BYTES, DEFAULT_RATE_LIMIT_QPS,
 };
+#[cfg(feature = "persistence")]
 #[allow(unused_imports)] // Re-exported for test access
 pub(crate) use resilience::CircuitState;
+#[cfg(feature = "persistence")]
 pub use resilience::{CircuitBreaker, RateLimiter};
 
 /// Global guard-rails manager (EPIC-048).
@@ -33,6 +46,7 @@ pub use resilience::{CircuitBreaker, RateLimiter};
 /// and circuit breaker that reconfigure in place, so that
 /// `Database::update_guardrails` (REST `PUT /guardrails`) can propagate
 /// updated limits to every collection without replacing the `Arc<GuardRails>`.
+#[cfg(feature = "persistence")]
 #[derive(Debug)]
 pub struct GuardRails {
     /// Query limits (behind `RwLock` for runtime updates via REST API).
@@ -47,6 +61,7 @@ pub struct GuardRails {
     clock_skew_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
+#[cfg(feature = "persistence")]
 impl GuardRails {
     /// Creates a new guard-rails manager with default configuration.
     #[must_use]
@@ -125,6 +140,7 @@ impl GuardRails {
     }
 }
 
+#[cfg(feature = "persistence")]
 impl Default for GuardRails {
     fn default() -> Self {
         Self::new()

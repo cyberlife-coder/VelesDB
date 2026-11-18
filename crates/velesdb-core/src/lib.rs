@@ -138,7 +138,6 @@ mod geo_distance_tests;
 pub mod gpu;
 #[cfg(test)]
 mod gpu_tests;
-#[cfg(feature = "persistence")]
 pub mod guardrails;
 #[cfg(all(test, feature = "persistence"))]
 mod guardrails_tests;

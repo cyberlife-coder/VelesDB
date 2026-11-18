@@ -59,6 +59,58 @@ impl Default for FusionClause {
     }
 }
 
+impl FusionClause {
+    /// The strategy that fuses a dense `NEAR` branch (branch 0) with a
+    /// `SPARSE_NEAR` branch (branch 1) under this clause. Every engine running
+    /// a hybrid dense + sparse search maps the clause through this one
+    /// function — core's query pipeline and the WASM executor alike.
+    ///
+    /// `rrf`, `average` and `maximum` map directly. `rsf` takes the
+    /// `dense_weight` / `sparse_weight` pair; `weighted` and `weighted_rrf`
+    /// both build weighted Reciprocal Rank Fusion over the two branches from
+    /// that pair and `k` — `weighted_rrf` is simply the honest name of the
+    /// math `weighted` has always run here. A weight pair the strategy
+    /// refuses (validate-time checks make it unreachable from a parsed
+    /// query) falls back to RRF.
+    #[must_use]
+    pub fn dense_sparse_strategy(&self) -> crate::fusion::FusionStrategy {
+        use crate::fusion::FusionStrategy;
+        let dense = self.dense_weight.unwrap_or(0.5);
+        let sparse = self.sparse_weight.unwrap_or(0.5);
+        match self.strategy {
+            FusionStrategyType::Rsf => FusionStrategy::relative_score(dense, sparse)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        dense_weight = dense,
+                        sparse_weight = sparse,
+                        error = %e,
+                        "RSF fusion strategy invalid; falling back to RRF"
+                    );
+                    FusionStrategy::rrf_default()
+                }),
+            FusionStrategyType::Average => FusionStrategy::Average,
+            FusionStrategyType::Maximum => FusionStrategy::Maximum,
+            FusionStrategyType::Weighted | FusionStrategyType::WeightedRrf => {
+                #[allow(clippy::cast_precision_loss)]
+                let k = self.k.unwrap_or(60) as f32;
+                FusionStrategy::weighted_rrf(vec![dense, sparse], k).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        dense_weight = dense,
+                        sparse_weight = sparse,
+                        k,
+                        error = %e,
+                        "Weighted RRF fusion strategy invalid; falling back to RRF"
+                    );
+                    FusionStrategy::rrf_default()
+                })
+            }
+            FusionStrategyType::Rrf => FusionStrategy::RRF {
+                k: self.k.unwrap_or(60),
+            },
+        }
+    }
+}
+
 /// Configuration for multi-vector fusion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FusionConfig {

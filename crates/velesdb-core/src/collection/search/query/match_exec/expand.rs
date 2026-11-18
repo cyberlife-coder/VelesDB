@@ -48,7 +48,7 @@ impl Collection {
         ctx: &mut TraversalCtx<'_>,
     ) -> Result<()> {
         for (start_id, start_bindings) in start_nodes {
-            if ctx.all_results.len() >= ctx.limit {
+            if ctx.bound.is_full(ctx.all_results.len()) {
                 break;
             }
 
@@ -101,7 +101,7 @@ impl Collection {
         if hops >= min_hops {
             self.try_bind_next_node(walk, current_id, rel_idx)?;
         }
-        if hops >= max_hops || walk.ctx.all_results.len() >= walk.ctx.limit {
+        if hops >= max_hops || walk.ctx.bound.is_full(walk.ctx.all_results.len()) {
             return Ok(());
         }
         let edges = Self::matching_edges(
@@ -129,7 +129,7 @@ impl Collection {
         // so a linear scan gives per-path visited-edge tracking with no
         // extra state; paths are short (bounded by the pattern's max hops
         // and the depth guard-rail).
-        if walk.ctx.all_results.len() >= walk.ctx.limit
+        if walk.ctx.bound.is_full(walk.ctx.all_results.len())
             || walk.path.contains(&edge.id())
             || !Self::edge_matches(edge, &walk.pattern.relationships[rel_idx])
         {
@@ -235,6 +235,7 @@ impl Collection {
             return Ok(());
         }
 
+        walk.ctx.bound.admit(walk.ctx.all_results.len())?;
         let mut result = MatchResult::new(node_id, walk.path.len() as u32, walk.path.clone());
         result.bindings.clone_from(walk.bindings);
         result.edge_bindings.clone_from(walk.edge_bindings);
@@ -258,12 +259,7 @@ impl Collection {
         if let Some(guardrail) = ctx.guardrail {
             guardrail.check_depth(depth).map_err(Error::from)?;
         }
-        self.check_periodic_guardrails(
-            ctx.guardrail,
-            *ctx.iteration_count,
-            ctx.all_results,
-            ctx.reported_cardinality,
-        )
+        self.check_periodic_guardrails(ctx.guardrail, *ctx.iteration_count)
     }
 
     fn matching_edges(

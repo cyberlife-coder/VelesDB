@@ -45,7 +45,7 @@ import { WASM_CAPABILITIES } from '../capabilities';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 import type { WasmModule, CollectionData, WasmVectorStore } from './wasm-types';
 import { requireWasmFieldsListed, requireWasmValueListed } from './wasm-capability-guards';
-import { freeSparse, indexSparse, newSparseIds, retireSparse } from './wasm-sparse';
+import { validateSparse, writeSparse } from './wasm-sparse';
 
 // Internal helpers
 import {
@@ -138,7 +138,7 @@ export class WasmBackend implements IVelesDBBackend {
   private wasmModule: WasmModule | null = null;
   private collections: Map<string, CollectionData> = new Map();
   // VelesQL over the collections' stores, when the binding can share them
-  // (`wasm-velesql.ts`); `null` on velesdb-wasm 8.0.0.
+  // (`wasm-velesql.ts`); `null` on velesdb-wasm 8.2.0 and older.
   private velesql: WasmVelesQL | null = null;
   // Graph operations and matchQuery over the same database, when the binding
   // has the edge API and executeMatch (`wasm-graph.ts`).
@@ -155,8 +155,8 @@ export class WasmBackend implements IVelesDBBackend {
   // close() during an in-flight init() would let the racy completion of
   // runInit() flip _initialized back to true after close() set it false.
   private _initGen = 0;
-  // Creates the metadata-only store that holds a collection's sparse index.
-  private readonly newSparseStore = (): WasmVectorStore =>
+  // Creates the scratch store the binding validates sparse vectors in.
+  private readonly newScratchStore = (): WasmVectorStore =>
     this.wasmModule!.VectorStore.new_metadata_only();
 
   // ========================================================================
@@ -224,7 +224,6 @@ export class WasmBackend implements IVelesDBBackend {
   async close(): Promise<void> {
     for (const [, data] of this.collections) {
       data.store.free();
-      freeSparse(data.sparseIds);
     }
     this.collections.clear();
     this.graph = null;
@@ -273,7 +272,6 @@ export class WasmBackend implements IVelesDBBackend {
       config: { ...config, metric },
       store,
       payloads: new Map(),
-      sparseIds: newSparseIds(),
       createdAt: new Date(),
     });
   }
@@ -285,7 +283,6 @@ export class WasmBackend implements IVelesDBBackend {
     // The executor shares the store: drop its reference before freeing it.
     this.velesql?.detach(name);
     collection.store.free();
-    freeSparse(collection.sparseIds);
     this.collections.delete(name);
   }
 
@@ -325,18 +322,13 @@ export class WasmBackend implements IVelesDBBackend {
       );
     }
 
-    if (doc.payload) {
-      collection.store.insert_with_payload(id, vector, doc.payload);
-    } else {
-      collection.store.insert(id, vector);
-    }
-    if (doc.sparseVector) {
-      indexSparse(collection.sparseIds, this.newSparseStore, id, doc.sparseVector);
-    }
-
-    if (doc.payload) {
-      collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
-    }
+    this.replacePoints(collection, [doc], () => {
+      if (doc.payload) {
+        collection.store.insert_with_payload(id, vector, doc.payload);
+      } else {
+        collection.store.insert(id, vector);
+      }
+    });
   }
 
   async upsertBatch(collectionName: string, docs: VectorDocument[]): Promise<void> {
@@ -353,27 +345,46 @@ export class WasmBackend implements IVelesDBBackend {
       }
     }
 
-    collection.store.reserve(docs.length);
-    const batch: Array<[bigint, number[]]> = [];
-    for (const doc of docs) {
-      const id = toPointId(doc.id);
-      const vector = doc.vector instanceof Float32Array
-        ? doc.vector
-        : new Float32Array(doc.vector);
-      if (doc.payload) {
-        collection.store.insert_with_payload(id, vector, doc.payload);
-      } else {
-        batch.push([id, Array.from(vector)]);
+    this.replacePoints(collection, docs, () => {
+      collection.store.reserve(docs.length);
+      const batch: Array<[bigint, number[]]> = [];
+      for (const doc of docs) {
+        const id = toPointId(doc.id);
+        const vector = doc.vector instanceof Float32Array
+          ? doc.vector
+          : new Float32Array(doc.vector);
+        if (doc.payload) {
+          collection.store.insert_with_payload(id, vector, doc.payload);
+        } else {
+          batch.push([id, Array.from(vector)]);
+        }
       }
-    }
-    if (batch.length > 0) { collection.store.insert_batch(batch); }
+      if (batch.length > 0) { collection.store.insert_batch(batch); }
+    });
+  }
 
+  /**
+   * Replace each of `docs`' points whole, as core's upsert does. The binding
+   * validates their sparse vectors first, so one it refuses fails the call
+   * before `writeDense` touches any point; once it has written them, each
+   * point's sparse vector and SDK-side payload become the ones its new version
+   * carries — none where it carries none (`writeSparse`).
+   */
+  private replacePoints(
+    collection: CollectionData,
+    docs: VectorDocument[],
+    writeDense: () => void
+  ): void {
+    const sparse = docs.map((doc) => doc.sparseVector ?? undefined);
+    validateSparse(this.newScratchStore, sparse);
+    writeDense();
+    writeSparse(collection.store, docs.map((doc) => toPointId(doc.id)), sparse);
     for (const doc of docs) {
+      const key = canonicalPayloadKey(doc.id);
       if (doc.payload) {
-        collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
-      }
-      if (doc.sparseVector) {
-        indexSparse(collection.sparseIds, this.newSparseStore, toPointId(doc.id), doc.sparseVector);
+        collection.payloads.set(key, doc.payload);
+      } else {
+        collection.payloads.delete(key);
       }
     }
   }
@@ -385,9 +396,11 @@ export class WasmBackend implements IVelesDBBackend {
   }
 
   /**
-   * Remove points and their bookkeeping. Through the database when it can,
-   * so the edges a removed point is an end of go with it, as core's delete
-   * cascades (#900); otherwise through the store, which then has no edges.
+   * Remove points, their sparse postings and their bookkeeping. Through the
+   * database when it can, so the edges a removed point is an end of go with
+   * it, as core's delete cascades (#900); otherwise through the store, which
+   * then has no edges. The postings are removed by id: the binding's
+   * `remove` drops them only since the release after 8.2.0.
    */
   async bulkDelete(collectionName: string, ids: Array<string | number>): Promise<number> {
     this.ensureInitialized();
@@ -398,7 +411,7 @@ export class WasmBackend implements IVelesDBBackend {
       ?? pointIds.filter((id) => collection.store.remove(id)).length;
     ids.forEach((id, i) => {
       collection.payloads.delete(canonicalPayloadKey(id));
-      retireSparse(collection.sparseIds, this.newSparseStore, pointIds[i]!);
+      collection.store.sparse_remove(pointIds[i]!);
     });
     return count;
   }

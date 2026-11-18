@@ -20,6 +20,8 @@ class MockVectorStore {
   insert = vi.fn();
   insert_with_payload = vi.fn();
   query = vi.fn(() => [{ id: 1, score: 0.9 }]);
+  sparse_insert = vi.fn();
+  sparse_remove = vi.fn(() => false);
   free = vi.fn(() => calls.push('store.free'));
   len = 0;
   is_empty = true;
@@ -76,6 +78,8 @@ class MockWasmDatabase {
 const PARSED: Record<string, { isSelect: boolean; isAggregation?: boolean; collectionName?: string }> = {
   "SELECT * FROM docs WHERE category = 'tech' LIMIT 10": { isSelect: true, isAggregation: false, collectionName: 'docs' },
   'SELECT * FROM docs WHERE vector NEAR $v AND category = $c LIMIT 5': { isSelect: true, isAggregation: false, collectionName: 'docs' },
+"SELECT * FROM docs WHERE vector SPARSE_NEAR {7: 1.0} LIMIT 5": { isSelect: true, isAggregation: false, collectionName: 'docs' },
+  'SELECT * FROM docs WHERE vector NEAR $v AND vector SPARSE_NEAR $s LIMIT 5': { isSelect: true, isAggregation: false, collectionName: 'docs' },
   "SELECT * FROM other WHERE category = 'x'": { isSelect: true, isAggregation: false, collectionName: 'other' },
   "SELECT * FROM docs WHERE title = 'Having fun'": { isSelect: true, isAggregation: false, collectionName: 'docs' },
   'SELECT "from archive" FROM docs': { isSelect: true, isAggregation: false, collectionName: 'docs' },
@@ -153,6 +157,26 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
       results: [{ id: 1, category: 'tech' }],
       stats: { executionTimeMs: expect.any(Number), strategy: 'select', scannedNodes: 1 },
     });
+  });
+
+  // The executor runs SPARSE_NEAR over the store it shares: the sparse vector
+  // must be in that store, under the point's id, for the query to see it.
+  it('when a point carries a sparse vector, then SPARSE_NEAR runs over the attached store that holds it', async () => {
+    const backend = await backendWithDocs();
+    await backend.upsert('docs', { id: 3, vector: [1, 0], sparseVector: { 7: 1 } });
+    const attached = MockWasmDatabase.last!.attached.get('docs')!;
+    expect(attached.sparse_insert).toHaveBeenCalledTimes(1);
+    expect(attached.sparse_insert.mock.calls[0]![0]).toBe(3n);
+    MockWasmDatabase.last!.nextRows = [{ id: '3', score: 1 }];
+
+    const alone = "SELECT * FROM docs WHERE vector SPARSE_NEAR {7: 1.0} LIMIT 5";
+    const fused = 'SELECT * FROM docs WHERE vector NEAR $v AND vector SPARSE_NEAR $s LIMIT 5';
+    expect(await backend.query('docs', alone)).toMatchObject({ results: [{ id: '3', score: 1 }] });
+    await backend.query('docs', fused, { v: [1, 0], s: { 7: 1 } });
+
+    const executed = MockWasmDatabase.last!.executeQuery.mock.calls;
+    expect(executed.map((c) => c[0])).toEqual([alone, fused]);
+    expect(JSON.parse(executed[1]![1] as string)).toEqual({ v: [1, 0], s: { 7: 1 } });
   });
 
   it('when params hold a Float32Array, then they reach the executor as a JSON array', async () => {

@@ -1701,8 +1701,11 @@ is a top-k retrieval, so an unbounded default would defeat top-k vector search.
 
 Exceptions (no implicit `LIMIT 10`):
 
-- `MATCH ... RETURN` graph queries return all matching rows, bounded only by
-  the server-wide ceiling of 100 000 rows per query;
+- `MATCH ... RETURN` graph queries return all matching rows, bounded by the
+  cardinality guard-rail (`max_cardinality`, 100 000 rows by default): a walk
+  that would hold more rows is refused with `VELES-027`, never cut short. A
+  `LIMIT` stops the walk early only when no `ORDER BY` reorders the rows;
+  under an `ORDER BY` every row is ranked before the `LIMIT` applies;
 - compound queries (`UNION` / `INTERSECT` / `EXCEPT`) evaluate their operands
   up to the same 100 000-row ceiling; only an explicit outer `LIMIT` caps the
   merged result.
@@ -3047,6 +3050,11 @@ TRAIN QUANTIZER ON <collection> WITH (<parameters>)
 | `oversampling` | integer | -- | Training oversampling ratio |
 | `sample` | integer | -- | Number of vectors to sample |
 | `force` | boolean | false | Force retrain if exists |
+
+Any other key is refused with `VELES-028` (invalid quantizer configuration),
+naming the key and the supported list: a misspelt parameter fails instead of
+silently falling back to its default. OPQ is `type = opq`; there is no `opq`
+key.
 
 ### Examples
 

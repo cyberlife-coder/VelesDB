@@ -50,6 +50,7 @@ class MockVectorStore {
   sparse_insert = vi.fn((id: bigint, indices: Uint32Array, values: Float32Array) =>
     this.sparse.insert(id, indices, values)
   );
+  sparse_remove = vi.fn((id: bigint) => this.sparse.remove(id));
   sparse_search = vi.fn((indices: Uint32Array, values: Float32Array, k: number) =>
     this.sparse.search(indices, values, k)
   );

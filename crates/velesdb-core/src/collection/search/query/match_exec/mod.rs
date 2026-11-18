@@ -14,6 +14,7 @@
 mod expand;
 mod index_prefilter;
 mod order_by;
+mod row_bound;
 mod similarity;
 mod sources;
 mod start_nodes;
@@ -29,6 +30,8 @@ use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage as _};
 use crate::velesql::{GraphPattern, MatchClause};
 use std::collections::{HashMap, HashSet};
 
+use row_bound::RowBound;
+pub(in crate::collection::search::query) use row_bound::RowOrder;
 pub(in crate::collection::search::query) use sources::MatchReads;
 pub(crate) use sources::MatchSources;
 
@@ -362,7 +365,7 @@ struct SingleNodeCtx<'a> {
     guards: &'a MatchStorageGuards<'a>,
     seen_pairs: &'a mut std::collections::HashSet<(u64, u64)>,
     all_results: &'a mut Vec<MatchResult>,
-    limit: usize,
+    bound: RowBound,
     /// S4-08: Pre-computed index filter set. `None` = no index available.
     prefilter: Option<std::collections::HashSet<u64>>,
 }
@@ -374,9 +377,8 @@ struct TraversalCtx<'a> {
     guards: &'a MatchStorageGuards<'a>,
     guardrail: Option<&'a QueryContext>,
     all_results: &'a mut Vec<MatchResult>,
-    limit: usize,
+    bound: RowBound,
     iteration_count: &'a mut u32,
-    reported_cardinality: &'a mut usize,
     seen_bindings: &'a mut HashSet<Vec<(u8, String, u64, u64)>>,
 }
 
@@ -450,12 +452,21 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
     ) -> Result<Vec<MatchResult>> {
-        self.execute_match_reading(match_clause, params, ctx, &MatchSources::default())
+        self.execute_match_reading(
+            match_clause,
+            params,
+            ctx,
+            &MatchSources::default(),
+            RowOrder::Clause,
+        )
     }
 
     /// [`Self::execute_match_with_context`] whose `@collection`-annotated
     /// aliases read `sources` too: every guard the walk needs is taken once,
     /// in the cross-collection order [`MatchReads::acquire`] sets.
+    ///
+    /// `order` says whether the caller re-sorts the rows before `LIMIT`
+    /// ([`RowOrder::Rescored`]), which keeps the walk from stopping at it.
     ///
     /// # Errors
     ///
@@ -466,8 +477,9 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
         sources: &MatchSources,
+        order: RowOrder,
     ) -> Result<Vec<MatchResult>> {
-        self.execute_match_from(match_clause, params, ctx, sources, StartNodes::Scan)
+        self.execute_match_from(match_clause, params, ctx, sources, StartNodes::Scan, order)
     }
 
     /// [`Self::execute_match_reading`] whose walk starts from `starts`.
@@ -485,13 +497,15 @@ impl Collection {
         ctx: Option<&QueryContext>,
         sources: &MatchSources,
         starts: StartNodes<'_>,
+        order: RowOrder,
     ) -> Result<Vec<MatchResult>> {
+        let bound = self.row_bound(match_clause, order, ctx);
         // Metric snapshot (config, rank 1) BEFORE the guards. See
         // `MatchStorageGuards`.
         let metric = self.storage.config.read().metric;
         let reads = MatchReads::acquire(self, sources);
         let guards = MatchStorageGuards::over(metric, &reads);
-        self.walk_match(match_clause, params, ctx, &guards, starts)
+        self.walk_match(match_clause, params, ctx, &guards, starts, bound)
     }
 
     /// Guard-accepting MATCH execution: the body of
@@ -508,12 +522,26 @@ impl Collection {
         ctx: Option<&QueryContext>,
         guards: &MatchStorageGuards<'_>,
     ) -> Result<Vec<MatchResult>> {
-        self.walk_match(match_clause, params, ctx, guards, StartNodes::Scan)
+        let bound = self.row_bound(match_clause, RowOrder::Clause, ctx);
+        self.walk_match(match_clause, params, ctx, guards, StartNodes::Scan, bound)
+    }
+
+    /// The walk's [`RowBound`]: the context's cardinality limit, else this
+    /// collection's configured one (a leaf lock, read once per walk).
+    fn row_bound(
+        &self,
+        match_clause: &MatchClause,
+        order: RowOrder,
+        ctx: Option<&QueryContext>,
+    ) -> RowBound {
+        RowBound::new(match_clause, order, ctx, || {
+            self.runtime.guard_rails.limits().max_cardinality
+        })
     }
 
     /// The MATCH walk every strategy runs: each pattern from its start nodes,
     /// WHERE evaluated on every row, rows scored by WHERE's first
-    /// `similarity()` leaf.
+    /// `similarity()` leaf, held under `bound` ([`RowBound`]).
     fn walk_match(
         &self,
         match_clause: &MatchClause,
@@ -521,11 +549,12 @@ impl Collection {
         ctx: Option<&QueryContext>,
         guards: &MatchStorageGuards<'_>,
         starts: StartNodes<'_>,
+        bound: RowBound,
     ) -> Result<Vec<MatchResult>> {
         // Inline pattern properties take the caller's `$name` values, as the
         // WHERE does (`velesql::inline_properties_hold`).
-        let bound = crate::velesql::bind_match_clause(match_clause, params)?;
-        let match_clause = &bound;
+        let bound_clause = crate::velesql::bind_match_clause(match_clause, params)?;
+        let match_clause = &bound_clause;
         if match_clause.patterns.is_empty() {
             return Err(Error::Query(
                 "MATCH query must have at least one pattern".to_string(),
@@ -533,15 +562,13 @@ impl Collection {
         }
 
         // Documented contract (VELESQL_SPEC "Default LIMIT"): MATCH ... RETURN
-        // has no implicit LIMIT 10 — results are bounded only by the
-        // server-wide MAX_LIMIT ceiling shared with compound queries.
-        let limit = traversal_limit(match_clause);
+        // has no implicit LIMIT 10 — the rows are bounded by the cardinality
+        // guard-rail, whose default is the 100 000-row ceiling.
         let mut all_results: Vec<MatchResult> = Vec::new();
         let mut iteration_count: u32 = 0;
-        let mut reported_cardinality: usize = 0;
 
         for pattern in &match_clause.patterns {
-            if all_results.len() >= limit {
+            if bound.is_full(all_results.len()) {
                 break;
             }
             let start_nodes = self.resolve_start_nodes(pattern, guards, starts)?;
@@ -552,10 +579,9 @@ impl Collection {
                 params,
                 ctx,
                 guards,
-                limit,
+                bound,
                 &mut all_results,
                 &mut iteration_count,
-                &mut reported_cardinality,
             )?;
         }
 
@@ -588,10 +614,9 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
         guards: &MatchStorageGuards<'_>,
-        limit: usize,
+        bound: RowBound,
         all_results: &mut Vec<MatchResult>,
         iteration_count: &mut u32,
-        reported_cardinality: &mut usize,
     ) -> Result<()> {
         if start_nodes.is_empty() {
             return Ok(());
@@ -615,7 +640,7 @@ impl Collection {
                 guards,
                 seen_pairs: &mut seen_pairs,
                 all_results,
-                limit,
+                bound,
                 prefilter,
             };
             return self.collect_single_node_results(start_nodes, &mut sn_ctx);
@@ -627,9 +652,8 @@ impl Collection {
             guards,
             guardrail: ctx,
             all_results,
-            limit,
+            bound,
             iteration_count,
-            reported_cardinality,
             seen_bindings: &mut HashSet::new(),
         };
         self.traverse_pattern(pattern, start_nodes, &self.graph.edge_store, &mut trav_ctx)
@@ -645,7 +669,7 @@ impl Collection {
         ctx: &mut SingleNodeCtx<'_>,
     ) -> Result<()> {
         for (node_id, bindings) in start_nodes {
-            if ctx.all_results.len() >= ctx.limit {
+            if ctx.bound.is_full(ctx.all_results.len()) {
                 break;
             }
             // S4-08: Fast-reject via index pre-filter.
@@ -668,6 +692,7 @@ impl Collection {
                 continue;
             }
             ctx.seen_pairs.insert((*node_id, *node_id));
+            ctx.bound.admit(ctx.all_results.len())?;
 
             let mut result = MatchResult::new(*node_id, 0, Vec::new());
             result.bindings.clone_from(bindings);
@@ -683,46 +708,20 @@ impl Collection {
         Ok(())
     }
 
-    /// Periodic guard-rail checks every 100 iterations (EPIC-048).
+    /// Periodic timeout check every 100 iterations (EPIC-048). The row
+    /// count is bounded per row by [`RowBound::admit`] instead.
     #[allow(clippy::unused_self)]
     fn check_periodic_guardrails(
         &self,
         ctx: Option<&QueryContext>,
         iteration_count: u32,
-        all_results: &[MatchResult],
-        reported_cardinality: &mut usize,
     ) -> Result<()> {
         if !iteration_count.is_multiple_of(100) {
             return Ok(());
         }
         let Some(ctx) = ctx else { return Ok(()) };
-        ctx.check_timeout().map_err(Error::from)?;
-        let new_results = all_results.len().saturating_sub(*reported_cardinality);
-        if new_results > 0 {
-            ctx.check_cardinality(new_results).map_err(Error::from)?;
-            *reported_cardinality = all_results.len();
-        }
-        Ok(())
+        ctx.check_timeout().map_err(Error::from)
     }
-}
-
-/// Computes the traversal-phase candidate cap for a MATCH clause.
-///
-/// Without a RETURN `ORDER BY`, the LIMIT applies to traversal order, so the
-/// early-break at `return_clause.limit` is correct and stops traversal as soon
-/// as enough rows are collected. WITH an `ORDER BY`, the post-sort LIMIT must
-/// select the GLOBAL top-K, so traversal must visit the full candidate set
-/// (bounded only by the shared `MAX_LIMIT` ceiling and the guard-rails) before
-/// the sort — otherwise the LIMIT would be applied to the first-K-traversed
-/// rows instead of the globally ordered set (backlog #1b).
-fn traversal_limit(match_clause: &MatchClause) -> usize {
-    if match_clause.return_clause.order_by.is_some() {
-        return super::MAX_LIMIT;
-    }
-    match_clause
-        .return_clause
-        .limit
-        .map_or(super::MAX_LIMIT, |l| l as usize)
 }
 
 // Tests moved to match_exec_tests.rs per project rules
