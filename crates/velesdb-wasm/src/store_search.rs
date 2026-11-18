@@ -201,10 +201,18 @@ pub(crate) fn text_search_matches(
         .collect()
 }
 
+/// One `(id, score, payload)` hit of a payload-carrying search.
+pub type ScoredTriple<'a> = (u64, f32, Option<&'a serde_json::Value>);
+
 /// Scored `(id, combined_score, payload)` triples behind
 /// [`hybrid_search_impl`] — native-typed so host tests can pin the exact
 /// browser-store contract without a `JsValue` (which needs the wasm32
 /// runtime).
+///
+/// # Errors
+///
+/// A non-finite `vector_weight`, refused by core's
+/// [`velesdb_core::validation::resolve_hybrid_vector_weight`] (`VELES-009`).
 #[allow(clippy::too_many_arguments)]
 pub fn hybrid_search_scored<'a>(
     query_vector: &[f32],
@@ -216,8 +224,10 @@ pub fn hybrid_search_scored<'a>(
     metric: DistanceMetric,
     k: usize,
     vector_weight: Option<f32>,
-) -> Vec<(u64, f32, Option<&'a serde_json::Value>)> {
-    let v_weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
+) -> Result<Vec<ScoredTriple<'a>>, WasmError> {
+    // Core's blend validator, not a local clamp: `NaN.clamp(0.0, 1.0)` is NaN.
+    let v_weight = velesdb_core::validation::resolve_hybrid_vector_weight(vector_weight)
+        .map_err(WasmError::from)?;
     let t_weight = 1.0 - v_weight;
     let text_query_lower = text_query.to_lowercase();
     let higher_is_better = metric.higher_is_better();
@@ -258,7 +268,7 @@ pub fn hybrid_search_scored<'a>(
 
     sort_scored_triples(&mut results, true);
     results.truncate(k);
-    results
+    Ok(results)
 }
 
 /// Hybrid vector + text search.
@@ -274,7 +284,7 @@ pub fn hybrid_search_impl(
     k: usize,
     vector_weight: Option<f32>,
 ) -> Result<JsValue, JsValue> {
-    scored_triples_to_js(hybrid_search_scored(
+    let scored = hybrid_search_scored(
         query_vector,
         text_query,
         ids,
@@ -284,7 +294,9 @@ pub fn hybrid_search_impl(
         metric,
         k,
         vector_weight,
-    ))
+    )
+    .map_err(WasmError::into_js_value)?;
+    scored_triples_to_js(scored)
 }
 
 /// Converts an optional flat `[avg_weight, max_weight, hit_weight]` slice

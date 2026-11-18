@@ -249,7 +249,8 @@ impl StoreState {
         store_search::text_search_impl(query, &self.ids, &self.payloads, field.as_deref(), k)
     }
 
-    /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5).
+    /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5); a
+    /// non-finite weight is refused (`VELES-009`), as core refuses it.
     ///
     /// Computes the exact per-vector score and the text match in a single
     /// pass, in every storage mode.
@@ -529,8 +530,8 @@ impl StoreState {
         text_query: &str,
         k: usize,
         vector_weight: Option<f32>,
-    ) -> Vec<(u64, f32)> {
-        store_search::hybrid_search_scored(
+    ) -> Result<Vec<(u64, f32)>, WasmError> {
+        let scored = store_search::hybrid_search_scored(
             query_vector,
             text_query,
             &self.ids,
@@ -540,10 +541,11 @@ impl StoreState {
             self.metric,
             k,
             vector_weight,
-        )
-        .into_iter()
-        .map(|(id, score, _)| (id, score))
-        .collect()
+        )?;
+        Ok(scored
+            .into_iter()
+            .map(|(id, score, _)| (id, score))
+            .collect())
     }
 
     /// Scoring entry point behind [`search_sparse`](Self::search_sparse).

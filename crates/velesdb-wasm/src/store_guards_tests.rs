@@ -57,6 +57,7 @@ fn hybrid_search_ranks_a_distance_metric_nearest_first() {
         insert_with_payload(&mut store, 2, &[9.0, 9.0], payload);
         let ids: Vec<u64> = store
             .hybrid_search_scored(&[0.0, 0.0], "zzz", 2, None)
+            .expect("test: hybrid search")
             .iter()
             .map(|(id, _)| *id)
             .collect();
@@ -91,9 +92,35 @@ fn hybrid_search_with_a_zero_vector_weight_returns_only_text_matches() {
         insert_with_payload(&mut store, 3, &[0.0, 1.0], None);
         let ids: Vec<u64> = store
             .hybrid_search_scored(&[1.0, 0.0], "rust", 3, Some(0.0))
+            .expect("test: hybrid search")
             .iter()
             .map(|(id, _)| *id)
             .collect();
         assert_eq!(ids, vec![1], "{metric}: only the text match");
+    }
+}
+
+/// The blend weight is core's: `NaN.clamp(0.0, 1.0)` stayed `NaN`, which
+/// emptied a similarity metric's result (no `NaN` score passes the relevance
+/// floor) and handed a distance metric `NaN` scores in arbitrary order. The
+/// store now refuses it, with core's `Config` code, under every metric.
+#[test]
+fn hybrid_search_refuses_a_non_finite_vector_weight() {
+    for metric in ["cosine", "euclidean"] {
+        let mut store = StoreState::new(2, metric).expect("test: store");
+        insert_with_payload(
+            &mut store,
+            1,
+            &[1.0, 0.0],
+            Some(serde_json::json!({"t": "rust"})),
+        );
+        for weight in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let refused = store.hybrid_search_scored(&[1.0, 0.0], "rust", 1, Some(weight));
+            assert_eq!(
+                refused.map_err(|e| e.code()),
+                Err("VELES-009"),
+                "{metric}, {weight}"
+            );
+        }
     }
 }

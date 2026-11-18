@@ -66,17 +66,20 @@ fn dense_hits_carry_the_id_as_a_string_and_the_score_as_a_number() {
 #[test]
 fn scored_records_carry_the_id_as_a_string() {
     let store = store_with_big_point();
-    let rows = crate::store_search::scored_triples_json(crate::store_search::hybrid_search_scored(
-        &[1.0, 0.0],
-        "hello",
-        &store.ids,
-        &store.data,
-        &store.payloads,
-        store.dimension,
-        store.metric,
-        1,
-        None,
-    ));
+    let rows = crate::store_search::scored_triples_json(
+        crate::store_search::hybrid_search_scored(
+            &[1.0, 0.0],
+            "hello",
+            &store.ids,
+            &store.data,
+            &store.payloads,
+            store.dimension,
+            store.metric,
+            1,
+            None,
+        )
+        .expect("test: hybrid search"),
+    );
     assert_eq!(rows[0]["id"], json!(BIG_TEXT));
     assert!(rows[0]["score"].is_number());
     assert_eq!(rows[0]["payload"]["title"], json!("hello rust"));

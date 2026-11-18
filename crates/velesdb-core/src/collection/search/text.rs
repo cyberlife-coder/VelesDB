@@ -18,16 +18,19 @@ type AnchoredHybridStreams = (Vec<crate::scored_result::ScoredResult>, Vec<(u64,
 
 /// Resolves `(weight, text_weight, rrf_constant)` from optional caller inputs.
 ///
-/// `vector_weight` defaults to 0.5; `rrf_k` defaults to 60.
+/// `vector_weight` is resolved by
+/// [`crate::validation::resolve_hybrid_vector_weight`] (default 0.5, a
+/// non-finite weight refused); `rrf_k` defaults to 60.
 #[allow(clippy::cast_precision_loss)]
-fn resolve_rrf_params(vector_weight: Option<f32>, rrf_k: Option<u32>) -> (f32, f32, f32) {
-    let w = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
+fn resolve_rrf_params(vector_weight: Option<f32>, rrf_k: Option<u32>) -> Result<(f32, f32, f32)> {
+    let w = crate::validation::resolve_hybrid_vector_weight(vector_weight)?;
     // u32→f32: RRF k is typically 1–1000, lossless below 2^24.
     let k = rrf_k.unwrap_or(60).max(1) as f32;
-    (w, 1.0 - w, k)
+    Ok((w, 1.0 - w, k))
 }
 
-/// Validates the query vector dimension and resolves RRF parameters.
+/// Validates the query vector dimension and the blend weight, and resolves
+/// RRF parameters.
 ///
 /// Returns `(metric, weight, text_weight, rrf_constant)`.
 fn validated_hybrid_params(
@@ -38,7 +41,7 @@ fn validated_hybrid_params(
 ) -> Result<(crate::DistanceMetric, f32, f32, f32)> {
     validate_dimension_match(config.dimension, vector_query.len())?;
     let metric = config.metric;
-    let (weight, text_weight, rrf_constant) = resolve_rrf_params(vector_weight, rrf_k);
+    let (weight, text_weight, rrf_constant) = resolve_rrf_params(vector_weight, rrf_k)?;
     Ok((metric, weight, text_weight, rrf_constant))
 }
 
@@ -226,7 +229,8 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the query vector dimension doesn't match.
+    /// Returns an error if the query vector dimension doesn't match, or
+    /// [`crate::Error::Config`] if `vector_weight` is not finite.
     pub fn hybrid_search(
         &self,
         vector_query: &[f32],
@@ -384,7 +388,8 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the query vector dimension doesn't match.
+    /// Returns an error if the query vector dimension doesn't match, or
+    /// [`crate::Error::Config`] if `vector_weight` is not finite.
     pub fn hybrid_search_with_filter(
         &self,
         vector_query: &[f32],
@@ -433,7 +438,8 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the query vector dimension doesn't match.
+    /// Returns an error if the query vector dimension doesn't match, or
+    /// [`crate::Error::Config`] if `vector_weight` is not finite.
     pub(crate) fn hybrid_search_with_anchors(
         &self,
         vector_query: &[f32],
@@ -443,7 +449,7 @@ impl Collection {
         rrf_k: Option<u32>,
         anchor_ids: &HashSet<u64>,
     ) -> Result<Vec<SearchResult>> {
-        let (weight, text_weight, rrf_constant) = resolve_rrf_params(vector_weight, rrf_k);
+        let (weight, text_weight, rrf_constant) = resolve_rrf_params(vector_weight, rrf_k)?;
         let overfetch_k = k.saturating_mul(4).max(k + 10);
         let (vector_scored, text_results) =
             self.anchored_hybrid_streams(vector_query, text_query, anchor_ids, overfetch_k)?;

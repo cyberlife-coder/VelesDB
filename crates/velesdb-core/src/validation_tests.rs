@@ -189,3 +189,23 @@ fn sparse_index_name_rejects_path_injection() {
     let over_long = "x".repeat(MAX_COLLECTION_NAME_LENGTH + 1);
     assert!(validate_sparse_index_name(&over_long).is_err());
 }
+
+#[test]
+fn hybrid_vector_weight_defaults_clamps_and_refuses_non_finite() {
+    assert_eq!(
+        resolve_hybrid_vector_weight(None).ok(),
+        Some(DEFAULT_HYBRID_VECTOR_WEIGHT)
+    );
+    assert_eq!(resolve_hybrid_vector_weight(Some(0.3)).ok(), Some(0.3));
+    assert_eq!(resolve_hybrid_vector_weight(Some(-2.0)).ok(), Some(0.0));
+    assert_eq!(resolve_hybrid_vector_weight(Some(7.0)).ok(), Some(1.0));
+    for weight in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(
+            matches!(
+                resolve_hybrid_vector_weight(Some(weight)),
+                Err(Error::Config(_))
+            ),
+            "{weight}"
+        );
+    }
+}

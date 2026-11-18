@@ -466,6 +466,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hybrid search refuses a non-finite `vector_weight`** (Core, Python, WASM,
+  2026-11-18). The blend was clamped to `0..1`, but `NaN.clamp(0.0, 1.0)` is
+  `NaN`: every fused score became `NaN` and the ranking arbitrary (Python
+  `hybrid_search(vector_weight=nan)`), and the WASM store, which kept its own
+  clamp, answered `[]` under a similarity metric and `NaN` scores under a
+  distance one. `validation::resolve_hybrid_vector_weight` is now the one
+  resolver: it refuses `NaN` and infinities with `VELES-009` (`Config`;
+  `ValueError` in Python), and every hybrid path — REST, Tauri, Python,
+  mobile, the WASM `VectorStore` — calls it.
+
 - **TypeScript SDK: `dropIndex` on a missing collection throws** (TypeScript,
   2026-11-18). It answered `false` — "the index was already gone" — because it
   absorbed every not-found code, `VELES-002` included, so a typo in the

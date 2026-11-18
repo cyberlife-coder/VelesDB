@@ -101,6 +101,32 @@ pub fn validate_sparse_vector_is_finite(vector: &crate::sparse_index::SparseVect
     Ok(())
 }
 
+/// Dense/text blend of a hybrid search when the caller supplies none.
+pub const DEFAULT_HYBRID_VECTOR_WEIGHT: f32 = 0.5;
+
+/// Resolves a hybrid search's dense/text blend: the caller's `vector_weight`
+/// (or [`DEFAULT_HYBRID_VECTOR_WEIGHT`]), clamped to `0.0..=1.0`.
+///
+/// The one validator for every hybrid blend — the collection's RRF fusion and
+/// the WASM store's score blend both call it — because the clamp alone is not
+/// a guard: `f32::NAN.clamp(0.0, 1.0)` is `NaN`, which turns every fused score
+/// into `NaN` and the ranking arbitrary. A non-finite weight is refused rather
+/// than given a meaning; an infinity is refused with it, since "infinitely
+/// dense" is a caller error, not a request for `1.0`.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] when `vector_weight` is `NaN` or infinite.
+pub fn resolve_hybrid_vector_weight(vector_weight: Option<f32>) -> Result<f32> {
+    let weight = vector_weight.unwrap_or(DEFAULT_HYBRID_VECTOR_WEIGHT);
+    if !weight.is_finite() {
+        return Err(Error::Config(format!(
+            "hybrid vector_weight must be a finite number in 0.0..=1.0, got {weight}"
+        )));
+    }
+    Ok(weight.clamp(0.0, 1.0))
+}
+
 /// Validates that a collection name is safe for use as a filesystem directory.
 ///
 /// # Rules
