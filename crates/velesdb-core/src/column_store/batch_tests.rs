@@ -1,6 +1,9 @@
 //! Tests for `batch` module - Batch operations for ColumnStore.
 
-use super::{BatchUpdate, ColumnStore, ColumnType, ColumnValue, Masked, TypedColumn};
+use super::{
+    BatchUpdate, ColumnStore, ColumnStoreError, ColumnType, ColumnValue, Masked, TypedColumn,
+    UpsertResult,
+};
 
 fn create_test_store() -> ColumnStore {
     let fields = [
@@ -288,4 +291,48 @@ fn test_set_column_value_null_string() {
     if let TypedColumn::String(vec) = col {
         assert!(vec.get(0).is_none());
     }
+}
+
+#[test]
+fn test_set_ttl_saturates_instead_of_wrapping() {
+    let mut store = create_test_store();
+    store.insert_row(&[("id", ColumnValue::Int(1))]).unwrap();
+
+    // `now + u64::MAX` used to wrap to a past timestamp (or panic in debug).
+    store.set_ttl(1, u64::MAX).unwrap();
+
+    assert_eq!(store.expire_rows().expired_count, 0);
+    assert!(store.get_row_idx_by_pk(1).is_some());
+}
+
+#[test]
+fn test_upsert_new_row_refuses_type_mismatch() {
+    let mut store = create_test_store();
+
+    let result = store.upsert(&[
+        ("id", ColumnValue::Int(1)),
+        ("value", ColumnValue::Bool(true)), // `value` is a Float column
+    ]);
+
+    assert!(matches!(result, Err(ColumnStoreError::TypeMismatch { .. })));
+    assert!(store.get_row_idx_by_pk(1).is_none());
+    assert_eq!(store.row_count(), 0);
+}
+
+#[test]
+fn test_upsert_new_row_accepts_matching_types_and_null() {
+    let mut store = create_test_store();
+
+    let result = store.upsert(&[
+        ("id", ColumnValue::Int(1)),
+        ("value", ColumnValue::Float(2.5)),
+        ("active", ColumnValue::Null),
+    ]);
+
+    assert!(matches!(result, Ok(UpsertResult::Inserted)));
+    let row = store.get_row_idx_by_pk(1).unwrap();
+    assert_eq!(
+        store.get_value_as_json("value", row),
+        Some(serde_json::json!(2.5))
+    );
 }

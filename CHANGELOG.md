@@ -554,6 +554,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `parseRestPointId` enforces. Decimal-string ids up to `u64::MAX` are
   unchanged.
 
+- **A `MATCH` hop count past `u32::MAX` is refused instead of read as a
+  default** (core, 2026-11-18). The parser replaced a bound it could not
+  read with the default for an omitted one: `*5000000000..3` ran as
+  `*1..3`, and `*5000000000` as an unbounded expansion. It now fails with
+  `invalid hop count`.
+
+- **`SELECT DISTINCT *` and set operations no longer merge payloads whose
+  keys contain `:` or `,`** (core, 2026-11-18). The canonical row key wrote
+  object keys unquoted, so `{"a":1,"b":2}` and `{"a:1,b":2}` produced the
+  same key and one row was dropped. Keys are now JSON-quoted.
+
+- **A scalar `ORDER BY` on `SPARSE_NEAR` or `NEAR_FUSED` ranks every match,
+  not the `LIMIT` best-scoring ones** (core, 2026-11-18). Both paths fetched
+  only `LIMIT + OFFSET` rows by relevance and sorted that set, so
+  `… SPARSE_NEAR {…} ORDER BY price DESC LIMIT 2` could return two cheap
+  rows. They now widen the fetch to `MAX_LIMIT` for a non-similarity
+  `ORDER BY`, as the dense and `similarity()` paths already did.
+
+- **The payload WAL indexes the next record where it lands after a failed
+  flush** (core, 2026-11-18). When a flush failed (ENOSPC, say), the store
+  reset its write offset to the file length, but the `BufWriter` keeps the
+  bytes it could not write and writes them on the next successful flush.
+  Every later record was then indexed that many bytes too early: `retrieve`
+  returned another record's payload, and a snapshot taken afterwards saved
+  an offset inside a record, so the next open stopped replay there and
+  truncated the acknowledged records after it. The offset now counts the
+  retained bytes, and the intermediate flush of a deferred batch resyncs it
+  too.
+
+- **Column-store `upsert` refuses a mistyped value for a new key** (core,
+  2026-11-18). It returned `TypeMismatch` only when the key already existed;
+  for a new key it inserted the row with the mismatched value stored as NULL
+  and reported `Inserted`. The type check now runs before either branch.
+
+- **A column-store TTL near `u64::MAX` no longer expires its row at once**
+  (core, 2026-11-18). `ColumnStore::set_ttl` added the TTL to the current
+  time unchecked: release builds wrapped to a past timestamp, so the next
+  `expire_rows()` tombstoned the row, and debug builds panicked. The sum
+  now saturates, as the agent-memory TTL already did.
+
 - **WASM: the memory e2e spec and the agent-memory example match
   `remember()`** (WASM, 2026-11-18). The Playwright spec read `remember()`'s
   `{id, similar}` as a bare id string, so every assertion compared objects

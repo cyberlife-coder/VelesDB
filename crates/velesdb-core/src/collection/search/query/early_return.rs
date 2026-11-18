@@ -36,6 +36,15 @@ impl Collection {
             return Ok(Some(results));
         }
 
+        // A scalar ORDER BY ranks rows only after the fetch, so the sparse and
+        // fused fetches below must not stop at `limit` first — the reason
+        // `try_not_similarity_or_union` widens its scan.
+        let limit = if Self::order_by_requires_exhaustive_fetch(stmt) {
+            MAX_LIMIT
+        } else {
+            limit
+        };
+
         // Phase 5: Sparse-only or hybrid dense+sparse execution.
         if let Some(ref svs) = extracted.sparse_vector_search {
             let results = self.dispatch_sparse_query(stmt, params, extracted, svs, limit, ctx)?;

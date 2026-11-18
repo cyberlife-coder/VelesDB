@@ -139,6 +139,8 @@ pub(crate) fn compute_distinct_key(
 ///
 /// This ensures that logically equal JSON objects produce identical strings,
 /// regardless of the original key order (e.g., `{"a":1,"b":2}` == `{"b":2,"a":1}`).
+/// Keys are JSON-quoted like values, so a key containing `:` or `,` cannot
+/// make two different objects share a string (`{"a:1,b":2}` vs `{"a":1,"b":2}`).
 fn canonical_json_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Object(map) => {
@@ -147,7 +149,10 @@ fn canonical_json_string(value: &serde_json::Value) -> String {
             keys.sort_unstable();
             let pairs: Vec<String> = keys
                 .iter()
-                .map(|k| format!("{}:{}", k, canonical_json_string(&map[*k])))
+                .map(|k| {
+                    let key = serde_json::Value::from(k.as_str());
+                    format!("{key}:{}", canonical_json_string(&map[*k]))
+                })
                 .collect();
             format!("{{{}}}", pairs.join(","))
         }

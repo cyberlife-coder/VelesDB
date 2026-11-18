@@ -444,3 +444,21 @@ fn test_resolve_sparse_vector_refuses_a_weight_past_f32() {
         assert_eq!(err.code(), "VELES-005", "{shape}: {err}");
     }
 }
+
+/// A scalar `ORDER BY` on a `SPARSE_NEAR` query ranks the whole match set, not
+/// the `LIMIT` best-scoring rows: the setup scores higher ids higher, so a
+/// fetch capped at `LIMIT 2` returned ids 10 and 11, sorted, instead of 0 and 1.
+#[test]
+fn test_sparse_near_scalar_order_by_ranks_every_match() {
+    let (_dir, col) = setup_hybrid_collection();
+
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector SPARSE_NEAR {1: 1.0} ORDER BY idx ASC LIMIT 2",
+            &HashMap::new(),
+        )
+        .expect("SPARSE_NEAR ORDER BY idx must execute");
+
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, [0, 1]);
+}
