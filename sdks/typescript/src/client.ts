@@ -9,6 +9,7 @@ import type {
   VectorDocument,
   SearchOptions,
   SearchResult,
+  SearchIdResult,
   BatchSearchItem,
   HybridSearchOptions,
   TextSearchResult,
@@ -299,7 +300,7 @@ export class VelesDB {
   }
 
   /** Multi-query fusion search returning only IDs and scores (no payloads). */
-  async multiQuerySearchIds(collection: string, vectors: Array<number[] | Float32Array>, options?: MultiQuerySearchOptions): Promise<Array<{ id: number; score: number }>> {
+  async multiQuerySearchIds(collection: string, vectors: Array<number[] | Float32Array>, options?: MultiQuerySearchOptions): Promise<SearchIdResult[]> {
     this.ensureInitialized();
     return searchMethods.multiQuerySearchIds(this.backend, collection, vectors, options);
   }
@@ -358,7 +359,7 @@ export class VelesDB {
     return searchMethods.streamUpsertPoints(this.backend, this.config, collection, docs);
   }
 
-  async searchIds(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<Array<{ id: number; score: number }>> {
+  async searchIds(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<SearchIdResult[]> {
     this.ensureInitialized();
     refuseRestOnlyOptions(this.config.backend, options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
     return searchMethods.searchIds(this.backend, collection, query, options);

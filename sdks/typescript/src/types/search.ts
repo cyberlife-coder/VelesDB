@@ -225,6 +225,15 @@ export interface SearchResult {
 }
 
 /**
+ * Hit of an ids-only search (`searchIds`, `multiQuerySearchIds`): a
+ * {@link SearchResult} without its payload. The id is the same contract —
+ * the server sends it as a decimal string (`IdScoreResult.id`), exact past
+ * `Number.MAX_SAFE_INTEGER` — so it is picked from `SearchResult`, not
+ * restated.
+ */
+export type SearchIdResult = Pick<SearchResult, 'id' | 'score'>;
+
+/**
  * Full-text search result (`textSearch`). `score` is the BM25 score on the
  * REST backend and `null` on the WASM backend, whose text search selects by
  * case-insensitive substring and ranks nothing (velesdb-wasm 8.0.0): there

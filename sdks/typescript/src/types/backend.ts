@@ -17,6 +17,7 @@ import type {
 import type {
   SearchOptions,
   SearchResult,
+  SearchIdResult,
   TextSearchResult,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
@@ -190,7 +191,7 @@ export interface IVelesDBBackend {
     collection: string,
     vectors: Array<number[] | Float32Array>,
     options?: MultiQuerySearchOptions
-  ): Promise<Array<{ id: number; score: number }>>;
+  ): Promise<SearchIdResult[]>;
 
   /** Check if collection is empty */
   isEmpty(collection: string): Promise<boolean>;
@@ -296,7 +297,7 @@ export interface IVelesDBBackend {
     collection: string,
     query: number[] | Float32Array,
     options?: SearchOptions
-  ): Promise<Array<{ id: number; score: number }>>;
+  ): Promise<SearchIdResult[]>;
 
   // Agent Memory (Phase 8)
 

@@ -486,7 +486,7 @@ Lightweight search returning only IDs and scores (no payloads).
 
 ```typescript
 const hits = await db.searchIds('docs', queryVector, { k: 100 });
-// Returns: Array<{ id: number, score: number }>
+// Returns: SearchIdResult[] — Array<{ id: string | number, score: number }>; REST sends the id as a decimal string
 ```
 
 #### `db.scroll(collection, request)`

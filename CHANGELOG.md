@@ -466,6 +466,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: `searchIds` / `multiQuerySearchIds` type the id the
+  server sends** (TypeScript, 2026-11-18). Both declared
+  `Array<{ id: number; score: number }>`, but the server serializes an
+  ids-only hit's id as a decimal string (`IdScoreResult.id`), so a caller
+  trusting the type did number arithmetic on a string. Every layer — the
+  REST and WASM backends, the backend port and `VelesDB` — now returns
+  `SearchIdResult[]`, which is `Pick<SearchResult, 'id' | 'score'>`: one id
+  contract with the full search results instead of a narrower copy.
+
 - **Python: the type stub declares every runtime member and keyword**
   (Python, 2026-11-17). `__init__.pyi` lacked dozens of methods and
   keywords the module has — among them `Collection.enable_streaming`,

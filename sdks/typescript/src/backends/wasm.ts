@@ -14,6 +14,7 @@ import type {
   SearchOptions,
   SearchQuality,
   SearchResult,
+  SearchIdResult,
   TextSearchResult,
   MultiQuerySearchOptions,
   CreateIndexOptions,
@@ -499,8 +500,8 @@ export class WasmBackend implements IVelesDBBackend {
   async getCollectionStats(c: string): Promise<CollectionStatsResponse | null> { this.ensureInitialized(); return wasmGetCollectionStats(c); }
   async analyzeCollection(c: string): Promise<CollectionStatsResponse> { this.ensureInitialized(); return wasmAnalyzeCollection(c); }
   async getCollectionConfig(c: string): Promise<CollectionConfigResponse> { this.ensureInitialized(); return wasmGetCollectionConfig(c); }
-  async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return wasmSearchIds(c, q, o); }
-  async multiQuerySearchIds(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return wasmMultiQuerySearchIds(c, v, o); }
+  async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<SearchIdResult[]> { this.ensureInitialized(); return wasmSearchIds(c, q, o); }
+  async multiQuerySearchIds(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<SearchIdResult[]> { this.ensureInitialized(); return wasmMultiQuerySearchIds(c, v, o); }
   async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return wasmStoreSemanticFact(c, e); }
   async searchSemanticMemory(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmSearchSemanticMemory(c, e, k); }
   async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<string> { this.ensureInitialized(); return wasmRecordEpisodicEvent(c, e); }
