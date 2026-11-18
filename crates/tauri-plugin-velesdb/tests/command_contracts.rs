@@ -226,7 +226,7 @@ fn hybrid_result_wire_shape_for_grouped_and_ungrouped_aggregates() {
 // ===========================================================================
 
 /// A graph command aimed at a vector collection answers core's
-/// GraphNotSupported (VELES-018), not "not found"; a missing name stays
+/// `GraphNotSupported` (VELES-018), not "not found"; a missing name stays
 /// VELES-002.
 #[test]
 fn graph_command_distinguishes_wrong_kind_from_missing() {
