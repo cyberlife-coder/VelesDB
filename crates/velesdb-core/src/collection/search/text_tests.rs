@@ -194,6 +194,29 @@ fn test_hybrid_search_dimension_mismatch_error() {
 }
 
 #[test]
+fn test_hybrid_search_refuses_a_non_finite_vector_weight() {
+    // `NaN.clamp(0.0, 1.0)` is NaN: every fused score became NaN and the
+    // ranking arbitrary. Both hybrid entry points refuse it instead.
+    let (_dir, col) = setup_text_collection();
+    let vector_query = vec![0.9, 0.1, 0.0, 0.0];
+    let filter = Filter::new(Condition::eq("category", "tech"));
+
+    for weight in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let plain = col.hybrid_search(&vector_query, "rust", 5, Some(weight), None);
+        assert!(
+            matches!(plain, Err(crate::Error::Config(_))),
+            "{weight}: {plain:?}"
+        );
+        let filtered =
+            col.hybrid_search_with_filter(&vector_query, "rust", 5, Some(weight), &filter, None);
+        assert!(
+            matches!(filtered, Err(crate::Error::Config(_))),
+            "{weight}: {filtered:?}"
+        );
+    }
+}
+
+#[test]
 fn test_top_k_from_scores_huge_k_does_not_over_reserve() {
     // Regression: `top_k_from_scores` reserved `with_capacity(k + 1)` from the
     // caller-supplied `k`, which is unclamped on the hybrid/fused path. A huge

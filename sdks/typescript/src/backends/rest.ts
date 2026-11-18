@@ -14,6 +14,7 @@ import type {
   SearchOptions,
   SearchQuality,
   SearchResult,
+  SearchIdResult,
   MultiQuerySearchOptions,
   CreateIndexOptions,
   IndexInfo,
@@ -217,8 +218,8 @@ export class RestBackend implements IVelesDBBackend {
   async textSearch(c: string, q: string, o?: { k?: number; filter?: FilterInput }): Promise<SearchResult[]> { this.ensureInitialized(); return _textSearch(buildSearchTransport(this.httpConfig), c, q, o); }
   async hybridSearch(c: string, v: number[] | Float32Array, t: string, o?: { k?: number; vectorWeight?: number; filter?: FilterInput }): Promise<SearchResult[]> { this.ensureInitialized(); return _hybridSearch(buildSearchTransport(this.httpConfig), c, v, t, o); }
   async multiQuerySearch(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<SearchResult[]> { this.ensureInitialized(); return _multiQuerySearch(buildSearchTransport(this.httpConfig), c, v, o); }
-  async multiQuerySearchIds(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return _multiQuerySearchIds(buildSearchTransport(this.httpConfig), c, v, o); }
-  async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return _searchIds(buildSearchTransport(this.httpConfig), c, q, o); }
+  async multiQuerySearchIds(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<SearchIdResult[]> { this.ensureInitialized(); return _multiQuerySearchIds(buildSearchTransport(this.httpConfig), c, v, o); }
+  async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<SearchIdResult[]> { this.ensureInitialized(); return _searchIds(buildSearchTransport(this.httpConfig), c, q, o); }
   async sparseSearchNamed(c: string, q: import('../types').SparseVector, idx: string, o?: import('../types').SparseSearchNamedOptions): Promise<SearchResult[]> { this.ensureInitialized(); return _sparseSearchNamed(buildSearchTransport(this.httpConfig), c, q, idx, o); }
 
   // Query

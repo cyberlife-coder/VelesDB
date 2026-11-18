@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`limits::whole_count`: the count validator every JS binding shares.** A
+  count a binding reads from JavaScript (`k`, `ttlSeconds`, `maxHops`, a token
+  reserve, an index) must be a finite whole number in `0..=u32::MAX`; anything
+  else is refused with the new `MemoryError::InvalidCount` (`InvalidInput`).
+  The Node binding carried this check privately while the WASM binding took
+  `usize`/`u64` parameters that `wasm-bindgen` wraps silently; both now call
+  this one function. `MemoryError` is `non_exhaustive`, so the variant breaks
+  no caller.
+
 - **`compile-stdin --tool-output`: line-level pruning of one command's
   output** (`context::prune_tool_output`). The fragment compiler's critical
   rules are existence tests, so on tool output — digits on nearly every line

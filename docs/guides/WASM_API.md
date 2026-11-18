@@ -143,7 +143,7 @@ Inserting an id that already exists replaces the previous entry — `insert` and
 | `search_with_quality(query, k, quality)` | `[[id, score], …]` | Accepts the Python/Server quality strings (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`). **All modes return identical results in WASM** — there is no HNSW graph; the parameter exists for API parity, and is checked as the server checks it: each ef in 16–4096, or it throws (#2275). |
 | `search_with_filter(query, k, filter)` | `[{id, score, payload}, …]` | Metadata-filtered search. |
 | `text_search(query, k, field?)` | `[{id, score: null, payload}, …]` | Case-insensitive substring match over payload fields, in insertion order. It selects without ranking, so `score` is always `null`. |
-| `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion: `vectorWeight × vector score + (1 − vectorWeight) × text match` (0 or 1), best first. Under a distance metric (`euclidean`, `hamming`) the vector score is the negated distance, so the blend stays higher-is-better and every row is kept; under a similarity metric a row whose blend is not above 0 is dropped. |
+| `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion: `vectorWeight × vector score + (1 − vectorWeight) × text match` (0 or 1), best first. `vectorWeight` defaults to 0.5 and is clamped to `0..1`; a `NaN` or infinite one throws `VELES-009`, as core's hybrid search does. Under a distance metric (`euclidean`, `hamming`) the vector score is the negated distance, so the blend stays higher-is-better and every row is kept; under a similarity metric a row whose blend is not above 0 is dropped. |
 | `multi_query_search(vectors, numVectors, k, strategy, rrfK?, weights?)` | `[[id, score], …]` | Multi-query fusion (MQG). |
 | `batch_search(vectors, numVectors, k)` | `[[[id, score], …], …]` | One result list per query vector. |
 | `similarity_search(query, threshold, operator, k)` | `[[id, score], …]` | Threshold-based selection. |
@@ -337,7 +337,14 @@ Contract details:
 - Every method is **synchronous** — no `Promise` to await.
 - Failures throw a JS `Error` carrying a `.code` field: `INVALID_INPUT`,
   `NOT_FOUND`, or `INTERNAL`.
-- `ttlSeconds` makes a fact expire; omit it or pass `0` for a permanent memory.
+- `ttlSeconds` makes a fact expire; omit it for a permanent memory. `0` is
+  refused (`INVALID_INPUT`): it reads as "expire now", not "never".
+- Every count — `k`, `maxHops`, `ttlSeconds`, `fragmentIndex`,
+  `reserveTokens`, and `recallFused`'s `hops` / `pool` — is a whole JS number
+  in `0..=4294967295`, checked by the same validator as the Node binding; a
+  fraction, a negative, `NaN` or `Infinity` throws `INVALID_INPUT` instead of
+  being wrapped. `ttlSeconds` and `reserveTokens` also accept a `BigInt`, the
+  type their earlier `u64` signature required.
 - `metadata` marshals as a **plain JS object**, not an ES2015 `Map` — this is
   pinned by a regression test (`tests/memory_wedge_web.rs`).
 - A fact larger than `velesdb_memory::limits::MAX_FACT_BYTES` is rejected with

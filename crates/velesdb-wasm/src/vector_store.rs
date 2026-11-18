@@ -225,7 +225,8 @@ impl VectorStore {
         self.state.borrow().text_search(query, k, field)
     }
 
-    /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5).
+    /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5); a
+    /// non-finite weight is refused (`VELES-009`), as core refuses it.
     ///
     /// Computes the exact per-vector score and the text match in a single
     /// pass, in every storage mode.

@@ -13,6 +13,7 @@ import type {
   VectorDocument,
   SearchOptions,
   SearchResult,
+  SearchIdResult,
   BatchSearchItem,
   HybridSearchOptions,
   TextSearchResult,
@@ -147,7 +148,7 @@ export function multiQuerySearchIds(
   collection: string,
   vectors: Array<number[] | Float32Array>,
   options?: MultiQuerySearchOptions
-): Promise<Array<{ id: number; score: number }>> {
+): Promise<SearchIdResult[]> {
   if (!Array.isArray(vectors) || vectors.length === 0) {
     throw new VelesDBError('Vectors must be a non-empty array', 'BAD_REQUEST');
   }
@@ -222,7 +223,7 @@ export function searchIds(
   collection: string,
   query: number[] | Float32Array,
   options?: SearchOptions
-): Promise<Array<{ id: number; score: number }>> {
+): Promise<SearchIdResult[]> {
   return backend.searchIds(collection, query, options);
 }
 

@@ -26,3 +26,15 @@ fn a_count_is_a_whole_number_in_u32_range() {
         );
     }
 }
+
+/// The refusal is the shared validator's (`velesdb_memory::limits`), and the
+/// message JS callers see is the one this binding has always sent.
+#[test]
+fn a_refused_count_keeps_its_message_and_status() {
+    let err = count("ttlSeconds", Some(-1.0)).err();
+    assert_eq!(
+        err.as_ref().map(|e| e.reason.as_str()),
+        Some("[INVALID_INPUT] ttlSeconds must be a whole number in 0..=4294967295, got -1")
+    );
+    assert_eq!(err.map(|e| e.status), Some(napi::Status::InvalidArg));
+}

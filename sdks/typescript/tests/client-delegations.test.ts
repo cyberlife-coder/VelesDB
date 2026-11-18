@@ -16,9 +16,9 @@
  * driving the full delegation surface in one file.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, expectTypeOf, beforeEach, vi } from 'vitest';
 import { VelesDB, AgentMemoryClient } from '../src/client';
-import type { IVelesDBBackend } from '../src/types';
+import type { IVelesDBBackend, SearchResult } from '../src/types';
 import { ValidationError } from '../src/types';
 import { InvalidDimensionError } from '../src/errors';
 
@@ -48,7 +48,7 @@ function buildBackend(): IVelesDBBackend {
     textSearch: vi.fn(() => Promise.resolve([])),
     hybridSearch: vi.fn(() => Promise.resolve([])),
     multiQuerySearch: vi.fn(() => Promise.resolve([])),
-    multiQuerySearchIds: vi.fn(() => Promise.resolve([{ id: 1, score: 0.5 }])),
+    multiQuerySearchIds: vi.fn(() => Promise.resolve([{ id: '1', score: 0.5 }])),
     searchIds: vi.fn(() => Promise.resolve([])),
     sparseSearchNamed: vi.fn(() => Promise.resolve([])),
 
@@ -239,9 +239,19 @@ describe('VelesDB — search / admin / scroll delegations (search-methods.ts)', 
   it('multiQuerySearchIds validates every vector and delegates', async () => {
     const vectors = [[0.1], new Float32Array([0.2])];
     await expect(db.multiQuerySearchIds('c', vectors, { k: 2 })).resolves.toEqual([
-      { id: 1, score: 0.5 },
+      { id: '1', score: 0.5 },
     ]);
     expect(backend.multiQuerySearchIds).toHaveBeenCalledWith('c', vectors, { k: 2 });
+  });
+
+  it('ids-only searches carry SearchResult\'s id type on the client and the backend port', () => {
+    type Hit = Pick<SearchResult, 'id' | 'score'>;
+    expectTypeOf<Awaited<ReturnType<VelesDB['searchIds']>>[number]>().toEqualTypeOf<Hit>();
+    expectTypeOf<Awaited<ReturnType<VelesDB['multiQuerySearchIds']>>[number]>().toEqualTypeOf<Hit>();
+    expectTypeOf<Awaited<ReturnType<IVelesDBBackend['searchIds']>>[number]>().toEqualTypeOf<Hit>();
+    expectTypeOf<
+      Awaited<ReturnType<IVelesDBBackend['multiQuerySearchIds']>>[number]
+    >().toEqualTypeOf<Hit>();
   });
 
   it('multiQuerySearchIds refuses an empty, non-array or ill-typed batch before the backend', async () => {

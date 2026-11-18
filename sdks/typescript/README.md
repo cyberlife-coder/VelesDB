@@ -486,7 +486,7 @@ Lightweight search returning only IDs and scores (no payloads).
 
 ```typescript
 const hits = await db.searchIds('docs', queryVector, { k: 100 });
-// Returns: Array<{ id: number, score: number }>
+// Returns: SearchIdResult[] — Array<{ id: string | number, score: number }>; REST sends the id as a decimal string
 ```
 
 #### `db.scroll(collection, request)`
@@ -1086,7 +1086,8 @@ Returns `true` if the specified index exists.
 
 #### `db.dropIndex(collection, label, property)`
 
-Drop an index. Returns `true` if the index existed and was removed.
+Drop an index. Returns `true` if the index existed and was removed, `false` if
+no such index exists; a missing collection throws `CollectionNotFoundError`.
 
 ---
 

@@ -340,6 +340,24 @@ def test_hybrid_search_rrf_k_and_component_scores(temp_db):
     assert len(r2) == 3
 
 
+@pytest.mark.parametrize("weight", [float("nan"), float("inf"), float("-inf")])
+def test_hybrid_search_refuses_a_non_finite_vector_weight(temp_db, weight):
+    # NaN survived core's clamp, so every fused score was NaN and the order
+    # arbitrary; core now refuses it, and the binding surfaces a ValueError.
+    col = temp_db.create_collection("hyb_nan", dimension=4, metric="cosine")
+    _seed_docs(col)
+    with pytest.raises(ValueError, match="vector_weight"):
+        col.hybrid_search([1.0, 0, 0, 0], "learning", top_k=3, vector_weight=weight)
+    with pytest.raises(ValueError, match="vector_weight"):
+        col.hybrid_search(
+            [1.0, 0, 0, 0],
+            "learning",
+            top_k=3,
+            vector_weight=weight,
+            filter={"condition": {"type": "eq", "field": "text", "value": "deep learning"}},
+        )
+
+
 def test_database_getters_guardrails_flush_all(tmp_path):
     db = velesdb.Database(str(tmp_path))
     assert db.data_dir == str(tmp_path)

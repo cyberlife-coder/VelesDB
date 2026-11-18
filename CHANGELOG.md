@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (Tauri IPC): point ids cross the IPC boundary as decimal
+  strings** (Tauri, 2026-11-18). Search hits already carried a string id
+  (core's `SearchResultResponse`), but every other point id the plugin wrote
+  was a JSON number, which JavaScript rounds past 2^53, and every point id it
+  read had to be a number. Now:
+  - `IdScoreOutput.id` (`search_ids`), `PointOutput.id` (`get_points`,
+    `scroll_collection`), `HybridResult.nodeId` (`query`),
+    `ScrollResponse.nextCursor`, and the `id` of `SemanticQueryResult`,
+    `EpisodicResult`, `EpisodicSimilarResult` and `ProceduralMatchResult` are
+    decimal strings;
+  - `upsert` / `upsert_metadata` / `sparse_upsert` point ids, `get_points` /
+    `delete_points` `ids`, the `scroll_collection` `cursor`, and the
+    agent-memory `id` / `eventId` / `procedureId` inputs accept a decimal
+    string or a number.
+
+  guest-js types follow, and its `SearchResult.id` is now `string`, as the
+  plugin already sent it. Migration: read point ids as strings (`BigInt(id)`
+  for arithmetic); numbers keep working as input.
+
 - **TypeScript SDK: the WASM backend needs the `@wiscale/velesdb-wasm` of its
   own release, and keeps sparse vectors in each collection's store**
   (TypeScript SDK, 2026-11-17). The backend indexed sparse vectors in a
@@ -479,6 +498,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file. Anything else is now a usage error (exit 2).
 
 ### Fixed
+
+- **WASM: the memory e2e spec and the agent-memory example match
+  `remember()`** (WASM, 2026-11-18). The Playwright spec read `remember()`'s
+  `{id, similar}` as a bare id string, so every assertion compared objects
+  with ids and the suite failed — unseen, because no workflow ran it. The
+  `04-agent-memory` example said `ttlSeconds: 0` stores a permanent memory;
+  `0` is refused. The spec reads `.id` and also pins the count refusals. The
+  suite's VectorStore, fusion and VelesQL specs called APIs that no longer
+  exist (`VectorStore.new`, `store.len()`, numeric ids, `new VelesQL()`) and
+  failed wholesale; they are ported to the current binding, and the
+  `wasm-check` job now runs the whole suite on chromium over the package it
+  already builds.
+
+- **WASM `MemoryService` refuses a count it used to wrap** (WASM, Node,
+  2026-11-18). Its counts — `k`, `maxHops`, `ttlSeconds`, `fragmentIndex`,
+  `reserveTokens`, `recallFused`'s `hops` / `pool` — were `usize`/`u64`
+  parameters that `wasm-bindgen` coerces silently: `Infinity` or `NaN` became
+  `k = 0` (an empty recall), `-1` became 4294967295, and a `-1n` TTL became
+  `u64::MAX`, a fact that never expires. The Node binding already refused
+  these with `INVALID_INPUT`; its check moved into `velesdb-memory`
+  (`limits::whole_count`, `MemoryError::InvalidCount`) and both bindings call
+  it, with Node's messages unchanged. `ttlSeconds` and `reserveTokens` accept
+  a number, as on Node, or the `BigInt` their old signature required.
+
+- **Hybrid search refuses a non-finite `vector_weight`** (Core, Python, WASM,
+  2026-11-18). The blend was clamped to `0..1`, but `NaN.clamp(0.0, 1.0)` is
+  `NaN`: every fused score became `NaN` and the ranking arbitrary (Python
+  `hybrid_search(vector_weight=nan)`), and the WASM store, which kept its own
+  clamp, answered `[]` under a similarity metric and `NaN` scores under a
+  distance one. `validation::resolve_hybrid_vector_weight` is now the one
+  resolver: it refuses `NaN` and infinities with `VELES-009` (`Config`;
+  `ValueError` in Python), and every hybrid path — REST, Tauri, Python,
+  mobile, the WASM `VectorStore` — calls it.
+
+- **TypeScript SDK: `dropIndex` on a missing collection throws** (TypeScript,
+  2026-11-18). It answered `false` — "the index was already gone" — because it
+  absorbed every not-found code, `VELES-002` included, so a typo in the
+  collection name looked like a successful no-op. Only the index's own 404
+  answers `false` now; `CollectionNotFoundError` reaches the caller.
+  `removeEdge`, which already drew that line for edges, shares the same check.
+
+- **TypeScript SDK: `searchIds` / `multiQuerySearchIds` type the id the
+  server sends** (TypeScript, 2026-11-18). Both declared
+  `Array<{ id: number; score: number }>`, but the server serializes an
+  ids-only hit's id as a decimal string (`IdScoreResult.id`), so a caller
+  trusting the type did number arithmetic on a string. Every layer — the
+  REST and WASM backends, the backend port and `VelesDB` — now returns
+  `SearchIdResult[]`, which is `Pick<SearchResult, 'id' | 'score'>`: one id
+  contract with the full search results instead of a narrower copy.
 
 - **A MATCH `ORDER BY` ranks every row, or refuses past the cardinality
   bound, instead of sorting the first 100 000** (core, WASM, 2026-11-18).

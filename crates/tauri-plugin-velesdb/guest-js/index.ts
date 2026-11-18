@@ -78,7 +78,7 @@ export interface CreateMetadataCollectionRequest {
 /** A metadata-only point to insert (no vector). */
 export interface MetadataPointInput {
   /** Unique point identifier. */
-  id: number;
+  id: string | number;
   /** Payload with metadata. */
   payload: Record<string, unknown>;
 }
@@ -108,7 +108,7 @@ export interface CollectionInfo {
 /** A point (vector with metadata) to insert. */
 export interface PointInput {
   /** Unique point identifier. */
-  id: number;
+  id: string | number;
   /** Vector data (must match collection dimension). */
   vector: number[];
   /** Optional JSON payload with metadata. */
@@ -178,7 +178,7 @@ export interface GetPointsRequest {
   /** Target collection name. */
   collection: string;
   /** Point IDs to retrieve. */
-  ids: number[];
+  ids: Array<string | number>;
 }
 
 /** Request to delete points by IDs. */
@@ -186,7 +186,7 @@ export interface DeletePointsRequest {
   /** Target collection name. */
   collection: string;
   /** Point IDs to delete. */
-  ids: number[];
+  ids: Array<string | number>;
 }
 
 /** Individual search request within a batch. */
@@ -254,8 +254,8 @@ export interface MultiQuerySearchRequest {
 
 /** Point output for get operations. */
 export interface PointOutput {
-  /** Point ID. */
-  id: number;
+  /** Point ID, as a decimal string (exact past 2^53, as REST sends it). */
+  id: string;
   /** Vector data. */
   vector: number[];
   /** Point payload (if any). */
@@ -264,8 +264,8 @@ export interface PointOutput {
 
 /** Search result item. */
 export interface SearchResult {
-  /** Point ID. */
-  id: number;
+  /** Point ID, as a decimal string (exact past 2^53, as REST sends it). */
+  id: string;
   /** Similarity/distance score. */
   score: number;
   /** Point payload (if any). */
@@ -282,8 +282,8 @@ export interface SearchResponse {
 
 /** A single ID + score pair returned by {@link searchIds}. */
 export interface IdScoreOutput {
-  /** Matched point ID. */
-  id: number;
+  /** Matched point ID, as a decimal string. */
+  id: string;
   /** Relevance score. */
   score: number;
 }
@@ -311,8 +311,8 @@ export interface GuardrailLimits {
 
 /** Hybrid result from VelesQL queries (vector + graph + column data). */
 export interface HybridResult {
-  /** Node/point ID. */
-  nodeId: number;
+  /** Node/point ID, as a decimal string. */
+  nodeId: string;
   /** Vector similarity score (if applicable). */
   vectorScore?: number;
   /** Graph traversal score (if applicable). */
@@ -1033,8 +1033,9 @@ export function createGraphCollection(request: CreateGraphCollectionRequest): Pr
 export interface ScrollRequest {
   /** Target collection name. */
   collection: string;
-  /** Cursor from a previous scroll (omit for the first batch). */
-  cursor?: number;
+  /** Cursor from a previous scroll (omit for the first batch): the
+   * `nextCursor` string as received, or a number. */
+  cursor?: string | number;
   /** Number of points per batch. Default: 100. */
   batchSize?: number;
   /** Optional metadata filter. */
@@ -1045,8 +1046,9 @@ export interface ScrollRequest {
 export interface ScrollResponse {
   /** Points in this batch. */
   points: PointOutput[];
-  /** Cursor for the next batch (absent when no more points). */
-  nextCursor?: number;
+  /** Cursor for the next batch, as a decimal string (absent when no more
+   * points). */
+  nextCursor?: string;
 }
 
 /**
@@ -1058,7 +1060,7 @@ export interface ScrollResponse {
  *
  * @example
  * ```typescript
- * let cursor: number | undefined;
+ * let cursor: string | undefined;
  * do {
  *   const batch = await scrollCollection({ collection: 'docs', cursor, batchSize: 50 });
  *   batch.points.forEach(p => console.log(p.id));
@@ -1077,7 +1079,7 @@ export function scrollCollection(request: ScrollRequest): Promise<ScrollResponse
 /** Request to store knowledge in semantic memory. */
 export interface SemanticStoreRequest {
   /** Unique ID for this knowledge fact. */
-  id: number;
+  id: string | number;
   /** Text content of the knowledge. */
   content: string;
   /** Embedding vector for the content. */
@@ -1097,7 +1099,7 @@ export interface SemanticQueryRequest {
 /** Result from semantic memory query. */
 export interface SemanticQueryResult {
   /** Knowledge fact ID. */
-  id: number;
+  id: string;
   /** Similarity score. */
   score: number;
   /** Knowledge content text. */
@@ -1127,7 +1129,7 @@ export function semanticQuery(request: SemanticQueryRequest): Promise<SemanticQu
 /** Request to store knowledge in semantic memory with a TTL. */
 export interface SemanticStoreWithTtlRequest {
   /** Unique ID for this knowledge fact. */
-  id: number;
+  id: string | number;
   /** Text content of the knowledge. */
   content: string;
   /** Embedding vector for the content. */
@@ -1139,7 +1141,7 @@ export interface SemanticStoreWithTtlRequest {
 /** Request to delete a semantic memory entry by ID. */
 export interface SemanticDeleteRequest {
   /** Knowledge fact ID to delete. */
-  id: number;
+  id: string | number;
 }
 
 /**
@@ -1203,7 +1205,7 @@ export async function semanticDeserialize(data: number[]): Promise<void> {
 /** Request to record an episode. */
 export interface EpisodicRecordRequest {
   /** Episode event ID. */
-  eventId: number;
+  eventId: string | number;
   /** Episode description/content. */
   content: string;
   /** Timestamp (epoch seconds). */
@@ -1223,7 +1225,7 @@ export interface EpisodicRecentRequest {
 /** Result from episodic memory query. */
 export interface EpisodicResult {
   /** Episode ID. */
-  id: number;
+  id: string;
   /** Episode content. */
   content: string;
   /** Timestamp (epoch seconds). */
@@ -1269,13 +1271,13 @@ export interface EpisodicOlderThanRequest {
 /** Request to delete an episode by event ID. */
 export interface EpisodicDeleteRequest {
   /** Episode event ID to delete. */
-  eventId: number;
+  eventId: string | number;
 }
 
 /** Result from an episodic similarity recall. */
 export interface EpisodicSimilarResult {
   /** Episode ID. */
-  id: number;
+  id: string;
   /** Episode content. */
   content: string;
   /** Timestamp (epoch seconds). */
@@ -1344,7 +1346,7 @@ export async function episodicDeserialize(data: number[]): Promise<void> {
 /** Request to learn a procedure. */
 export interface ProceduralLearnRequest {
   /** Procedure ID. */
-  procedureId: number;
+  procedureId: string | number;
   /** Procedure name. */
   name: string;
   /** Steps to perform. */
@@ -1368,7 +1370,7 @@ export interface ProceduralRecallRequest {
 /** Result from procedural memory recall. */
 export interface ProceduralMatchResult {
   /** Procedure ID. */
-  id: number;
+  id: string;
   /** Procedure name. */
   name: string;
   /** Steps. */
@@ -1402,7 +1404,7 @@ export function proceduralRecall(request: ProceduralRecallRequest): Promise<Proc
 /** Request to reinforce a stored procedure. */
 export interface ProceduralReinforceRequest {
   /** Procedure ID to reinforce. */
-  procedureId: number;
+  procedureId: string | number;
   /** Whether the procedure execution succeeded. */
   success: boolean;
 }
@@ -1410,7 +1412,7 @@ export interface ProceduralReinforceRequest {
 /** Request to delete a procedure by ID. */
 export interface ProceduralDeleteRequest {
   /** Procedure ID to delete. */
-  procedureId: number;
+  procedureId: string | number;
 }
 
 /**
@@ -1477,7 +1479,7 @@ export interface MemoryTtlRequest {
   /** Target memory subsystem. */
   kind: MemoryKind;
   /** Entry ID to expire. */
-  id: number;
+  id: string | number;
   /** Time-to-live in seconds. */
   ttlSeconds: number;
 }

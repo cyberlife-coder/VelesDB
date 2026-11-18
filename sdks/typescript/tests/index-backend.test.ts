@@ -5,7 +5,8 @@
  * `src/backends/index-backend.ts`: createIndex, listIndexes, hasIndex,
  * dropIndex. Exercises happy paths, URL encoding, snake_case to
  * camelCase mapping, the BUG-2 fallback for empty 204 bodies, and the
- * error routing (VELES-002 → CollectionNotFoundError or sentinel).
+ * error routing (VELES-002 → CollectionNotFoundError, a missing index →
+ * the `false` sentinel).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -271,13 +272,28 @@ describe('dropIndex', () => {
     expect(call[1]).toBe('/collections/docs/indexes/Per%20son/e%2Fmail');
   });
 
-  it('returns false on VELES-002 (not-found sentinel)', async () => {
+  it('returns false when only the index is absent (the codeless 404)', async () => {
+    // `delete_index` answers a missing index with `error_response(404, …)`,
+    // which carries no VELES code, so the transport fills in 'NOT_FOUND'.
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      error: { code: 'NOT_FOUND', message: 'Index on Person.email not found' },
+    });
+
+    const result = await dropIndex(transport, 'docs', 'Person', 'email');
+    expect(result).toBe(false);
+  });
+
+  it('throws CollectionNotFoundError on VELES-002 instead of answering false', async () => {
+    // A missing collection is not "the index was already gone": the caller
+    // addressed the wrong collection and must hear about it.
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       typedError()
     );
 
-    const result = await dropIndex(transport, 'missing', 'Person', 'email');
-    expect(result).toBe(false);
+    await expect(dropIndex(transport, 'missing', 'Person', 'email')).rejects.toThrow(
+      CollectionNotFoundError
+    );
   });
 });
