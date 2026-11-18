@@ -55,6 +55,44 @@ pub(super) fn compute_delete_crc(id: u64) -> u32 {
 // WAL record writing
 // ---------------------------------------------------------------------------
 
+/// Flushes the WAL writer's buffer to the file.
+///
+/// Every WAL flush whose failure must resync the write offset goes through
+/// here, so a test can fail it ([`fail_next_wal_flush`]). The injected
+/// failure returns before writing anything, which leaves the buffer exactly
+/// as a flush that wrote nothing does.
+pub(super) fn flush_wal(wal: &mut io::BufWriter<std::fs::File>) -> io::Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_WAL_FLUSH.with(|fail| fail.replace(false)) {
+        return Err(io::Error::other("injected WAL flush failure"));
+    }
+    wal.flush()
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_WAL_FLUSH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Makes the next [`flush_wal`] on this thread fail; the guard clears the
+/// fault on drop if no flush consumed it.
+#[cfg(test)]
+pub(super) fn fail_next_wal_flush() -> WalFlushFault {
+    FAIL_NEXT_WAL_FLUSH.with(|fail| fail.set(true));
+    WalFlushFault
+}
+
+/// Clears an unconsumed [`fail_next_wal_flush`] fault on drop.
+#[cfg(test)]
+pub(super) struct WalFlushFault;
+
+#[cfg(test)]
+impl Drop for WalFlushFault {
+    fn drop(&mut self) {
+        FAIL_NEXT_WAL_FLUSH.with(|fail| fail.set(false));
+    }
+}
+
 /// The WAL offset the next record will land at, after a failed write or flush.
 ///
 /// The WAL file is opened in append mode, and a `BufWriter` whose flush fails

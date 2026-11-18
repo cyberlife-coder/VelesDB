@@ -1228,3 +1228,43 @@ fn test_wal_end_counts_bytes_a_failed_flush_kept() {
         "the kept bytes landed first"
     );
 }
+
+/// After a failed flush, the next record is indexed where it lands, so it
+/// reads back as itself, now and after a snapshot and reopen. Resyncing to
+/// the file length indexed record 3 at record 2's position.
+fn assert_recovers_after_failed_flush(
+    store_second: impl FnOnce(&mut LogPayloadStorage) -> std::io::Result<()>,
+) {
+    let (mut storage, temp_dir) = create_test_storage();
+    storage.store(1, &json!({"a": 1})).expect("store 1");
+    {
+        let _fault = super::log_payload_io::fail_next_wal_flush();
+        assert!(
+            store_second(&mut storage).is_err(),
+            "precondition: the flush failed"
+        );
+    }
+    storage.store(3, &json!({"c": 3})).expect("store 3");
+
+    assert_eq!(storage.retrieve(3).expect("read 3"), Some(json!({"c": 3})));
+    assert_eq!(
+        storage.retrieve(2).expect("read 2"),
+        Some(json!({"b": "kept"}))
+    );
+    storage.create_snapshot().expect("snapshot");
+    drop(storage);
+
+    let reopened = LogPayloadStorage::new(temp_dir.path()).expect("reopen");
+    assert_eq!(reopened.retrieve(1).expect("read 1"), Some(json!({"a": 1})));
+    assert_eq!(reopened.retrieve(3).expect("read 3"), Some(json!({"c": 3})));
+}
+
+#[test]
+fn test_store_after_a_failed_flush_reads_back_its_own_payload() {
+    assert_recovers_after_failed_flush(|s| s.store(2, &json!({"b": "kept"})));
+}
+
+#[test]
+fn test_deferred_batch_after_a_failed_flush_reads_back_its_own_payload() {
+    assert_recovers_after_failed_flush(|s| s.store_batch_deferred(&[(2, &json!({"b": "kept"}))]));
+}

@@ -22,7 +22,9 @@
 //!
 //! Snapshot format and I/O are handled by the [`super::snapshot`] module.
 
-use super::log_payload_io::{compute_delete_crc, wal_end, write_store_record, CRC_DELETE_MARKER};
+use super::log_payload_io::{
+    compute_delete_crc, flush_wal, wal_end, write_store_record, CRC_DELETE_MARKER,
+};
 use super::snapshot;
 use super::traits::PayloadStorage;
 
@@ -216,11 +218,11 @@ impl LogPayloadStorage {
     fn sync_wal(wal: &mut io::BufWriter<File>, mode: DurabilityMode) -> io::Result<()> {
         match mode {
             DurabilityMode::Fsync => {
-                wal.flush()?;
+                flush_wal(wal)?;
                 wal.get_ref().sync_all()?;
             }
             DurabilityMode::FlushOnly => {
-                wal.flush()?;
+                flush_wal(wal)?;
             }
             DurabilityMode::None => {}
         }
@@ -413,8 +415,7 @@ impl LogPayloadStorage {
                 // Buffer-only flush: data reaches OS kernel but is not fsynced.
                 // Safe for intermediate batches — caller must fsync after the
                 // final batch.
-                wal.flush()
-                    .inspect_err(|_| Self::resync_offset(&wal, &mut offset))?;
+                flush_wal(&mut wal).inspect_err(|_| Self::resync_offset(&wal, &mut offset))?;
             }
         }
 
