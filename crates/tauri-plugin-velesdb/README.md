@@ -123,18 +123,19 @@ Expected output in the webview console:
 inserted: 2
 {
   "results": [
-    { "id": 1, "score": 1.0, "payload": { "title": "north" } },
-    { "id": 2, "score": 0.0, "payload": { "title": "east" } }
+    { "id": "1", "score": 1.0, "payload": { "title": "north" } },
+    { "id": "2", "score": 0.0, "payload": { "title": "east" } }
   ],
   "timingMs": 0.42
 }
 ```
 
 **How to read it.** With the `cosine` metric the score is a similarity: `1.0`
-means identical, `0.0` means orthogonal. Success is *`id: 1` ranked first with a
+means identical, `0.0` means orthogonal. Success is *`id: "1"` ranked first with a
 score close to `1.0`*. The last decimals and `timingMs` will differ on your
-machine — that is normal. A directory `./velesdb_data` now exists next to the
-running binary.
+machine — that is normal. Ids come back as decimal strings, exact past 2^53
+where a JavaScript number rounds; a command takes an id as a string or a
+number. A directory `./velesdb_data` now exists next to the running binary.
 
 **If it failed instead**, the rejection is a `{ message, code }` object:
 `code: "VELES-002"` means the collection was not found (step 3 ran before

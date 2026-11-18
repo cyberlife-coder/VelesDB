@@ -54,6 +54,15 @@ apart.
 | `get_points` | Retrieve points by IDs |
 | `delete_points` | Delete points by IDs |
 
+Point ids follow REST too. Every point id a command returns — a search hit's
+`id`, `IdScoreOutput.id`, `PointOutput.id`, `HybridResult.nodeId`,
+`scroll_collection`'s `nextCursor`, and the `id` of every agent-memory result
+— is a decimal string, exact past 2^53 where a JavaScript number rounds. Every
+point id a command takes (`upsert` / `upsert_metadata` / `sparse_upsert`
+points, `get_points` / `delete_points` `ids`, the `scroll_collection`
+`cursor`, the agent-memory `id` / `eventId` / `procedureId`) is a decimal
+string or a number.
+
 ## Search
 
 | Command | Description |

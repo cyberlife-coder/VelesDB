@@ -31,6 +31,7 @@
 //! - **Graph types** (`EdgeOutput`, `TraversalOutput`, etc.) — Tauri-specific wrappers.
 
 use serde::{Deserialize, Serialize};
+use velesdb_core::api_types::serde_id;
 
 // Re-export shared defaults from core for use in serde attributes.
 pub use velesdb_core::api_types::{
@@ -122,6 +123,7 @@ pub struct CreateGraphCollectionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct MetadataPointInput {
     /// Point ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Payload (JSON object).
     pub payload: serde_json::Value,
@@ -142,6 +144,7 @@ pub struct UpsertMetadataRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PointInput {
     /// Point ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Vector data.
     pub vector: Vec<f32>,
@@ -166,6 +169,7 @@ pub struct GetPointsRequest {
     /// Collection name.
     pub collection: String,
     /// Point IDs to retrieve.
+    #[serde(deserialize_with = "serde_id::deserialize_ids_from_string_or_number")]
     pub ids: Vec<u64>,
 }
 
@@ -176,6 +180,7 @@ pub struct DeletePointsRequest {
     /// Collection name.
     pub collection: String,
     /// Point IDs to delete.
+    #[serde(deserialize_with = "serde_id::deserialize_ids_from_string_or_number")]
     pub ids: Vec<u64>,
 }
 
@@ -333,6 +338,7 @@ pub struct HybridSparseSearchRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SparsePointInput {
     /// Point ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Dense vector data.
     pub vector: Vec<f32>,
@@ -442,6 +448,7 @@ pub struct CollectionInfo {
 #[serde(rename_all = "camelCase")]
 pub struct HybridResult {
     /// Node/point ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub node_id: u64,
     /// Vector similarity score (if applicable).
     pub vector_score: Option<f32>,
@@ -477,6 +484,7 @@ pub struct QueryResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PointOutput {
     /// Point ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Vector data.
     pub vector: Vec<f32>,
@@ -502,6 +510,7 @@ pub struct SearchResponse {
 #[serde(rename_all = "camelCase")]
 pub struct IdScoreOutput {
     /// Matched point ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Relevance score.
     pub score: f32,
@@ -573,6 +582,7 @@ pub fn default_fusion() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct SemanticStoreRequest {
     /// Unique ID for this knowledge fact.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Text content of the knowledge.
     pub content: String,
@@ -600,6 +610,7 @@ pub struct SemanticQueryRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SemanticQueryResult {
     /// Knowledge fact ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Similarity score.
     pub score: f32,
@@ -612,6 +623,7 @@ pub struct SemanticQueryResult {
 #[serde(rename_all = "camelCase")]
 pub struct SemanticStoreWithTtlRequest {
     /// Unique ID for this knowledge fact.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Text content of the knowledge.
     pub content: String,
@@ -626,6 +638,7 @@ pub struct SemanticStoreWithTtlRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SemanticDeleteRequest {
     /// Knowledge fact ID to delete.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
 }
 
@@ -634,6 +647,7 @@ pub struct SemanticDeleteRequest {
 #[serde(rename_all = "camelCase")]
 pub struct EpisodicRecordRequest {
     /// Episode event ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub event_id: u64,
     /// Episode description/content.
     pub content: String,
@@ -660,6 +674,7 @@ pub struct EpisodicRecentRequest {
 #[serde(rename_all = "camelCase")]
 pub struct EpisodicResult {
     /// Episode ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Episode content.
     pub content: String,
@@ -672,6 +687,7 @@ pub struct EpisodicResult {
 #[serde(rename_all = "camelCase")]
 pub struct EpisodicDeleteRequest {
     /// Episode event ID to delete.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub event_id: u64,
 }
 
@@ -702,6 +718,7 @@ pub struct EpisodicOlderThanRequest {
 #[serde(rename_all = "camelCase")]
 pub struct EpisodicSimilarResult {
     /// Episode ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Episode content.
     pub content: String,
@@ -726,6 +743,7 @@ pub const fn default_confidence() -> f32 {
 #[serde(rename_all = "camelCase")]
 pub struct ProceduralLearnRequest {
     /// Procedure ID.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub procedure_id: u64,
     /// Procedure name.
     pub name: String,
@@ -757,6 +775,7 @@ pub struct ProceduralRecallRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ProceduralMatchResult {
     /// Procedure ID.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
     /// Procedure name.
     pub name: String,
@@ -773,6 +792,7 @@ pub struct ProceduralMatchResult {
 #[serde(rename_all = "camelCase")]
 pub struct ProceduralReinforceRequest {
     /// Procedure ID to reinforce.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub procedure_id: u64,
     /// Whether the procedure execution succeeded.
     pub success: bool,
@@ -783,6 +803,7 @@ pub struct ProceduralReinforceRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ProceduralDeleteRequest {
     /// Procedure ID to delete.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub procedure_id: u64,
 }
 
@@ -809,6 +830,7 @@ pub struct MemoryTtlRequest {
     /// Target memory subsystem.
     pub kind: MemoryKindDto,
     /// Entry ID to expire.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
     /// Time-to-live in seconds.
     pub ttl_seconds: u64,
@@ -893,8 +915,12 @@ pub const fn default_batch_size() -> usize {
 pub struct ScrollRequest {
     /// Collection name.
     pub collection: String,
-    /// Cursor from a previous scroll (omit for the first batch).
-    #[serde(default)]
+    /// Cursor from a previous scroll (omit for the first batch): a decimal
+    /// string, as `nextCursor` is sent, or a number.
+    #[serde(
+        default,
+        deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
+    )]
     pub cursor: Option<u64>,
     /// Number of points per batch. Default: 100.
     #[serde(default = "default_batch_size")]
@@ -910,8 +936,12 @@ pub struct ScrollRequest {
 pub struct ScrollResponse {
     /// Points in this batch.
     pub points: Vec<PointOutput>,
-    /// Cursor for the next batch (absent when no more points).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Cursor for the next batch, as a decimal string (absent when no more
+    /// points).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serde_id::serialize_option_id_as_string"
+    )]
     pub next_cursor: Option<u64>,
 }
 
@@ -963,3 +993,7 @@ pub struct IndexInfoOutput {
     /// Estimated heap size of the index, in bytes.
     pub memory_bytes: usize,
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;

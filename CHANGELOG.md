@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (Tauri IPC): point ids cross the IPC boundary as decimal
+  strings** (Tauri, 2026-11-18). Search hits already carried a string id
+  (core's `SearchResultResponse`), but every other point id the plugin wrote
+  was a JSON number, which JavaScript rounds past 2^53, and every point id it
+  read had to be a number. Now:
+  - `IdScoreOutput.id` (`search_ids`), `PointOutput.id` (`get_points`,
+    `scroll_collection`), `HybridResult.nodeId` (`query`),
+    `ScrollResponse.nextCursor`, and the `id` of `SemanticQueryResult`,
+    `EpisodicResult`, `EpisodicSimilarResult` and `ProceduralMatchResult` are
+    decimal strings;
+  - `upsert` / `upsert_metadata` / `sparse_upsert` point ids, `get_points` /
+    `delete_points` `ids`, the `scroll_collection` `cursor`, and the
+    agent-memory `id` / `eventId` / `procedureId` inputs accept a decimal
+    string or a number.
+
+  guest-js types follow, and its `SearchResult.id` is now `string`, as the
+  plugin already sent it. Migration: read point ids as strings (`BigInt(id)`
+  for arithmetic); numbers keep working as input.
+
 - **TypeScript SDK: the WASM backend needs the `@wiscale/velesdb-wasm` of its
   own release, and keeps sparse vectors in each collection's store**
   (TypeScript SDK, 2026-11-17). The backend indexed sparse vectors in a

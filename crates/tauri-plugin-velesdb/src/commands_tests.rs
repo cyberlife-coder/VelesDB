@@ -365,7 +365,7 @@ fn test_point_output_serialize() {
     };
     let json = serde_json::to_string(&point).unwrap();
 
-    assert!(json.contains("\"id\":1"));
+    assert!(json.contains("\"id\":\"1\""));
     assert!(json.contains("\"vector\":[0.1,0.2,0.3]"));
     assert!(json.contains("\"key\":\"value\""));
 }
@@ -490,7 +490,7 @@ fn test_hybrid_result_serialize() {
     };
     let json = serde_json::to_string(&result).unwrap();
 
-    assert!(json.contains("\"nodeId\":42"));
+    assert!(json.contains("\"nodeId\":\"42\""));
     assert!(json.contains("\"vectorScore\":0.95"));
     assert!(json.contains("\"graphScore\":0.88"));
     assert!(json.contains("\"fusedScore\":0.92"));
@@ -509,7 +509,7 @@ fn test_hybrid_result_serialize_minimal() {
     };
     let json = serde_json::to_string(&result).unwrap();
 
-    assert!(json.contains("\"nodeId\":1"));
+    assert!(json.contains("\"nodeId\":\"1\""));
     assert!(json.contains("\"fusedScore\":0.5"));
     assert!(json.contains("\"vectorScore\":null"));
 }
@@ -558,8 +558,8 @@ fn test_query_response_serialize() {
 
     assert!(json.contains("\"results\""));
     assert!(json.contains("\"timingMs\":2.5"));
-    assert!(json.contains("\"nodeId\":1"));
-    assert!(json.contains("\"nodeId\":2"));
+    assert!(json.contains("\"nodeId\":\"1\""));
+    assert!(json.contains("\"nodeId\":\"2\""));
 }
 
 #[test]
@@ -777,8 +777,8 @@ fn test_scroll_response_serialize() {
         next_cursor: Some(2),
     };
     let json = serde_json::to_string(&resp).unwrap();
-    assert!(json.contains("\"nextCursor\":2"));
-    assert!(json.contains("\"id\":1"));
+    assert!(json.contains("\"nextCursor\":\"2\""));
+    assert!(json.contains("\"id\":\"1\""));
 }
 
 // ============================================================================
@@ -860,7 +860,7 @@ fn test_episodic_result_serialize() {
         timestamp: 1_700_000_000,
     };
     let json = serde_json::to_string(&result).unwrap();
-    assert!(json.contains("\"id\":42"));
+    assert!(json.contains("\"id\":\"42\""));
     assert!(json.contains("\"content\":\"found key\""));
     assert!(json.contains("\"timestamp\":1700000000"));
 }
@@ -876,7 +876,7 @@ fn test_procedural_match_result_serialize() {
         score: 0.85,
     };
     let json = serde_json::to_string(&result).unwrap();
-    assert!(json.contains("\"id\":1"));
+    assert!(json.contains("\"id\":\"1\""));
     assert!(json.contains("\"name\":\"login\""));
     assert!(json.contains("\"steps\""));
     assert!(json.contains("\"confidence\":0.9"));
@@ -923,7 +923,7 @@ fn test_id_score_output_serialize() {
     use crate::types::IdScoreOutput;
     let out = IdScoreOutput { id: 7, score: 0.42 };
     let json = serde_json::to_string(&out).unwrap();
-    assert!(json.contains("\"id\":7"));
+    assert!(json.contains("\"id\":\"7\""));
     assert!(json.contains("\"score\":0.42"));
 }
 
