@@ -124,7 +124,7 @@ impl ColumnStore {
     /// Returns an error when `pk` is missing or points to a deleted row.
     pub fn set_ttl(&mut self, pk: i64, ttl_seconds: u64) -> Result<(), ColumnStoreError> {
         let row_idx = self.resolve_live_row(pk)?;
-        let expiry_ts = Self::now_timestamp() + ttl_seconds;
+        let expiry_ts = Self::now_timestamp().saturating_add(ttl_seconds);
         self.row_expiry.insert(row_idx, expiry_ts);
         Ok(())
     }

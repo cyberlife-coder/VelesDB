@@ -289,3 +289,15 @@ fn test_set_column_value_null_string() {
         assert!(vec.get(0).is_none());
     }
 }
+
+#[test]
+fn test_set_ttl_saturates_instead_of_wrapping() {
+    let mut store = create_test_store();
+    store.insert_row(&[("id", ColumnValue::Int(1))]).unwrap();
+
+    // `now + u64::MAX` used to wrap to a past timestamp (or panic in debug).
+    store.set_ttl(1, u64::MAX).unwrap();
+
+    assert_eq!(store.expire_rows().expired_count, 0);
+    assert!(store.get_row_idx_by_pk(1).is_some());
+}

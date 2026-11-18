@@ -499,6 +499,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A column-store TTL near `u64::MAX` no longer expires its row at once**
+  (core, 2026-11-18). `ColumnStore::set_ttl` added the TTL to the current
+  time unchecked: release builds wrapped to a past timestamp, so the next
+  `expire_rows()` tombstoned the row, and debug builds panicked. The sum
+  now saturates, as the agent-memory TTL already did.
+
 - **WASM: the memory e2e spec and the agent-memory example match
   `remember()`** (WASM, 2026-11-18). The Playwright spec read `remember()`'s
   `{id, similar}` as a bare id string, so every assertion compared objects
