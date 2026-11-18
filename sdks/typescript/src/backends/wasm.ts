@@ -49,8 +49,9 @@ import { freeSparse, indexSparse, newSparseIds, retireSparse } from './wasm-spar
 
 // Internal helpers
 import {
-  toNumericId,
+  toPointId,
   canonicalPayloadKey,
+  canonicalPayloadKeyFromResultId,
   buildWasmContext,
   buildCollectionInfo,
   describeWasmThrow,
@@ -312,7 +313,7 @@ export class WasmBackend implements IVelesDBBackend {
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
 
-    const id = toNumericId(doc.id);
+    const id = toPointId(doc.id);
     const vector = doc.vector instanceof Float32Array
       ? doc.vector
       : new Float32Array(doc.vector);
@@ -325,9 +326,9 @@ export class WasmBackend implements IVelesDBBackend {
     }
 
     if (doc.payload) {
-      collection.store.insert_with_payload(BigInt(id), vector, doc.payload);
+      collection.store.insert_with_payload(id, vector, doc.payload);
     } else {
-      collection.store.insert(BigInt(id), vector);
+      collection.store.insert(id, vector);
     }
     if (doc.sparseVector) {
       indexSparse(collection.sparseIds, this.newSparseStore, id, doc.sparseVector);
@@ -355,7 +356,7 @@ export class WasmBackend implements IVelesDBBackend {
     collection.store.reserve(docs.length);
     const batch: Array<[bigint, number[]]> = [];
     for (const doc of docs) {
-      const id = BigInt(toNumericId(doc.id));
+      const id = toPointId(doc.id);
       const vector = doc.vector instanceof Float32Array
         ? doc.vector
         : new Float32Array(doc.vector);
@@ -372,7 +373,7 @@ export class WasmBackend implements IVelesDBBackend {
         collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
       }
       if (doc.sparseVector) {
-        indexSparse(collection.sparseIds, this.newSparseStore, toNumericId(doc.id), doc.sparseVector);
+        indexSparse(collection.sparseIds, this.newSparseStore, toPointId(doc.id), doc.sparseVector);
       }
     }
   }
@@ -392,12 +393,12 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
-    const numericIds = ids.map((id) => toNumericId(id));
-    const count = this.velesql?.removePoints(collectionName, numericIds.map((id) => BigInt(id)))
-      ?? numericIds.filter((id) => collection.store.remove(BigInt(id))).length;
+    const pointIds = ids.map((id) => toPointId(id));
+    const count = this.velesql?.removePoints(collectionName, pointIds)
+      ?? pointIds.filter((id) => collection.store.remove(id)).length;
     ids.forEach((id, i) => {
       collection.payloads.delete(canonicalPayloadKey(id));
-      retireSparse(collection.sparseIds, this.newSparseStore, numericIds[i]!);
+      retireSparse(collection.sparseIds, this.newSparseStore, pointIds[i]!);
     });
     return count;
   }
@@ -406,10 +407,10 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
-    const numericId = toNumericId(id);
-    const point = collection.store.get(BigInt(numericId));
+    const pointId = toPointId(id);
+    const point = collection.store.get(pointId);
     if (!point) { return null; }
-    const payload = point.payload ?? collection.payloads.get(canonicalPayloadKey(numericId));
+    const payload = point.payload ?? collection.payloads.get(canonicalPayloadKeyFromResultId(pointId));
     return {
       id: String(point.id),
       vector: Array.isArray(point.vector) ? point.vector : Array.from(point.vector),

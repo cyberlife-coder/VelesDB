@@ -82,7 +82,7 @@ export function canonicalPayloadKey(id: string | number): string {
   if (normalized !== null) {
     return normalized.replace(/^0+(?=\d)/, '');
   }
-  return String(toNumericId(id));
+  return String(toPointId(id));
 }
 
 /** Convert a sparse vector object to parallel index/value arrays. */
@@ -98,7 +98,7 @@ export function sparseVectorToArrays(sv: SparseVector): { indices: number[]; val
 
 /**
  * A graph id (edge or node) as the binding takes it: its exact decimal
- * string. Unlike {@link toNumericId}, which hashes a document id that is not
+ * string. Unlike {@link toPointId}, which hashes a document id that is not
  * a number, a graph id is a `u64` and nothing else: a derived edge id is
  * routinely above 2^53, so a lossy or hashed stand-in would address another
  * edge. Anything but a non-negative integer is refused.
@@ -113,30 +113,40 @@ export function exactGraphId(id: string | number, what: string): string {
   throw new VelesDBError(`${what} must be a non-negative integer id, got ${JSON.stringify(id)}`, 'BAD_REQUEST');
 }
 
+/** The largest id a `u64` holds. */
+const U64_MAX = 2n ** 64n - 1n;
+
 /**
- * Convert a string or number document ID to a numeric ID.
+ * A document id as the binding takes it: the exact `u64` it names, as a
+ * `BigInt`.
  *
- * A decimal string is that number. One past `Number.MAX_SAFE_INTEGER` is
- * refused (`BAD_REQUEST`) rather than hashed: a hash of its digits would
- * address, and could collide with, another point, and this backend has no
- * exact form for it — the binding hands search ids back as JS numbers.
- * Any other string keeps its stable hash.
+ * A number is that integer. A decimal string is its exact value, past
+ * `Number.MAX_SAFE_INTEGER` too: the binding returns every point id as its
+ * decimal string, so such an id comes back from a search or a `get` as it
+ * went in, as on REST. One past `u64::MAX` names no point and is refused
+ * (`BAD_REQUEST`) rather than hashed into another. Any other string keeps
+ * its stable hash.
  */
-export function toNumericId(id: string | number): number {
+export function toPointId(id: string | number): bigint {
   if (typeof id === 'number') {
-    return id;
+    return BigInt(id);
   }
   const normalized = normalizeIdString(id);
-  if (normalized !== null) {
-    const parsed = Number(normalized);
-    if (Number.isSafeInteger(parsed)) {
-      return parsed;
-    }
+  if (normalized === null) {
+    return BigInt(stringHash(id));
+  }
+  const exact = BigInt(normalized);
+  if (exact > U64_MAX) {
     throw new VelesDBError(
-      `Point id ${normalized} is past Number.MAX_SAFE_INTEGER; the WASM backend cannot address it exactly`,
+      `Point id ${normalized} is past u64::MAX (${U64_MAX}); no point can carry it`,
       'BAD_REQUEST'
     );
   }
+  return exact;
+}
+
+/** The stable non-negative hash a non-numeric document id is stored under. */
+function stringHash(id: string): number {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
     const char = id.charCodeAt(i);
@@ -157,7 +167,7 @@ export function buildWasmContext(
     canonicalPayloadKeyFromResultId: (id) => canonicalPayloadKeyFromResultId(id),
     canonicalPayloadKey: (id) => canonicalPayloadKey(id),
     sparseVectorToArrays: (sv) => sparseVectorToArrays(sv),
-    toNumericId: (id) => toNumericId(id),
+    toPointId: (id) => toPointId(id),
   };
 }
 

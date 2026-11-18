@@ -150,7 +150,7 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     const response = await db.matchQuery('docs', 'MATCH (a)-[r:NEXT]->(b) RETURN a.title, b.category, r.weight');
     expect(response.results).toEqual([
       {
-        bindings: { a: 1, b: 2 },
+        bindings: { a: '1', b: '2' },
         depth: 1,
         projected: { 'a.title': 'hello rust', 'b.category': 'docs', 'r.weight': 0.5 },
       },
@@ -198,13 +198,35 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
       'MATCH (a)-[:SEES]->(b) WHERE similarity(b.embedding, $v) > 0.5 RETURN b.id ORDER BY similarity() DESC',
       { v: [0, 1] }
     );
-    expect(where.results.map(r => r.bindings.b)).toEqual([2, 3]);
+    expect(where.results.map(r => r.bindings.b)).toEqual(['2', '3']);
     expect(where.results[0]!.score).toBeCloseTo(1, 4);
 
     const scored = await db.matchQuery('docs', 'MATCH (a)-[:SEES]->(b) RETURN b.id', undefined, {
       vector: [0, 1],
       threshold: 0.9,
     });
-    expect(scored.results.map(r => r.bindings.b)).toEqual([2]);
+    expect(scored.results.map(r => r.bindings.b)).toEqual(['2']);
+  });
+
+  it('a point id past 2^53 comes back exactly from every search and read', async () => {
+    // The binding threw serializing such an id as a number, and the SDK
+    // refused it up front; it now leaves every surface as its decimal string.
+    const big = '9007199254740993';
+    await db.createCollection('big', { dimension: 2, metric: 'cosine' });
+    await db.upsert('big', { id: big, vector: [1, 0], payload: RUST, sparseVector: { 1: 1 } });
+    await db.upsert('big', { id: 5, vector: [0, 1], payload: NOTES, sparseVector: { 1: 0.5 } });
+
+    const [hit] = await db.search('big', [1, 0], { k: 1 });
+    expect(hit).toMatchObject({ id: big, payload: RUST });
+    expect(await db.get('big', big)).toEqual({ id: big, vector: [1, 0], payload: RUST });
+    const fused = await db.search('big', [1, 0], { k: 2, sparseVector: { 1: 1 } });
+    expect(fused.map(r => r.id)).toEqual([big, '5']);
+    expect((await db.textSearch('big', 'rust', { k: 2 })).map(r => r.id)).toEqual([big]);
+    expect((await db.hybridSearch('big', [1, 0], 'rust', { k: 1 }))[0]!.id).toBe(big);
+    expect((await db.multiQuerySearch('big', [[1, 0]], { k: 1 }))[0]!.id).toBe(big);
+
+    expect(await db.delete('big', big)).toBe(true);
+    expect(await db.get('big', big)).toBeNull();
+    expect((await db.search('big', [1, 0], { k: 2, sparseVector: { 1: 1 } })).map(r => r.id)).toEqual(['5']);
   });
 });

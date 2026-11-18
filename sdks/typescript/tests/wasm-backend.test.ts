@@ -9,29 +9,30 @@ import { WasmBackend } from '../src/backends/wasm';
 import { VelesDBError, NotFoundError, ConnectionError } from '../src/types';
 import { FakeSparseIndex } from './helpers/fake-sparse-index';
 
-// Mock WASM module with class-based VectorStore
+// Mock WASM module with class-based VectorStore. Like the binding, it takes
+// ids as BigInt and returns each point id as its decimal string.
 class MockVectorStore {
   insert = vi.fn();
   insert_with_payload = vi.fn();
   insert_batch = vi.fn();
   search = vi.fn((_q: Float32Array, _k: number) => [
-    [BigInt(1), 0.95],
-    [BigInt(2), 0.85],
+    ['1', 0.95],
+    ['2', 0.85],
   ]);
   // The binding parses the preset, then runs the same brute-force search
   // (`search_with_quality` in velesdb-wasm's `vector_store.rs`).
   search_with_quality = vi.fn((q: Float32Array, k: number) => this.search(q, k));
   search_with_filter = vi.fn(() => [
-    { id: BigInt(1), score: 0.95, payload: { title: 'filtered' } },
+    { id: '1', score: 0.95, payload: { title: 'filtered' } },
   ]);
   get = vi.fn((id: bigint) => ({
-    id,
+    id: String(id),
     vector: [1, 0, 0, 0],
     payload: { title: 'Stored' },
   }));
   // velesdb-wasm 8.0.0's text_search ranks nothing: `score` is null.
-  text_search = vi.fn(() => [{ id: 1, score: null, payload: { title: 'Text' } }]);
-  hybrid_search = vi.fn(() => [{ id: BigInt(1), score: 0.91, payload: { title: 'Hybrid' } }]);
+  text_search = vi.fn(() => [{ id: '1', score: null, payload: { title: 'Text' } }]);
+  hybrid_search = vi.fn(() => [{ id: '1', score: 0.91, payload: { title: 'Hybrid' } }]);
   query = vi.fn(() => [
     { id: 1, a: 1 },
   ]);
@@ -44,7 +45,7 @@ class MockVectorStore {
       _strategy: string,
       _rrfK: number,
       _weights: Float32Array | null
-    ) => [[BigInt(1), 0.95]]
+    ) => [['1', 0.95]]
   );
   remove = vi.fn((_id: bigint) => true);
   clear = vi.fn();
@@ -377,6 +378,27 @@ describe('WasmBackend', () => {
     it('should delete a vector', async () => {
       const deleted = await backend.delete('vectors', '1');
       expect(deleted).toBe(true);
+    });
+
+    it('addresses a decimal id past 2^53 exactly on upsert, get and delete', async () => {
+      // A point id is a u64; the binding returns it as its decimal string,
+      // so the backend no longer refuses one past Number.MAX_SAFE_INTEGER.
+      const big = '9007199254740993';
+      await backend.upsert('vectors', { id: big, vector: [1.0, 0.0, 0.0, 0.0], payload: { title: 'Big' } });
+      const store = (backend as any).collections.get('vectors').store as MockVectorStore;
+      expect(store.insert_with_payload).toHaveBeenCalledWith(9007199254740993n, expect.any(Float32Array), { title: 'Big' });
+
+      expect(await backend.get('vectors', big)).toMatchObject({ id: big });
+      expect(store.get).toHaveBeenLastCalledWith(9007199254740993n);
+
+      expect(await backend.delete('vectors', big)).toBe(true);
+      expect(store.remove).toHaveBeenLastCalledWith(9007199254740993n);
+    });
+
+    it('refuses a decimal id past u64::MAX', async () => {
+      await expect(
+        backend.upsert('vectors', { id: '18446744073709551616', vector: [1.0, 0.0, 0.0, 0.0] })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     });
 
     it('should not use partial numeric parsing for mixed string IDs', async () => {

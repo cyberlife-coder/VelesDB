@@ -135,6 +135,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — point ids come back as decimal strings from every search and
+  read, as REST sends them.** A point id was serialized as a JavaScript
+  number, which the serializer refuses past 2^53 (the call threw) and
+  `JSON.parse` rounds. Now a string: the ids of `search`,
+  `search_with_quality`, `similarity_search`, `multi_query_search` and
+  `batch_search` (`[["id", score], …]`, also `WasmCollectionHandle.search`),
+  `id` of `search_with_filter`, `hybrid_search`, `text_search` and `get`,
+  `doc_id` of `search_sparse`, `sparse_search`, `SparseIndex.search` and
+  `hybrid_search_fuse`, `nodeId` of `query`, `id` of `SemanticMemory.query`,
+  the node ids of `GraphStore.bfs_traverse` / `dfs_traverse` (depths stay
+  numbers), and `WasmDatabase.executeMatch` `bindings` (REST `/match`).
+  `hybrid_search_fuse` takes ids as strings, safe-integer numbers or BigInts.
+  VelesQL rows keep numeric point ids, as REST `/query` does. Ids passed in
+  as `BigInt` are unchanged; `BigInt(id)` turns a returned id into that form.
+
 - **BREAKING (behavior) — an unaliased aggregate is named as in core.**
   `COUNT(*)` comes back as `count` (was `count(*)`), `SUM(price)` as
   `sum_price` (was `sum(price)`), and every other aggregate as

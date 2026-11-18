@@ -257,13 +257,14 @@ fn test_dfs_traverse() {
         .unwrap();
 
     let result = store.dfs_traverse(1, 3, 10);
-    let nodes: Vec<(u64, usize)> = serde_wasm_bindgen::from_value(result.unwrap()).unwrap();
+    // Each node id is its decimal string, each depth a number.
+    let nodes: Vec<(String, usize)> = serde_wasm_bindgen::from_value(result.unwrap()).unwrap();
     // source node (depth 0) is excluded
-    assert!(!nodes.iter().any(|(id, _)| *id == 1));
+    assert!(!nodes.iter().any(|(id, _)| id == "1"));
     // all reachable nodes visited with their correct depths
-    assert!(nodes.contains(&(2, 1)));
-    assert!(nodes.contains(&(3, 2)));
-    assert!(nodes.contains(&(4, 1)));
+    assert!(nodes.contains(&("2".to_string(), 1)));
+    assert!(nodes.contains(&("3".to_string(), 2)));
+    assert!(nodes.contains(&("4".to_string(), 1)));
     assert_eq!(nodes.len(), 3);
 }
 

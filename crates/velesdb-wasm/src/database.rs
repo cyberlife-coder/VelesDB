@@ -545,8 +545,9 @@ impl WasmDatabase {
 
     /// The edges of collection `name` as a JSON array string of
     /// `{ id, source, target, label, properties? }`, optionally only those
-    /// labelled `label`. `id` is a decimal string (derived edge ids exceed
-    /// 2^53); `source` and `target` are numbers.
+    /// labelled `label`. `id`, `source` and `target` are decimal strings, as
+    /// REST's `EdgeResponse` (derived edge ids exceed 2^53, and a node id
+    /// may).
     ///
     /// # Errors
     /// Returns a `JsValue` error string when the collection does not exist or
@@ -659,7 +660,7 @@ impl WasmCollectionHandle {
             .insert_batch_raw(ids, vectors, dimension)
     }
 
-    /// k-NN search. Returns `[[id, score], ...]`.
+    /// k-NN search. Returns `[[id, score], ...]`, each id a decimal string.
     ///
     /// When a read-path observer is registered on the owning database, it is
     /// consulted before the store is touched: a `Deny` decision aborts with

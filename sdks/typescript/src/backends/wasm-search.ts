@@ -70,8 +70,10 @@ function searchHybridFusion(
   const denseResults: WasmDenseResult[] = collection!.store.search_with_quality(
     queryVector, k, quality
   );
-  const denseForFuse: Array<[number, number]> = denseResults.map(
-    ([id, score]) => [Number(id), score]
+  // Ids go back to the binding as `BigInt`: exact past 2^53, unlike the
+  // `Number(id)` this replaced, and read by every binding generation.
+  const denseForFuse: Array<[bigint, number]> = denseResults.map(
+    ([id, score]) => [BigInt(id), score]
   );
   const sparseForFuse = sparseHits(collection!.sparseIds, indices, values, k);
 

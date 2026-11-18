@@ -49,7 +49,11 @@ fn store_with_payloads() -> VectorStore {
 /// Asserts a plain-object record for id 1 carrying the payload above.
 fn assert_record(record: &JsValue, what: &str) {
     assert_plain_object(record, what);
-    assert_eq!(prop(record, "id").as_f64(), Some(1.0), "{what}.id");
+    assert_eq!(
+        prop(record, "id").as_string().as_deref(),
+        Some("1"),
+        "{what}.id"
+    );
     let payload = prop(record, "payload");
     assert_plain_object(&payload, &format!("{what}.payload"));
     assert_eq!(
@@ -108,11 +112,11 @@ fn text_search_records_are_plain_objects_without_a_score() {
         prop(&record, "score").is_null(),
         "text_search score is null"
     );
-    let ids: Vec<f64> = js_sys::Array::from(&results)
+    let ids: Vec<String> = js_sys::Array::from(&results)
         .iter()
-        .map(|r| prop(&r, "id").as_f64().unwrap())
+        .map(|r| prop(&r, "id").as_string().unwrap())
         .collect();
-    assert_eq!(ids, vec![1.0, 3.0], "every match, in insertion order");
+    assert_eq!(ids, vec!["1", "3"], "every match, in insertion order");
 }
 
 /// An absent payload arrives as `null`, as `JSON.stringify` would keep it.
@@ -123,7 +127,7 @@ fn absent_payload_is_null() {
         .hybrid_search(&[0.0, 1.0], "nothing matches", 1, Some(1.0))
         .unwrap();
     let record = first(&results);
-    assert_eq!(prop(&record, "id").as_f64(), Some(2.0));
+    assert_eq!(prop(&record, "id").as_string().as_deref(), Some("2"));
     assert!(prop(&record, "payload").is_null(), "absent payload is null");
 }
 
@@ -132,7 +136,7 @@ fn get_returns_a_plain_object() {
     let store = store_with_payloads();
     let point = store.get(1).unwrap();
     assert_plain_object(&point, "get() point");
-    assert_eq!(prop(&point, "id").as_f64(), Some(1.0));
+    assert_eq!(prop(&point, "id").as_string().as_deref(), Some("1"));
     assert!(js_sys::Array::is_array(&prop(&point, "vector")));
     let payload = prop(&point, "payload");
     assert_plain_object(&payload, "get() payload");
@@ -148,7 +152,7 @@ fn query_bindings_are_a_plain_object() {
     let results = store.query(&[1.0, 0.0], 1).unwrap();
     let record = first(&results);
     assert_plain_object(&record, "query() record");
-    assert_eq!(prop(&record, "nodeId").as_f64(), Some(1.0));
+    assert_eq!(prop(&record, "nodeId").as_string().as_deref(), Some("1"));
     let bindings = prop(&record, "bindings");
     assert_plain_object(&bindings, "query() bindings");
     assert_eq!(
@@ -179,4 +183,32 @@ fn graph_edge_to_json_properties_are_a_plain_object() {
     let properties = prop(&json, "properties");
     assert_plain_object(&properties, "GraphEdge.to_json().properties");
     assert_eq!(prop(&properties, "since").as_f64(), Some(2020.0));
+}
+
+/// A point id past `Number.MAX_SAFE_INTEGER` made a search, a `get` or a
+/// `query` throw: the serializer refuses such a `u64` as a number. Every one
+/// returns it as its exact decimal string, as REST does.
+#[wasm_bindgen_test]
+fn a_point_id_past_2_pow_53_comes_back_as_its_exact_string() {
+    const BIG: u64 = (1 << 53) + 1;
+    let mut store = VectorStore::new(2, "cosine").unwrap();
+    store.insert(BIG, &[1.0, 0.0]).unwrap();
+
+    let hit = first(&store.search(&[1.0, 0.0], 1).unwrap());
+    assert_eq!(
+        first(&hit).as_string().as_deref(),
+        Some("9007199254740993"),
+        "search() [id, score]"
+    );
+    assert_eq!(
+        prop(&store.get(BIG).unwrap(), "id").as_string().as_deref(),
+        Some("9007199254740993"),
+        "get().id"
+    );
+    let record = first(&store.query(&[1.0, 0.0], 1).unwrap());
+    assert_eq!(
+        prop(&record, "nodeId").as_string().as_deref(),
+        Some("9007199254740993"),
+        "query().nodeId"
+    );
 }

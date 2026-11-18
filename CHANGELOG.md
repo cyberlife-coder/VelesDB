@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (WASM, TypeScript SDK): point ids leave every WASM search and
+  read surface as decimal strings, as REST sends them** (WASM, TypeScript
+  SDK, 2026-11-17). The binding serialized point ids as JavaScript numbers:
+  its serializer throws on a `u64` past 2^53, so a search, `get` or `query`
+  over such a point threw, and a JSON number past it is rounded by
+  `JSON.parse`. REST already sends `SearchResultResponse.id` and `/match`
+  `bindings` as strings. Now:
+  - velesdb-wasm: `search`, `search_with_quality`, `similarity_search`,
+    `multi_query_search`, `batch_search` (also `WasmCollectionHandle.search`)
+    return `[["id", score], …]`; `search_with_filter`, `hybrid_search`,
+    `text_search` and `get` return `id` as a string; `search_sparse`,
+    `sparse_search`, `SparseIndex.search` and `hybrid_search_fuse` return
+    `doc_id` as a string; `query` returns `nodeId`, `SemanticMemory.query`
+    `id`, and `GraphStore.bfs_traverse` / `dfs_traverse` each node id as a
+    string (the depth stays a number); `WasmDatabase.executeMatch` returns
+    `bindings` as strings. `hybrid_search_fuse` takes ids as strings,
+    safe-integer numbers or BigInts. VelesQL rows (`executeQuery`, MATCH
+    alias objects, `executeMatch` `projected`, `SELECT EDGES`
+    `source` / `target`) keep numeric point ids, as REST `/query` does.
+    Ids passed in as `BigInt` are unchanged.
+  - TypeScript SDK, WASM backend: a decimal point id past
+    `Number.MAX_SAFE_INTEGER` (up to `u64::MAX`) is addressed exactly by
+    `upsert`, `upsertBatch`, `get`, `delete`, `bulkDelete`, every search and
+    the sparse index, where it was refused with `BAD_REQUEST`; one past
+    `u64::MAX` is still refused. Hybrid dense + sparse fusion hands ids back
+    to the binding exactly (it rounded them through `Number`). `matchQuery`
+    returns `bindings` as strings, as on REST.
+
+  Migration: read point ids from WASM results as strings (`BigInt(id)` to
+  pass one back to a `BigInt` parameter). The SDK's `SearchResult.id` was
+  already a string. With a velesdb-wasm binding older than this release a
+  search over a point past 2^53 still throws inside the binding.
+
 - **Python: a collection's query methods run reads only** (Python,
   2026-11-17). `Collection.query` / `query_ids` / `explain_analyze` and their
   `GraphCollection` twins rewrite a SELECT's `FROM` to their own collection,

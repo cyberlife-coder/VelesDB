@@ -63,7 +63,12 @@ fn run(db: &mut DatabaseInner, sql: &str) -> Vec<serde_json::Value> {
 
 fn docs(rows: &[serde_json::Value]) -> Vec<u64> {
     rows.iter()
-        .map(|r| r["bindings"]["d"].as_u64().expect("test: d"))
+        .map(|r| {
+            r["bindings"]["d"]
+                .as_str()
+                .and_then(|d| d.parse().ok())
+                .expect("test: d is a decimal id string")
+        })
         .collect()
 }
 
