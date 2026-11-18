@@ -499,6 +499,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The payload WAL indexes the next record where it lands after a failed
+  flush** (core, 2026-11-18). When a flush failed (ENOSPC, say), the store
+  reset its write offset to the file length, but the `BufWriter` keeps the
+  bytes it could not write and writes them on the next successful flush.
+  Every later record was then indexed that many bytes too early: `retrieve`
+  returned another record's payload, and a snapshot taken afterwards saved
+  an offset inside a record, so the next open stopped replay there and
+  truncated the acknowledged records after it. The offset now counts the
+  retained bytes, and the intermediate flush of a deferred batch resyncs it
+  too.
+
 - **Column-store `upsert` refuses a mistyped value for a new key** (core,
   2026-11-18). It returned `TypeMismatch` only when the key already existed;
   for a new key it inserted the row with the mismatched value stored as NULL

@@ -55,6 +55,17 @@ pub(super) fn compute_delete_crc(id: u64) -> u32 {
 // WAL record writing
 // ---------------------------------------------------------------------------
 
+/// The WAL offset the next record will land at, after a failed write or flush.
+///
+/// The WAL file is opened in append mode, and a `BufWriter` whose flush fails
+/// keeps the bytes it could not write and writes them on the next successful
+/// flush. So the next record lands after the file *and* that retained buffer —
+/// resyncing to the file length alone made every later index entry point
+/// that many bytes too early.
+pub(super) fn wal_end<W: Write>(wal: &io::BufWriter<W>, file_len: u64) -> u64 {
+    file_len.saturating_add(wal.buffer().len() as u64)
+}
+
 /// Serializes a payload and writes a CRC-protected WAL store record.
 ///
 /// Shared by `store()` (per-point) and `store_batch()` (batched) to avoid

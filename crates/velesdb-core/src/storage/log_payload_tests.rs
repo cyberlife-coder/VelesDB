@@ -1178,3 +1178,53 @@ fn test_torn_tail_after_snapshot_truncated_and_delta_survives_restart() {
         "snapshot + delta replay must see id 99"
     );
 }
+
+// -------------------------------------------------------------------------
+// Offset resync after a failed flush
+// -------------------------------------------------------------------------
+
+/// A writer whose first `write` fails and whose later writes succeed — a
+/// transient ENOSPC, as the `BufWriter` in front of the WAL file sees it.
+#[derive(Default)]
+struct FailsFirstWrite {
+    failed: bool,
+    written: Vec<u8>,
+}
+
+impl std::io::Write for FailsFirstWrite {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if !self.failed {
+            self.failed = true;
+            return Err(std::io::Error::other("transient write failure"));
+        }
+        self.written.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The bytes a failed flush leaves buffered still land in the file on the
+/// next successful flush, so the offset the next record is indexed at must
+/// count them. Resyncing to the file length alone indexed it 30 bytes early,
+/// where `retrieve` read the previous record's payload.
+#[test]
+fn test_wal_end_counts_bytes_a_failed_flush_kept() {
+    use std::io::Write;
+    let mut wal = std::io::BufWriter::new(FailsFirstWrite::default());
+    wal.write_all(&[CRC_STORE_MARKER; 30]).expect("buffered");
+    assert!(wal.flush().is_err(), "precondition: the flush failed");
+
+    let next = super::log_payload_io::wal_end(&wal, 0);
+
+    assert_eq!(next, 30);
+    wal.write_all(&[CRC_STORE_MARKER; 5]).expect("buffered");
+    wal.flush().expect("the retry succeeds");
+    assert_eq!(
+        wal.get_ref().written.len(),
+        35,
+        "the kept bytes landed first"
+    );
+}

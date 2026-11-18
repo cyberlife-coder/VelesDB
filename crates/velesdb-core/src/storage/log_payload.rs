@@ -22,7 +22,7 @@
 //!
 //! Snapshot format and I/O are handled by the [`super::snapshot`] module.
 
-use super::log_payload_io::{compute_delete_crc, write_store_record, CRC_DELETE_MARKER};
+use super::log_payload_io::{compute_delete_crc, wal_end, write_store_record, CRC_DELETE_MARKER};
 use super::snapshot;
 use super::traits::PayloadStorage;
 
@@ -228,8 +228,7 @@ impl LogPayloadStorage {
     }
 
     /// Syncs the WAL according to durability mode, resyncing `write_offset`
-    /// with the actual file length on failure to prevent desync on subsequent
-    /// writes.
+    /// on failure to prevent desync on subsequent writes.
     ///
     /// RF-2: Shared by `store` and `delete` to eliminate duplicated
     /// sync-and-resync-offset error handling.
@@ -238,13 +237,16 @@ impl LogPayloadStorage {
         mode: DurabilityMode,
         offset: &mut u64,
     ) -> io::Result<()> {
-        if let Err(e) = Self::sync_wal(wal, mode) {
-            if let Ok(meta) = wal.get_ref().metadata() {
-                *offset = meta.len();
-            }
-            return Err(e);
+        Self::sync_wal(wal, mode).inspect_err(|_| Self::resync_offset(wal, offset))
+    }
+
+    /// Resets `offset` to where the next WAL record will actually land
+    /// ([`wal_end`]): the file plus the bytes a failed flush
+    /// left buffered.
+    fn resync_offset(wal: &io::BufWriter<File>, offset: &mut u64) {
+        if let Ok(meta) = wal.get_ref().metadata() {
+            *offset = wal_end(wal, meta.len());
         }
-        Ok(())
     }
 
     /// Replays WAL entries from `start_pos` to `end_pos`, updating the index.
@@ -411,7 +413,8 @@ impl LogPayloadStorage {
                 // Buffer-only flush: data reaches OS kernel but is not fsynced.
                 // Safe for intermediate batches — caller must fsync after the
                 // final batch.
-                wal.flush()?;
+                wal.flush()
+                    .inspect_err(|_| Self::resync_offset(&wal, &mut offset))?;
             }
         }
 
