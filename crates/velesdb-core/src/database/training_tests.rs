@@ -58,15 +58,16 @@ fn an_unknown_with_key_is_refused_instead_of_ignored() {
     );
 }
 
-/// A misspelt parameter fails loudly instead of falling back to its default.
+/// A near-miss of a real key fails loudly instead of leaving that parameter
+/// at its default: `samples=200` is not `sample=200`.
 #[test]
-fn a_misspelt_with_key_is_refused() {
+fn a_near_miss_of_a_documented_with_key_is_refused() {
     let (_dir, db) = seeded_db("docs");
 
-    let err = train(&db, "TRAIN QUANTIZER ON docs WITH (m=4, k=16, froce=true)")
-        .expect_err("a misspelt TRAIN parameter must be refused");
+    let err = train(&db, "TRAIN QUANTIZER ON docs WITH (m=4, k=16, samples=200)")
+        .expect_err("a near-miss TRAIN parameter must be refused");
 
-    assert!(err.to_string().contains("'froce'"), "{err}");
+    assert!(err.to_string().contains("'samples'"), "{err}");
 }
 
 /// Positive control: every documented parameter is still accepted together.
