@@ -44,11 +44,12 @@ npm run test:ui
 | Error handling | Invalid metric, dimension mismatch |
 | Remove/Clear | Vector deletion operations |
 | Large vectors | 1536-dim (OpenAI embeddings) |
+| Multi-query fusion | RRF and average fusion, batch search |
+| VelesQL | `VelesQL.parse` / `isValid`: SELECT, WHERE, NEAR, FUSION, ORDER BY, a refused query |
+| Memory wedge | remember / recall / relate / why / forget, refused counts, `NOT_FOUND` |
 
 ## CI Integration
 
-The `wasm-check` job of `.github/workflows/ci.yml` runs `tests/memory.spec.ts`
-on chromium, over the `wasm-pack --target web` package it builds for the
-TypeScript SDK's real-binding test. The other specs (`vectorstore`, `fusion`,
-`velesql`) are not run there: they predate the current API (`VectorStore.new`,
-a `VelesQL` export) and fail until rewritten.
+The `wasm-check` job of `.github/workflows/ci.yml` runs the whole suite on
+chromium, over the `wasm-pack --target web` package it builds for the
+TypeScript SDK's real-binding test.

@@ -504,9 +504,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{id, similar}` as a bare id string, so every assertion compared objects
   with ids and the suite failed — unseen, because no workflow ran it. The
   `04-agent-memory` example said `ttlSeconds: 0` stores a permanent memory;
-  `0` is refused. The spec reads `.id` and also pins the count refusals, and
-  the `wasm-check` job now runs it on chromium over the package it already
-  builds (the suite's other specs predate the current API and stay out).
+  `0` is refused. The spec reads `.id` and also pins the count refusals. The
+  suite's VectorStore, fusion and VelesQL specs called APIs that no longer
+  exist (`VectorStore.new`, `store.len()`, numeric ids, `new VelesQL()`) and
+  failed wholesale; they are ported to the current binding, and the
+  `wasm-check` job now runs the whole suite on chromium over the package it
+  already builds.
 
 - **WASM `MemoryService` refuses a count it used to wrap** (WASM, Node,
   2026-11-18). Its counts — `k`, `maxHops`, `ttlSeconds`, `fragmentIndex`,
