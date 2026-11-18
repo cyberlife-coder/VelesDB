@@ -741,6 +741,30 @@ fn test_default_permissions_count_matches_commands() {
     );
 }
 
+/// Drift gate: the crate README states the command count, in full and
+/// without the `persistence` feature; both numbers must be what `lib.rs`
+/// registers. They said 69 and 67 while 70 and 68 were registered.
+#[test]
+fn test_readme_command_counts_match_lib_rs_registration() {
+    let total = commands_registered_in_lib_rs().len();
+    let registration = extract_block(include_str!("lib.rs"), "velesdb_invoke_handler!(", "));");
+    let persistence_only = extract_block(registration, "persistence_only:", "]")
+        .lines()
+        .filter(|line| line.contains("::"))
+        .count();
+    let readme = include_str!("../README.md");
+    for claim in [
+        format!("exposes {total} typed commands"),
+        format!("without it the surface is {}", total - persistence_only),
+    ] {
+        assert!(
+            readme.contains(&claim),
+            "README.md must say \"{claim}\" ({total} registered, {persistence_only} \
+             persistence-only)"
+        );
+    }
+}
+
 // ============================================================================
 // Scroll DTO Tests
 // ============================================================================

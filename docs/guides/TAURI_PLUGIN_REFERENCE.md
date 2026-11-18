@@ -246,8 +246,8 @@ Passed as `metric` on `create_collection`.
 `balanced`, `accurate`, `perfect`, `auto`, `custom:<ef>` or
 `adaptive:<min_ef>:<max_ef>`, each ef in 16–4096 (#2275); any other value is
 refused, as the server refuses it. It is honoured
-only on the persistence path, and it is **ignored when a `filter` is also
-supplied** (known limitation #457). See the
+only on the persistence path, where it applies together with a `filter` too
+(core's `search_dense` runs a filtered search at the requested quality). See the
 [search modes guide](./SEARCH_MODES.md).
 
 `semantic_query` takes the same optional `quality` string, parsed by the same
@@ -297,9 +297,10 @@ string matching.
 | `VELES-003` | Agent-memory entry not found |
 | `VELES-004` | Embedding or vector dimension differs from the stored dimension |
 | `VELES-009` | Wrong collection kind, bad quality mode, bad metric or fusion, config load failure |
-| `VELES-010` | VelesQL parse error |
+| `VELES-010` | VelesQL parse error; a `MATCH` with no `collection` |
 | `VELES-011` | I/O error |
 | `VELES-012` | Payload could not be (de)serialized |
+| `VELES-018` | A graph command aimed at a vector or metadata collection |
 | `TASK_JOIN` | The plugin's blocking task panicked or was cancelled (`recoverable: false`); the one code core has no equivalent for |
 
 Every other `VELES-###` code is forwarded verbatim from velesdb-core.

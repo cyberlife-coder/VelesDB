@@ -596,6 +596,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   became `{}`. Filters are now read as JSON data and checked as
   `{field, op, value}`, rejecting with `INVALID_INPUT` naming the filter.
 
+- **Graph schema: `{"schemaless": true}` and types without `properties` are
+  accepted** (core, 2026-11-18). `GraphSchema` demanded `node_types` and
+  `edge_types`, and `NodeType`/`EdgeType` demanded `properties`, so the
+  documented short form `{"schemaless": true}` failed with "missing field
+  `node_types`" (REST `graph_schema` and Tauri `graphSchema` alike) → an
+  absent list or `properties` map now means "none declared", the same as `[]`
+  / `{}`; `schemaless` stays required.
+
+- **Tauri plugin: `graphSchema: { schemaless: true }` creates a schemaless
+  graph** (Tauri plugin, 2026-11-18). `create_graph_collection` refused the
+  form its own TypeScript docs show with VELES-009 "missing field
+  `node_types`", and a strict schema whose types omitted `properties` with
+  "missing field `properties`" → both are accepted, through the core fix
+  above.
+
+- **Tauri plugin: `query` takes a `collection` for a top-level `MATCH`**
+  (Tauri plugin, 2026-11-18). A `MATCH` pattern names no collection and the
+  request had no field to supply one (an extra field was dropped), so the
+  documented `MATCH` example failed with VELES-010 unless the caller knew to
+  pass `params._collection` → `QueryRequest.collection` (Rust and TypeScript)
+  is passed to the engine as `params._collection` when that key is not already
+  set, the rule of the REST server's `/query`; an explicit `_collection` keeps
+  precedence and a `FROM` still decides for a `SELECT`. The guest-js example,
+  README "Known limits" and the recipes guide are corrected.
+
+- **Tauri plugin: TypeScript result types match the wire** (Tauri plugin,
+  2026-11-18). `HybridResult.columnData` was typed `Record<string, unknown>`
+  while a `GROUP BY` aggregate sends an array, and `vectorScore`,
+  `graphScore`, `bindings`, `columnData` and
+  `SearchResult`/`PointOutput.payload` were typed optional (`?:`) while the
+  plugin always sends them, as `null` when absent → `columnData` is
+  `Record<string, unknown> | Array<Record<string, unknown>> | null` and the
+  others `T | null`; the serialization is unchanged and pinned by a test for
+  grouped, ungrouped and search rows.
+
+- **Tauri plugin: graph commands on a vector or metadata collection answer
+  VELES-018** (Tauri plugin, 2026-11-18). `add_edge`, `get_edges`,
+  `traverse_graph` and the other graph commands answered VELES-002 "Collection
+  not found" for a collection that existed with another kind → they answer
+  core's `GraphNotSupported` (VELES-018), as core's own graph statements do; a
+  name no collection has is still VELES-002.
+
+- **Tauri plugin: `train_pq` requires `m`** (Tauri plugin, 2026-11-18). `m`
+  was optional in Rust and TypeScript, but core's TRAIN reads an absent `m` as
+  `0` and refuses it, so every call without it failed with VELES-028 "m must
+  be > 0" → `m` is required (`m: usize`, `m: number`), as in the REST server's
+  `TRAIN QUANTIZER ... WITH (m = ...)`; a request without it is refused when
+  it is deserialized. **Breaking** for Rust callers that built `TrainPqRequest
+  { m: Some(..) }`.
+
+- **Tauri plugin: sparse vectors past 65,536 entries are refused** (Tauri
+  plugin, 2026-11-18). `sparse_search`, `hybrid_sparse_search` and
+  `sparse_upsert` parsed sparse vectors with their own copy of the conversion,
+  which skipped core's `MAX_SPARSE_NNZ` cap (65,537 keys were accepted and
+  stored) and its finite-weight check → `helpers::parse_sparse_vector`
+  delegates to core's `SparseVectorInput::into_sparse_vector`, the conversion
+  REST uses, and such a vector is refused with VELES-009.
+
+- **Tauri plugin: README command counts and the `quality` + `filter` note
+  corrected** (Tauri plugin, 2026-11-18). The README said "up to 69 typed
+  commands", "67 under default" and advised `features = ["persistence"]` for
+  the full surface, while `lib.rs` registers 70 (68 common + 2
+  persistence-only) and `default` already includes `persistence` → it states
+  70, and 68 without `persistence`, and a drift test pins both numbers to the
+  registration; the reference guide no longer claims `quality` is ignored when
+  a `filter` is supplied (core's `search_dense` runs a filtered search at the
+  requested quality).
+
 - **Python: the type stub documents `hybrid_search`'s `ValueError`**
   (Python, 2026-11-18). The binding refuses a NaN or infinite
   `vector_weight` with `ValueError` since #2847, and its Rust docstring

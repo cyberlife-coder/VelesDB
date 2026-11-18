@@ -94,6 +94,7 @@ fn aggregate(app: &App<tauri::test::MockRuntime>, sql: &str) -> Result<serde_jso
         QueryRequest {
             query: sql.to_string(),
             params: std::collections::HashMap::new(),
+            collection: None,
         },
     ))
     .map(|response| {

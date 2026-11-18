@@ -194,6 +194,38 @@ fn test_graph_schema_serialization_roundtrip() {
     assert!(deserialized.has_edge_type("KNOWS"));
 }
 
+/// `{"schemaless": true}` is the documented short form for a schemaless
+/// graph (REST `graph_schema`, Tauri `graphSchema`): the type lists have
+/// nothing to declare and must not be demanded.
+#[test]
+fn test_schemaless_short_form_deserializes() {
+    let schema: GraphSchema = serde_json::from_value(serde_json::json!({ "schemaless": true }))
+        .expect("schemaless short form must deserialize");
+
+    assert!(schema.is_schemaless());
+    assert!(schema.node_types().is_empty());
+    assert!(schema.edge_types().is_empty());
+}
+
+/// A strict schema whose types declare no properties may omit
+/// `properties` — it means the same as `{}`.
+#[test]
+fn test_strict_schema_types_without_properties_deserialize() {
+    let schema: GraphSchema = serde_json::from_value(serde_json::json!({
+        "schemaless": false,
+        "node_types": [{ "name": "Person" }],
+        "edge_types": [{ "name": "KNOWS", "from_type": "Person", "to_type": "Person" }]
+    }))
+    .expect("types without `properties` must deserialize");
+
+    assert!(!schema.is_schemaless());
+    assert!(schema.node_types()[0].properties().is_empty());
+    assert!(schema.edge_types()[0].properties().is_empty());
+    assert!(schema
+        .validate_edge_type("KNOWS", "Person", "Person")
+        .is_ok());
+}
+
 #[test]
 fn test_value_type_serialization() {
     let types = vec![

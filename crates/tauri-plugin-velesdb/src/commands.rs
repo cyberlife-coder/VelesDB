@@ -688,12 +688,10 @@ pub async fn train_pq<R: Runtime>(
             use velesdb_core::velesql::{Query, TrainStatement, WithValue};
 
             let mut params = std::collections::HashMap::new();
-            if let Some(m) = request.m {
-                params.insert(
-                    "m".to_string(),
-                    WithValue::Integer(i64::try_from(m).unwrap_or(i64::MAX)),
-                );
-            }
+            params.insert(
+                "m".to_string(),
+                WithValue::Integer(i64::try_from(request.m).unwrap_or(i64::MAX)),
+            );
             if let Some(k) = request.k {
                 params.insert(
                     "k".to_string(),

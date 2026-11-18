@@ -112,23 +112,23 @@ pub fn parse_fusion_strategy(
     .map_err(|e| Error::InvalidConfig(e.to_string()))
 }
 
-/// Parses a sparse vector from JSON string-keyed map to core `SparseVector`.
+/// Converts a sparse vector from the JSON string-keyed map the frontend sends
+/// (`{ "42": 0.8, "7": 1.2 }`) to a core `SparseVector`.
 ///
-/// JSON only supports string keys, so the frontend sends `{ "42": 0.8, "7": 1.2 }`.
-/// This function parses each key to `u32` and constructs a sorted `SparseVector`.
+/// Delegates to core's API-boundary conversion
+/// ([`SparseVectorInput::into_sparse_vector`](velesdb_core::api_types::SparseVectorInput::into_sparse_vector)),
+/// the one REST uses, so the same keys, values and size cap
+/// ([`MAX_SPARSE_NNZ`](velesdb_core::api_types::MAX_SPARSE_NNZ)) are refused.
 pub fn parse_sparse_vector<S: std::hash::BuildHasher>(
     sparse: &std::collections::HashMap<String, f32, S>,
 ) -> Result<velesdb_core::sparse_index::SparseVector> {
-    let mut pairs = Vec::with_capacity(sparse.len());
-    for (key, &value) in sparse {
-        let index: u32 = key.parse().map_err(|_| {
-            Error::InvalidConfig(format!(
-                "Sparse vector key '{key}' is not a valid u32 dimension index"
-            ))
-        })?;
-        pairs.push((index, value));
-    }
-    Ok(velesdb_core::sparse_index::SparseVector::new(pairs))
+    let dict = sparse
+        .iter()
+        .map(|(key, &value)| (key.clone(), value))
+        .collect();
+    velesdb_core::api_types::SparseVectorInput::Dict(dict)
+        .into_sparse_vector()
+        .map_err(Error::InvalidConfig)
 }
 
 /// Converts a core `SearchResult` into the Tauri `SearchResult` DTO.
@@ -227,13 +227,27 @@ pub fn require_vector_collection(
         .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
 }
 
-/// Looks up a `GraphCollection` by name, returning a typed error on miss.
+/// Looks up a `GraphCollection` by name.
+///
+/// `CollectionNotFound` (VELES-002) when no collection has the name, core's
+/// `GraphNotSupported` (VELES-018) when one of another kind does — the answer
+/// core's own graph statements give for the same name.
 pub fn require_graph_collection(
     db: &velesdb_core::Database,
     name: &str,
 ) -> Result<velesdb_core::GraphCollection> {
-    db.get_graph_collection(name)
-        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+    if let Some(graph) = db.get_graph_collection(name) {
+        return Ok(graph);
+    }
+    if db.get_any_collection(name).is_none() {
+        return Err(Error::CollectionNotFound(name.to_string()));
+    }
+    Err(Error::Database(velesdb_core::Error::GraphNotSupported(
+        format!(
+            "'{name}' is not a graph collection; graph commands need one created by \
+             create_graph_collection"
+        ),
+    )))
 }
 
 /// Parses an optional JSON filter value into a core `Filter`.

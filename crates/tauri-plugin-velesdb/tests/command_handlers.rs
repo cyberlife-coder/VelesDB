@@ -968,6 +968,7 @@ fn query_parse_error_carries_core_query_code() {
         QueryRequest {
             query: "NOT VALID SQL AT ALL".to_string(),
             params: std::collections::HashMap::new(),
+            collection: None,
         },
     ))
     .expect_err("parse error");
@@ -986,7 +987,7 @@ fn train_pq_failure_carries_core_code() {
         st(&app),
         TrainPqRequest {
             collection: "ghost".to_string(),
-            m: Some(2),
+            m: 2,
             k: Some(4),
             opq: None,
         },

@@ -30,6 +30,8 @@ pub enum ValueType {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeType {
     name: String,
+    /// Absent means no declared properties, the same as `{}`.
+    #[serde(default)]
     properties: HashMap<String, ValueType>,
 }
 
@@ -75,6 +77,8 @@ pub struct EdgeType {
     name: String,
     from_type: String,
     to_type: String,
+    /// Absent means no declared properties, the same as `{}`.
+    #[serde(default)]
     properties: HashMap<String, ValueType>,
 }
 
@@ -130,7 +134,12 @@ impl EdgeType {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GraphSchema {
     schemaless: bool,
+    /// Absent means none declared, so `{"schemaless": true}` is a whole
+    /// schema; a strict schema with no node types still admits none.
+    #[serde(default)]
     node_types: Vec<NodeType>,
+    /// Absent means none declared, as for `node_types`.
+    #[serde(default)]
     edge_types: Vec<EdgeType>,
 }
 

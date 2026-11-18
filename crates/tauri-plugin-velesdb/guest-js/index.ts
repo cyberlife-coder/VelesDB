@@ -171,6 +171,13 @@ export interface QueryRequest {
   query: string;
   /** Query parameters (for parameterized queries). */
   params?: Record<string, unknown>;
+  /**
+   * Collection a statement without `FROM` runs on — required for a top-level
+   * `MATCH`, whose pattern names none. Sent to the engine as
+   * `params._collection` unless that key is set, which then takes precedence
+   * (the REST server's `/query` rule); a statement with `FROM` reads its `FROM`.
+   */
+  collection?: string;
 }
 
 /** Request to get points by IDs. */
@@ -258,8 +265,8 @@ export interface PointOutput {
   id: string;
   /** Vector data. */
   vector: number[];
-  /** Point payload (if any). */
-  payload?: Record<string, unknown>;
+  /** Point payload, `null` for a point stored without one. */
+  payload: Record<string, unknown> | null;
 }
 
 /** Search result item. */
@@ -268,8 +275,8 @@ export interface SearchResult {
   id: string;
   /** Similarity/distance score. */
   score: number;
-  /** Point payload (if any). */
-  payload?: Record<string, unknown>;
+  /** Point payload, `null` for a point stored without one. */
+  payload: Record<string, unknown> | null;
 }
 
 /** Response from search operations. */
@@ -309,20 +316,29 @@ export interface GuardrailLimits {
   circuitRecoverySeconds: number;
 }
 
-/** Hybrid result from VelesQL queries (vector + graph + column data). */
+/**
+ * Hybrid result from VelesQL queries (vector + graph + column data).
+ *
+ * Every field is always present: one that does not apply is `null`.
+ */
 export interface HybridResult {
-  /** Node/point ID, as a decimal string. */
+  /** Node/point ID, as a decimal string (`"0"` for an aggregate's row). */
   nodeId: string;
-  /** Vector similarity score (if applicable). */
-  vectorScore?: number;
-  /** Graph traversal score (if applicable). */
-  graphScore?: number;
+  /** Vector similarity score, `null` for an aggregate. */
+  vectorScore: number | null;
+  /** Graph traversal score; the `query` command sets none, so `null`. */
+  graphScore: number | null;
   /** Fused score combining vector and graph components. */
   fusedScore: number;
-  /** Payload/bindings from the query. */
-  bindings?: Record<string, unknown>;
-  /** Column data from aggregation queries. */
-  columnData?: Record<string, unknown>;
+  /** Payload/bindings from the query, `null` when there are none. */
+  bindings: Record<string, unknown> | null;
+  /**
+   * Result of an aggregate `SELECT ... FROM` (scalar aggregates or a
+   * `GROUP BY` without `NEAR`), on the single row such a query returns: one
+   * object without `GROUP BY` (`{ count: 3 }`), an array of one object per
+   * group with it. `null` on every other row.
+   */
+  columnData: Record<string, unknown> | Array<Record<string, unknown>> | null;
 }
 
 /** Response from VelesQL query operations. */
@@ -596,10 +612,10 @@ export function hybridSearch(request: HybridSearchRequest): Promise<SearchRespon
  *   params: { v: queryEmbedding }
  * });
  *
- * // MATCH (graph) query
+ * // MATCH (graph) query: the pattern names no collection, so pass it
  * const response = await query({
  *   query: "MATCH (d:Doc)-[:AUTHORED_BY]->(a:Person) RETURN a.name",
- *   params: {}
+ *   collection: 'knowledge'
  * });
  * ```
  */
@@ -1650,7 +1666,10 @@ export function memoryQueryProcedural(request: MemoryQueryRequest): Promise<Hybr
 export interface SparseSearchRequest {
   /** Target collection name. */
   collection: string;
-  /** Sparse vector as `{ "<dimIndex>": weight, ... }`. */
+  /**
+   * Sparse vector as `{ "<dimIndex>": weight, ... }`: at most 65,536 entries,
+   * finite weights, or the call is refused (VELES-009), as REST refuses it.
+   */
   sparseVector: Record<string, number>;
   /** Number of results to return. Default: 10. */
   topK?: number;
@@ -1664,7 +1683,10 @@ export interface HybridSparseSearchRequest {
   collection: string;
   /** Dense query vector. */
   vector: number[];
-  /** Sparse vector as `{ "<dimIndex>": weight, ... }`. */
+  /**
+   * Sparse vector as `{ "<dimIndex>": weight, ... }`: at most 65,536 entries,
+   * finite weights, or the call is refused (VELES-009), as REST refuses it.
+   */
   sparseVector: Record<string, number>;
   /** Number of results to return. Default: 10. */
   topK?: number;
@@ -1672,7 +1694,10 @@ export interface HybridSparseSearchRequest {
 
 /** A {@link PointInput} carrying an optional sparse vector. */
 export interface SparsePointInput extends PointInput {
-  /** Optional sparse vector as `{ "<dimIndex>": weight, ... }`. */
+  /**
+   * Optional sparse vector as `{ "<dimIndex>": weight, ... }`: at most 65,536
+   * entries, finite weights, or the upsert is refused (VELES-009).
+   */
   sparseVector?: Record<string, number>;
 }
 
@@ -1734,8 +1759,12 @@ export function sparseUpsert(request: SparseUpsertRequest): Promise<number> {
 export interface TrainPqRequest {
   /** Target collection name. */
   collection: string;
-  /** Number of sub-quantizers. */
-  m?: number;
+  /**
+   * Number of sub-quantizers (the dimension must be divisible by it).
+   * Required, as in the REST server's `TRAIN QUANTIZER ... WITH (m = ...)`:
+   * the engine reads an absent `m` as `0` and refuses it (VELES-028).
+   */
+  m: number;
   /** Number of centroids per sub-quantizer. */
   k?: number;
   /** Whether to use Optimized Product Quantization (OPQ). */

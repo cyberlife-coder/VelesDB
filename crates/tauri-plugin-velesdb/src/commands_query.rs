@@ -9,6 +9,9 @@ use crate::state::VelesDbState;
 use crate::types::{HybridResult, QueryRequest, QueryResponse};
 use tauri::{command, AppHandle, Runtime, State};
 
+/// Named `VelesQL` parameters, as [`QueryRequest::params`] carries them.
+type Params = std::collections::HashMap<String, serde_json::Value>;
+
 /// Executes a `VelesQL` query (EPIC-031 US-012).
 ///
 /// Supports SELECT-style and MATCH-style `VelesQL` queries with vector
@@ -80,13 +83,14 @@ async fn dispatch_tauri_query(
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
     // `SelectStatement::is_aggregation_query` is the routing test every
     // surface shares: a vector GROUP BY runs inside `execute_query`.
+    let params = effective_params(request);
     if parsed.select.is_aggregation_query() && !parsed.select.from.is_empty() {
-        return execute_tauri_aggregation(state, parsed, request).await;
+        return execute_tauri_aggregation(state, parsed, params).await;
     }
 
     state
         .run_db(move |db| {
-            let search_results = db.execute_query(&parsed, &request.params)?;
+            let search_results = db.execute_query(&parsed, &params)?;
             Ok(search_results
                 .into_iter()
                 .map(|r| search_result_to_hybrid(&r))
@@ -96,19 +100,36 @@ async fn dispatch_tauri_query(
         .map_err(CommandError::from)
 }
 
+/// The parameters a statement executes with: the caller's, plus a non-empty
+/// `collection` as `_collection` when the caller set no `_collection` — the
+/// rule of the REST server's `/query`, where the body's `collection` fills
+/// the key a `MATCH` is addressed by and never overrides an explicit one.
+/// Core reads `_collection` only for a statement without `FROM`
+/// (`read_authorization::read_target`), so a `FROM` still decides.
+fn effective_params(request: QueryRequest) -> Params {
+    let QueryRequest {
+        mut params,
+        collection,
+        ..
+    } = request;
+    if let Some(name) = collection.filter(|name| !name.is_empty()) {
+        params
+            .entry("_collection".to_string())
+            .or_insert(serde_json::Value::String(name));
+    }
+    params
+}
+
 /// Executes an aggregation query through `Database::execute_aggregate`, never a
 /// collection handle: the database is where the observer's read gate runs, so
 /// a denial refuses the aggregate and a scope narrows the rows it counts.
 async fn execute_tauri_aggregation(
     state: &VelesDbState,
     parsed: velesdb_core::velesql::Query,
-    request: QueryRequest,
+    params: Params,
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
     let agg_json = state
-        .run_db(move |db| {
-            db.execute_aggregate(&parsed, &request.params)
-                .map_err(Error::from)
-        })
+        .run_db(move |db| db.execute_aggregate(&parsed, &params).map_err(Error::from))
         .await
         .map_err(CommandError::from)?;
 
