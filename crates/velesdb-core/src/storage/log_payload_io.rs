@@ -58,7 +58,7 @@ pub(super) fn compute_delete_crc(id: u64) -> u32 {
 /// Flushes the WAL writer's buffer to the file.
 ///
 /// Every WAL flush whose failure must resync the write offset goes through
-/// here, so a test can fail it ([`fail_next_wal_flush`]). The injected
+/// here, so a test can fail it (`fail_next_wal_flush`, test builds only). The injected
 /// failure returns before writing anything, which leaves the buffer exactly
 /// as a flush that wrote nothing does.
 pub(super) fn flush_wal(wal: &mut io::BufWriter<std::fs::File>) -> io::Result<()> {
