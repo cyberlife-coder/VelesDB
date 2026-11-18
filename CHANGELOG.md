@@ -518,6 +518,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: the WASM backend refuses a sparse key that is not a
+  term id** (TypeScript SDK, 2026-11-18). `sparseVectorToArrays` put
+  `Number(key)` into the `Uint32Array` the binding takes, so a key REST
+  refuses landed on another term: `'foo'` on 0, `'-1'` on 4294967295,
+  `'4294967296'` on 0, `'1.5'` on 1. A key must now be decimal digits no
+  larger than `u32::MAX`, as core's `SparseVectorInput::convert_dict` parses
+  it; anything else is refused with `BAD_REQUEST`, on `upsert` /
+  `upsertBatch` before any point is written and on a sparse or hybrid
+  `search`.
+
 - **TypeScript SDK: the WASM backend refuses a numeric point id it used to
   wrap** (TypeScript SDK, 2026-11-18). `toPointId` handed any number to
   `BigInt` and on to the binding, which passes a `u64` as raw `i64` bits:

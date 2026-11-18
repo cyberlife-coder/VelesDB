@@ -169,6 +169,23 @@ describe('sparseVectorToArrays', () => {
     expect(out.indices).toEqual([42]);
     expect(out.values).toEqual([0.9]);
   });
+
+  it('keeps the u32 bounds and a zero-padded key, as core parses them', () => {
+    const out = sparseVectorToArrays({ 0: 1, 4294967295: 2, ['007' as unknown as number]: 3 });
+    expect(out.indices).toEqual([0, 4294967295, 7]);
+  });
+
+  it('refuses a key that is not a u32 term id with BAD_REQUEST, naming it', () => {
+    for (const key of ['foo', '-1', '4294967296', '1.5', '', '1e3', '0x10']) {
+      const sv = { [key]: 1 } as unknown as Record<number, number>;
+      const outcome = (() => {
+        try { return sparseVectorToArrays(sv); } catch (err) { return err; }
+      })();
+      expect(outcome, key).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+      expect((outcome as VelesDBError).message).toContain(`'${key}'`);
+    }
+  });
 });
 
 describe('buildWasmContext', () => {

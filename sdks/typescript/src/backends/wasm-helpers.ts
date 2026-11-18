@@ -85,12 +85,34 @@ export function canonicalPayloadKey(id: string | number): string {
   return String(toPointId(id));
 }
 
-/** Convert a sparse vector object to parallel index/value arrays. */
+/** The largest sparse term id: `u32::MAX`. */
+const U32_MAX = 4294967295;
+
+/**
+ * A sparse key as the term id it names: a run of decimal digits no larger
+ * than `u32::MAX`, as core's `SparseVectorInput::convert_dict` parses it on
+ * REST. Anything else is refused (`BAD_REQUEST`): the `Uint32Array` the
+ * binding takes would otherwise coerce it to another term — `'foo'` to 0,
+ * `'-1'` to `u32::MAX`, `'4294967296'` to 0, `'1.5'` to 1.
+ */
+function sparseTermId(key: string): number {
+  const term = /^\d+$/.test(key) ? Number(key) : NaN;
+  if (term <= U32_MAX) { return term; }
+  throw new VelesDBError(
+    `Sparse vector key '${key}' is not a valid u32 term ID (0..${U32_MAX})`,
+    'BAD_REQUEST'
+  );
+}
+
+/**
+ * Convert a sparse vector object to parallel index/value arrays, refusing a
+ * key that is not a u32 term id ({@link sparseTermId}).
+ */
 export function sparseVectorToArrays(sv: SparseVector): { indices: number[]; values: number[] } {
   const indices: number[] = [];
   const values: number[] = [];
   for (const [k, v] of Object.entries(sv)) {
-    indices.push(Number(k));
+    indices.push(sparseTermId(k));
     values.push(v);
   }
   return { indices, values };

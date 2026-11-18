@@ -367,7 +367,7 @@ await db.upsert('docs', {
 });
 ```
 
-> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. An upsert replaces the whole point, as core does: a later `sparseVector` for the same id replaces it, an upsert without one drops it — and its payload too when it carries none — and a deleted point never comes back in sparse results. A sparse vector the binding refuses (a non-finite weight) fails the upsert before the point is written. The sparse vector lives in the collection's own store, under the point's id, so VelesQL `SPARSE_NEAR` in `query()` ranks the same points as sparse search.
+> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. An upsert replaces the whole point, as core does: a later `sparseVector` for the same id replaces it, an upsert without one drops it — and its payload too when it carries none — and a deleted point never comes back in sparse results. A sparse vector the binding refuses (a non-finite weight) fails the upsert before the point is written, and so does a key that is not a `u32` term id (decimal digits up to 4294967295, as REST parses it), refused with `BAD_REQUEST` on upsert and on a sparse or hybrid search alike, never coerced into another term. The sparse vector lives in the collection's own store, under the point's id, so VelesQL `SPARSE_NEAR` in `query()` ranks the same points as sparse search.
 
 #### `db.upsertBatch(collection, documents)`
 

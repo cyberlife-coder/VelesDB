@@ -612,6 +612,37 @@ describe('WasmBackend — sparse vectors live in the collection store, under the
     expect(storeOf(backend, 's').sparse.size).toBe(2);
   });
 
+  // REST refuses these keys (core's `SparseVectorInput::convert_dict`); a
+  // Uint32Array would coerce them to another term instead: 'foo' -> 0,
+  // '-1' -> 4294967295, '4294967296' -> 0, '1.5' -> 1.
+  const badKeys = ['foo', '-1', '4294967296', '1.5', '', ' 1'];
+
+  it('refuses a sparse key that is not a u32 term id on upsert and upsertBatch, writing nothing', async () => {
+    const store = storeOf(backend, 's');
+    for (const key of badKeys) {
+      const sparseVector = { [key]: 1 } as unknown as Record<number, number>;
+      await expect(backend.upsert('s', { id: 1, vector: [], sparseVector }), key)
+        .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        backend.upsertBatch('s', [{ id: 2, vector: [] }, { id: 3, vector: [], sparseVector }]),
+        key
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(store.sparse_insert).not.toHaveBeenCalled();
+    expect(store.insert_batch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a sparse query key that is not a u32 term id', async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 0: 1, 4294967295: 1 } });
+    for (const key of badKeys) {
+      const sparseVector = { [key]: 1 } as unknown as Record<number, number>;
+      await expect(backend.search('s', [], { k: 5, sparseVector }), key)
+        .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    // The bounds themselves are term ids: 0 and u32::MAX.
+    expect(await hitIds({ 4294967295: 1 })).toEqual(['1']);
+  });
+
   it("a delete removes the point's sparse postings", async () => {
     await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
     await backend.delete('s', 1);
