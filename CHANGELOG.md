@@ -466,6 +466,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: `dropIndex` on a missing collection throws** (TypeScript,
+  2026-11-18). It answered `false` — "the index was already gone" — because it
+  absorbed every not-found code, `VELES-002` included, so a typo in the
+  collection name looked like a successful no-op. Only the index's own 404
+  answers `false` now; `CollectionNotFoundError` reaches the caller.
+  `removeEdge`, which already drew that line for edges, shares the same check.
+
 - **TypeScript SDK: `searchIds` / `multiQuerySearchIds` type the id the
   server sends** (TypeScript, 2026-11-18). Both declared
   `Array<{ id: number; score: number }>`, but the server serializes an

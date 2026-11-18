@@ -1080,7 +1080,8 @@ Returns `true` if the specified index exists.
 
 #### `db.dropIndex(collection, label, property)`
 
-Drop an index. Returns `true` if the index existed and was removed.
+Drop an index. Returns `true` if the index existed and was removed, `false` if
+no such index exists; a missing collection throws `CollectionNotFoundError`.
 
 ---
 

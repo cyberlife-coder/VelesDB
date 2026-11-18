@@ -10,7 +10,7 @@ import type {
   IndexInfo,
 } from '../types';
 import type { BaseTransport } from './shared';
-import { throwOnError, returnNullOnNotFound, collectionPath } from './shared';
+import { throwOnError, isAddressedResourceAbsent, collectionPath } from './shared';
 
 /** Minimal transport interface for index operations. */
 export type IndexTransport = BaseTransport;
@@ -80,8 +80,10 @@ export async function dropIndex(
     `${collectionPath(collection)}/indexes/${encodeURIComponent(label)}/${encodeURIComponent(property)}`
   );
 
-  if (returnNullOnNotFound(response)) {
-    return false;  // Index didn't exist
+  // Only the index's own (codeless) 404 means "absent"; a missing
+  // collection (`VELES-002`) is thrown.
+  if (isAddressedResourceAbsent(response)) {
+    return false;
   }
 
   // BUG-2 FIX: Success without error = index was dropped
