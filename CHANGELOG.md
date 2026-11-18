@@ -499,6 +499,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `MATCH` hop count past `u32::MAX` is refused instead of read as a
+  default** (core, 2026-11-18). The parser replaced a bound it could not
+  read with the default for an omitted one: `*5000000000..3` ran as
+  `*1..3`, and `*5000000000` as an unbounded expansion. It now fails with
+  `invalid hop count`.
+
 - **`SELECT DISTINCT *` and set operations no longer merge payloads whose
   keys contain `:` or `,`** (core, 2026-11-18). The canonical row key wrote
   object keys unquoted, so `{"a":1,"b":2}` and `{"a:1,b":2}` produced the
