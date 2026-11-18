@@ -553,3 +553,49 @@ def test_query_scope_narrows_with_nominal_from():
         collection = _seed(db)
         scoped = collection.query("SELECT * FROM vectors LIMIT 10")
     assert {r["node_id"] for r in scoped} == {1}
+
+
+# ---------------------------------------------------------------------------
+# Collection-scoped VelesQL methods run reads only. The retarget rewrites a
+# SELECT's FROM; a DDL or DML statement names its own target, so forwarding it
+# would let `docs.query(...)` drop or delete from another collection.
+# ---------------------------------------------------------------------------
+
+_WRITES_ON_OTHER = [
+    "DROP COLLECTION other",
+    "DELETE FROM other WHERE id = 1",
+    "TRUNCATE COLLECTION other",
+]
+
+
+@pytest.mark.parametrize("statement", _WRITES_ON_OTHER)
+@pytest.mark.parametrize("method", ["query", "query_ids", "explain_analyze"])
+def test_collection_query_refuses_statements_that_write(method, statement):
+    with _Db() as db:
+        collection = _seed(db)
+        other = _seed(db, name="other")
+        with pytest.raises(ValueError, match="execute_query"):
+            getattr(collection, method)(statement)
+        assert "other" in db.list_collections()
+        assert other.get([1])[0] is not None
+
+
+@pytest.mark.parametrize("statement", _WRITES_ON_OTHER)
+@pytest.mark.parametrize("method", ["query", "query_ids", "explain_analyze"])
+def test_graph_query_refuses_statements_that_write(method, statement):
+    with _Db() as db:
+        graph = _seed_graph(db)
+        other = _seed(db, name="other")
+        with pytest.raises(ValueError, match="execute_query"):
+            getattr(graph, method)(statement)
+        assert "other" in db.list_collections()
+        assert other.get([1])[0] is not None
+
+
+def test_collection_query_still_runs_reads():
+    with _Db() as db:
+        collection = _seed(db)
+        assert len(collection.query("SELECT * FROM docs LIMIT 10")) == 2
+        assert len(collection.query_ids("SELECT * FROM docs LIMIT 10")) == 2
+        stats = collection.explain_analyze("SELECT * FROM docs LIMIT 10")["actual_stats"]
+        assert stats["actual_rows"] == 2

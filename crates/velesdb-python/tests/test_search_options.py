@@ -18,7 +18,7 @@ from tests.conftest import _SKIP_NO_BINDINGS
 pytestmark = _SKIP_NO_BINDINGS
 
 try:
-    from velesdb import Database, SearchOptions
+    from velesdb import Database, FusionStrategy, SearchOptions
 
     VELESDB_AVAILABLE = True
 except (ImportError, AttributeError):
@@ -132,3 +132,47 @@ def test_search_shorthand_emits_no_deprecation_warning(collection):
         warnings.simplefilter("error", DeprecationWarning)
         results = collection.search(vector=query, top_k=2)
     assert len(results) == 2
+
+
+# ---------------------------------------------------------------------------
+# A knob the chosen search path does not apply is refused, never dropped.
+# Core's sparse and hybrid searches take no ef_search / quality, and fusion
+# only combines the two branches of a hybrid search.
+# ---------------------------------------------------------------------------
+
+DENSE = [1.0, 0.0, 0.0, 0.0]
+SPARSE = {0: 1.0, 1: 0.5}
+
+
+@pytest.fixture
+def sparse_collection(collection):
+    collection.upsert([{"id": 9, "vector": DENSE, "sparse_vector": SPARSE}])
+    return collection
+
+
+@pytest.mark.parametrize("knob", [{"ef_search": 64}, {"quality": "accurate"}])
+@pytest.mark.parametrize("dense", [DENSE, None], ids=["hybrid", "sparse_only"])
+def test_dense_tuning_with_a_sparse_vector_is_refused(sparse_collection, knob, dense):
+    opts = SearchOptions(vector=dense, sparse_vector=SPARSE, k=3, **knob)
+    with pytest.raises(ValueError, match="dense-only"):
+        sparse_collection.search_request(opts)
+
+
+@pytest.mark.parametrize(
+    "vectors",
+    [{"vector": DENSE}, {"sparse_vector": SPARSE}],
+    ids=["dense_only", "sparse_only"],
+)
+def test_fusion_outside_a_hybrid_search_is_refused(sparse_collection, vectors):
+    opts = SearchOptions(k=3, fusion=FusionStrategy.rrf(60), **vectors)
+    with pytest.raises(ValueError, match="hybrid"):
+        sparse_collection.search_request(opts)
+
+
+def test_knobs_on_their_own_path_still_run(sparse_collection):
+    dense = SearchOptions(vector=DENSE, k=3, ef_search=64, quality="accurate")
+    assert sparse_collection.search_request(dense)
+    hybrid = SearchOptions(
+        vector=DENSE, sparse_vector=SPARSE, k=3, fusion=FusionStrategy.rrf(60)
+    )
+    assert sparse_collection.search_request(hybrid)

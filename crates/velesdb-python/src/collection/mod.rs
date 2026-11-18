@@ -41,11 +41,41 @@ pub(crate) struct SearchPlan<'a> {
     pub(crate) top_k: usize,
     pub(crate) filter: Option<&'a Filter>,
     pub(crate) sparse_index_name: Option<&'a str>,
-    /// Hybrid dense+sparse only; the other paths ignore it.
+    /// Hybrid dense+sparse only; [`Self::ensure_knobs_apply`] refuses it on
+    /// any other path.
     pub(crate) fusion: Option<&'a CoreFusionStrategy>,
-    /// Dense-only tuning knobs.
+    /// Dense-only tuning knobs; [`Self::ensure_knobs_apply`] refuses them
+    /// with a sparse vector.
     pub(crate) ef_search: Option<usize>,
     pub(crate) quality: Option<&'a velesdb_core::SearchQuality>,
+}
+
+impl SearchPlan<'_> {
+    /// Refuses a knob the path this plan takes would not apply, rather than
+    /// run the search without it.
+    ///
+    /// Core's sparse and hybrid searches (`sparse_search`,
+    /// `hybrid_sparse_search_filtered`) take no `ef` or quality, so those
+    /// tune a dense-only search alone; `fusion` combines the two branches of
+    /// a hybrid search and means nothing on a single-branch one.
+    fn ensure_knobs_apply(&self) -> PyResult<()> {
+        use pyo3::exceptions::PyValueError;
+
+        let has_sparse = self.sparse.is_some();
+        if has_sparse && (self.ef_search.is_some() || self.quality.is_some()) {
+            return Err(PyValueError::new_err(
+                "ef_search and quality tune a dense-only search; the sparse and \
+                 hybrid searches take neither, so drop them or the sparse_vector",
+            ));
+        }
+        if self.fusion.is_some() && !(has_sparse && self.dense.is_some()) {
+            return Err(PyValueError::new_err(
+                "fusion applies to a hybrid search only: set both vector and \
+                 sparse_vector, or drop fusion",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The caller identity a read forwards to the database's read gate.
@@ -220,12 +250,14 @@ impl Collection {
         // F2.2: vector search on a graph/metadata collection must fail loud,
         // not return an empty list.
         self.ensure_vector()?;
+        plan.ensure_knobs_apply()?;
 
         let index_name = plan
             .sparse_index_name
             .unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
         // Hybrid dense+sparse honors a caller-supplied fusion strategy
-        // (backlog #24); other paths ignore it. Default preserves RRF k=60.
+        // (backlog #24); `ensure_knobs_apply` refused it on any other path.
+        // Default preserves RRF k=60.
         let fusion = plan.fusion.unwrap_or(&DEFAULT_FUSION);
 
         match (plan.dense, plan.sparse) {

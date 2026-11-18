@@ -100,6 +100,20 @@ impl PyObserver {
         }
     }
 
+    /// Shared implementation of the write notifications (`upsert`, `delete`):
+    /// invokes the callback as `callback(event, collection=…, point_count=…)`.
+    fn notify_point_count(&self, event: &str, collection: &str, point_count: usize) {
+        Python::attach(|py| {
+            let fields = PyDict::new(py);
+            if fields.set_item("collection", collection).is_err()
+                || fields.set_item("point_count", point_count).is_err()
+            {
+                return;
+            }
+            self.dispatch(py, event, &fields);
+        });
+    }
+
     /// Shared implementation of the DDL/DML veto hooks: invokes the callback as
     /// `callback(event, operation=…, collection=…)` and maps the return value to
     /// the trait's `Result<()>` veto channel — `None`/`True` allow, `False` or a
@@ -332,15 +346,11 @@ impl DatabaseObserver for PyObserver {
     }
 
     fn on_upsert(&self, collection: &str, point_count: usize) {
-        Python::attach(|py| {
-            let fields = PyDict::new(py);
-            if fields.set_item("collection", collection).is_err()
-                || fields.set_item("point_count", point_count).is_err()
-            {
-                return;
-            }
-            self.dispatch(py, "upsert", &fields);
-        });
+        self.notify_point_count("upsert", collection, point_count);
+    }
+
+    fn on_delete(&self, collection: &str, point_count: usize) {
+        self.notify_point_count("delete", collection, point_count);
     }
 
     fn on_query(&self, collection: &str, duration_us: u64) {
