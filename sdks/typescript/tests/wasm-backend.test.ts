@@ -351,6 +351,23 @@ describe('WasmBackend', () => {
       ]);
     });
 
+    it('upsertBatch writes a repeated id in input order, so the last version wins as in core', async () => {
+      const { collections } = backend as unknown as { collections: Map<string, { store: MockVectorStore }> };
+      const store = collections.get('vectors')!.store;
+      const P = { v: 2 };
+
+      await backend.upsertBatch('vectors', [
+        { id: 1, vector: [1, 0, 0, 0] },
+        { id: 1, vector: [0, 1, 0, 0], payload: P },
+      ]);
+      // The payload-less first version must reach the store BEFORE the
+      // second; written last, it would replace the vector P came with.
+      expect(store.insert_batch).toHaveBeenCalledWith([[1n, [1, 0, 0, 0]]]);
+      expect(store.insert_with_payload).toHaveBeenCalledWith(1n, new Float32Array([0, 1, 0, 0]), P);
+      expect(store.insert_batch.mock.invocationCallOrder[0]!)
+        .toBeLessThan(store.insert_with_payload.mock.invocationCallOrder[0]!);
+    });
+
     it.each([
       ['first', [{ id: '1', vector: [1.0, 0.0] }, { id: '2', vector: [0.0, 1.0, 0.0, 0.0] }], '1'],
       ['last', [{ id: '1', vector: [1.0, 0.0, 0.0, 0.0] }, { id: '2', vector: [0.0, 1.0] }], '2'],
@@ -402,6 +419,27 @@ describe('WasmBackend', () => {
       await expect(
         backend.upsert('vectors', { id: '18446744073709551616', vector: [1.0, 0.0, 0.0, 0.0] })
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    });
+
+    it('refuses an out-of-range numeric id on upsert, upsertBatch, get and delete before touching the store', async () => {
+      const { collections } = backend as unknown as { collections: Map<string, { store: MockVectorStore }> };
+      const store = collections.get('vectors')!.store;
+      for (const bad of [-1, 2 ** 64, 1.5]) {
+        const vector = [1.0, 0.0, 0.0, 0.0];
+        await expect(backend.upsert('vectors', { id: bad, vector }), String(bad))
+          .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(
+          backend.upsertBatch('vectors', [{ id: 1, vector }, { id: bad, vector, payload: { p: 1 } }]),
+          String(bad)
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(backend.get('vectors', bad), String(bad)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(backend.delete('vectors', bad), String(bad)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      }
+      expect(store.insert).not.toHaveBeenCalled();
+      expect(store.insert_with_payload).not.toHaveBeenCalled();
+      expect(store.insert_batch).not.toHaveBeenCalled();
+      expect(store.get).not.toHaveBeenCalled();
+      expect(store.remove).not.toHaveBeenCalled();
     });
 
     it('should not use partial numeric parsing for mixed string IDs', async () => {
@@ -589,6 +627,37 @@ describe('WasmBackend — sparse vectors live in the collection store, under the
 
     expect(await hitIds({ 7: 1 })).toEqual(['1', '2']);
     expect(storeOf(backend, 's').sparse.size).toBe(2);
+  });
+
+  // REST refuses these keys (core's `SparseVectorInput::convert_dict`); a
+  // Uint32Array would coerce them to another term instead: 'foo' -> 0,
+  // '-1' -> 4294967295, '4294967296' -> 0, '1.5' -> 1.
+  const badKeys = ['foo', '-1', '4294967296', '1.5', '', ' 1'];
+
+  it('refuses a sparse key that is not a u32 term id on upsert and upsertBatch, writing nothing', async () => {
+    const store = storeOf(backend, 's');
+    for (const key of badKeys) {
+      const sparseVector = { [key]: 1 } as unknown as Record<number, number>;
+      await expect(backend.upsert('s', { id: 1, vector: [], sparseVector }), key)
+        .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        backend.upsertBatch('s', [{ id: 2, vector: [] }, { id: 3, vector: [], sparseVector }]),
+        key
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(store.sparse_insert).not.toHaveBeenCalled();
+    expect(store.insert_batch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a sparse query key that is not a u32 term id', async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 0: 1, 4294967295: 1 } });
+    for (const key of badKeys) {
+      const sparseVector = { [key]: 1 } as unknown as Record<number, number>;
+      await expect(backend.search('s', [], { k: 5, sparseVector }), key)
+        .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    // The bounds themselves are term ids: 0 and u32::MAX.
+    expect(await hitIds({ 4294967295: 1 })).toEqual(['1']);
   });
 
   it("a delete removes the point's sparse postings", async () => {

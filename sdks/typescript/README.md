@@ -367,7 +367,7 @@ await db.upsert('docs', {
 });
 ```
 
-> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. An upsert replaces the whole point, as core does: a later `sparseVector` for the same id replaces it, an upsert without one drops it — and its payload too when it carries none — and a deleted point never comes back in sparse results. A sparse vector the binding refuses (a non-finite weight) fails the upsert before the point is written. The sparse vector lives in the collection's own store, under the point's id, so VelesQL `SPARSE_NEAR` in `query()` ranks the same points as sparse search.
+> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. An upsert replaces the whole point, as core does: a later `sparseVector` for the same id replaces it, an upsert without one drops it — and its payload too when it carries none — and a deleted point never comes back in sparse results. A sparse vector the binding refuses (a non-finite weight) fails the upsert before the point is written, and so does a key that is not a `u32` term id (decimal digits up to 4294967295, as REST parses it), refused with `BAD_REQUEST` on upsert and on a sparse or hybrid search alike, never coerced into another term. The sparse vector lives in the collection's own store, under the point's id, so VelesQL `SPARSE_NEAR` in `query()` ranks the same points as sparse search.
 
 #### `db.upsertBatch(collection, documents)`
 
@@ -405,11 +405,11 @@ await db.streamInsert('docs', largeDocumentArray);
 
 #### `db.get(collection, id)`
 
-Get a document by ID. Returns `null` if not found.
+Get a document by ID. Returns `null` if not found. A missing collection throws on both backends (`CollectionNotFoundError` on REST).
 
 #### `db.delete(collection, id)`
 
-Delete a document by ID. Returns `true` if deleted, `false` if not found.
+Delete a document by ID. Returns `true` if deleted, `false` if not found. A missing collection throws on both backends (`CollectionNotFoundError` on REST). Over REST, `false` needs a server that answers a delete of an absent point with `404 VELES-003`, which it does since the release after 8.2.0; an older server answers `200`, read as `true`.
 
 ---
 
@@ -874,7 +874,9 @@ await db.alterCollection('docs', { autoReindex: false });
 > `bulkDelete` remove a point's edges with it, as the server does. A decimal point id past
 > `Number.MAX_SAFE_INTEGER` (up to `u64::MAX`) is addressed exactly, as on REST: the binding
 > returns every point id as its decimal string, so `search`, `get` and the other reads give it
-> back as it went in; one past `u64::MAX` is refused with `BAD_REQUEST`. `matchQuery` names the
+> back as it went in; one past `u64::MAX` is refused with `BAD_REQUEST`, and so is a numeric
+> point id that is not a non-negative integer up to `Number.MAX_SAFE_INTEGER` (`-1`, `1.5`,
+> `2 ** 64`), which would otherwise reach the binding wrapped into another id. `matchQuery` names the
 > collection for the MATCH and returns REST's `{ bindings, depth, projected, score? }` rows,
 > each binding's node id a decimal string as on REST: the points' vectors score `similarity()` as on the server,
 > and `options.vector` / `threshold` behave as on REST `/match`. Traversal (`traverseGraph`, `traverseParallel`)

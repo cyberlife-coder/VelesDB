@@ -20,6 +20,8 @@ mod crud_helpers;
 mod crud_histogram;
 mod crud_indexing;
 mod crud_read_delete;
+#[cfg(all(test, feature = "persistence"))]
+mod crud_read_delete_tests;
 #[cfg(test)]
 mod crud_tests;
 mod flush;

@@ -227,12 +227,27 @@ export class VelesDB {
     return this.backend.upsertBatchRaw(collection, docs);
   }
 
+  /**
+   * Delete one point.
+   *
+   * @returns `true` when the point existed and was removed, `false` when no
+   *   point carried `id` (the delete is idempotent).
+   * @throws {CollectionNotFoundError} when `collection` does not exist — a
+   *   misspelt collection is an error, never an absent point.
+   */
   async delete(collection: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
     validateRestPointId(id, this.config);
     return this.backend.delete(collection, id);
   }
 
+  /**
+   * Delete several points in one request.
+   *
+   * @returns the number of points actually removed: an id that held no point
+   *   is skipped and not counted, and an id repeated in `ids` counts once.
+   * @throws {CollectionNotFoundError} when `collection` does not exist.
+   */
   async bulkDelete(collection: string, ids: Array<string | number>): Promise<number> {
     this.ensureInitialized();
     for (const id of ids) { validateRestPointId(id, this.config); }

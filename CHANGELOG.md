@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (REST server): a point delete reports what it removed** (REST
+  server, TypeScript SDK, core, 2026-11-18).
+  `DELETE /collections/{name}/points/{id}` answered `200` whether or not a point was
+  stored under the id, and `POST /collections/{name}/points/delete` counted
+  every id it was sent in `deleted_count`, missing and repeated ones included,
+  because core's `delete` returns nothing. The single delete of an absent
+  point now answers what its OpenAPI entry already documented and `GET`
+  answers: `404` `VELES-003` (a missing collection stays `VELES-002`);
+  `deleted_count` is the number of points removed, each counted once. Core
+  gains `delete_counted` on `VectorCollection`, `GraphCollection` and
+  `MetadataCollection`, taken under the delete's own write locks; `delete` is
+  unchanged. The TypeScript SDK's REST `delete()` read a `deleted` field the
+  server never sent and so always returned `false`: it now returns `true` on
+  the server's `200` and `false` on `VELES-003`, and `delete()` and `get()`
+  throw `CollectionNotFoundError` for a missing collection instead of
+  answering `false` / `null`, as the WASM backend does.
+  `AgentMemoryClient.deleteMemory` follows. Migration: a REST client that
+  deletes ids it is not sure exist handles a `404` `VELES-003`.
+
 - **BREAKING (Tauri IPC): point ids cross the IPC boundary as decimal
   strings** (Tauri, 2026-11-18). Search hits already carried a string id
   (core's `SearchResultResponse`), but every other point id the plugin wrote
@@ -498,6 +517,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file. Anything else is now a usage error (exit 2).
 
 ### Fixed
+
+- **Python: the type stub documents `hybrid_search`'s `ValueError`**
+  (Python, 2026-11-18). The binding refuses a NaN or infinite
+  `vector_weight` with `ValueError` since #2847, and its Rust docstring
+  says so; the `__init__.pyi` stub that IDEs read still documented only the
+  default. It now states the clamp to 0..1 and the
+  `Raises: ValueError`.
+
+- **TypeScript SDK: a WASM `upsertBatch` repeating an id keeps its last
+  version** (TypeScript SDK, 2026-11-18). The backend wrote each payload
+  document at once and buffered the payload-less ones for a single
+  `insert_batch` at the end, so `[{ id: 1, v1 }, { id: 1, v2, payload: P }]`
+  stored `v1` beside `P`. Points are now written in input order — the
+  pending payload-less run is flushed before each payload document — so the
+  last version of an id wins whole, as in core.
+
+- **TypeScript SDK: the WASM backend refuses a sparse key that is not a
+  term id** (TypeScript SDK, 2026-11-18). `sparseVectorToArrays` put
+  `Number(key)` into the `Uint32Array` the binding takes, so a key REST
+  refuses landed on another term: `'foo'` on 0, `'-1'` on 4294967295,
+  `'4294967296'` on 0, `'1.5'` on 1. A key must now be decimal digits no
+  larger than `u32::MAX`, as core's `SparseVectorInput::convert_dict` parses
+  it; anything else is refused with `BAD_REQUEST`, on `upsert` /
+  `upsertBatch` before any point is written and on a sparse or hybrid
+  `search`.
+
+- **TypeScript SDK: the WASM backend refuses a numeric point id it used to
+  wrap** (TypeScript SDK, 2026-11-18). `toPointId` handed any number to
+  `BigInt` and on to the binding, which passes a `u64` as raw `i64` bits:
+  `-1` addressed point `18446744073709551615`, `2 ** 64` addressed point 0,
+  and `1.5` escaped as a native `RangeError`. A numeric id that is not a
+  non-negative safe integer is now refused with `BAD_REQUEST` on `upsert`,
+  `upsertBatch` (before any point is written), `get`, `delete` and
+  `bulkDelete`, the rule `exactGraphId` already applied and REST's
+  `parseRestPointId` enforces. Decimal-string ids up to `u64::MAX` are
+  unchanged.
 
 - **A `MATCH` hop count past `u32::MAX` is refused instead of read as a
   default** (core, 2026-11-18). The parser replaced a bound it could not

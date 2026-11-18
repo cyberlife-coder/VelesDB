@@ -350,6 +350,18 @@ impl GraphCollection {
         self.inner.delete(ids)
     }
 
+    /// Deletes nodes by IDs and returns how many of them held a node.
+    ///
+    /// Same delete as [`delete`](Self::delete); the count is what it
+    /// removed — a missing id counts zero, an id repeated in `ids` once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage operations fail.
+    pub fn delete_counted(&self, ids: &[u64]) -> Result<usize> {
+        self.inner.delete_counted(ids)
+    }
+
     /// Removes an edge from the graph by ID.
     ///
     /// Returns `true` if the edge existed and was removed, `false` otherwise —

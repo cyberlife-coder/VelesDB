@@ -410,14 +410,66 @@ describe('RestBackend', () => {
       );
     });
 
+    // The server's `delete_point` wire shape (pinned by the server's
+    // `test_delete_point_by_id`): 200 `{ message, id }` when a point was
+    // removed, 404 `VELES-003` when none was stored under the id, 404
+    // `VELES-002` when the collection is missing.
     it('should delete a vector', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ deleted: true }),
+        json: () => Promise.resolve({ message: 'Point deleted', id: '1' }),
       });
 
       const deleted = await backend.delete('test', 1);
       expect(deleted).toBe(true);
+    });
+
+    it('delete returns false when no point was stored under the id', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({
+          code: 'VELES-003',
+          error: '[VELES-003] Point 1 not found',
+        }),
+      });
+
+      await expect(backend.delete('test', 1)).resolves.toBe(false);
+    });
+
+    it('delete throws when the collection is missing', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({
+          code: 'VELES-002',
+          error: "[VELES-002] Collection 'ghost' not found",
+        }),
+      });
+
+      await expect(backend.delete('ghost', 1)).rejects.toThrow(CollectionNotFoundError);
+    });
+
+    it('get returns null for a missing point but throws for a missing collection', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({
+          code: 'VELES-003',
+          error: '[VELES-003] Point 1 not found',
+        }),
+      });
+      await expect(backend.get('test', 1)).resolves.toBeNull();
+
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({
+          code: 'VELES-002',
+          error: "[VELES-002] Collection 'ghost' not found",
+        }),
+      });
+      await expect(backend.get('ghost', 1)).rejects.toThrow(CollectionNotFoundError);
     });
 
     it('should get a vector', async () => {

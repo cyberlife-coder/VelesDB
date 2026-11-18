@@ -193,7 +193,7 @@ describe('Agent Memory REST methods', () => {
     it('should delete by a decimal-string id (as returned by recordEvent/learnProcedure)', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ deleted: true }),
+        json: () => Promise.resolve({ message: 'Point deleted', id: '12345' }),
       });
 
       // recordEvent/learnProcedure return ids as strings; the delete path must
@@ -231,7 +231,7 @@ describe('Agent Memory REST methods', () => {
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ deleted: true }),
+        json: () => Promise.resolve({ message: 'Point deleted', id: '18446744073709551615' }),
       });
       const result = await backend.delete('events', id);
 

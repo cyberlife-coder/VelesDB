@@ -133,10 +133,16 @@ export interface IVelesDBBackend {
     options?: SearchOptions
   ): Promise<SearchResult[]>;
 
-  /** Delete a vector by ID */
+  /**
+   * Delete a point by ID: `true` if it existed and was removed, `false` if no
+   * point carried the id. A missing collection throws `CollectionNotFoundError`.
+   */
   delete(collection: string, id: string | number): Promise<boolean>;
 
-  /** Delete multiple vectors by ID in one request; returns the deleted count. */
+  /**
+   * Delete points by ID in one request; returns how many were actually removed
+   * (absent ids skipped, repeated ids counted once). A missing collection throws.
+   */
   bulkDelete(collection: string, ids: Array<string | number>): Promise<number>;
 
   /** Get a vector by ID */

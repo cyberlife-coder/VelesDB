@@ -121,6 +121,19 @@ describe('toPointId', () => {
     expect(() => toPointId('18446744073709551616')).toThrow(VelesDBError);
     expect(() => toPointId('18446744073709551616')).toThrow(/u64::MAX/);
   });
+
+  it('refuses a number that is not a non-negative safe integer instead of wrapping it', () => {
+    // wasm-bindgen passes a u64 as raw i64 bits: -1 would address
+    // u64::MAX, 2^64 would address 0, and 1.5 throws a native RangeError.
+    for (const bad of [-1, 2 ** 64, 2 ** 53, 1.5, Number.NaN, Infinity, -Infinity]) {
+      const outcome = (() => {
+        try { return toPointId(bad); } catch (err) { return err; }
+      })();
+      expect(outcome, String(bad)).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+    }
+    expect(toPointId(Number.MAX_SAFE_INTEGER)).toBe(BigInt(Number.MAX_SAFE_INTEGER));
+  });
 });
 
 describe('exactGraphId', () => {
@@ -155,6 +168,23 @@ describe('sparseVectorToArrays', () => {
     const out = sparseVectorToArrays({ 42: 0.9 });
     expect(out.indices).toEqual([42]);
     expect(out.values).toEqual([0.9]);
+  });
+
+  it('keeps the u32 bounds and a zero-padded key, as core parses them', () => {
+    const out = sparseVectorToArrays({ 0: 1, 4294967295: 2, ['007' as unknown as number]: 3 });
+    expect(out.indices).toEqual([0, 4294967295, 7]);
+  });
+
+  it('refuses a key that is not a u32 term id with BAD_REQUEST, naming it', () => {
+    for (const key of ['foo', '-1', '4294967296', '1.5', '', '1e3', '0x10']) {
+      const sv = { [key]: 1 } as unknown as Record<number, number>;
+      const outcome = (() => {
+        try { return sparseVectorToArrays(sv); } catch (err) { return err; }
+      })();
+      expect(outcome, key).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+      expect((outcome as VelesDBError).message).toContain(`'${key}'`);
+    }
   });
 });
 

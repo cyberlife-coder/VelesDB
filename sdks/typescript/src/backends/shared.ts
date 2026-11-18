@@ -116,8 +116,9 @@ export function returnNullOnNotFound(
 }
 
 /**
- * For a DELETE of one addressed resource whose absence answers `false`
- * (`dropIndex`, `removeEdge`): `true` when `response` failed only because
+ * For a request on one addressed resource whose absence is an answer, not an
+ * error (`dropIndex`, `removeEdge` and point `delete` answer `false`, point
+ * `get` answers `null`): `true` when `response` failed only because
  * THAT resource is missing, `false` when it succeeded, and a throw for any
  * other error.
  *

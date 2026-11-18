@@ -241,6 +241,10 @@ pub async fn get_point(
 }
 
 /// Delete a point by ID.
+///
+/// Answers like `GET` on the same path: `404 VELES-003` when no point is
+/// stored under `id`, so a client can tell "deleted" from "was not there".
+/// The delete is still idempotent — nothing changes either way.
 #[utoipa::path(
     delete,
     path = "/collections/{name}/points/{id}",
@@ -251,7 +255,7 @@ pub async fn get_point(
     ),
     responses(
         (status = 200, description = "Point deleted", body = Object),
-        (status = 404, description = "Point or collection not found", body = ErrorResponse)
+        (status = 404, description = "Point (VELES-003) or collection (VELES-002) not found", body = ErrorResponse)
     )
 )]
 pub async fn delete_point(
@@ -264,10 +268,11 @@ pub async fn delete_point(
     };
 
     // Deletion takes write locks and fsyncs — run it on the blocking pool.
-    match run_blocking(move || collection.delete(&[id])).await {
+    match run_blocking(move || collection.delete_counted(&[id])).await {
+        Ok(Ok(0)) => auto_core_error_response(&velesdb_core::Error::PointNotFound(id)),
         // ID as a string for JS precision-safety (see `serde_id`), consistent
         // with the string ID accepted in the path and returned by reads.
-        Ok(Ok(())) => Json(serde_json::json!({
+        Ok(Ok(_)) => Json(serde_json::json!({
             "message": "Point deleted",
             "id": id.to_string()
         }))
@@ -418,11 +423,12 @@ pub struct BulkDeleteRequest {
 /// Deletes multiple points by ID in a single request.
 ///
 /// Accepts a JSON body with a list of point IDs. All IDs are passed to
-/// the underlying `Collection::delete(&[u64])` in one call, which is
-/// more efficient than individual deletions.
+/// the underlying `VectorCollection::delete_counted(&[u64])` in one call,
+/// which is more efficient than individual deletions.
 ///
-/// Returns the number of points that were requested for deletion.
-/// Points that do not exist are silently skipped (idempotent delete).
+/// Returns the number of points the delete removed: an id that held no
+/// point is silently skipped (idempotent delete) and not counted, and an id
+/// repeated in the batch counts once.
 ///
 /// # Empty payload semantics
 ///
@@ -481,12 +487,11 @@ pub async fn bulk_delete_points(
     };
 
     let ids = req.ids;
-    let count = ids.len();
     let coll_name = name.clone();
 
-    let result = tokio::task::spawn_blocking(move || collection.delete(&ids)).await;
+    let result = tokio::task::spawn_blocking(move || collection.delete_counted(&ids)).await;
     match result {
-        Ok(Ok(())) => Json(serde_json::json!({
+        Ok(Ok(count)) => Json(serde_json::json!({
             "message": "Points deleted",
             "collection": coll_name,
             "deleted_count": count

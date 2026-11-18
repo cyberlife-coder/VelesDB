@@ -224,6 +224,25 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     expect(fused.map(r => r.id)).toEqual(['2', '1']);
   });
 
+  it('upsertBatch with a repeated id keeps the last version whole, as core does', async () => {
+    await db.createCollection('dupes', { dimension: 2, metric: 'cosine' });
+    await db.upsertBatch('dupes', [
+      { id: 1, vector: [1, 0] },
+      { id: 1, vector: [0, 1], payload: NOTES },
+    ]);
+    const first = await db.get('dupes', 1);
+    expect(Array.from(first!.vector)).toEqual([0, 1]);
+    expect(first!.payload).toEqual(NOTES);
+
+    await db.upsertBatch('dupes', [
+      { id: 2, vector: [0, 1], payload: RUST },
+      { id: 2, vector: [1, 0] },
+    ]);
+    const second = await db.get('dupes', 2);
+    expect(Array.from(second!.vector)).toEqual([1, 0]);
+    expect(second!.payload ?? null).toBeNull();
+  });
+
   it('a point id past 2^53 comes back exactly from every search and read', async () => {
     // The binding threw serializing such an id as a number, and the SDK
     // refused it up front; it now leaves every surface as its decimal string.

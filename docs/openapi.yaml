@@ -1254,7 +1254,7 @@ paths:
       tags:
       - points
       summary: Deletes multiple points by ID in a single request.
-      description: "Accepts a JSON body with a list of point IDs. All IDs are passed to\nthe underlying `Collection::delete(&[u64])` in one call, which is\nmore efficient than individual deletions.\n\nReturns the number of points that were requested for deletion.\nPoints that do not exist are silently skipped (idempotent delete).\n\n# Empty payload semantics\n\n`{ \"ids\": [] }` is treated as a successful no-op: the response is\n`200 OK` with `deleted_count = 0`. This matches Kubernetes-style\nidempotent batch APIs and lets callers send empty batches without\nspecial-casing on the client side.\n\n# Limits\n\nBatches larger than `MAX_BULK_DELETE_SIZE` (10000) are rejected with\n`400 BAD_REQUEST`."
+      description: "Accepts a JSON body with a list of point IDs. All IDs are passed to\nthe underlying `VectorCollection::delete_counted(&[u64])` in one call,\nwhich is more efficient than individual deletions.\n\nReturns the number of points the delete removed: an id that held no\npoint is silently skipped (idempotent delete) and not counted, and an id\nrepeated in the batch counts once.\n\n# Empty payload semantics\n\n`{ \"ids\": [] }` is treated as a successful no-op: the response is\n`200 OK` with `deleted_count = 0`. This matches Kubernetes-style\nidempotent batch APIs and lets callers send empty batches without\nspecial-casing on the client side.\n\n# Limits\n\nBatches larger than `MAX_BULK_DELETE_SIZE` (10000) are rejected with\n`400 BAD_REQUEST`."
       operationId: bulk_delete_points
       parameters:
       - name: name
@@ -1477,6 +1477,7 @@ paths:
       tags:
       - points
       summary: Delete a point by ID.
+      description: "Answers like `GET` on the same path: `404 VELES-003` when no point is\nstored under `id`, so a client can tell \"deleted\" from \"was not there\".\nThe delete is still idempotent — nothing changes either way."
       operationId: delete_point
       parameters:
       - name: name
@@ -1500,7 +1501,7 @@ paths:
               schema:
                 type: object
         "404":
-          description: Point or collection not found
+          description: Point (VELES-003) or collection (VELES-002) not found
           content:
             application/json:
               schema:

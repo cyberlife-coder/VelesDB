@@ -42,6 +42,15 @@ function mockReply(data: unknown): void {
   });
 }
 
+/** The server's success reply for a DELETE: 204 with no body (`res.json()` rejects). */
+function mockNoContent(): void {
+  mockFetch.mockResolvedValueOnce({
+    ok: true,
+    status: 204,
+    json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+  });
+}
+
 function mockErrorReply(status: number, code?: string, message?: string): void {
   mockFetch.mockResolvedValueOnce({
     ok: false,
@@ -135,7 +144,7 @@ describe('unrelate', () => {
   });
 
   it('DELETEs /collections/{name}/relations/{edgeId} and returns true', async () => {
-    mockReply({ deleted: true });
+    mockNoContent();
 
     const result = await backend.unrelate('kg', 42);
 
@@ -146,13 +155,19 @@ describe('unrelate', () => {
   });
 
   it('keeps a u64 string edge id verbatim in the path', async () => {
-    mockReply({ deleted: true });
+    mockNoContent();
 
     await backend.unrelate('kg', '18446744073709551615');
 
     expect(lastCall().url).toBe(
       'http://localhost:8080/collections/kg/relations/18446744073709551615'
     );
+  });
+
+  it('throws CollectionNotFoundError on 404 VELES-002 instead of answering false', async () => {
+    mockErrorReply(404, 'VELES-002', "Collection 'kg' not found");
+
+    await expect(backend.unrelate('kg', 42)).rejects.toThrow(CollectionNotFoundError);
   });
 
   it('returns false on 404 VELES-020 (edge not found)', async () => {

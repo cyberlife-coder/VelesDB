@@ -22,8 +22,8 @@ import type {
   RelationsResponse,
 } from '../types';
 import type { BaseTransport } from './shared';
-import { throwOnError, collectionPath } from './shared';
-import { parseVelesError, EdgeNotFoundError } from '../errors';
+import { throwOnError, collectionPath, isAddressedResourceAbsent } from './shared';
+import { EdgeNotFoundError } from '../errors';
 import { ValidationError } from '../types';
 
 /** Minimal transport interface for graph operations. */
@@ -307,14 +307,7 @@ export async function unrelate(
     `${collectionPath(collection)}/relations/${encodeURIComponent(String(edgeId))}`
   );
 
-  if (response.error !== undefined) {
-    const { code, message } = response.error;
-    const err = parseVelesError(code, message);
-    if (err instanceof EdgeNotFoundError) { return false; }
-    if (code === 'NOT_FOUND') { return false; }
-    throwOnError(response, `Collection '${collection}'`);
-  }
-  return true;
+  return !isAddressedResourceAbsent(response, EdgeNotFoundError);
 }
 
 /** List outgoing relation edges for a point. */
