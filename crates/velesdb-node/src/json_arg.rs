@@ -9,12 +9,24 @@
 //! plain objects (prototype `Object.prototype` or `null`) — and refuses
 //! anything else with `INVALID_INPUT`, naming where it sits. A whole number
 //! a JS `number` holds exactly (up to `2^53 - 1`) becomes an integer
-//! ([`json_number`]).
+//! ([`json_number`]), and a `BigInt` in the 64-bit range becomes the same
+//! integer, losslessly — the type this binding hands back for an integer
+//! past `2^53`, so a value read can be written or filtered on again.
 //!
-//! As `JSON.stringify` does, an `undefined` property is left out and an
-//! `undefined` array element becomes `null`.
+//! As `JSON.stringify` does, only own enumerable string-keyed properties
+//! are read (never an inherited one), an `undefined` property is left out
+//! and an `undefined` array element becomes `null`.
+//!
+//! The walk is bounded: at most [`MAX_DEPTH`] levels and [`MAX_VALUES`]
+//! values in all, counted before anything is allocated, so an array whose
+//! `length` claims billions of elements is refused instead of aborting the
+//! process on a failed allocation.
 
-use napi::bindgen_prelude::{JsObjectValue, JsValue, Object, Unknown};
+use std::cell::Cell;
+
+use napi::bindgen_prelude::{
+    JsObjectValue, JsValue, KeyCollectionMode, KeyConversion, KeyFilter, Object, Unknown,
+};
 use napi::{Env, ValueType};
 use serde_json::{Map, Value};
 
@@ -24,6 +36,11 @@ use crate::error::invalid_input;
 /// Nesting beyond this is refused: it is far past any metadata or request
 /// shape, and a cyclic object would otherwise recurse forever.
 const MAX_DEPTH: usize = 64;
+
+/// Values one argument may hold in all, every level counted — the bound
+/// napi's own JSON conversion applies. Far past any metadata, filter or
+/// request a caller writes by hand.
+const MAX_VALUES: usize = 1_000_000;
 
 /// `value` as JSON data, or `INVALID_INPUT` naming the first part of it
 /// JSON cannot hold. `what` names the argument in the message.
@@ -42,6 +59,7 @@ pub fn to_json(value: &Unknown<'_>, what: &str) -> napi::Result<Value> {
     Walk {
         env,
         object_prototype,
+        budget: Cell::new(MAX_VALUES),
     }
     .value(value, what, 0)
 }
@@ -65,14 +83,30 @@ pub fn to_optional_json(value: Option<&Unknown<'_>>, what: &str) -> napi::Result
 struct Walk<'env> {
     env: Env,
     object_prototype: Unknown<'env>,
+    /// Values still allowed before the argument is refused.
+    budget: Cell<usize>,
 }
 
 impl Walk<'_> {
+    /// Charge `count` values to the budget, or refuse the argument.
+    fn spend(&self, count: usize, at: &str) -> napi::Result<()> {
+        let left = self.budget.get();
+        if count > left {
+            return Err(invalid_input(format!(
+                "{at} holds more than {MAX_VALUES} values in all, past what one argument may carry"
+            )));
+        }
+        self.budget.set(left - count);
+        Ok(())
+    }
+
     fn value(&self, value: &Unknown<'_>, at: &str, depth: usize) -> napi::Result<Value> {
+        self.spend(1, at)?;
         match value.get_type()? {
             ValueType::Undefined | ValueType::Null => Ok(Value::Null),
             ValueType::Boolean => Ok(Value::Bool(value.coerce_to_bool()?)),
             ValueType::Number => number(value.coerce_to_number()?.get_double()?, at),
+            ValueType::BigInt => bigint(value, at),
             ValueType::String => Ok(Value::String(
                 value.coerce_to_string()?.into_utf8()?.as_str()?.to_owned(),
             )),
@@ -97,7 +131,16 @@ impl Walk<'_> {
 
     fn array(&self, array: &Object<'_>, at: &str, depth: usize) -> napi::Result<Value> {
         let len = array.get_array_length()?;
-        let mut items = Vec::with_capacity(len as usize);
+        // The claimed length is checked against the budget before anything
+        // is allocated or read: `length` is the caller's to set, and a
+        // sparse `[]` with `length = 2 ** 32 - 1` costs nothing to build.
+        let claimed = usize::try_from(len).unwrap_or(usize::MAX);
+        if claimed > self.budget.get() {
+            return Err(invalid_input(format!(
+                "{at} has {len} elements, more than the {MAX_VALUES} values one argument may carry"
+            )));
+        }
+        let mut items = Vec::with_capacity(claimed);
         for index in 0..len {
             let item = array.get_element::<Unknown>(index)?;
             items.push(self.value(&item, &format!("{at}[{index}]"), depth + 1)?);
@@ -113,16 +156,29 @@ impl Walk<'_> {
             )));
         }
         let object = value.coerce_to_object()?;
-        let keys = object.get_property_names()?;
+        // Own keys only, as `JSON.stringify` reads them: the default name
+        // listing walks the prototype chain, so an enumerable key someone
+        // added to `Object.prototype` landed in every stored object.
+        let keys = object.get_all_property_names(
+            KeyCollectionMode::OwnOnly,
+            KeyFilter::Enumerable,
+            KeyConversion::NumbersToStrings,
+        )?;
         let mut map = Map::new();
         for index in 0..keys.get_array_length()? {
-            let key = keys
-                .get_element::<Unknown>(index)?
+            let key_value = keys.get_element::<Unknown>(index)?;
+            if key_value.get_type()? == ValueType::Symbol {
+                // `JSON.stringify` skips symbol keys.
+                continue;
+            }
+            let key = key_value
                 .coerce_to_string()?
                 .into_utf8()?
                 .as_str()?
                 .to_owned();
-            let entry = object.get_named_property::<Unknown>(&key)?;
+            // Read by the key value itself, not by its text: a named lookup
+            // goes through a C string, which a key holding NUL cannot be.
+            let entry = object.get_property::<Unknown, Unknown>(key_value)?;
             if entry.get_type()? == ValueType::Undefined {
                 continue;
             }
@@ -170,11 +226,27 @@ fn number(n: f64, at: &str) -> napi::Result<Value> {
         .ok_or_else(|| invalid_input(format!("{at} is {n}, which JSON cannot hold")))
 }
 
+/// A `BigInt` as the JSON integer it holds, read through its decimal text
+/// so no digit is lost; one outside `i64::MIN..=u64::MAX`, the integers
+/// JSON metadata holds, is refused.
+fn bigint(value: &Unknown<'_>, at: &str) -> napi::Result<Value> {
+    let text = value.coerce_to_string()?.into_utf8()?.as_str()?.to_owned();
+    text.parse::<u64>()
+        .map(Value::from)
+        .or_else(|_| text.parse::<i64>().map(Value::from))
+        .map_err(|_| {
+            invalid_input(format!(
+                "{at} is {text}n, outside the 64-bit integer range ({}..={}) JSON metadata holds",
+                i64::MIN,
+                u64::MAX
+            ))
+        })
+}
+
 fn type_name(kind: ValueType) -> &'static str {
     match kind {
         ValueType::Function => "function",
         ValueType::Symbol => "symbol",
-        ValueType::BigInt => "bigint (pass a decimal string)",
         ValueType::External => "native external",
         _ => "value of an unknown kind",
     }

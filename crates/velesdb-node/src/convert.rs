@@ -7,7 +7,7 @@ use velesdb_memory::context::ingest::{resolve_transcript_path, IngestRoots};
 use velesdb_memory::context::CompileRequest;
 use velesdb_memory::{ColumnFilter, ColumnOp, FusionOptions, Link, MemoryError, Metadata};
 
-use crate::dto::{ColumnFilterJs, FusionOptionsJs, LinkJs};
+use crate::dto::{FusionOptionsJs, LinkJs};
 use crate::error::{internal, invalid_input, to_napi_err};
 
 /// Format a `u64` id as a decimal string (JS `number` loses precision >2^53).
@@ -34,33 +34,6 @@ pub fn to_metadata(value: Option<Value>) -> napi::Result<Option<Metadata>> {
 
 /// The largest whole number a JS `number` holds exactly (`2^53 - 1`).
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-
-/// Restores the integers napi's JSON conversion turned into floats, for the
-/// values napi still converts itself (a column filter's `value`, a field of
-/// a `#[napi(object)]`); the arguments [`crate::json_arg`] reads come out
-/// right.
-///
-/// napi reads a JS number as an integer only within `u32` / `i32` range: a
-/// whole number past it — a millisecond timestamp, a large id — arrives as
-/// `5000000000.0`. Stored so, it reads back as a float from Python or Rust,
-/// and misses a JSON equality against the integer every other surface stores
-/// (`[5000000000] != [5000000000.0]`). Every whole number a JS number holds
-/// exactly becomes an integer again, at any depth.
-pub fn integral_numbers(value: Value) -> Value {
-    match value {
-        Value::Number(n) => Value::Number(match n.as_f64() {
-            Some(f) if n.is_f64() => json_number(f).unwrap_or(n),
-            _ => n,
-        }),
-        Value::Array(items) => Value::Array(items.into_iter().map(integral_numbers).collect()),
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, item)| (key, integral_numbers(item)))
-                .collect(),
-        ),
-        other => other,
-    }
-}
 
 /// A JS number as JSON: a whole number a JS `number` holds exactly (within
 /// `±(2^53 - 1)`) as an integer, any other finite number as a float, and
@@ -97,15 +70,46 @@ fn parse_op(op: &str) -> napi::Result<ColumnOp> {
         .map_err(|_| invalid_input(format!("invalid op '{op}' (expected eq|ne|lt|le|gt|ge)")))
 }
 
-/// JS `[{field, op, value}]` → engine `Vec<ColumnFilter>`.
-pub fn to_filters(filters: Vec<ColumnFilterJs>) -> napi::Result<Vec<ColumnFilter>> {
-    filters
+/// The `filters` argument of `recallWhere`, already read as JSON data by
+/// [`crate::json_arg`], as engine [`ColumnFilter`]s: an array of
+/// `{field, op, value}` objects.
+///
+/// # Errors
+///
+/// `INVALID_INPUT` naming the first filter that is not an object with a
+/// string `field`, a known `op` and a `value`.
+pub fn to_filters(filters: Value) -> napi::Result<Vec<ColumnFilter>> {
+    let Value::Array(items) = filters else {
+        return Err(invalid_input(
+            "filters must be an array of {field, op, value} objects",
+        ));
+    };
+    items
         .into_iter()
-        .map(|f| {
+        .enumerate()
+        .map(|(index, item)| {
+            let Value::Object(mut filter) = item else {
+                return Err(invalid_input(format!(
+                    "filters[{index}] must be an object {{field, op, value}}"
+                )));
+            };
+            let Some(Value::String(field)) = filter.remove("field") else {
+                return Err(invalid_input(format!(
+                    "filters[{index}].field must be a string"
+                )));
+            };
+            let Some(Value::String(op)) = filter.remove("op") else {
+                return Err(invalid_input(format!(
+                    "filters[{index}].op must be a string (eq|ne|lt|le|gt|ge)"
+                )));
+            };
+            let value = filter
+                .remove("value")
+                .ok_or_else(|| invalid_input(format!("filters[{index}].value is missing")))?;
             Ok(ColumnFilter {
-                field: f.field,
-                op: parse_op(&f.op)?,
-                value: integral_numbers(f.value),
+                field,
+                op: parse_op(&op)?,
+                value,
             })
         })
         .collect()

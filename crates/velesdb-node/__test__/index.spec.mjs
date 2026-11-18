@@ -1984,7 +1984,8 @@ test('metadata and filters that are not JSON data are refused, never stored as {
       ['a class instance', { tag: new Tag() }],
       ['a function', { f: () => 1 }],
       ['a symbol', { s: Symbol('s') }],
-      ['a bigint', { n: 10n }],
+      // A BigInt in the 64-bit range is an integer (json_arg.spec.mjs); past it, JSON holds no such integer.
+      ['a bigint past 64 bits', { n: 2n ** 64n }],
       ['NaN', { n: NaN }],
       ['Infinity', { list: [1, Infinity] }],
     ]

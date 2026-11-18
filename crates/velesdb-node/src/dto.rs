@@ -23,7 +23,15 @@ pub struct LinkJs {
     pub relation: String,
 }
 
-/// A structured predicate for `recallWhere` (input).
+/// A structured predicate for `recallWhere` (input). The typing of the
+/// `filters` argument only: the binding reads it as JSON data
+/// ([`crate::json_arg`]) and [`crate::convert::to_filters`] checks this
+/// shape, so napi never converts it field by field.
+#[allow(
+    dead_code,
+    reason = "kept for the `ColumnFilterJs` interface napi generates in index.d.ts, \
+              which `recallWhere`'s `ts_args_type` names; never built in Rust"
+)]
 #[napi(object)]
 pub struct ColumnFilterJs {
     /// Metadata field name (alphanumeric/underscore).
