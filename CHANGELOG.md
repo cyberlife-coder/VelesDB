@@ -499,6 +499,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SELECT DISTINCT *` and set operations no longer merge payloads whose
+  keys contain `:` or `,`** (core, 2026-11-18). The canonical row key wrote
+  object keys unquoted, so `{"a":1,"b":2}` and `{"a:1,b":2}` produced the
+  same key and one row was dropped. Keys are now JSON-quoted.
+
 - **A scalar `ORDER BY` on `SPARSE_NEAR` or `NEAR_FUSED` ranks every match,
   not the `LIMIT` best-scoring ones** (core, 2026-11-18). Both paths fetched
   only `LIMIT + OFFSET` rows by relevance and sorted that set, so

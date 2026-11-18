@@ -66,6 +66,19 @@ fn test_canonical_json_key_order_independent() {
 }
 
 #[test]
+fn test_canonical_json_quotes_keys_so_objects_cannot_collide() {
+    // Unquoted keys rendered both payloads as `{a:1,b:2}`.
+    let results = vec![
+        make_result(1, serde_json::json!({"a": 1, "b": 2})),
+        make_result(2, serde_json::json!({"a:1,b": 2})),
+    ];
+
+    let distinct = apply_distinct(results, &SelectColumns::All);
+
+    assert_eq!(distinct.len(), 2);
+}
+
+#[test]
 fn test_canonical_json_nested_objects() {
     let result1 = make_result(1, serde_json::json!({"outer": {"z": 1, "a": 2}}));
     let result2 = make_result(2, serde_json::json!({"outer": {"a": 2, "z": 1}}));
