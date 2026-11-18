@@ -573,7 +573,7 @@ fn with_id(
         Some(serde_json::Value::Object(map)) => map.clone(),
         _ => serde_json::Map::new(),
     };
-    map.insert("id".to_string(), serde_json::json!(id));
+    map.insert("id".to_string(), crate::js_value::row_id_json(id));
     map
 }
 
@@ -671,7 +671,7 @@ fn node_json(id: u64, data: &WasmGraphNode) -> serde_json::Value {
             map.insert(k.clone(), v.clone());
         }
     }
-    map.insert("id".to_string(), serde_json::json!(id));
+    map.insert("id".to_string(), crate::js_value::row_id_json(id));
     map.insert("labels".to_string(), serde_json::json!(data.labels.clone()));
     serde_json::Value::Object(map)
 }

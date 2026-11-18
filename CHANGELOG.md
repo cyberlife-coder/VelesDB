@@ -563,6 +563,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source or target that is neither a string nor a number is now refused with
   `BAD_REQUEST` naming its type, as REST requires the id.
 
+- **WASM: a VelesQL row keeps a point id past 2^53 exact** (WASM,
+  TypeScript SDK, 2026-11-18). The executor wrote every row id as a JSON
+  number (`SELECT *`, a named `id` column, `MATCH` node objects and
+  `alias.id` projections), and the SDK parses the rows with `JSON.parse`,
+  which rounds a number past `Number.MAX_SAFE_INTEGER`: point
+  `9007199254740993` came back as `9007199254740992`, another point. An id
+  past `2^53 - 1` is now its exact decimal string; a smaller one stays a
+  number, as core's `SELECT *` writes it.
+
 - **Node: an argument whose array claims billions of elements is refused
   instead of killing the process** (Node, 2026-11-18). The JSON reader
   pre-allocated one slot per claimed element, so `const a = []; a.length =

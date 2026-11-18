@@ -370,13 +370,20 @@ silently reduced instead.
 
 These arguments must be JSON data, what `JSON.parse` can produce: `null`,
 booleans, finite numbers, strings, arrays and plain objects (an object
-literal, or `Object.create(null)`). Anything else rejects with
-`INVALID_INPUT`, naming where it sits (`metadata.when is a Date, not a plain
-object`): a `Date`, a `Map`, a `Set`, a class instance, a typed array, a
-function, a symbol, a `bigint`, `NaN` or an infinity. They used to be stored
+literal, or `Object.create(null)`), plus a `bigint` in the 64-bit range
+(below). Anything else rejects with `INVALID_INPUT`, naming where it sits
+(`metadata.when is a Date, not a plain object`): a `Date`, a `Map`, a `Set`,
+a class instance, a typed array, a function, a symbol, a `bigint` outside
+`-(2n ** 63n)..=2n ** 64n - 1n`, `NaN` or an infinity. They used to be stored
 as `{}` (or `null`) without a word; convert them first (`date.toISOString()`,
-`Object.fromEntries(map)`, a decimal string for a `bigint`). As with
-`JSON.stringify`, a property set to `undefined` is left out.
+`Object.fromEntries(map)`). As with `JSON.stringify`, only an object's own
+enumerable string keys are read (never one inherited from its prototype),
+and a property set to `undefined` is left out. The `filters` of
+`recallWhere` follow the same rules.
+
+One argument holds at most 1,000,000 values in all, every level counted:
+past that, including an array whose `length` merely claims more, it rejects
+with `INVALID_INPUT` before anything is allocated.
 
 ### Numbers in metadata and filters
 
@@ -385,6 +392,14 @@ A JS `number` that holds a whole value — up to `Number.MAX_SAFE_INTEGER`
 reads back as the integer `5000000000` from Python or Rust, and an exact
 metadata filter on it matches what the other bindings stored. Fractions, and
 whole numbers past 2^53 − 1 (which JS cannot hold exactly), stay floats.
+
+An integer past 2^53 − 1 that another binding stored (a nanosecond
+timestamp, a large serial) comes back as a `bigint`. Pass a `bigint` to store
+or filter on such an integer: one in `-(2n ** 63n)..=2n ** 64n - 1n` is read
+exactly as that integer, so the value read back filters on itself
+(`listMemories(null, 50, { serial: profile.serial })`). Do not convert it to
+a decimal string: a string never equals the stored integer, and the filter
+silently matches nothing.
 
 ### Argument errors
 

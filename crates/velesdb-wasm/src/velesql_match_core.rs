@@ -143,7 +143,7 @@ fn find<'b>(elements: &'b [BoundElement], alias: &str) -> Option<&'b BoundElemen
 /// holds; any other property is a (dot-nested) path in the payload.
 fn element_property(element: &BoundElement, property: &str) -> Option<serde_json::Value> {
     if property == "id" {
-        return Some(serde_json::json!(element.id));
+        return Some(crate::js_value::row_id_json(element.id));
     }
     let payload = element.payload.as_ref()?;
     payload_path(payload, property).cloned()
@@ -170,7 +170,7 @@ fn project_all(node: &BoundElement, projected: &mut HashMap<String, serde_json::
             projected.insert(format!("{alias}.{key}"), value.clone());
         }
     }
-    projected.insert(format!("{alias}.id"), serde_json::json!(node.id));
+    projected.insert(format!("{alias}.id"), crate::js_value::row_id_json(node.id));
 }
 
 /// Core's `projection_key`: the item's `AS` alias, else its expression.

@@ -425,6 +425,27 @@ describe.skipIf(!PKG)('the WASM backend answers as core does, on the real bindin
     expect('results' in pure && pure.results).toEqual([{ id: 1, title: 'a' }]);
   });
 
+  it('a VelesQL row keeps a point id past 2^53 exact, as its decimal string', async () => {
+    // JSON.parse rounds a number past Number.MAX_SAFE_INTEGER: 2^53 + 1 read
+    // back as 2^53, a different point. Ids up to 2^53 - 1 stay numbers.
+    const big = '9007199254740993';
+    await db.createCollection('bigid', { dimension: 2, metric: 'cosine' });
+    await db.upsert('bigid', { id: big, vector: [1, 0], payload: { title: 'big' } });
+    await db.upsert('bigid', { id: 7, vector: [0, 1], payload: { title: 'small' } });
+
+    const pure = await db.query('bigid', 'SELECT * FROM bigid WHERE vector NEAR $v LIMIT 1', { v: [1, 0] });
+    const filtered = await db.query(
+      'bigid', "SELECT * FROM bigid WHERE vector NEAR $v AND title = 'big' LIMIT 1", { v: [1, 0] }
+    );
+    const named = await db.query('bigid', "SELECT id, title FROM bigid WHERE title = 'big'");
+    const small = await db.query('bigid', "SELECT id FROM bigid WHERE title = 'small'");
+
+    expect('results' in pure && pure.results).toEqual([{ id: big, title: 'big' }]);
+    expect('results' in filtered && filtered.results).toEqual([{ id: big, title: 'big' }]);
+    expect('results' in named && named.results).toEqual([{ id: big, title: 'big' }]);
+    expect('results' in small && small.results).toEqual([{ id: 7 }]);
+  });
+
   it('a typed dense + sparse search fuses as deep a branch as VelesQL and core do', async () => {
     // Dense ranking to [1, 0]: 1, 3, 4, 2. Sparse ranking of {1: 1}: 2, 3.
     // Cut to k = 1 per branch, RRF ties 1 and 2 on one rank each; core reads
