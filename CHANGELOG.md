@@ -518,6 +518,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: a WASM `upsertBatch` repeating an id keeps its last
+  version** (TypeScript SDK, 2026-11-18). The backend wrote each payload
+  document at once and buffered the payload-less ones for a single
+  `insert_batch` at the end, so `[{ id: 1, v1 }, { id: 1, v2, payload: P }]`
+  stored `v1` beside `P`. Points are now written in input order — the
+  pending payload-less run is flushed before each payload document — so the
+  last version of an id wins whole, as in core.
+
 - **TypeScript SDK: the WASM backend refuses a sparse key that is not a
   term id** (TypeScript SDK, 2026-11-18). `sparseVectorToArrays` put
   `Number(key)` into the `Uint32Array` the binding takes, so a key REST

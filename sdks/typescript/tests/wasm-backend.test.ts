@@ -351,6 +351,23 @@ describe('WasmBackend', () => {
       ]);
     });
 
+    it('upsertBatch writes a repeated id in input order, so the last version wins as in core', async () => {
+      const { collections } = backend as unknown as { collections: Map<string, { store: MockVectorStore }> };
+      const store = collections.get('vectors')!.store;
+      const P = { v: 2 };
+
+      await backend.upsertBatch('vectors', [
+        { id: 1, vector: [1, 0, 0, 0] },
+        { id: 1, vector: [0, 1, 0, 0], payload: P },
+      ]);
+      // The payload-less first version must reach the store BEFORE the
+      // second; written last, it would replace the vector P came with.
+      expect(store.insert_batch).toHaveBeenCalledWith([[1n, [1, 0, 0, 0]]]);
+      expect(store.insert_with_payload).toHaveBeenCalledWith(1n, new Float32Array([0, 1, 0, 0]), P);
+      expect(store.insert_batch.mock.invocationCallOrder[0]!)
+        .toBeLessThan(store.insert_with_payload.mock.invocationCallOrder[0]!);
+    });
+
     it.each([
       ['first', [{ id: '1', vector: [1.0, 0.0] }, { id: '2', vector: [0.0, 1.0, 0.0, 0.0] }], '1'],
       ['last', [{ id: '1', vector: [1.0, 0.0, 0.0, 0.0] }, { id: '2', vector: [0.0, 1.0] }], '2'],

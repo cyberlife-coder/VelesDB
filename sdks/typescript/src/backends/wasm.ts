@@ -348,21 +348,29 @@ export class WasmBackend implements IVelesDBBackend {
     // Every id is checked before any point is written.
     const ids = docs.map((doc) => toPointId(doc.id));
 
+    // Points are written in input order, so an id repeated in `docs` keeps
+    // its last version, as core's upsert does: the run of payload-less docs
+    // pending in `batch` is flushed before each payload doc is written.
     this.replacePoints(collection, docs, () => {
       collection.store.reserve(docs.length);
-      const batch: Array<[bigint, number[]]> = [];
+      let batch: Array<[bigint, number[]]> = [];
+      const flush = (): void => {
+        if (batch.length > 0) { collection.store.insert_batch(batch); }
+        batch = [];
+      };
       docs.forEach((doc, i) => {
         const id = ids[i]!;
         const vector = doc.vector instanceof Float32Array
           ? doc.vector
           : new Float32Array(doc.vector);
         if (doc.payload) {
+          flush();
           collection.store.insert_with_payload(id, vector, doc.payload);
         } else {
           batch.push([id, Array.from(vector)]);
         }
       });
-      if (batch.length > 0) { collection.store.insert_batch(batch); }
+      flush();
     });
   }
 
