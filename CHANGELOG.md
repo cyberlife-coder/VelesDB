@@ -499,6 +499,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A scalar `ORDER BY` on `SPARSE_NEAR` or `NEAR_FUSED` ranks every match,
+  not the `LIMIT` best-scoring ones** (core, 2026-11-18). Both paths fetched
+  only `LIMIT + OFFSET` rows by relevance and sorted that set, so
+  `… SPARSE_NEAR {…} ORDER BY price DESC LIMIT 2` could return two cheap
+  rows. They now widen the fetch to `MAX_LIMIT` for a non-similarity
+  `ORDER BY`, as the dense and `similarity()` paths already did.
+
 - **The payload WAL indexes the next record where it lands after a failed
   flush** (core, 2026-11-18). When a flush failed (ENOSPC, say), the store
   reset its write offset to the file length, but the `BufWriter` keeps the
