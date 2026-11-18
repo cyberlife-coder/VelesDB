@@ -83,6 +83,7 @@ pub mod observer;
 pub mod state;
 pub mod types;
 pub mod types_graph;
+pub mod types_memory;
 
 pub use error::{CommandError, Error, Result};
 pub use state::VelesDbState;
