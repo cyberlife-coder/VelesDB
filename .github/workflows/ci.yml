@@ -1587,6 +1587,23 @@ jobs:
           npm ci
           npx vitest run tests/wasm-real-binding.test.ts
 
+      # The memory wedge in a real browser, over the package the step above
+      # built. Nothing ran crates/velesdb-wasm/e2e before, so its memory spec
+      # went on reading `remember()`'s `{id, similar}` as a bare id string,
+      # unnoticed. Only memory.spec.ts runs: the vectorstore, fusion and
+      # velesql specs predate the current API (`VectorStore.new`, a `VelesQL`
+      # export) and fail wholesale; they need rewriting before they can gate.
+      - name: WASM memory wedge in a browser (Playwright, chromium)
+        if: needs.code-changed.outputs.relevant == 'true'
+        working-directory: crates/velesdb-wasm/e2e
+        env:
+          VELESDB_WASM_PKG: ${{ runner.temp }}/velesdb-wasm-pkg
+        run: |
+          cp -r "$VELESDB_WASM_PKG" pkg
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test tests/memory.spec.ts --project=chromium
+
   # ===========================================================================
   # OpenAPI Drift Check
   # Regenerates the committed docs/openapi.{json,yaml} snapshots from the

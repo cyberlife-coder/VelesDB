@@ -47,27 +47,8 @@ npm run test:ui
 
 ## CI Integration
 
-Add to `.github/workflows/ci.yml`:
-
-```yaml
-wasm-e2e:
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-    - uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-    - name: Install wasm-pack
-      run: cargo install wasm-pack
-    - name: Build WASM
-      run: |
-        cd crates/velesdb-wasm
-        wasm-pack build --target web --out-dir e2e/pkg
-    - name: Install & Test
-      run: |
-        cd crates/velesdb-wasm/e2e
-        npm ci
-        npx playwright install --with-deps chromium
-        npm test -- --project=chromium
-```
+The `wasm-check` job of `.github/workflows/ci.yml` runs `tests/memory.spec.ts`
+on chromium, over the `wasm-pack --target web` package it builds for the
+TypeScript SDK's real-binding test. The other specs (`vectorstore`, `fusion`,
+`velesql`) are not run there: they predate the current API (`VectorStore.new`,
+a `VelesQL` export) and fail until rewritten.

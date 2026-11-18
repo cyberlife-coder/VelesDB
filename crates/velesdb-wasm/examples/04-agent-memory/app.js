@@ -18,9 +18,10 @@ async function main() {
   // ---- 1. remember(fact, links, metadata, ttlSeconds) ---------------------
   // `links` is an array of {target, relation} edges to memories that already
   // exist; pass `null` for none. `metadata` is a plain object or `null`.
-  // `ttlSeconds` makes the fact expire; omit it (or pass 0) for a permanent
-  // memory. The call resolves to `{id, similar}` — `id` is the new memory's
-  // id as a decimal string, `similar` the pre-existing memories nearest to it.
+  // `ttlSeconds` (a whole number of seconds) makes the fact expire; omit it
+  // for a permanent memory. `0` is refused: it would mean "expire now". The
+  // call resolves to `{id, similar}` — `id` is the new memory's id as a
+  // decimal string, `similar` the pre-existing memories nearest to it.
   const pgId = memory.remember(
     'The team chose PostgreSQL for the billing service.',
     null,

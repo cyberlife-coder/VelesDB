@@ -466,6 +466,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WASM: the memory e2e spec and the agent-memory example match
+  `remember()`** (WASM, 2026-11-18). The Playwright spec read `remember()`'s
+  `{id, similar}` as a bare id string, so every assertion compared objects
+  with ids and the suite failed — unseen, because no workflow ran it. The
+  `04-agent-memory` example said `ttlSeconds: 0` stores a permanent memory;
+  `0` is refused. The spec reads `.id` and also pins the count refusals, and
+  the `wasm-check` job now runs it on chromium over the package it already
+  builds (the suite's other specs predate the current API and stay out).
+
 - **WASM `MemoryService` refuses a count it used to wrap** (WASM, Node,
   2026-11-18). Its counts — `k`, `maxHops`, `ttlSeconds`, `fragmentIndex`,
   `reserveTokens`, `recallFused`'s `hops` / `pool` — were `usize`/`u64`
