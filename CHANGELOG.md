@@ -518,6 +518,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python: the type stub documents `hybrid_search`'s `ValueError`**
+  (Python, 2026-11-18). The binding refuses a NaN or infinite
+  `vector_weight` with `ValueError` since #2847, and its Rust docstring
+  says so; the `__init__.pyi` stub that IDEs read still documented only the
+  default. It now states the clamp to 0..1 and the
+  `Raises: ValueError`.
+
 - **TypeScript SDK: a WASM `upsertBatch` repeating an id keeps its last
   version** (TypeScript SDK, 2026-11-18). The backend wrote each payload
   document at once and buffered the payload-less ones for a single

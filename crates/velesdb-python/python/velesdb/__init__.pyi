@@ -753,11 +753,15 @@ class Collection:
             vector: Query embedding.
             query: Query text for the BM25 branch.
             top_k: Number of results (default: 10).
-            vector_weight: Dense/text blend ``alpha`` (default: 0.5).
+            vector_weight: Dense/text blend ``alpha`` (default: 0.5), clamped
+                to 0..1.
             filter: Optional metadata filter dict.
             principal: Optional caller identity forwarded to the read gate.
             tenant: Optional tenant hint forwarded to the read gate.
             rrf_k: RRF fusion constant (default: None = core's 60).
+
+        Raises:
+            ValueError: If ``vector_weight`` is NaN or infinite.
         """
         ...
 
