@@ -47,6 +47,7 @@ import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 import type { WasmModule, CollectionData, WasmVectorStore } from './wasm-types';
 import { requireWasmFieldsListed, requireWasmValueListed } from './wasm-capability-guards';
 import { validateSparse, writeSparse } from './wasm-sparse';
+import { validateCollectionName } from './shared';
 
 // Internal helpers
 import {
@@ -70,7 +71,6 @@ import {
   wasmHybridSearch,
   wasmMultiQuerySearch,
   wasmQuery,
-  isPureNearQuery,
 } from './wasm-search';
 
 // Unsupported-feature stubs (pre-Wave 4)
@@ -254,6 +254,9 @@ export class WasmBackend implements IVelesDBBackend {
 
   async createCollection(name: string, config: CollectionConfig): Promise<void> {
     this.ensureInitialized();
+    // Core's name rules, refused as REST refuses them (VELES-034), before
+    // the binding is handed a name it would throw on.
+    validateCollectionName(name);
     if (this.collections.has(name)) {
       throw new VelesDBError(`Collection '${name}' already exists`, 'COLLECTION_EXISTS');
     }
@@ -268,7 +271,13 @@ export class WasmBackend implements IVelesDBBackend {
     const dimension = config.dimension ?? 0;
     const metric = config.metric ?? 'cosine';
     const store = this.wasmModule!.VectorStore.new_with_mode(dimension, metric, mode);
-    this.velesql?.attach(name, store);
+    try {
+      this.velesql?.attach(name, store);
+    } catch (error) {
+      // No handle reaches the store but this one: free it, or it leaks.
+      store.free();
+      throw error;
+    }
     this.collections.set(name, {
       config: { ...config, metric },
       store,
@@ -486,7 +495,9 @@ export class WasmBackend implements IVelesDBBackend {
 
   async query(c: string, q: string, p?: Record<string, unknown>): Promise<QueryApiResponse> {
     this.ensureInitialized();
-    if (this.velesql && !isPureNearQuery(q)) {
+    // Every read-only SELECT the executor takes, the pure `NEAR` shape
+    // included: it returns core's rows, whatever the WHERE clause holds.
+    if (this.velesql) {
       if (!this.collections.has(c)) { throw new NotFoundError(`Collection '${c}'`); }
       const selected = this.velesql.trySelect(c, q, p);
       if (selected) { return selected; }

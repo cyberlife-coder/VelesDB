@@ -20,9 +20,10 @@
  * @packageDocumentation
  */
 
+import { parseVelesError } from '../errors';
 import { VelesDBError } from '../types';
 import type { QueryResponse } from '../types';
-import { describeWasmThrow, paramsJson } from './wasm-helpers';
+import { describeWasmThrow, paramsJson, tryRead } from './wasm-helpers';
 import { WasmGraph } from './wasm-graph';
 import type {
   WasmModule,
@@ -31,6 +32,9 @@ import type {
   WasmVelesQLDatabase,
   WasmVelesQLParser,
 } from './wasm-types';
+
+/** A core error code, as velesdb-wasm sets it on the `Error` it throws. */
+const VELES_CODE = /^VELES-\d{3}$/;
 
 /**
  * Whether the executor takes the statement: a `SELECT` the parser does not
@@ -62,9 +66,22 @@ export class WasmVelesQL {
     return new WasmVelesQL(db, mod.VelesQL);
   }
 
-  /** Share `store` with the executor as collection `name`. */
+  /**
+   * Share `store` with the executor as collection `name`. The binding's
+   * refusal keeps its core code (`error.code`, e.g. VELES-034 for a name core
+   * refuses) as the matching typed error; one without a code is
+   * `BAD_REQUEST`.
+   */
   attach(name: string, store: WasmVectorStore): void {
-    this.db.attachStore!(name, store);
+    try {
+      this.db.attachStore!(name, store);
+    } catch (error) {
+      const message = describeWasmThrow(error);
+      const code = tryRead(() => (error as { code?: unknown }).code).value;
+      throw typeof code === 'string' && VELES_CODE.test(code)
+        ? parseVelesError(code, message)
+        : new VelesDBError(message, 'BAD_REQUEST');
+    }
   }
 
   /**

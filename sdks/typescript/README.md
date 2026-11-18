@@ -698,6 +698,9 @@ Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, 
 >   A `SPARSE_NEAR` on a collection that was never given a sparse vector, or naming an index
 >   (`USING '<name>'`: WASM keeps only the default one), is refused as core refuses a missing index.
 >
+> A pure `NEAR` returns core's `SELECT *` rows on every binding, as REST does and as the same
+> statement with a `WHERE` does: the point `id` and its payload fields.
+>
 > Aggregations (`GROUP BY`, `COUNT`, …), `MATCH`, DDL and mutations through `query()`, and
 > every non-`NEAR` statement on a binding shipped before `attachStore`, throw `NOT_SUPPORTED`
 > instead of silently ignoring clauses. Accordingly, `db.capabilities().velesqlQuery` is `false` on WASM.

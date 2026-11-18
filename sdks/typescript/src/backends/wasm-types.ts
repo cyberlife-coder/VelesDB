@@ -319,6 +319,13 @@ export interface WasmModule {
 
   /** Fuse dense + sparse search results via Reciprocal Rank Fusion. */
   hybrid_search_fuse(...args: AllParams<typeof bindingHybridSearchFuse>): WasmSparseResult[];
+
+  /**
+   * Core's `fusion::dense_sparse_candidate_k`: how many of each branch's
+   * best points a hybrid dense + sparse search fuses when `limit` results
+   * are wanted. Declared by hand and optional: bindings before it lack it.
+   */
+  denseSparseCandidateK?(limit: number): number;
 }
 
 /** In-memory collection storage */

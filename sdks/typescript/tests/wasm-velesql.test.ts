@@ -12,6 +12,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
+import { InvalidCollectionNameError } from '../src/errors';
 import { VelesDBError } from '../src/types';
 
 const calls: string[] = [];
@@ -77,6 +78,7 @@ class MockWasmDatabase {
  */
 const PARSED: Record<string, { isSelect: boolean; isAggregation?: boolean; collectionName?: string }> = {
   "SELECT * FROM docs WHERE category = 'tech' LIMIT 10": { isSelect: true, isAggregation: false, collectionName: 'docs' },
+  'SELECT * FROM docs WHERE vector NEAR $v LIMIT 3': { isSelect: true, isAggregation: false, collectionName: 'docs' },
   'SELECT * FROM docs WHERE vector NEAR $v AND category = $c LIMIT 5': { isSelect: true, isAggregation: false, collectionName: 'docs' },
 "SELECT * FROM docs WHERE vector SPARSE_NEAR {7: 1.0} LIMIT 5": { isSelect: true, isAggregation: false, collectionName: 'docs' },
   'SELECT * FROM docs WHERE vector NEAR $v AND vector SPARSE_NEAR $s LIMIT 5': { isSelect: true, isAggregation: false, collectionName: 'docs' },
@@ -138,6 +140,45 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
     expect(db.attached.has('docs')).toBe(true);
   });
 
+  it('when the name is not a valid collection name, then it is refused with InvalidCollectionNameError before any store is built', async () => {
+    const backend = new WasmBackend();
+    await backend.init();
+    const build = vi.spyOn(MockVectorStore, 'new_with_mode');
+
+    await expect(backend.createCollection('bad.name', { dimension: 2 }))
+      .rejects.toBeInstanceOf(InvalidCollectionNameError);
+
+    expect(build).not.toHaveBeenCalled();
+    expect(MockWasmDatabase.last!.attachStore).not.toHaveBeenCalled();
+    build.mockRestore();
+  });
+
+  it('when the binding refuses to attach the store, then the store is freed and the refusal keeps its VELES code', async () => {
+    const backend = new WasmBackend();
+    await backend.init();
+    // velesdb-wasm throws an `Error` whose `code` property is core's code.
+    const refusal = Object.assign(new Error('[VELES-034] Invalid collection name'), { code: 'VELES-034' });
+    MockWasmDatabase.last!.attachStore.mockImplementationOnce(() => { throw refusal; });
+
+    const error = await backend.createCollection('docs', { dimension: 2 }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(InvalidCollectionNameError);
+    expect((error as InvalidCollectionNameError).message).toBe('[VELES-034] Invalid collection name');
+    expect(calls).toEqual(['store.free']);
+    expect(await backend.getCollection('docs')).toBeNull();
+  });
+
+  it('when the binding refuses to attach with a bare string, then the store is freed and the refusal is BAD_REQUEST', async () => {
+    const backend = new WasmBackend();
+    await backend.init();
+    MockWasmDatabase.last!.attachStore.mockImplementationOnce(() => { throw "Collection 'docs' already exists"; });
+
+    await expect(backend.createCollection('docs', { dimension: 2 }))
+      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: "Collection 'docs' already exists" });
+    expect(calls).toEqual(['store.free']);
+    expect(await backend.getCollection('docs')).toBeNull();
+  });
+
   it('when the collection is deleted, then the database drops it before the store is freed', async () => {
     const backend = await backendWithDocs();
 
@@ -189,12 +230,15 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
     expect(JSON.parse(json)).toEqual({ v: [1, 0], c: 'tech' });
   });
 
-  it('when the query is the pure NEAR shape, then it keeps the store.query fast path', async () => {
+  it('when the query is the pure NEAR shape, then the executor answers it too, with the rows a WHERE gets', async () => {
     const backend = await backendWithDocs();
+    const sql = 'SELECT * FROM docs WHERE vector NEAR $v LIMIT 3';
 
-    await backend.query('docs', 'SELECT * FROM docs WHERE vector NEAR $v LIMIT 3', { v: [1, 0] });
+    const response = await backend.query('docs', sql, { v: [1, 0] });
 
-    expect(MockWasmDatabase.last!.executeQuery).not.toHaveBeenCalled();
+    expect(MockWasmDatabase.last!.executeQuery).toHaveBeenCalledWith(sql, JSON.stringify({ v: [1, 0] }));
+    expect(MockWasmDatabase.last!.attached.get('docs')!.query).not.toHaveBeenCalled();
+    expect(response).toMatchObject({ results: [{ id: 1, category: 'tech' }], stats: { strategy: 'select' } });
   });
 
   it('when the SELECT targets another collection, then it is refused as BAD_REQUEST', async () => {

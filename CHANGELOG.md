@@ -518,6 +518,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
+  SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
+  the binding's VelesQL executor and returned `VectorStore.query`'s own
+  records (`{nodeId, vectorScore, graphScore, fusedScore, bindings,
+  columnData}`), while the same statement with `AND title = 'a'` returned
+  `{id, title}`, the row core's `SELECT *` projection writes and REST
+  returns. The executor now answers the pure `NEAR` shape too; on a binding
+  without one, the backend projects each record to the point `id` and its
+  payload fields.
+
+- **TypeScript SDK: a typed WASM dense + sparse search fuses as deep a
+  branch as core** (TypeScript SDK, WASM, 2026-11-18). `search(…, { k,
+  sparseVector })` fused the `k` best points of each branch, where core's
+  hybrid search and the binding's own `NEAR … AND SPARSE_NEAR` read
+  `dense_sparse_candidate_k(k)` (twice `k`, and at least `k + 10`), so a
+  point ranked second in both branches could lose to one ranked first in
+  one. velesdb-wasm now exports core's rule as `denseSparseCandidateK`, and
+  the SDK reads each branch that deep; a binding without the export keeps
+  `k` per branch.
+
+- **WASM: `multiQuerySearch` fuses as deep a branch as core** (WASM,
+  2026-11-18). `VectorStore.multi_query_search` read `k * 2` points per
+  query vector, where core's `Collection::multi_query_search` and the
+  binding's own `NEAR_FUSED` read `fusion::branch_depth(k)`, so with
+  `average` fusion a point near one query vector could outrank one close to
+  every query vector, which core ranks first. It now reads
+  `branch_depth(k)`; that depth saturates, so the largest `k` answers
+  instead of being refused as an overflow, and the fan-out memory guardrail
+  is unchanged.
+
+- **TypeScript SDK: an invalid WASM collection name is
+  `InvalidCollectionNameError`, and leaks no store** (TypeScript SDK,
+  2026-11-18). `createCollection('bad.name', …)` built the binding's
+  `VectorStore`, then let the executor's raw `Error` (VELES-034) escape, and
+  the store was never freed. The name is now checked with
+  `validateCollectionName` first, refused as REST refuses it; a store the
+  executor still refuses to attach is freed, and the refusal is the typed
+  error of its VELES code (`BAD_REQUEST` without one).
+
+- **TypeScript SDK: a WASM edge without an id is `BAD_REQUEST`**
+  (TypeScript SDK, 2026-11-18). `addEdge(…, { source: 1, target: 2,
+  label: 'L' })` threw a `TypeError` from inside `exactGraphId`. An edge id,
+  source or target that is neither a string nor a number is now refused with
+  `BAD_REQUEST` naming its type, as REST requires the id.
+
+- **Node: an argument whose array claims billions of elements is refused
+  instead of killing the process** (Node, 2026-11-18). The JSON reader
+  pre-allocated one slot per claimed element, so `const a = []; a.length =
+  2 ** 32 - 1` passed as metadata, a filter, a compile request, a working
+  context or a `recallWhere` value aborted Node on a failed allocation
+  (SIGABRT, uncatchable). The walk now counts at most 1,000,000 values per
+  argument, checked before anything is allocated, and rejects past it with
+  `INVALID_INPUT`.
+
+- **Node: metadata and filters keep only their own keys** (Node,
+  2026-11-18). The reader listed property names through the prototype
+  chain, so an enumerable key added to `Object.prototype` was stored in
+  every fact and added to every filter (which then matched nothing). Only
+  own enumerable string keys are read now, as `JSON.stringify` reads them.
+
+- **Node: an integer past `2^53` round-trips as a `BigInt`** (Node,
+  2026-11-18). The binding hands such an integer back as a `BigInt`, but
+  refused a `BigInt` on the way in and advised a decimal string, which never
+  equals the stored integer. A `BigInt` in `i64::MIN..=u64::MAX` is now read
+  losslessly as that integer, in metadata, filters and `recallWhere`
+  values; one outside the range is refused with `INVALID_INPUT`.
+
+- **Node: a key holding a NUL character is read like any other**
+  (Node, 2026-11-18). Each value was re-read by its key's text through a C
+  string, so `{ 'a\u0000b': 1 }` rejected with a generic error and no code.
+  Values are now read by the key itself.
+
+- **Node: `recallWhere` filters go through the same JSON reader** (Node,
+  2026-11-18). napi converted them field by field: a missing or `undefined`
+  `value` threw synchronously with no code, and a `Date` or `Map` value
+  became `{}`. Filters are now read as JSON data and checked as
+  `{field, op, value}`, rejecting with `INVALID_INPUT` naming the filter.
+
 - **Python: the type stub documents `hybrid_search`'s `ValueError`**
   (Python, 2026-11-18). The binding refuses a NaN or infinite
   `vector_weight` with `ValueError` since #2847, and its Rust docstring

@@ -26,7 +26,7 @@ import {
   requireWasmFieldsListed,
   requireWasmFilterSupport,
 } from './wasm-capability-guards';
-import { describeWasmThrow } from './wasm-helpers';
+import { describeWasmThrow, selectStarRow } from './wasm-helpers';
 import { sparseHits } from './wasm-sparse';
 import type {
   CollectionData,
@@ -58,6 +58,13 @@ function searchSparseOnly(
   );
 }
 
+/**
+ * Core's hybrid dense + sparse search: each branch's
+ * `dense_sparse_candidate_k(k)` best points, fused by RRF, the `k` best kept.
+ * The depth is core's own, read through the binding (`denseSparseCandidateK`,
+ * the rule VelesQL's `NEAR … AND SPARSE_NEAR` runs under too); a binding
+ * released before that export keeps its previous depth, `k` per branch.
+ */
 function searchHybridFusion(
   ctx: WasmContext,
   collection: ReturnType<WasmContext['getCollection']>,
@@ -67,15 +74,16 @@ function searchHybridFusion(
   k: number,
   quality: SearchQuality
 ): SearchResult[] {
+  const depth = ctx.wasmModule.denseSparseCandidateK?.(k) ?? k;
   const denseResults: WasmDenseResult[] = collection!.store.search_with_quality(
-    queryVector, k, quality
+    queryVector, depth, quality
   );
   // Ids go back to the binding as `BigInt`: exact past 2^53, unlike the
   // `Number(id)` this replaced, and read by every binding generation.
   const denseForFuse: Array<[bigint, number]> = denseResults.map(
     ([id, score]) => [BigInt(id), score]
   );
-  const sparseForFuse = sparseHits(collection!.store, indices, values, k);
+  const sparseForFuse = sparseHits(collection!.store, indices, values, depth);
 
   const fused: WasmSparseResult[] = ctx.wasmModule.hybrid_search_fuse(
     denseForFuse, sparseForFuse, 60, k
@@ -711,9 +719,10 @@ export async function wasmMultiQuerySearch(
 // ---------------------------------------------------------------------------
 
 /**
- * The only VelesQL shape the WASM backend can execute faithfully: a pure
- * top-k NEAR scan — `SELECT * FROM <collection> WHERE vector NEAR $param
- * [LIMIT n]` (case-insensitive, optional trailing semicolon).
+ * The only VelesQL shape the WASM backend executes on a binding without the
+ * VelesQL executor (`wasm-velesql.ts`): a pure top-k NEAR scan —
+ * `SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]`
+ * (case-insensitive, optional trailing semicolon).
  *
  * `vector` is the literal keyword from the grammar
  * (`vector_search = { ^"vector" ~ ^"NEAR" ~ vector_value }`), not a column
@@ -732,15 +741,6 @@ export async function wasmMultiQuerySearch(
 // match the same characters — unlike `;?` between two `\s*`.
 const PURE_NEAR_QUERY =
   /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)(?:\s+limit\s+(\d+))?\s*(?:;\s*)?$/i;
-
-/**
- * Whether `queryString` is the pure top-k `NEAR` shape `wasmQuery` answers
- * with `VectorStore.query()`; the backend sends every other read-only
- * `SELECT` to the VelesQL executor when the binding has one.
- */
-export function isPureNearQuery(queryString: string): boolean {
-  return PURE_NEAR_QUERY.test(queryString);
-}
 
 /**
  * The pure-NEAR shape with a LIMIT token that failed the grammar above:
@@ -852,13 +852,14 @@ export async function wasmQuery(
   );
   // `LIMIT 0` asks for no rows: there is nothing to ask the binding.
   const raw: Record<string, unknown>[] = k <= 0 ? [] : collection.store.query(queryVector, k);
+  const results = raw.map(selectStarRow);
 
   return {
-    results: raw,
+    results,
     stats: {
       executionTimeMs: 0,
       strategy: 'wasm-query',
-      scannedNodes: raw.length,
+      scannedNodes: results.length,
     },
   };
 }

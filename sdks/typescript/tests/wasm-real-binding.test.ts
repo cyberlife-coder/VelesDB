@@ -24,6 +24,9 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { VelesDB } from '../src/client';
 import { WasmBackend } from '../src/backends/wasm';
+import { InvalidCollectionNameError } from '../src/errors';
+import { VelesDBError } from '../src/types';
+import type { AddEdgeRequest } from '../src/types';
 
 const PKG = process.env.VELESDB_WASM_PKG;
 
@@ -388,5 +391,98 @@ describe.skipIf(!PKG)('VelesQL SPARSE_NEAR through the WASM backend, on the real
     const hybrid = await db.search('sp', Q, { k: 5, sparseVector: S });
     expect(hybrid.map(r => r.id)).toEqual(['3', '4', '5', '1', '2']);
     expect(hybrid.map(r => r.score)).toEqual(close([0.032002047, 0.031778056, 0.031498015, 0.016393442, 0.016129032]));
+  });
+});
+
+/**
+ * The typed searches and `query()` answer as core does for the same points:
+ * the same rows for the same statement shape, and the same per-branch
+ * depth before a fusion (each expected id is core's answer, see the
+ * comments and `store_search_tests.rs`).
+ */
+describe.skipIf(!PKG)('the WASM backend answers as core does, on the real binding', () => {
+  const db = new VelesDB({ backend: 'wasm' });
+
+  beforeAll(async () => {
+    await db.init();
+  });
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it('a pure NEAR returns the rows a NEAR with a WHERE does: the id and the payload columns', async () => {
+    await db.createCollection('shape', { dimension: 2, metric: 'cosine' });
+    await db.upsert('shape', { id: 1, vector: [1, 0], payload: { title: 'a' } });
+    await db.upsert('shape', { id: 2, vector: [0, 1], payload: { title: 'b' } });
+
+    const pure = await db.query('shape', 'SELECT * FROM shape WHERE vector NEAR $v LIMIT 1', { v: [1, 0] });
+    const filtered = await db.query(
+      'shape', "SELECT * FROM shape WHERE vector NEAR $v AND title = 'a' LIMIT 1", { v: [1, 0] }
+    );
+
+    expect('results' in filtered && filtered.results).toEqual([{ id: 1, title: 'a' }]);
+    expect('results' in pure && pure.results).toEqual([{ id: 1, title: 'a' }]);
+  });
+
+  it('a typed dense + sparse search fuses as deep a branch as VelesQL and core do', async () => {
+    // Dense ranking to [1, 0]: 1, 3, 4, 2. Sparse ranking of {1: 1}: 2, 3.
+    // Cut to k = 1 per branch, RRF ties 1 and 2 on one rank each; core reads
+    // `dense_sparse_candidate_k(1)` points per branch, where 3 ranks second
+    // in both and wins.
+    await db.createCollection('hyb', { dimension: 2, metric: 'cosine' });
+    await db.upsertBatch('hyb', [
+      { id: 1, vector: [1, 0], sparseVector: { 2: 1 } },
+      { id: 2, vector: [0, 1], sparseVector: { 1: 1 } },
+      { id: 3, vector: [0.9, 0.436], sparseVector: { 1: 0.5 } },
+      { id: 4, vector: [0.5, 0.5] },
+    ]);
+
+    const typed = await db.search('hyb', [1, 0], { k: 1, sparseVector: { 1: 1 } });
+    const velesql = await db.query(
+      'hyb', 'SELECT * FROM hyb WHERE vector NEAR $v AND vector SPARSE_NEAR $s LIMIT 1', { v: [1, 0], s: { 1: 1 } }
+    );
+
+    expect('results' in velesql && velesql.results.map(r => String(r.id))).toEqual(['3']);
+    expect(typed.map(r => r.id)).toEqual(['3']);
+  });
+
+  it('multiQuerySearch fuses as deep a branch as NEAR_FUSED and core do', async () => {
+    // Cosine to [1, 0] ranks 1, 4, 6, 3, …; to [0, 1] ranks 2, 5, 7, 3, ….
+    // Two points per branch leave 3 out, and 1 averages its one score
+    // (0.9988); core's `branch_depth(1)` keeps every point, and 3, at 0.707
+    // in both branches, has the best average.
+    await db.createCollection('mq', { dimension: 2, metric: 'cosine' });
+    await db.upsertBatch('mq', [
+      [1, [1, 0.05]], [2, [0.05, 1]], [3, [1, 1]], [4, [1, 0.3]],
+      [5, [0.3, 1]], [6, [1, 0.6]], [7, [0.6, 1]],
+    ].map(([id, vector]) => ({ id: id as number, vector: vector as number[] })));
+
+    const typed = await db.multiQuerySearch('mq', [[1, 0], [0, 1]], { k: 1, fusion: 'average' });
+    const velesql = await db.query(
+      'mq', "SELECT * FROM mq WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'average' LIMIT 1", { a: [1, 0], b: [0, 1] }
+    );
+
+    expect('results' in velesql && velesql.results.map(r => String(r.id))).toEqual(['3']);
+    expect(typed.map(r => r.id)).toEqual(['3']);
+  });
+
+  it('an invalid collection name is refused with InvalidCollectionNameError, as on REST', async () => {
+    await expect(db.createCollection('bad.name', { dimension: 2 }))
+      .rejects.toBeInstanceOf(InvalidCollectionNameError);
+    expect(await db.getCollection('bad.name')).toBeNull();
+  });
+
+  it('an edge without an id is BAD_REQUEST, as on REST, naming what it got', async () => {
+    await db.createCollection('edges', { dimension: 2, metric: 'cosine' });
+    await db.upsert('edges', { id: 1, vector: [1, 0] });
+    await db.upsert('edges', { id: 2, vector: [0, 1] });
+
+    for (const id of [undefined, null]) {
+      const edge = { id, source: 1, target: 2, label: 'L' } as unknown as AddEdgeRequest;
+      const error = await db.addEdge('edges', edge).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(VelesDBError);
+      expect(error).toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining(String(id)) });
+    }
   });
 });

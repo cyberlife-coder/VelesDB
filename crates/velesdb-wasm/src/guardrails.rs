@@ -98,18 +98,6 @@ pub(crate) fn check_fanout_memory(
     Ok(())
 }
 
-/// Doubles `k` for fused-search over-fetch, refusing a wrapped count.
-///
-/// `k * 2` wraps silently in release and panics in debug; the refusal is
-/// `Error::Overflow` — the request is unrepresentable, not merely large.
-pub(crate) fn checked_fanout_k(k: usize) -> Result<usize, velesdb_core::Error> {
-    k.checked_mul(2).ok_or_else(|| {
-        velesdb_core::Error::Overflow(format!(
-            "k = {k} overflows usize when doubled for fused over-fetch"
-        ))
-    })
-}
-
 #[cfg(test)]
 #[path = "guardrails_tests.rs"]
 mod tests;

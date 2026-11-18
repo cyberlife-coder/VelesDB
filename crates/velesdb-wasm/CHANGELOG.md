@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`multi_query_search` reads core's per-branch depth.** Each query
+  vector's branch held its `k * 2` best points, where core's
+  `Collection::multi_query_search` and `NEAR_FUSED` hold
+  `fusion::branch_depth(k)`, so the fused ranking could differ from core's.
+  It now reads `branch_depth(k)`; that depth saturates, so the largest `k`
+  answers instead of being refused as an overflow.
+
+- **`denseSparseCandidateK(limit)` exports core's hybrid branch depth.** A
+  caller fusing its own dense and sparse branches with `hybrid_search_fuse`
+  (the TypeScript SDK's typed hybrid search) reads core's
+  `fusion::dense_sparse_candidate_k` here, the depth `NEAR … AND
+  SPARSE_NEAR` already uses, instead of cutting each branch at `k`.
+
 - **`MemoryService` refuses a count it used to wrap.** `k`, `maxHops`,
   `ttlSeconds`, `fragmentIndex`, `reserveTokens` and `recallFused`'s `hops` /
   `pool` were `usize`/`u64` parameters, which `wasm-bindgen` coerces silently:
