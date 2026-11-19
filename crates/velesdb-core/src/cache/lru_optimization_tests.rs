@@ -6,7 +6,9 @@
 )]
 //! Optimization Tests for `LruCache` (US-CORE-003-14)
 //!
-//! Validates `LruCache` performance characteristics.
+//! Validates `LruCache` complexity-sensitive behavior. Timing assertions in
+//! the suite are `#[ignore]`d (manual runs); per-size cost is measured by the
+//! `LruCache-Baseline` group of `benches/concurrency_benchmark.rs`.
 //!
 //! # Implementation Notes
 //!
@@ -113,42 +115,24 @@ fn test_get_performance_scaling() {
     );
 }
 
-/// Test that peek (read-only) is faster than get.
+/// `peek` is the read-only lookup: unlike `get` it must not touch recency.
+/// (Its speed relative to `get` is a benchmark question, not a test one.)
 #[test]
-fn test_peek_faster_than_get() {
-    let cache: LruCache<u64, String> = LruCache::new(1000);
-
-    // Fill cache
-    for i in 0..1000 {
+fn test_peek_does_not_update_recency() {
+    let cache: LruCache<u64, String> = LruCache::new(3);
+    for i in 1..=3 {
         cache.insert(i, format!("value_{i}"));
     }
 
-    let ops = 10_000;
+    assert_eq!(cache.peek(&1), Some("value_1".to_string()));
+    cache.insert(4, "value_4".to_string());
 
-    // Measure peek time
-    let start = Instant::now();
-    for i in 0..ops {
-        let _ = cache.peek(&(i % 1000));
-    }
-    let peek_time = start.elapsed();
-
-    // Measure get time
-    let start = Instant::now();
-    for i in 0..ops {
-        let _ = cache.get(&(i % 1000));
-    }
-    let get_time = start.elapsed();
-
-    println!("Peek vs Get:");
-    println!("  Peek: {:?}", peek_time);
-    println!("  Get:  {:?}", get_time);
-    println!(
-        "  Ratio get/peek: {:.2}x",
-        get_time.as_nanos() as f64 / peek_time.as_nanos() as f64
+    assert_eq!(
+        cache.peek(&1),
+        None,
+        "peeked key stayed LRU and was evicted"
     );
-
-    // Peek should be faster (no recency update)
-    assert!(peek_time < get_time, "Peek should be faster than get");
+    assert_eq!(cache.peek(&2), Some("value_2".to_string()));
 }
 
 /// Test eviction performance scaling.
@@ -195,42 +179,31 @@ fn test_eviction_performance_scaling() {
     );
 }
 
-/// Test move_to_back is O(1).
+/// `get` moves the key to the MRU end at every size the per-size benchmark
+/// covers (`concurrency_benchmark`, `LruCache-Baseline/get_hit`), so the key
+/// outlives every other resident through a full turnover of the cache.
+///
+/// This replaces a wall-clock ratio that claimed O(1) for move-to-back. It
+/// timed `get(&0)` repeatedly, which after the first call hits the key already
+/// at the back — the one position where `shift_remove` is O(1) — and in
+/// general `get` is O(n), as the `lru` module documents.
 #[test]
-fn test_move_to_back_o1_complexity() {
-    let sizes = [100, 1_000, 10_000];
-    let mut times_per_op = vec![];
-
-    for &size in &sizes {
+fn test_get_moves_key_to_mru_at_every_size() {
+    for size in [100usize, 1_000, 10_000] {
         let cache: LruCache<u64, String> = LruCache::new(size);
-
-        // Fill cache
-        for i in 0..size as u64 {
+        let size_u64 = size as u64;
+        for i in 0..size_u64 {
             cache.insert(i, format!("value_{i}"));
         }
 
-        // Measure get (which calls move_to_back internally)
-        let ops = 500;
-        let start = Instant::now();
-        for _ in 0..ops {
-            // Access key 0 repeatedly - forces move_to_back each time
-            let _ = cache.get(&0);
+        assert!(cache.get(&0).is_some());
+        // size - 1 new keys evict exactly the size - 1 keys older than 0.
+        for i in size_u64..(2 * size_u64 - 1) {
+            cache.insert(i, format!("value_{i}"));
         }
-        let elapsed = start.elapsed();
-        let time_per_op = elapsed.as_nanos() as f64 / ops as f64;
-        times_per_op.push((size, time_per_op));
+
+        assert_eq!(cache.stats().evictions, size_u64 - 1, "size={size}");
+        assert!(cache.peek(&0).is_some(), "size={size}: MRU key evicted");
+        assert!(cache.peek(&1).is_none(), "size={size}: LRU key survived");
     }
-
-    let ratio = times_per_op[2].1 / times_per_op[0].1;
-
-    println!("Move-to-back complexity test:");
-    for (size, time) in &times_per_op {
-        println!("  size={size}: {time:.1} ns/move");
-    }
-    println!("  Ratio 10K/100: {ratio:.1}x");
-
-    assert!(
-        ratio < 10.0,
-        "Move-to-back is not O(1): ratio={ratio:.1}x (should be < 10x)"
-    );
 }

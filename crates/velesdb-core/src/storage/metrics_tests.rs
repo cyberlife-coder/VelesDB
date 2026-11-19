@@ -231,17 +231,24 @@ fn test_timing_guard_records_elapsed() {
     let recorded_clone = recorded.clone();
 
     // Act
+    let outer = std::time::Instant::now();
     {
         let _guard = TimingGuard::new(move |d| {
             *recorded_clone.lock() = d;
         });
         thread::sleep(Duration::from_millis(10));
     }
+    let outer_elapsed = outer.elapsed();
 
-    // Assert - Should have recorded ~10ms
+    // Assert - bracketed, not bounded by a constant: `sleep` never returns
+    // early, and the guard's span lies inside the outer one on the same
+    // monotonic clock. A fixed ceiling would only measure the runner.
     let elapsed = *recorded.lock();
-    assert!(elapsed >= Duration::from_millis(5)); // Allow some slack
-    assert!(elapsed < Duration::from_millis(100)); // But not too much
+    assert!(elapsed >= Duration::from_millis(10), "recorded {elapsed:?}");
+    assert!(
+        elapsed <= outer_elapsed,
+        "recorded {elapsed:?} exceeds the enclosing {outer_elapsed:?}"
+    );
 }
 
 // =============================================================================

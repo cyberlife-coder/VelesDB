@@ -218,8 +218,15 @@ mod ecommerce_search {
         assert_eq!(results[0].point.id, 1, "First result should be exact match");
     }
 
+    /// Latency is not asserted here. A single 128-d search over 1 000 points
+    /// costs about 1 ms in the unoptimized test profile, first call included
+    /// (no lazy init: nothing is spawned by `open`/`upsert`, and the GPU route
+    /// starts at 500 000 vectors), so a wall-clock bound on one sample only
+    /// measures the runner — one failed at 128 ms on a PR that did not touch
+    /// search. Search latency is gated by `perf-smoke`
+    /// (`smoke_search/10k_k10/128d`, regression-compared against a baseline).
     #[test]
-    fn test_batch_product_indexing_performance() {
+    fn test_batch_product_indexing_finds_exact_match() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db = Database::open(temp_dir.path()).expect("Failed to open database");
 
@@ -238,19 +245,22 @@ mod ecommerce_search {
         collection.upsert(points).expect("Failed to upsert");
         assert_eq!(collection.len(), 1000);
 
-        // Search should be fast
-        let start = std::time::Instant::now();
+        // The query is product 500's own embedding.
         let query: Vec<f32> = (0..128)
             .map(|i| (500.0 * 0.1 + i as f32 * 0.01).cos())
             .collect();
         let results = collection.search(&query, 10).expect("Search failed");
-        let duration = start.elapsed();
 
         assert_eq!(results.len(), 10);
+        assert_eq!(results[0].point.id, 500, "nearest is the indexed twin");
         assert!(
-            duration.as_millis() < 100,
-            "Search should complete in <100ms, took {:?}",
-            duration
+            (results[0].score - 1.0).abs() < 1e-4,
+            "cosine of a vector with itself, got {}",
+            results[0].score
+        );
+        assert!(
+            results.windows(2).all(|w| w[0].score >= w[1].score),
+            "results are ranked best first"
         );
     }
 }
