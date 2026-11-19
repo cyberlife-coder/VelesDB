@@ -273,6 +273,88 @@ fn test_lockfree_cache_remove_racing_l1_demotion_does_not_resurrect() {
     }
 }
 
+/// A cache whose keys `0..VICTIMS` sit in L2 only: inserted, then pushed
+/// out of an L1 of capacity `VICTIMS` by as many fresh keys.
+fn cache_with_victims_in_l2_only() -> Arc<LockFreeLruCache<u64, u64>> {
+    let cache = Arc::new(LockFreeLruCache::new(VICTIMS as usize, 10_000));
+    for key in 0..VICTIMS {
+        cache.insert(key, key);
+    }
+    for key in 1_000..1_000 + VICTIMS {
+        cache.insert(key, key);
+    }
+    cache
+}
+
+const VICTIMS: u64 = 8;
+
+/// A promotion must not resurrect a key that a concurrent `remove`
+/// deleted: a `get` that read the key from L2 before the removal must not
+/// put it back into L1 after the removal returned.
+#[test]
+fn test_lockfree_cache_remove_racing_l2_promotion_does_not_resurrect() {
+    for round in 0..500_u64 {
+        let cache = cache_with_victims_in_l2_only();
+        let readers: Vec<_> = (0..3)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                thread::spawn(move || {
+                    for key in (0..VICTIMS).cycle().take(64) {
+                        let _ = cache.get(&key);
+                    }
+                })
+            })
+            .collect();
+        for key in 0..VICTIMS {
+            cache.remove(&key);
+        }
+        for handle in readers {
+            handle.join().expect("reader panicked");
+        }
+
+        for key in 0..VICTIMS {
+            assert!(
+                cache.peek_l1(&key).is_none() && cache.peek_l2(&key).is_none(),
+                "round {round}: removed key {key} was promoted back"
+            );
+        }
+    }
+}
+
+/// A promotion must not overwrite a newer insert: once `insert(k, new)`
+/// has returned, a `get` that read the old value from L2 before it must
+/// not put that old value into L1.
+#[test]
+fn test_lockfree_cache_promotion_never_overwrites_a_newer_insert() {
+    for round in 0..500_u64 {
+        let cache = cache_with_victims_in_l2_only();
+        let readers: Vec<_> = (0..3)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                thread::spawn(move || {
+                    for key in (0..VICTIMS).cycle().take(64) {
+                        let _ = cache.get(&key);
+                    }
+                })
+            })
+            .collect();
+        for key in 0..VICTIMS {
+            cache.insert(key, key + 100);
+        }
+        for handle in readers {
+            handle.join().expect("reader panicked");
+        }
+
+        for key in 0..VICTIMS {
+            assert_eq!(
+                cache.get(&key),
+                Some(key + 100),
+                "round {round}: key {key} lost its newer value to a promotion"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_lockfree_cache_l2_promotion_refreshes_l1_recency() {
     let cache: LockFreeLruCache<u64, String> = LockFreeLruCache::new(2, 100);

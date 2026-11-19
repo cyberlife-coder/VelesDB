@@ -8,13 +8,20 @@
 //! # Tier relationship
 //!
 //! Inserts write through to both tiers, and an L2 hit promotes the entry to
-//! L1. An L1 hit stays lock-free and does not touch L2, so a key served from
-//! L1 alone ages in L2 and may be evicted there while it is hot. When L1
+//! L1. An L1 hit takes only its `DashMap` shard's read lock and does not
+//! touch L2, so a key served from L1 alone ages in L2 and may be evicted
+//! there while it is hot. When L1
 //! evicts an entry, it demotes it to L2's MRU position (re-inserting it if
 //! L2 had dropped it). Every access goes through L1, so keys leave L1 in
 //! last-access order (up to the ties described under "L1 recency"), and
 //! L2's order among the keys outside L1 is their last-access order: L2 acts
 //! as L1's victim cache.
+//!
+//! Every operation on one key that touches L2 (a promotion, a demotion,
+//! `remove`) holds that key's L1 shard write lock across its L2 access, so
+//! the three are serialised per key: a promotion cannot bring back a key
+//! that `remove` deleted, nor put an older value over a newer `insert`.
+//! Lock order: L1 shard, then `LruCache.inner`.
 //!
 //! # L1 recency
 //!
@@ -42,14 +49,16 @@
 //!
 //! | Operation | L1 Hit | L1 Miss + L2 Hit |
 //! |-----------|--------|------------------|
-//! | `get()` | lock-free, stamp refresh if stale | L2, then promotion to L1 |
+//! | `get()` | shard read lock, stamp refresh if stale | shard write lock, L2, promotion to L1 |
 //! | `peek()` | L1 only | N/A |
 //! | `insert()` | write-through | - |
 //! | `remove()` | L1 + L2 | L1 + L2 (`LruCache::remove`, order-preserving) |
 //!
 //! When an insert or a promotion takes L1 over capacity, choosing the victim
-//! scans L1, O(L1 capacity), and demoting it is one L2 insert (O(L2
-//! capacity) under the L2 write lock), per evicted entry.
+//! scans L1, O(L1 capacity), and demoting it is one L2 insert, per evicted
+//! entry. That insert is O(L2 capacity) while `LruCache` shifts its
+//! `IndexMap`, and runs under the victim's shard write lock: L1 hits on that
+//! shard wait for it.
 
 // Reason: Numeric casts in cache metrics are intentional:
 // - All casts are for hit rate calculations and statistics
@@ -201,17 +210,37 @@ where
             self.l1_hits.fetch_add(1, Ordering::Relaxed);
             return Some(entry.value.clone());
         }
+        self.get_from_l2(key)
+    }
 
-        // Slow path: L2 lookup
-        if let Some(value) = self.l2.get(key) {
-            self.l2_hits.fetch_add(1, Ordering::Relaxed);
-            // Promote to L1
-            self.promote_to_l1(key.clone(), value.clone());
-            return Some(value);
-        }
-
-        self.misses.fetch_add(1, Ordering::Relaxed);
-        None
+    /// The slow path of [`get`](Self::get): looks `key` up in L2 and promotes
+    /// it to L1, under the key's L1 shard write lock.
+    ///
+    /// Holding that lock across the L2 read and the L1 insert serialises the
+    /// promotion with `remove`, `insert` and the demotion of the same key,
+    /// which all take it first. Read outside it, an L2 value could be
+    /// promoted after a `remove` or `insert` of the key had returned,
+    /// resurrecting the key or replacing its newer value with an older one.
+    fn get_from_l2(&self, key: &K) -> Option<V> {
+        let value = match self.l1.entry(key.clone()) {
+            // Inserted or promoted since the L1 lookup above: an L1 hit.
+            Entry::Occupied(slot) => {
+                slot.get().touch(self.now());
+                self.l1_hits.fetch_add(1, Ordering::Relaxed);
+                return Some(slot.get().value.clone());
+            }
+            Entry::Vacant(slot) => {
+                let Some(value) = self.l2.get(key) else {
+                    self.misses.fetch_add(1, Ordering::Relaxed);
+                    return None;
+                };
+                slot.insert(L1Entry::new(value.clone(), self.advance_clock()));
+                value
+            }
+        };
+        self.l2_hits.fetch_add(1, Ordering::Relaxed);
+        self.maybe_evict_l1();
+        Some(value)
     }
 
     /// Peek at L1 only (ultra-fast, no promotion).
@@ -246,16 +275,22 @@ where
 
     /// Remove a key from both L1 and L2.
     ///
-    /// L1 first: a demotion of this key holds its L1 shard lock until its
-    /// L2 copy is written, so the L2 removal that follows deletes that copy.
+    /// Both removals run under the key's L1 shard write lock, which a
+    /// promotion and a demotion of the key also hold across their L2 access:
+    /// either one completes before the removal, which then deletes what it
+    /// wrote, or it runs after and no longer finds the key.
     pub fn remove(&self, key: &K) {
-        self.l1.remove(key);
+        let slot = self.l1.entry(key.clone());
         self.l2.remove(key);
+        if let Entry::Occupied(slot) = slot {
+            slot.remove();
+        }
     }
 
     /// Clear both L1 and L2.
     ///
-    /// L1 first, for the same reason as [`remove`](Self::remove).
+    /// Not atomic with respect to a concurrent promotion or demotion: one
+    /// that runs between the two clears can leave its key behind.
     pub fn clear(&self) {
         self.l1.clear();
         self.l2.clear();
@@ -298,13 +333,6 @@ where
         self.clock.fetch_add(2, Ordering::Relaxed) + 1
     }
 
-    /// Promote a key from L2 to L1 as its most recently used entry.
-    fn promote_to_l1(&self, key: K, value: V) {
-        self.l1
-            .insert(key, L1Entry::new(value, self.advance_clock()));
-        self.maybe_evict_l1();
-    }
-
     /// Demote least recently used L1 entries to L2 while L1 is over capacity.
     ///
     /// Bounded to [`MAX_L1_EVICTION_PASSES`] so contention cannot make the
@@ -330,11 +358,11 @@ where
     /// refreshed its stamp since it was chosen: the entry then stays, and the
     /// next pass picks the new oldest one.
     ///
-    /// Both steps run under the victim's L1 shard write lock, which
-    /// `remove` and `clear` take before touching L2: they either find the
-    /// victim still in L1, or run after the demotion and delete its L2 copy.
-    /// A removed key is never re-inserted into L2. Lock order: L1 shard,
-    /// then `LruCache.inner`.
+    /// Both steps run under the victim's L1 shard write lock, which `remove`
+    /// holds across its L2 removal: it either finds the victim still in L1,
+    /// or runs after the demotion and deletes its L2 copy, so a removed key
+    /// is never re-inserted into L2. Lock order: L1 shard, then
+    /// `LruCache.inner`.
     fn demote_to_l2(&self, victim: K, stamp: u64) {
         if let Entry::Occupied(slot) = self.l1.entry(victim) {
             if slot.get().last_access() == stamp {

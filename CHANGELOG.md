@@ -570,9 +570,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recently than what L2 kept. L1 now demotes each eviction victim to L2's
   most recently used position, re-inserting it if L2 had dropped it, so
   L2 orders the keys outside L1 by last access. The L1 hit path is
-  unchanged and stays lock-free. The demotion writes L2 under the
-  victim's L1 shard lock, which `remove` and `clear` take first, so it
-  never re-inserts a key a concurrent `remove` deleted.
+  unchanged. Promotion, demotion and `remove` of one key now hold that
+  key's L1 shard lock across their L2 access, so they are serialised per
+  key. Before, an L2 hit read L2 and promoted outside any lock: racing a
+  `remove`, it put the deleted key back into L1, and racing an `insert`,
+  it replaced the newer value with the older one it had read.
+
+- **Core: a zero-capacity `LruCache` stores nothing** (core, 2026-11-19).
+  `LruCache::new(0)` kept one entry, since eviction only runs on a
+  non-empty map; `LockFreeLruCache::new(n, 0)` inherited it in its L2.
 
 - **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
   SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped

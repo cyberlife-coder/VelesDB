@@ -92,6 +92,16 @@ fn test_lru_cache_access_updates_recency() {
 }
 
 #[test]
+fn test_lru_cache_with_zero_capacity_holds_nothing() {
+    let cache: LruCache<u64, String> = LruCache::new(0);
+
+    cache.insert(1, "one".to_string());
+
+    assert!(cache.is_empty(), "a zero-capacity cache must stay empty");
+    assert_eq!(cache.peek(&1), None);
+}
+
+#[test]
 fn test_lru_cache_remove_preserves_recency_order() {
     let cache: LruCache<u64, String> = LruCache::new(3);
 

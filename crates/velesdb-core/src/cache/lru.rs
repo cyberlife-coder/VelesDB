@@ -110,6 +110,11 @@ where
     /// move-to-back of an existing key and the eviction of the front entry
     /// shift the remaining entries.
     pub fn insert(&self, key: K, value: V) {
+        // A zero-capacity cache stores nothing: the eviction below only runs
+        // on a non-empty map, so the entry would otherwise stay.
+        if self.capacity == 0 {
+            return;
+        }
         let mut inner = self.inner.write();
 
         // Check if key already exists - if so, remove and re-insert to move to back
