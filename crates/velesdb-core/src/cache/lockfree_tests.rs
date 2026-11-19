@@ -91,6 +91,28 @@ fn test_lockfree_cache_remove() {
 }
 
 #[test]
+fn test_lockfree_cache_remove_preserves_l2_recency_order() {
+    let cache: LockFreeLruCache<u64, String> = LockFreeLruCache::new(100, 3);
+
+    cache.insert(1, "value_1".to_string());
+    cache.insert(2, "value_2".to_string());
+    cache.insert(3, "value_3".to_string());
+
+    cache.remove(&1);
+    cache.insert(4, "value_4".to_string());
+    cache.insert(5, "value_5".to_string());
+
+    // L2 is the capacity tier: its eviction must pick 2, the oldest survivor.
+    assert!(
+        cache.peek_l2(&2).is_none(),
+        "the oldest L2 entry must be evicted"
+    );
+    assert!(cache.peek_l2(&3).is_some());
+    assert!(cache.peek_l2(&4).is_some());
+    assert!(cache.peek_l2(&5).is_some());
+}
+
+#[test]
 fn test_lockfree_cache_clear() {
     let cache: LockFreeLruCache<u64, String> = LockFreeLruCache::new(100, 1000);
 

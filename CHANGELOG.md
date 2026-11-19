@@ -518,6 +518,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Core: `LruCache::remove` keeps the recency order** (core, 2026-11-19).
+  `remove` used `IndexMap::swap_remove`, which moves the most recently used
+  entry into the removed key's slot, so after a removal the MRU entry could
+  sit at the front and be the next one evicted. It now uses `shift_remove`
+  (order-preserving, O(n) instead of O(1)), so eviction always picks the
+  least recently used entry. `LockFreeLruCache::remove` delegates to it for
+  its L2 tier and inherits the fix; the query plan cache only ever clears,
+  so no shipped path hit the defect. The module docs now state the real cost
+  of every operation instead of claiming O(1) throughout.
+
 - **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
   SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
   the binding's VelesQL executor and returned `VectorStore.query`'s own

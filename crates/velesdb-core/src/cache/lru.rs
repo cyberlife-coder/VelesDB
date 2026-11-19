@@ -1,16 +1,22 @@
 //! LRU Cache implementation for `VelesDB`.
 //!
-//! Thread-safe LRU cache with O(1) operations using `IndexMap`.
+//! Thread-safe LRU cache backed by an insertion-ordered `IndexMap`
+//! (front = LRU, back = MRU). Lookups hash in O(1); every operation that
+//! must keep the recency order intact shifts the tail, which is O(n).
 //! Based on arXiv:2310.11703v2 recommendations.
 //!
 //! # Performance (US-CORE-003-14)
 //!
 //! | Operation | Complexity | Notes |
 //! |-----------|------------|-------|
-//! | insert | O(1) | Amortized |
-//! | get | O(n) | With recency update (shift_remove) |
-//! | remove | O(1) | swap_remove |
-//! | eviction | O(1) | shift_remove from front |
+//! | insert (new key) | O(1) / O(n) | O(1) append below capacity; O(n) when full (`shift_remove_index(0)` eviction) |
+//! | insert (existing key) | O(n) | `shift_remove` + append (moves to MRU) |
+//! | get | O(n) | `shift_remove_full` + append (moves to MRU) |
+//! | peek | O(1) | Read lock, no recency update |
+//! | remove | O(n) | `shift_remove`: order-preserving, so eviction stays LRU |
+//!
+//! `swap_remove` is O(1) but moves the MRU entry into the freed slot, which
+//! corrupts the recency order; no path here may use it.
 
 #![allow(clippy::cast_precision_loss)] // Precision loss acceptable for hit rate calculation
 
@@ -43,10 +49,10 @@ impl CacheStats {
     }
 }
 
-/// Thread-safe LRU cache with O(1) operations.
+/// Thread-safe LRU cache.
 ///
-/// Uses `IndexMap` internally which preserves insertion order
-/// and provides O(1) access, making move-to-back operations efficient.
+/// Uses `IndexMap` internally: its insertion order is the recency order
+/// (front = LRU, back = MRU). See the module docs for per-operation costs.
 pub struct LruCache<K, V>
 where
     K: Hash + Eq + Clone,
@@ -100,7 +106,9 @@ where
 
     /// Insert a key-value pair, evicting LRU entry if at capacity.
     ///
-    /// O(1) amortized complexity.
+    /// O(1) for a new key below capacity. O(n) otherwise: both the
+    /// move-to-back of an existing key and the eviction of the front entry
+    /// shift the remaining entries.
     pub fn insert(&self, key: K, value: V) {
         let mut inner = self.inner.write();
 
@@ -156,10 +164,11 @@ where
 
     /// Remove a key from the cache.
     ///
-    /// O(1) complexity using `swap_remove` (doesn't preserve order of other elements).
+    /// O(n): `shift_remove` keeps the relative order of the remaining
+    /// entries, so the next eviction still picks the least recently used one.
     pub fn remove(&self, key: &K) {
         let mut inner = self.inner.write();
-        inner.swap_remove(key);
+        inner.shift_remove(key);
     }
 
     /// Clear all entries.

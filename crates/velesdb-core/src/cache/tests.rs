@@ -91,6 +91,29 @@ fn test_lru_cache_access_updates_recency() {
     assert_eq!(cache.get(&4), Some("four".to_string()));
 }
 
+#[test]
+fn test_lru_cache_remove_preserves_recency_order() {
+    let cache: LruCache<u64, String> = LruCache::new(3);
+
+    cache.insert(1, "one".to_string());
+    cache.insert(2, "two".to_string());
+    cache.insert(3, "three".to_string());
+
+    // Removing the LRU entry must not reorder the survivors: 2 stays LRU, 3 MRU.
+    cache.remove(&1);
+    cache.insert(4, "four".to_string());
+
+    // Full again: inserting 5 must evict 2, the oldest surviving entry.
+    cache.insert(5, "five".to_string());
+
+    // `peek` asserts without touching recency.
+    assert_eq!(cache.peek(&2), None, "the oldest entry must be evicted");
+    assert_eq!(cache.peek(&3), Some("three".to_string()));
+    assert_eq!(cache.peek(&4), Some("four".to_string()));
+    assert_eq!(cache.peek(&5), Some("five".to_string()));
+    assert_eq!(cache.stats().evictions, 1);
+}
+
 // ========== Cache Stats Tests ==========
 
 #[test]
