@@ -1,6 +1,6 @@
 //! LRU Cache implementation for `VelesDB`.
 //!
-//! Thread-safe LRU cache with O(1) operations over [`LruList`].
+//! Thread-safe LRU cache with O(1) operations over `LruList`.
 //! Based on arXiv:2310.11703v2 recommendations.
 //!
 //! # Performance (US-CORE-003-14)
@@ -47,7 +47,7 @@ impl CacheStats {
 
 /// Thread-safe LRU cache with O(1) operations.
 ///
-/// Recency is kept by an index-linked list plus a key index ([`LruList`]),
+/// Recency is kept by an index-linked list plus a key index (`LruList`),
 /// so promote, evict and remove never shift other entries.
 pub struct LruCache<K, V>
 where
