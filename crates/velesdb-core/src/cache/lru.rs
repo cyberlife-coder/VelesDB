@@ -7,7 +7,7 @@
 //!
 //! | Operation | Complexity | Notes |
 //! |-----------|------------|-------|
-//! | insert | O(1) | Storage allocated once, at construction |
+//! | insert | O(1) | Amortized: nodes allocated once, hash index rehashes tombstones |
 //! | get | O(1) | With recency update (list relink) |
 //! | remove | O(1) | Recency order of the others preserved |
 //! | eviction | O(1) | LRU node reused in place by the incoming entry |
@@ -98,7 +98,8 @@ where
 
     /// Insert a key-value pair, evicting LRU entry if at capacity.
     ///
-    /// O(1): storage is allocated up front and the evicted node is reused.
+    /// O(1) amortized: nodes are allocated up front and the evicted node is
+    /// reused; only the hash index occasionally rehashes (see `LruList`).
     pub fn insert(&self, key: K, value: V) {
         let evicted = self.inner.write().insert(key, value);
         if evicted {

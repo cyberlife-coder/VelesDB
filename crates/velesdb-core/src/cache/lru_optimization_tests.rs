@@ -27,50 +27,77 @@ fn test_peek_does_less_work_than_get() {
     assert!(peek < get, "peek touched {peek} nodes, get {get}");
 }
 
-/// Per-op time of the fastest batch of `get` calls on the LRU (front) key.
+const SMALL: u64 = 100;
+const LARGE: u64 = 10_000;
+/// An O(n) operation costs ~100x more at `LARGE` than at `SMALL`; an O(1) one
+/// stays within cache-locality noise (~1-2x).
+const MAX_RATIO: f64 = 10.0;
+
+/// A full cache holding keys `0..size`, oldest first.
+fn full_cache(size: u64) -> LruCache<u64, u64> {
+    let cache = LruCache::new(size as usize);
+    (0..size).for_each(|i| cache.insert(i, i));
+    cache
+}
+
+/// Fastest per-op batch time at `LARGE` divided by the one at `SMALL`.
 ///
-/// Reading keys in insertion order always hits the current LRU entry, the
-/// worst position for a move-to-back that shifts the entries behind it.
-fn min_ns_per_lru_get(cache: &LruCache<u64, u64>, size: u64, next_key: &mut u64) -> f64 {
-    const BATCH: u32 = 32;
-    let start = Instant::now();
-    for _ in 0..BATCH {
-        let _ = cache.get(&(*next_key % size));
-        *next_key += 1;
+/// `op(cache, size, n)` runs the n-th operation on a full cache of `size`.
+/// Load-robust by construction: the sizes are sampled interleaved, so both see
+/// the same machine conditions, and only the fastest batch per size counts —
+/// preemption and contention can only slow a batch down, never speed it up.
+/// The minimum also leaves out the hash index's occasional in-place tombstone
+/// rehash, which is amortized O(1) and not what these tests guard.
+fn fastest_batch_ratio(label: &str, op: impl Fn(&LruCache<u64, u64>, u64, u64)) -> f64 {
+    const BATCH: u64 = 32;
+    const REPETITIONS: usize = 200;
+    let sizes = [SMALL, LARGE];
+    let caches = sizes.map(full_cache);
+    let mut next = [0_u64; 2];
+    let mut best = [f64::MAX; 2];
+    for _ in 0..REPETITIONS {
+        for i in 0..2 {
+            let start = Instant::now();
+            for _ in 0..BATCH {
+                op(&caches[i], sizes[i], next[i]);
+                next[i] += 1;
+            }
+            best[i] = best[i].min(start.elapsed().as_nanos() as f64 / BATCH as f64);
+        }
     }
-    start.elapsed().as_nanos() as f64 / f64::from(BATCH)
+    let ratio = best[1] / best[0].max(1.0);
+    println!(
+        "{label} min ns/op: size={SMALL}: {:.1}, size={LARGE}: {:.1}, ratio {ratio:.1}x",
+        best[0], best[1]
+    );
+    ratio
 }
 
 /// Move-to-back must not scale with the cache size (black-box guard).
 ///
-/// Load-robust by construction: sizes are sampled interleaved, so both see the
-/// same machine conditions, and only the fastest batch per size is compared —
-/// preemption and contention can only slow a batch down, never speed it up.
-/// An O(n) move-to-back costs ~100x more at 10 000 than at 100 entries, an
-/// O(1) one stays within cache-locality noise (~1-2x), hence the 10x bound.
+/// Reading keys in insertion order always hits the current LRU entry, the
+/// worst position for a move-to-back that shifts the entries behind it.
 #[test]
 fn test_move_to_back_time_is_size_independent() {
-    const SMALL: u64 = 100;
-    const LARGE: u64 = 10_000;
-    const REPETITIONS: usize = 200;
-
-    let small: LruCache<u64, u64> = LruCache::new(SMALL as usize);
-    let large: LruCache<u64, u64> = LruCache::new(LARGE as usize);
-    (0..SMALL).for_each(|i| small.insert(i, i));
-    (0..LARGE).for_each(|i| large.insert(i, i));
-
-    let (mut next_small, mut next_large) = (0, 0);
-    let (mut best_small, mut best_large) = (f64::MAX, f64::MAX);
-    for _ in 0..REPETITIONS {
-        best_small = best_small.min(min_ns_per_lru_get(&small, SMALL, &mut next_small));
-        best_large = best_large.min(min_ns_per_lru_get(&large, LARGE, &mut next_large));
-    }
-
-    let ratio = best_large / best_small.max(1.0);
-    println!("move-to-back min ns/op: size={SMALL}: {best_small:.1}, size={LARGE}: {best_large:.1}, ratio {ratio:.1}x");
+    let ratio = fastest_batch_ratio("move-to-back", |cache, size, n| {
+        let _ = cache.get(&(n % size));
+    });
     assert!(
-        ratio < 10.0,
-        "move-to-back scales with size: ratio={ratio:.1}x (O(1) expected, bound 10x)"
+        ratio < MAX_RATIO,
+        "move-to-back scales with size: ratio={ratio:.1}x (O(1) expected)"
+    );
+}
+
+/// Eviction must not scale with the cache size (black-box guard).
+///
+/// Each insert brings a key never seen before into a full cache, so every one
+/// evicts the current LRU entry.
+#[test]
+fn test_eviction_time_is_size_independent() {
+    let ratio = fastest_batch_ratio("eviction", |cache, size, n| cache.insert(size + n, n));
+    assert!(
+        ratio < MAX_RATIO,
+        "eviction scales with size: ratio={ratio:.1}x (O(1) expected)"
     );
 }
 
@@ -81,8 +108,7 @@ fn test_move_to_back_time_is_size_independent() {
 #[test]
 fn test_recency_operations_touch_constant_nodes() {
     let touches_at = |size: u64| {
-        let cache: LruCache<u64, u64> = LruCache::new(size as usize);
-        (0..size).for_each(|i| cache.insert(i, i));
+        let cache = full_cache(size);
         [
             cache.nodes_touched_by(|c| {
                 let _ = c.get(&0); // LRU front -> MRU back
@@ -93,8 +119,8 @@ fn test_recency_operations_touch_constant_nodes() {
         ]
     };
 
-    let small = touches_at(100);
-    let large = touches_at(10_000);
+    let small = touches_at(SMALL);
+    let large = touches_at(LARGE);
 
     assert!(
         small.iter().all(|&t| t > 0),

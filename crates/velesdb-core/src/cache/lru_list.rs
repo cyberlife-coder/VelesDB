@@ -3,9 +3,13 @@
 //! Nodes live densely in a `Vec` and are chained by index into a doubly-linked
 //! list (head = LRU, tail = MRU); a `HashMap` maps each key to its node index.
 //! A new key arriving at capacity takes over the LRU node in place, so the
-//! `Vec` is allocated once and never grows past capacity. Removal swaps the
-//! last node into the freed slot and re-points its two neighbours and its map
-//! entry. Every operation touches a constant number of nodes.
+//! node `Vec` is allocated once and never grows past capacity. Removal swaps
+//! the last node into the freed slot and re-points its two neighbours and its
+//! map entry. Every operation touches a constant number of nodes.
+//!
+//! The `HashMap` is the one amortized part: eviction churn leaves tombstones
+//! that it clears by rehashing, growing its table once to about twice the
+//! initial size and rehashing in place from then on.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -105,7 +109,7 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
         self.link_back(idx);
     }
 
-    /// Hands the LRU node to a new entry: no allocation, no relocation.
+    /// Hands the LRU node to a new entry: no node allocation, no relocation.
     /// Returns `false` only at capacity 0, where there is no node to take.
     fn recycle_lru(&mut self, key: K, value: V) -> bool {
         let idx = self.head;
@@ -115,8 +119,7 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
         let node = self.node_mut(idx);
         let evicted = std::mem::replace(&mut node.key, key.clone());
         node.value = value;
-        // Remove before insert: the index never exceeds the capacity it was
-        // allocated for, so a full cache never rehashes.
+        // Remove before insert: the index never holds more than `capacity` keys.
         self.index.remove(&evicted);
         self.index.insert(key, idx);
         self.move_to_back(idx);
