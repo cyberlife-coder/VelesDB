@@ -44,38 +44,33 @@ fn test_parse_payload_snapshot_accepts_a_snapshot_the_writer_wrote() {
 /// the full replay on every boot until someone notices.
 ///
 /// The fix is `try_exists()?`, which distinguishes "not there" from "cannot
-/// tell". This asserts the distinction on a directory the process cannot
-/// enter.
+/// tell". This asserts the distinction on a path whose parent is a regular
+/// file: looking it up fails with `NotADirectory` (`ENOTDIR`) for every user,
+/// root included. A `chmod 000` directory, the obvious alternative, stops
+/// only non-root processes: root ignores the mode, so the test could not
+/// observe anything when run as root.
 #[cfg(unix)]
 #[test]
 fn an_unreachable_snapshot_is_an_error_not_a_missing_one() {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = tempfile::tempdir().expect("test: temp dir");
-    let locked = dir.path().join("locked");
-    std::fs::create_dir(&locked).expect("test: create the locked dir");
-    let snapshot = locked.join("payload.snapshot");
-    std::fs::write(&snapshot, b"whatever").expect("test: write the snapshot");
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
-        .expect("test: chmod 000");
+    let not_a_directory = dir.path().join("not-a-directory");
+    std::fs::write(&not_a_directory, b"a file").expect("test: write the file");
+    let snapshot = not_a_directory.join("payload.snapshot");
 
-    // Observe first, restore second, assert last: a panic between the chmod
-    // and the restore would leave an unremovable directory behind and the
-    // temp dir would fail to clean up, turning a clear verdict into noise.
-    let reachable = std::fs::read(&snapshot).is_ok();
-    let outcome = load_snapshot(&snapshot);
-    let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700));
-
-    // The premise: this process really cannot reach the file. Root ignores
-    // the mode, and a test whose premise is absent proves nothing, so say so
-    // instead of passing quietly.
+    // The premise: the metadata lookup fails with something other than
+    // `NotFound`, and `Path::exists` still answers `false` -- the trap.
+    let lookup = std::fs::metadata(&snapshot).expect_err("test: the lookup must fail");
+    assert_ne!(
+        lookup.kind(),
+        std::io::ErrorKind::NotFound,
+        "test premise: {lookup}"
+    );
     assert!(
-        !reachable,
-        "the locked directory is still readable (running as root?): this test \
-         cannot observe what it exists to observe"
+        !snapshot.exists(),
+        "test premise: `exists` must answer false"
     );
 
-    let err = outcome.expect_err("an unreachable snapshot must not load");
+    let err = load_snapshot(&snapshot).expect_err("an unreachable snapshot must not load");
     assert_ne!(
         err.kind(),
         std::io::ErrorKind::NotFound,

@@ -6972,7 +6972,6 @@ dependencies = [
  "getrandom 0.4.3",
  "half",
  "hex",
- "indexmap 2.14.2",
  "libc",
  "loom",
  "memmap2",
