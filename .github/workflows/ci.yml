@@ -1218,6 +1218,11 @@ jobs:
   # - taplo enforces `.taplo.toml` (the repo's own 4-space manifest style).
   # - cargo-machete fails on any dependency declared but never used, and on
   #   stale `ignored` entries.
+  # - every standalone Cargo project's lockfile (examples/, demos/, fuzz/:
+  #   each a workspace of its own, so the root `--locked` builds never read
+  #   them) must match its manifests. Without this they drifted silently:
+  #   all five example/demo lockfiles had fallen behind velesdb-core's own
+  #   dependencies before anyone noticed.
   # ===========================================================================
 
       - name: Skipped — docs-only diff
@@ -1252,6 +1257,23 @@ jobs:
 
       - name: Unused dependencies (cargo-machete)
         run: cargo machete
+
+      # Discovered, not listed: a new example is covered the day it lands.
+      # `cargo update --workspace --locked` only resolves (no crate download)
+      # and refuses any lockfile that resolution would change.
+      - name: Standalone Cargo lockfiles in sync (--locked)
+        run: |
+          status=0
+          for lock in $(git ls-files '*/Cargo.lock'); do
+            dir=$(dirname "$lock")
+            if ! cargo update --workspace --locked --manifest-path "$dir/Cargo.toml" \
+                >/dev/null 2>"$RUNNER_TEMP/lockfile-check.err"; then
+              echo "::error file=$lock::$lock is out of date with its manifests. Refresh it: (cd $dir && cargo update --workspace)"
+              cat "$RUNNER_TEMP/lockfile-check.err"
+              status=1
+            fi
+          done
+          exit $status
 
   # ===========================================================================
   # NOTE: Miri & Loom moved to quality-deep.yml (weekly + manual)
