@@ -46,9 +46,6 @@ version = "1.9"
 [dependencies.rustc-hash]
 version = "2.1.1"
 
-[dependencies.indexmap]
-version = "2.14"
-
 # Lock-free concurrent HashMap for high-throughput parallel operations
 [dependencies.dashmap]
 version = "6.2"

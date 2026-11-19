@@ -1771,6 +1771,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads the signature from PyInstaller's compressed archive, so it no
   longer reports every official build as NOT VERIFIED.
 
+### Performance
+
+- **Core: `LruCache` is O(1)** (core, 2026-11-19). It kept recency order in
+  an `IndexMap`, so `get`, `remove` and eviction shifted every later entry:
+  O(n), about 60 µs per eviction at 10,000 entries. `LockFreeLruCache`, and
+  through it the compiled plan cache, paid that on every L2 hit and every
+  L1 demotion, the latter under an L1 shard write lock that L1 hits on the
+  shard wait for. `LruCache` now sits on a hash map over a doubly linked
+  slab, the classic LRU construction: every operation is one hash lookup
+  and a constant number of link updates. API, statistics and recency
+  semantics are unchanged. On the `LockFreeLruCache-Concurrent` benchmark
+  at the plan cache's sizes (4-core VM), the read-mostly workload with
+  evicting inserts goes from 193K, 70K, 53K and 52K ops/s at 1, 2, 4 and 8
+  threads to 675K, 649K, 673K and 697K, and no longer degrades with the
+  thread count; L1 hits are unchanged. `velesdb-core` no longer depends on
+  `indexmap`.
+
 ## [8.2.0] - 2026-11-09
 
 ### Added

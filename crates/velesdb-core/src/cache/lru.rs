@@ -1,26 +1,24 @@
 //! LRU Cache implementation for `VelesDB`.
 //!
-//! Thread-safe LRU cache backed by an insertion-ordered `IndexMap`
-//! (front = LRU, back = MRU). Lookups hash in O(1); every operation that
-//! must keep the recency order intact shifts the tail, which is O(n).
-//! Based on arXiv:2310.11703v2 recommendations.
+//! Thread-safe LRU cache: an [`LruList`] (hash map over a doubly linked
+//! slab, front = LRU, back = MRU) behind a `RwLock`, plus hit, miss and
+//! eviction counters. Based on arXiv:2310.11703v2 recommendations.
 //!
 //! # Performance (US-CORE-003-14)
 //!
-//! | Operation | Complexity | Notes |
-//! |-----------|------------|-------|
-//! | insert (new key) | O(1) / O(n) | O(1) append below capacity; O(n) when full (`shift_remove_index(0)` eviction) |
-//! | insert (existing key) | O(n) | `shift_remove` + append (moves to MRU) |
-//! | get | O(n) | `shift_remove_full` + append (moves to MRU) |
-//! | peek | O(1) | Read lock, no recency update |
-//! | remove | O(n) | `shift_remove`: order-preserving, so eviction stays LRU |
+//! Every operation is O(1): one hash lookup and a constant number of link
+//! updates.
 //!
-//! `swap_remove` is O(1) but moves the MRU entry into the freed slot, which
-//! corrupts the recency order; no path here may use it.
+//! | Operation | Lock | Notes |
+//! |-----------|------|-------|
+//! | insert | write | Moves an existing key to MRU; evicts the LRU entry when full |
+//! | get | write | Moves the entry to MRU |
+//! | peek | read | No recency update |
+//! | remove | write | Keeps the order of the remaining entries |
 
 #![allow(clippy::cast_precision_loss)] // Precision loss acceptable for hit rate calculation
 
-use indexmap::IndexMap;
+use super::lru_list::LruList;
 use parking_lot::RwLock;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,7 +30,7 @@ pub struct CacheStats {
     pub hits: u64,
     /// Number of cache misses.
     pub misses: u64,
-    /// Number of evictions.
+    /// Number of entries evicted to make room for a new key.
     pub evictions: u64,
 }
 
@@ -51,8 +49,7 @@ impl CacheStats {
 
 /// Thread-safe LRU cache.
 ///
-/// Uses `IndexMap` internally: its insertion order is the recency order
-/// (front = LRU, back = MRU). See the module docs for per-operation costs.
+/// See the module docs for the structure and per-operation costs.
 pub struct LruCache<K, V>
 where
     K: Hash + Eq + Clone,
@@ -60,9 +57,8 @@ where
 {
     /// Maximum capacity.
     capacity: usize,
-    /// Internal data protected by `RwLock`.
-    /// `IndexMap` preserves insertion order (front = LRU, back = MRU).
-    inner: RwLock<IndexMap<K, V>>,
+    /// Entries in recency order (front = LRU, back = MRU).
+    inner: RwLock<LruList<K, V>>,
     /// Statistics (atomic for lock-free reads).
     hits: AtomicU64,
     misses: AtomicU64,
@@ -79,7 +75,7 @@ where
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            inner: RwLock::new(IndexMap::with_capacity(capacity)),
+            inner: RwLock::new(LruList::new(capacity)),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
@@ -104,76 +100,44 @@ where
         self.inner.read().is_empty()
     }
 
-    /// Insert a key-value pair, evicting LRU entry if at capacity.
+    /// Insert a key-value pair as the most recently used entry, evicting the
+    /// least recently used one if a new key meets a full cache.
     ///
-    /// O(1) for a new key below capacity. O(n) otherwise: both the
-    /// move-to-back of an existing key and the eviction of the front entry
-    /// shift the remaining entries.
+    /// A zero-capacity cache stores nothing, and returns without locking.
     pub fn insert(&self, key: K, value: V) {
-        // A zero-capacity cache stores nothing: the eviction below only runs
-        // on a non-empty map, so the entry would otherwise stay.
         if self.capacity == 0 {
             return;
         }
-        let mut inner = self.inner.write();
-
-        // Check if key already exists - if so, remove and re-insert to move to back
-        if inner.shift_remove(&key).is_some() {
-            // Key existed, just re-insert at back
-            inner.insert(key, value);
-            return;
+        let evicted = self.inner.write().insert(key, value);
+        if evicted.is_some() {
+            self.evictions.fetch_add(1, Ordering::Relaxed);
         }
-
-        // Evict LRU (front) if at capacity
-        if inner.len() >= self.capacity {
-            // shift_remove(0) removes the first element (LRU)
-            if inner.shift_remove_index(0).is_some() {
-                self.evictions.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-
-        // Insert new entry at back (MRU)
-        inner.insert(key, value);
     }
 
-    /// Get a value by key, updating recency.
+    /// Get a value by key; the entry becomes the most recently used.
     ///
-    /// F-18: Uses a single write lock for lookup + move-to-back in one operation,
-    /// eliminating the previous read-lock → clone → write-lock → re-clone pattern
-    /// (2 locks + 2 clones → 1 lock + 1 clone).
+    /// One write lock covers the lookup and the move to MRU (F-18).
     #[must_use]
     pub fn get(&self, key: &K) -> Option<V> {
-        let mut inner = self.inner.write();
-        if let Some((_idx, owned_key, value)) = inner.shift_remove_full(key) {
-            let cloned = value.clone();
-            // Re-insert at back (MRU position)
-            inner.insert(owned_key, value);
-            drop(inner);
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            Some(cloned)
+        let value = self.inner.write().get(key).cloned();
+        let counter = if value.is_some() {
+            &self.hits
         } else {
-            drop(inner);
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            None
-        }
+            &self.misses
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        value
     }
 
-    /// Get a value without updating recency (peek).
-    ///
-    /// O(1) complexity with only read lock.
+    /// Get a value without updating recency, under a read lock.
     #[must_use]
     pub fn peek(&self, key: &K) -> Option<V> {
-        let inner = self.inner.read();
-        inner.get(key).cloned()
+        self.inner.read().peek(key).cloned()
     }
 
-    /// Remove a key from the cache.
-    ///
-    /// O(n): `shift_remove` keeps the relative order of the remaining
-    /// entries, so the next eviction still picks the least recently used one.
+    /// Remove a key, keeping the order of the remaining entries.
     pub fn remove(&self, key: &K) {
-        let mut inner = self.inner.write();
-        inner.shift_remove(key);
+        self.inner.write().remove(key);
     }
 
     /// Clear all entries.
