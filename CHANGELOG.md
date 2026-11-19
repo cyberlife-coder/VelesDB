@@ -518,18 +518,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Core: the `LruCache` O(1) guard measures what it claims and holds under
-  load** (core, tests, 2026-11-19). `test_move_to_back_o1_complexity` re-read
-  key 0, which is the most recently used entry after its first read, so it
-  timed a move-to-back that does nothing, and it compared one wall-clock ratio
-  over 500 nanosecond-scale reads, so a loaded parallel suite failed it with
-  no related change. It is replaced by three guards: a node-touch count per
-  `get`, evicting insert, overwrite and `remove` at 100 and at 10 000 entries,
-  which must be equal (deterministic: the `LruList` slab counts its own node
-  accesses in test builds), and two comparisons of interleaved timing minima,
-  `get` on the least recently used key and eviction, which load can slow but
-  not distort. All three fail on an O(n) move-to-back; the old test passed on
-  the O(n) `IndexMap` it was meant to catch.
+- **Core: `LruCache`'s O(1) claim has a deterministic guard** (core, tests,
+  2026-11-19). #2860 made every operation O(1) and #2854 moved per-size cost
+  to the `LruCache-Baseline` benchmark, which CI does not gate, so an O(n)
+  regression could merge unseen. `LruList`'s slab now counts its node accesses
+  in test builds (a plain `Vec` otherwise, no logic change), and
+  `test_recency_operations_touch_constant_nodes` requires the count for `get`,
+  evicting insert, overwrite and `remove` to be the same at 100 and at 10 000
+  entries: no clock, so load cannot move it, and a move-to-back that walks the
+  list fails it.
 
 - **Core: the unreachable-snapshot test holds when run as root** (core,
   tests, 2026-11-19). `an_unreachable_snapshot_is_an_error_not_a_missing_one`
