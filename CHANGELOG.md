@@ -540,6 +540,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so no shipped path hit the defect. The module docs now state the real cost
   of every operation instead of claiming O(1) throughout.
 
+- **Core: `LockFreeLruCache` evicts its least recently used L1 entry**
+  (core, 2026-11-19). Over capacity, L1 (a `DashMap`) removed whichever
+  entries its iteration reached first, so it could drop the hottest key, or
+  the key just promoted from L2. Each L1 entry now carries a logical
+  last-access stamp, and eviction removes the oldest one, guarded on that
+  stamp so an entry hit during the scan survives. Inserts and promotions
+  advance the clock; hits only read it and write their entry only when it
+  is stale, so the hit path adds no contended write: the order is exact
+  except among entries whose last access was a hit between the same two
+  writes. A per-hit clock, which would make it exact, measured at about
+  half the concurrent hit throughput. Choosing a victim scans L1, O(L1
+  capacity) per evicted entry. The compiled query plan cache sits on this
+  cache.
+
 - **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
   SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
   the binding's VelesQL executor and returned `VectorStore.query`'s own
