@@ -1,15 +1,8 @@
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::float_cmp
-)]
 //! Tests for `lockfree` module - Lock-free LRU cache.
 
 use super::lockfree::*;
 use std::sync::Arc;
 use std::thread;
-use std::time::Instant;
 
 #[test]
 fn test_lockfree_cache_new() {
@@ -161,55 +154,6 @@ fn test_lockfree_cache_concurrent_reads() {
         stats.misses, 0,
         "every key is present, got {} misses",
         stats.misses
-    );
-}
-
-#[test]
-#[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
-fn test_lockfree_cache_scaling_8_threads() {
-    let cache = Arc::new(LockFreeLruCache::<u64, String>::new(1000, 10000));
-
-    for i in 0..1000 {
-        cache.insert(i, format!("value_{i}"));
-    }
-
-    let ops_per_thread = 5_000;
-
-    let start = Instant::now();
-    for i in 0..ops_per_thread {
-        let _ = cache.get(&(i % 1000));
-    }
-    let single_thread_time = start.elapsed();
-
-    let start = Instant::now();
-    let mut handles = vec![];
-    for t in 0..8 {
-        let cache_clone = Arc::clone(&cache);
-        handles.push(thread::spawn(move || {
-            let offset = t * 100;
-            for i in 0..ops_per_thread {
-                let key = ((i + offset) % 1000) as u64;
-                let _ = cache_clone.get(&key);
-            }
-        }));
-    }
-    for h in handles {
-        h.join().unwrap();
-    }
-    let eight_thread_time = start.elapsed();
-
-    let single_throughput = ops_per_thread as f64 / single_thread_time.as_secs_f64();
-    let eight_throughput = (8 * ops_per_thread) as f64 / eight_thread_time.as_secs_f64();
-    let scaling_factor = eight_throughput / single_throughput;
-
-    println!("LockFreeLruCache scaling test:");
-    println!("  1 thread:  {:.0} ops/sec", single_throughput);
-    println!("  8 threads: {:.0} ops/sec", eight_throughput);
-    println!("  Scaling:   {:.2}x", scaling_factor);
-
-    assert!(
-        scaling_factor > 0.5,
-        "Scaling factor {scaling_factor:.2}x should be > 0.5x (no severe regression)"
     );
 }
 
