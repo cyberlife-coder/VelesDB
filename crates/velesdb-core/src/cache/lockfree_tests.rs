@@ -269,7 +269,8 @@ fn test_lockfree_cache_remove_racing_l1_demotion_does_not_resurrect() {
 /// A cache whose keys `0..VICTIMS` sit in L2 only: inserted, then pushed
 /// out of an L1 of capacity `VICTIMS` by as many fresh keys.
 fn cache_with_victims_in_l2_only() -> Arc<LockFreeLruCache<u64, u64>> {
-    let cache = Arc::new(LockFreeLruCache::new(VICTIMS as usize, 10_000));
+    let l1_capacity = usize::try_from(VICTIMS).expect("VICTIMS fits in usize");
+    let cache = Arc::new(LockFreeLruCache::new(l1_capacity, 10_000));
     for key in 0..VICTIMS {
         cache.insert(key, key);
     }
