@@ -91,6 +91,22 @@ fn test_lru_cache_access_updates_recency() {
     assert_eq!(cache.get(&4), Some("four".to_string()));
 }
 
+/// `peek` reads without refreshing recency: the peeked entry stays the
+/// next one evicted. (This replaces a timing test asserting that `peek`
+/// beats `get`, which only held while `get` shifted the whole map.)
+#[test]
+fn test_lru_cache_peek_does_not_refresh_recency() {
+    let cache: LruCache<u64, String> = LruCache::new(2);
+    cache.insert(1, "one".to_string());
+    cache.insert(2, "two".to_string());
+
+    assert_eq!(cache.peek(&1), Some("one".to_string()));
+    cache.insert(3, "three".to_string());
+
+    assert_eq!(cache.peek(&1), None, "1 was still the LRU entry");
+    assert_eq!(cache.peek(&2), Some("two".to_string()));
+}
+
 #[test]
 fn test_lru_cache_with_zero_capacity_holds_nothing() {
     let cache: LruCache<u64, String> = LruCache::new(0);

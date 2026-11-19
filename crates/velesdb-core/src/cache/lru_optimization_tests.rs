@@ -10,9 +10,10 @@
 //!
 //! # Implementation Notes
 //!
-//! `IndexMap` provides O(1) lookup but O(n) for `shift_remove` (preserves order).
-//! This is still faster than `VecDeque::retain` which was O(n) with higher constant.
-//! For true O(1) LRU, a custom doubly-linked list + `HashMap` would be needed.
+//! `LruCache` sits on `LruList`, a hash map over a doubly linked slab, so
+//! insert, get, remove and eviction are all O(1). The bounds below predate
+//! it (they allowed the O(n) shifts of the `IndexMap` it replaced) and stay
+//! as loose sanity checks.
 
 #![allow(clippy::similar_names)]
 #![allow(clippy::doc_markdown)]
@@ -22,7 +23,6 @@ use std::time::Instant;
 use super::LruCache;
 
 /// Test that insert performance scales reasonably.
-/// IndexMap shift_remove is O(n) but with low constant.
 #[test]
 #[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_insert_performance_scaling() {
@@ -56,9 +56,8 @@ fn test_insert_performance_scaling() {
     }
     println!("  Ratio 10K/100: {ratio:.1}x");
 
-    // IndexMap is O(n) for shift_remove but should be < 300x (linear)
-    // This is acceptable for cache sizes < 100K
-    // Note: CI machines may have higher variance
+    // Loose bound: O(1) operations should not scale with the size at all;
+    // CI machines have high variance.
     assert!(ratio < 300.0, "Insert scaling too poor: ratio={ratio:.1}x");
 
     // Absolute performance: < 500µs per insert for 10K cache (CI machines are slower)
@@ -70,7 +69,7 @@ fn test_insert_performance_scaling() {
 }
 
 /// Test get performance scaling.
-/// Get includes move_to_back which is O(n) with IndexMap.
+/// Get includes the move to MRU.
 #[test]
 #[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_get_performance_scaling() {
@@ -113,46 +112,7 @@ fn test_get_performance_scaling() {
     );
 }
 
-/// Test that peek (read-only) is faster than get.
-#[test]
-fn test_peek_faster_than_get() {
-    let cache: LruCache<u64, String> = LruCache::new(1000);
-
-    // Fill cache
-    for i in 0..1000 {
-        cache.insert(i, format!("value_{i}"));
-    }
-
-    let ops = 10_000;
-
-    // Measure peek time
-    let start = Instant::now();
-    for i in 0..ops {
-        let _ = cache.peek(&(i % 1000));
-    }
-    let peek_time = start.elapsed();
-
-    // Measure get time
-    let start = Instant::now();
-    for i in 0..ops {
-        let _ = cache.get(&(i % 1000));
-    }
-    let get_time = start.elapsed();
-
-    println!("Peek vs Get:");
-    println!("  Peek: {:?}", peek_time);
-    println!("  Get:  {:?}", get_time);
-    println!(
-        "  Ratio get/peek: {:.2}x",
-        get_time.as_nanos() as f64 / peek_time.as_nanos() as f64
-    );
-
-    // Peek should be faster (no recency update)
-    assert!(peek_time < get_time, "Peek should be faster than get");
-}
-
 /// Test eviction performance scaling.
-/// Eviction uses shift_remove_index(0) which is O(n) with IndexMap.
 #[test]
 #[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_eviction_performance_scaling() {
