@@ -1101,3 +1101,79 @@ fn test_prefetch_recall_regression() {
         avg_recall * 100.0,
     );
 }
+
+// =========================================================================
+// 16. Stagnation only ends a walk whose result set is full
+// =========================================================================
+
+#[test]
+fn test_stagnation_never_terminates_a_result_set_with_room() {
+    let mut state = SearchState::new(0);
+    state.push_candidate(1, 0.1);
+    state.push_candidate(2, 0.3);
+    let (ef, stagnation_limit) = (3, 2);
+
+    for _ in 0..stagnation_limit {
+        state.update_stagnation(false);
+    }
+
+    assert!(
+        !state.should_terminate(0.0, ef, stagnation_limit),
+        "a result set below ef admits every node the walk still discovers: \
+         stagnation must not end it"
+    );
+}
+
+/// Hub-and-tail base layer: node 0 lists nodes `1..=HUB_FANOUT`, each of
+/// which lists only node 0 back, except the farthest, `HUB_FANOUT`, the only
+/// way to the `TAIL` nodes behind it. Popping node 0 discovers the whole hub
+/// at once; every child popped after it, closest first, discovers nothing.
+#[test]
+#[allow(clippy::cast_precision_loss)] // Reason: node ids below 100 are exact in f32.
+fn test_search_layer_walks_past_a_run_of_already_discovered_candidates() {
+    const HUB_FANOUT: usize = 40;
+    const TAIL: usize = 20;
+    const STAGNATION_LIMIT: usize = 10;
+    let n = 1 + HUB_FANOUT + TAIL;
+
+    let hnsw = NativeHnsw::new(
+        CachedSimdDistance::new(DistanceMetric::Euclidean, 2),
+        8,
+        32,
+        n,
+    );
+    for i in 0..n {
+        hnsw.insert(&[i as f32, 0.0]).expect("test: insert");
+    }
+    {
+        let layers = hnsw.layers.read();
+        let base = &layers[0];
+        base.set_neighbors(0, (1..=HUB_FANOUT).collect());
+        for child in 1..HUB_FANOUT {
+            base.set_neighbors(child, vec![0]);
+        }
+        base.set_neighbors(
+            HUB_FANOUT,
+            std::iter::once(0).chain(HUB_FANOUT + 1..n).collect(),
+        );
+        for tail in HUB_FANOUT + 1..n {
+            base.set_neighbors(tail, vec![HUB_FANOUT]);
+        }
+    }
+    // The phenomenon: the children popped before `HUB_FANOUT` form a run of
+    // pops that discover nothing, longer than the stagnation limit.
+    assert!(HUB_FANOUT - 1 > STAGNATION_LIMIT);
+    let ef = 4 * n;
+    // The tail is reachable: a walk with no stagnation limit finds every node.
+    let unbounded = hnsw.search_layer(&[0.0, 0.0], &[0], ef, 0, 0, None);
+    assert_eq!(unbounded.len(), n, "the tail must be reachable from node 0");
+
+    let found = hnsw.search_layer(&[0.0, 0.0], &[0], ef, 0, STAGNATION_LIMIT, None);
+
+    assert_eq!(
+        found.len(),
+        n,
+        "with ef = {ef} above the {n} reachable nodes, a run of pops that \
+         discover nothing must not end the walk before the tail"
+    );
+}
