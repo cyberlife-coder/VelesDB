@@ -111,7 +111,9 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// producing a more navigable graph with better recall across all search
     /// modes. The value 1.2 follows the VAMANA paper recommendation.
     pub(in crate::index::hnsw::native) alpha: f32,
-    /// Maximum consecutive candidates without improving top-k before early termination.
+    /// Maximum consecutive candidates without improving the result set before
+    /// early termination, counted only once the set holds `ef` nodes
+    /// (`SearchState::should_terminate`).
     /// Default: `ef_construction / 2`. Set to `0` to disable.
     pub(crate) stagnation_limit: usize,
     /// Node slots every layer holds, at least: `expand_layers()` skips the
