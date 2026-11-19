@@ -1788,6 +1788,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thread count; L1 hits are unchanged. `velesdb-core` no longer depends on
   `indexmap`.
 
+- **Core: `LockFreeLruCache` L1 hits scale with threads** (core,
+  2026-11-19). Every L1 hit incremented one shared `AtomicU64`, whose cache
+  line bounced between cores: L1 hit throughput fell from 27M ops/s on one
+  thread to 10–12M at 2 to 8. The hit counter is now striped over
+  cache-line-padded stripes, one per thread round-robin, summed on read so
+  the count stays exact. On the `LockFreeLruCache-Concurrent` benchmark,
+  `l1_hit_read` goes from 26.8M, 11.6M, 10.2M and 12.0M ops/s at 1, 2, 4
+  and 8 threads to 25.9M, 23.0M, 26.2M and 27.0M.
+
 ## [8.2.0] - 2026-11-09
 
 ### Added
