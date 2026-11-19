@@ -463,10 +463,12 @@ fn on_threads(num_threads: u64, op: impl Fn(u64, u64) + Sync) {
     });
 }
 
-/// The hot key a thread reads at its `op`-th operation; threads start at
-/// different offsets so they do not read in lockstep.
+/// The hot key a thread reads at its `op`-th operation. Threads start
+/// `THREAD_STRIDE` keys apart; the stride is prime to `HOT_KEYS`, so up to
+/// 8 threads all start on distinct keys and never read in lockstep.
 fn hot_key(thread: u64, op: u64) -> u64 {
-    (op + thread * 100) % HOT_KEYS
+    const THREAD_STRIDE: u64 = 97;
+    (op + thread * THREAD_STRIDE) % HOT_KEYS
 }
 
 /// A `LockFreeLruCache` at the plan cache's sizes with L1 full of keys
