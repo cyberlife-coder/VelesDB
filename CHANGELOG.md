@@ -537,6 +537,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of time, and the three `#[ignore]`d scaling timers they supersede
   are removed. `velesdb-core` no longer depends on `indexmap`.
 
+- **Core: the unreachable-snapshot test holds when run as root** (core,
+  tests, 2026-11-19). `an_unreachable_snapshot_is_an_error_not_a_missing_one`
+  (#2325) built its unreachable path with a `chmod 000` directory, which
+  root ignores, so it failed in every root container by design. Its path is
+  now `<file>/payload.snapshot`: the lookup fails with `NotADirectory` for
+  every user, while `Path::exists` still answers `false`, the trap the test
+  guards. `load_snapshot`'s error docs no longer describe the `exists()`
+  behaviour it replaced.
+
 - **Core: an HNSW search with room left in its result set no longer stops
   on stagnation** (core, 2026-11-19). The layer walk counted every popped
   candidate whose neighbours were all visited already as stagnation, even
