@@ -214,7 +214,7 @@ fn test_trigram_search_short_pattern() {
     assert!(!results.contains(3u32));
 }
 
-// ========== Performance Tests ==========
+// ========== Pruning Tests ==========
 
 /// What makes `search_like` fast is that the trigram intersection prunes the
 /// corpus before any verification — so that is what is asserted, as a count,
@@ -402,14 +402,51 @@ fn test_threshold_pruning_keeps_only_matching_docs() {
         }
     }
 
+    // Candidates the threshold, not the trigram intersection, must drop:
+    // they hold the pattern among so many other characters that their
+    // Jaccard is low, exact and fingerprint-approximated alike.
+    let diluted: Vec<u64> = (1_000..1_010).collect();
+    for &id in &diluted {
+        let text = format!(
+            "matching {id} ABCDEFGHIJKLMNOPQRSTUVWXYZ bdefjklopqrsuvwxyz !#$%&*+-/:;<=>?@[]^_{{|}}~"
+        );
+        index.insert(id, &text).expect("test: insert");
+    }
+
+    let candidates = index.search_like("matching");
+    let unthresholded = index.search_like_ranked("matching", 0.0);
     let results = index.search_like_ranked("matching", 0.2);
 
-    // Pruning, asserted on what it removes rather than on wall-clock time:
-    // no non-matching doc reaches the ranked output, none below threshold.
+    // Positive control: without a threshold the diluted docs are ranked, so
+    // their absence below is the threshold's doing.
+    for &id in &diluted {
+        let id32 = u32::try_from(id).expect("test: ids fit u32");
+        assert!(candidates.contains(id32), "doc {id} is a trigram candidate");
+        assert!(
+            unthresholded.iter().any(|(r, _)| *r == id),
+            "doc {id} is ranked when no threshold applies"
+        );
+        assert!(
+            results.iter().all(|(r, _)| *r != id),
+            "doc {id} should fall under the threshold"
+        );
+    }
+
+    // The threshold removes exactly the sub-threshold scores, nothing else
+    // (compared by id: ties are ordered by an unstable sort).
+    let by_id = |mut v: Vec<(u64, f32)>| {
+        v.sort_unstable_by_key(|(id, _)| *id);
+        v
+    };
+    let expected: Vec<(u64, f32)> = unthresholded
+        .iter()
+        .copied()
+        .filter(|(_, score)| *score >= 0.2)
+        .collect();
+    assert_eq!(by_id(results.clone()), by_id(expected));
     assert!(!results.is_empty(), "matching docs clear the threshold");
-    assert!(results.len() <= 100, "at most the 100 matching docs");
     for (id, score) in &results {
-        assert_eq!(id % 10, 0, "doc {id} does not contain the pattern");
+        assert_eq!(id % 10, 0, "doc {id} is not a well-matching doc");
         assert!(*score >= 0.2, "doc {id} scored {score} under the threshold");
     }
 }

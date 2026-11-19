@@ -251,12 +251,24 @@ mod ecommerce_search {
             .collect();
         let results = collection.search(&query, 10).expect("Search failed");
 
+        // Not `results[0].point.id == 500`: `id * 0.1` wraps 2π every ~63
+        // ids, so products 123 and 877 are 0.0009 rad out of phase with 500
+        // and score the same as it in f32. Which of the ties ranks first is
+        // up to SIMD summation order, not a property of search.
         assert_eq!(results.len(), 10);
-        assert_eq!(results[0].point.id, 500, "nearest is the indexed twin");
         assert!(
             (results[0].score - 1.0).abs() < 1e-4,
-            "cosine of a vector with itself, got {}",
+            "the best match is the query's own vector, got {}",
             results[0].score
+        );
+        let twin = results
+            .iter()
+            .find(|r| r.point.id == 500)
+            .expect("the query's indexed twin is among the 10 nearest");
+        assert!(
+            (twin.score - 1.0).abs() < 1e-4,
+            "cosine of a vector with itself, got {}",
+            twin.score
         );
         assert!(
             results.windows(2).all(|w| w[0].score >= w[1].score),
