@@ -13,6 +13,7 @@
 //! | get() | lock-free | L2, then promotion to L1 |
 //! | peek() | L1 only | N/A |
 //! | insert() | write-through | - |
+//! | remove() | L1 + L2 | L1 + L2 (`LruCache::remove`, order-preserving) |
 
 // Reason: Numeric casts in cache metrics are intentional:
 // - All casts are for hit rate calculations and statistics
