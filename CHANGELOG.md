@@ -542,6 +542,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_pipeline_qdrant_400_quoting_500_is_not_retried`, which made four
   scroll calls before the fix and makes one now.
 
+- **Core: an HNSW search with room left in its result set no longer stops
+  on stagnation** (core, 2026-11-19). The layer walk counted every popped
+  candidate whose neighbours were all visited already as stagnation, even
+  while its result set held fewer than `ef` nodes and still admitted every
+  node it discovered. A run of such pops — its neighbours reached first
+  through other nodes — ended the walk with candidates left, and a search
+  for `k` returned fewer than `k` results from a graph whose every node was
+  reachable: `search(&[0.0, 0.0], 10_040)` on 10 050 collinear points
+  returned about 2 000 to 9 000 results in roughly one build out of five,
+  filtered or not. The stagnation limit, like the distance bound beside
+  it, now applies only once the result set is full.
+
 - **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
   SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
   the binding's VelesQL executor and returned `VectorStore.query`'s own
