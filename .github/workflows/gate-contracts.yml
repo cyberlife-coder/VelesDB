@@ -104,6 +104,9 @@ jobs:
       # the report instead of the exit code, retries only the attempts that
       # produced no report, and still fails closed when none ever does -- with
       # exit 75 and a message that says it is infrastructure, not a finding.
+      # An advisory with no fixed release can be accepted by GHSA id, with a
+      # reason and a review_by date, in scripts/npm-audit-accepted.json; an
+      # expired acceptance, or a count npm does not attribute, still fails.
       - name: Audit ${{ matrix.path }}
         run: |
           python3 scripts/npm-audit-gate.py \

@@ -31,15 +31,18 @@ a single `Option` check per hook.
 | `on_dml_mutation_request(operation, collection)` | before a VelesQL `INSERT_EDGE`, `INSERT_NODE`, `DELETE` or `DELETE_EDGE` | yes, by returning `Err` |
 | `on_query_request(&QueryAccessContext)` | before a VelesQL `SELECT`, aggregate, `MATCH` or `SELECT EDGES` reads anything — once for each collection it reads — and on every `gated_search` / `authorize_read` call | yes, through `AccessDecision` |
 | `on_collection_created`, `on_collection_deleted` | after a collection is created or deleted, through VelesQL or the Rust API | no (telemetry) |
-| `on_upsert(collection, count)` | after a VelesQL `INSERT` / `UPSERT` | no (telemetry) |
-| `on_query(collection, duration_us)` | after a VelesQL read through `Database::execute_query` | no (telemetry) |
+| `on_upsert(collection, count)` | after every completed write to a registered collection, whatever surface made it: a VelesQL `INSERT` / `UPSERT`, `upsert`, `upsert_metadata`, `upsert_bulk`, a graph node payload | no (telemetry) |
+| `on_delete(collection, count)` | after every completed point delete from a registered collection: a VelesQL `DELETE` or a direct `delete` call | no (telemetry) |
+| `on_query(collection, duration_us)` | after every completed read core runs or gates: `execute_query`, `execute_aggregate`, `match_query`, `gated_search`, `run_gated_read` | no (telemetry) |
 
-The two mutation gates and the `on_upsert` / `on_query` telemetry cover
-statements that go through VelesQL (`Database::execute_query`). A direct Rust
-call — `Database::create_collection`, `VectorCollection::upsert`, a search on a
-collection handle — is never gated, and of the telemetry hooks only creation
-and deletion fire for it; a `gated_search` (below) consults
-`on_query_request` but does not fire `on_query`.
+The two mutation gates cover statements that go through VelesQL
+(`Database::execute_query`): a direct Rust call — `Database::create_collection`,
+`VectorCollection::upsert`, a search on a collection handle — is never gated.
+The write telemetry is not limited that way: `on_upsert` and `on_delete` fire
+from the storage entry points every write and delete funnels through, once per
+operation, for any collection the database registered (a collection opened
+directly with `Collection::open` reports nothing). `on_query` fires for the
+reads core runs or gates, and not for an ungated search on a collection handle.
 
 `on_query_request` returns an `AccessDecision`:
 

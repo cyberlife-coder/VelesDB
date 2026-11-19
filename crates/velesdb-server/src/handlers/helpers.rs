@@ -125,6 +125,9 @@ pub(crate) fn http_status_for_error(e: &velesdb_core::Error) -> StatusCode {
         // 409 Conflict
         Error::CollectionExists(_) | Error::EdgeExists(_) => StatusCode::CONFLICT,
 
+        // 403 Forbidden — the database's observer policy turned the request down
+        Error::AccessDenied(_) => StatusCode::FORBIDDEN,
+
         // 408 Request Timeout — the request's own time budget ran out
         Error::GuardRail {
             kind: GuardRailKind::Timeout(TimeoutBudget::Client),

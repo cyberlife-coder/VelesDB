@@ -17,6 +17,7 @@ import type {
 import type {
   SearchOptions,
   SearchResult,
+  SearchIdResult,
   TextSearchResult,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
@@ -132,10 +133,16 @@ export interface IVelesDBBackend {
     options?: SearchOptions
   ): Promise<SearchResult[]>;
 
-  /** Delete a vector by ID */
+  /**
+   * Delete a point by ID: `true` if it existed and was removed, `false` if no
+   * point carried the id. A missing collection throws `CollectionNotFoundError`.
+   */
   delete(collection: string, id: string | number): Promise<boolean>;
 
-  /** Delete multiple vectors by ID in one request; returns the deleted count. */
+  /**
+   * Delete points by ID in one request; returns how many were actually removed
+   * (absent ids skipped, repeated ids counted once). A missing collection throws.
+   */
   bulkDelete(collection: string, ids: Array<string | number>): Promise<number>;
 
   /** Get a vector by ID */
@@ -190,7 +197,7 @@ export interface IVelesDBBackend {
     collection: string,
     vectors: Array<number[] | Float32Array>,
     options?: MultiQuerySearchOptions
-  ): Promise<Array<{ id: number; score: number }>>;
+  ): Promise<SearchIdResult[]>;
 
   /** Check if collection is empty */
   isEmpty(collection: string): Promise<boolean>;
@@ -296,7 +303,7 @@ export interface IVelesDBBackend {
     collection: string,
     query: number[] | Float32Array,
     options?: SearchOptions
-  ): Promise<Array<{ id: number; score: number }>>;
+  ): Promise<SearchIdResult[]>;
 
   // Agent Memory (Phase 8)
 
@@ -375,7 +382,7 @@ export interface IVelesDBBackend {
   ): Promise<MatchQueryResponse>;
 
   /** Remove a graph edge by ID. Returns `true` if removed, `false` if not found. */
-  removeEdge(collection: string, edgeId: number): Promise<boolean>;
+  removeEdge(collection: string, edgeId: import('./graph').GraphNodeId): Promise<boolean>;
 
   /** Total edge count in a graph collection. */
   getEdgeCount(collection: string): Promise<number>;

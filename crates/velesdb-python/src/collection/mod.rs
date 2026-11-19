@@ -41,11 +41,41 @@ pub(crate) struct SearchPlan<'a> {
     pub(crate) top_k: usize,
     pub(crate) filter: Option<&'a Filter>,
     pub(crate) sparse_index_name: Option<&'a str>,
-    /// Hybrid dense+sparse only; the other paths ignore it.
+    /// Hybrid dense+sparse only; [`Self::ensure_knobs_apply`] refuses it on
+    /// any other path.
     pub(crate) fusion: Option<&'a CoreFusionStrategy>,
-    /// Dense-only tuning knobs.
+    /// Dense-only tuning knobs; [`Self::ensure_knobs_apply`] refuses them
+    /// with a sparse vector.
     pub(crate) ef_search: Option<usize>,
     pub(crate) quality: Option<&'a velesdb_core::SearchQuality>,
+}
+
+impl SearchPlan<'_> {
+    /// Refuses a knob the path this plan takes would not apply, rather than
+    /// run the search without it.
+    ///
+    /// Core's sparse and hybrid searches (`sparse_search`,
+    /// `hybrid_sparse_search_filtered`) take no `ef` or quality, so those
+    /// tune a dense-only search alone; `fusion` combines the two branches of
+    /// a hybrid search and means nothing on a single-branch one.
+    fn ensure_knobs_apply(&self) -> PyResult<()> {
+        use pyo3::exceptions::PyValueError;
+
+        let has_sparse = self.sparse.is_some();
+        if has_sparse && (self.ef_search.is_some() || self.quality.is_some()) {
+            return Err(PyValueError::new_err(
+                "ef_search and quality tune a dense-only search; the sparse and \
+                 hybrid searches take neither, so drop them or the sparse_vector",
+            ));
+        }
+        if self.fusion.is_some() && !(has_sparse && self.dense.is_some()) {
+            return Err(PyValueError::new_err(
+                "fusion applies to a hybrid search only: set both vector and \
+                 sparse_vector, or drop fusion",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The caller identity a read forwards to the database's read gate.
@@ -220,12 +250,14 @@ impl Collection {
         // F2.2: vector search on a graph/metadata collection must fail loud,
         // not return an empty list.
         self.ensure_vector()?;
+        plan.ensure_knobs_apply()?;
 
         let index_name = plan
             .sparse_index_name
             .unwrap_or(velesdb_core::sparse_index::DEFAULT_SPARSE_INDEX_NAME);
         // Hybrid dense+sparse honors a caller-supplied fusion strategy
-        // (backlog #24); other paths ignore it. Default preserves RRF k=60.
+        // (backlog #24); `ensure_knobs_apply` refused it on any other path.
+        // Default preserves RRF k=60.
         let fusion = plan.fusion.unwrap_or(&DEFAULT_FUSION);
 
         match (plan.dense, plan.sparse) {
@@ -452,23 +484,23 @@ impl Collection {
         deny_if_scoped(scope, "info")?;
         let config = self.inner.config();
         let dict = PyDict::new(py);
-        let _ = dict.set_item(PyString::intern(py, "name"), config.name.as_str());
-        let _ = dict.set_item(PyString::intern(py, "dimension"), config.dimension);
-        let _ = dict.set_item(
+        dict.set_item(PyString::intern(py, "name"), config.name.as_str())?;
+        dict.set_item(PyString::intern(py, "dimension"), config.dimension)?;
+        dict.set_item(
             PyString::intern(py, "metric"),
             config.metric.canonical_name(),
-        );
-        let _ = dict.set_item(
+        )?;
+        dict.set_item(
             PyString::intern(py, "storage_mode"),
             config.storage_mode.canonical_name(),
-        );
-        let _ = dict.set_item(PyString::intern(py, "point_count"), config.point_count);
-        let _ = dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only);
+        )?;
+        dict.set_item(PyString::intern(py, "point_count"), config.point_count)?;
+        dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only)?;
         let auto_reindex = config
             .auto_reindex_config
             .as_ref()
             .is_some_and(|c| c.enabled);
-        let _ = dict.set_item(PyString::intern(py, "auto_reindex"), auto_reindex);
+        dict.set_item(PyString::intern(py, "auto_reindex"), auto_reindex)?;
         Ok(dict.into_any().unbind())
     }
 
@@ -485,7 +517,7 @@ impl Collection {
     /// decides like ``count``.
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn is_empty(&self) -> PyResult<bool> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
@@ -538,7 +570,7 @@ impl Collection {
     ///     int: The point count
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn __len__(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
@@ -553,7 +585,7 @@ impl Collection {
     ///     int: The point count
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn count(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
@@ -567,7 +599,7 @@ impl Collection {
     ///     List[int]: All point IDs
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope filter (ids carry
     ///         no payload to filter — fail closed).
     fn all_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
@@ -607,7 +639,7 @@ impl Collection {
     /// ascending. Used by training paths that need every stored vector.
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope filter (ids carry
     ///         no payload to filter — fail closed).
     fn all_point_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
@@ -790,7 +822,7 @@ impl Collection {
         let json = serde_json::to_value(&stats).map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Stats serialization failed: {e}"))
         })?;
-        Ok(crate::utils::json_to_python(py, &json))
+        crate::utils::json_to_python(py, &json)
     }
 
     /// Membership test: ``id in collection``.
@@ -806,7 +838,7 @@ impl Collection {
     /// ``__iter__`` and raises ``TypeError`` for the ``in`` operator.
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope filter
     ///         (membership is id-only — fail closed rather than reveal the
     ///         existence of out-of-scope points).

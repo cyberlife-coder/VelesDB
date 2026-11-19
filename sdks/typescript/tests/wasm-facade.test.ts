@@ -36,6 +36,7 @@ class MockVectorStore {
   len = 0;
   is_empty = true;
   sparse_insert = vi.fn();
+  sparse_remove = vi.fn(() => false);
   constructor(public dimension: number, _metric: string) {}
 
   static new_with_mode(dimension: number, metric: string, _mode: string): MockVectorStore {

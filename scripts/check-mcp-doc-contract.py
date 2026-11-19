@@ -285,6 +285,7 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
         (),
         (
             "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
             "docs/reference/MCP_TOOLS.md",
         ),
     ),

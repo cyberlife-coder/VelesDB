@@ -125,3 +125,46 @@ fn test_dml_collection_name_insert_node() {
 
     assert_eq!(node.collection, "kg");
 }
+
+fn insert_edge_id(sql: &str) -> Option<u64> {
+    let query = Parser::parse(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let Some(DmlStatement::InsertEdge(edge)) = query.dml else {
+        panic!("{sql}: expected INSERT EDGE");
+    };
+    edge.edge_id
+}
+
+/// An edge id reads back as a decimal string (SELECT EDGES, MATCH `r.id`),
+/// so INSERT EDGE takes it back in that form, exactly.
+#[test]
+fn insert_edge_takes_its_id_as_an_integer_or_a_decimal_string() {
+    assert_eq!(
+        insert_edge_id(
+            "INSERT EDGE INTO kg (id = 9007199254740993, source = 1, target = 2, label = 'K')"
+        ),
+        Some(9_007_199_254_740_993)
+    );
+    assert_eq!(
+        insert_edge_id(
+            "INSERT EDGE INTO kg (id = '9007199254740993', source = 1, target = 2, label = 'K')"
+        ),
+        Some(9_007_199_254_740_993)
+    );
+    assert_eq!(
+        insert_edge_id("INSERT EDGE INTO kg (source = 1, target = 2, label = 'K')"),
+        None,
+        "no id: the engine derives one"
+    );
+}
+
+/// An id that is not one is refused, never dropped for a derived id.
+#[test]
+fn insert_edge_refuses_an_id_that_is_not_one() {
+    for sql in [
+        "INSERT EDGE INTO kg (id = 'abc', source = 1, target = 2, label = 'K')",
+        "INSERT EDGE INTO kg (id = -1, source = 1, target = 2, label = 'K')",
+        "INSERT EDGE INTO kg (id = 1.5, source = 1, target = 2, label = 'K')",
+    ] {
+        assert!(Parser::parse(sql).is_err(), "{sql} must be refused");
+    }
+}

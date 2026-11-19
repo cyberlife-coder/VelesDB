@@ -72,8 +72,13 @@ pub(crate) fn velesql_error(
 /// so a storage fault or an internal error is no longer reported as the
 /// client's. Which errors are the client's is core's
 /// [`velesdb_core::Error::is_caller_error`].
+///
+/// An observer refusal is the exception: a caller error, but not a fault in
+/// the statement, so it answers `403` as on every other endpoint.
 pub(crate) fn velesql_execution_status(error: &velesdb_core::Error) -> StatusCode {
-    if error.is_caller_error() {
+    if matches!(error, velesdb_core::Error::AccessDenied(_)) {
+        StatusCode::FORBIDDEN
+    } else if error.is_caller_error() {
         StatusCode::UNPROCESSABLE_ENTITY
     } else {
         crate::handlers::helpers::http_status_for_error(error)

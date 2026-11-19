@@ -6,9 +6,10 @@ fixture opens without an observer, so these tests build their own ``Database``
 with one attached.
 
 Scope note: ``collection_created`` / ``collection_deleted`` fire directly from
-the core engine, and so does ``upsert``: core reports every write to a
-collection the database registered, whether it comes through VelesQL or the
-collection API, so the binding adds nothing of its own. The ``query`` event
+the core engine, and so do ``upsert`` and ``delete``: core reports every write
+and every point delete to a collection the database registered, whether it
+comes through VelesQL or the collection API, so the binding adds nothing of its
+own. The ``query`` event
 comes from core as well, for every completed search or VelesQL read; the REST
 server's end-to-end wiring
 is covered by ``crates/velesdb-server/tests/observer_lifecycle_tests.rs``.
@@ -251,6 +252,33 @@ def test_upsert_event_fires_once_on_bulk_and_graph_writes():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_delete_event_fires_on_direct_and_velesql_deletes():
+    """Core reports every completed delete with ``on_delete``; the observer
+    must receive it as a ``delete`` event, once per delete, whatever surface
+    made it — ``Collection.delete`` and VelesQL ``DELETE`` alike."""
+    temp_dir = tempfile.mkdtemp()
+    try:
+        recorder = Recorder()
+        db = Database(temp_dir, observer=recorder)
+        col = db.create_collection("docs", dimension=DIM)
+        col.upsert(
+            [
+                {"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]},
+                {"id": 2, "vector": [0.0, 1.0, 0.0, 0.0]},
+                {"id": 3, "vector": [0.0, 0.0, 1.0, 0.0]},
+            ]
+        )
+        recorder.events.clear()
+        col.delete([1, 2])
+        assert recorder.events_of("delete") == [{"collection": "docs", "point_count": 2}]
+
+        recorder.events.clear()
+        db.execute_query("DELETE FROM docs WHERE id = 3")
+        assert recorder.events_of("delete") == [{"collection": "docs", "point_count": 1}]
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def test_query_event_fires_once_per_direct_search():
     """Each direct search reports one ``query`` event naming the collection.
 
@@ -388,3 +416,66 @@ def test_observer_lenient_allows_a_write_veto_it_cannot_read():
         assert "docs" not in db.list_collections()
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_match_query_reports_one_query_event(observed_db):
+    """A MATCH through match_query is a read the observer hears about, once.
+
+    Both match_query methods ran on the collection leaf, past
+    `Database.match_query` (REST `/match`'s path): the read was gated but
+    never reported, and `@collection` sources and `search.max_results` were
+    the leaf's business.
+    """
+    db, recorder = observed_db
+    graph = db.create_graph_collection("kg", dimension=DIM)
+    graph.upsert_node_payload(10, {"_labels": ["Person"]})
+    docs = db.create_collection("docs", dimension=DIM)
+    docs.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"_labels": ["Doc"]}}])
+
+    for collection, run in (
+        ("kg", lambda: graph.match_query("MATCH (n:Person) RETURN n")),
+        ("docs", lambda: docs.match_query("MATCH (n:Doc) RETURN n")),
+    ):
+        recorder.events.clear()
+        assert run(), "the MATCH finds its node"
+        assert [e["collection"] for e in recorder.events_of("query")] == [collection]
+
+
+def test_an_observer_refusal_raises_permission_error_with_cores_code():
+    """A deny or a veto is "not allowed", not "malformed": PermissionError.
+
+    Every refusal used to travel as a query error (VELES-010) and surface as
+    ValueError, indistinguishable from a typo in the query.
+    """
+    temp_dir = tempfile.mkdtemp()
+    try:
+
+        def policy(event, **fields):
+            if event == "query_request":
+                return "reads are closed"
+            if event == "ddl_request":
+                return False
+            return None
+
+        db = Database(temp_dir, observer=policy)
+        db.create_collection("docs", dimension=DIM)
+        with pytest.raises(PermissionError, match="VELES-037"):
+            db.execute_query("SELECT * FROM docs")
+        with pytest.raises(PermissionError, match="VELES-037"):
+            db.execute_query("DROP COLLECTION docs")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_search_by_embedding_reports_one_query_event(observed_db):
+    """A graph collection's embedding search is a read the observer hears
+    about, once, like every other search of this binding: it was gated but
+    never reported, so metering and audit missed it."""
+    db, recorder = observed_db
+    graph = db.create_graph_collection("kg", dimension=DIM)
+    graph.upsert_node(10, {"name": "Alice"}, vector=[1.0, 0.0, 0.0, 0.0])
+
+    recorder.events.clear()
+    hits = graph.search_by_embedding([1.0, 0.0, 0.0, 0.0], 1)
+    assert [h["id"] for h in hits] == [10]
+    assert [e["collection"] for e in recorder.events_of("query")] == ["kg"]

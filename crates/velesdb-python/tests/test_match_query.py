@@ -133,3 +133,54 @@ def test_search_with_ef_and_search_ids(temp_db_path):
     assert first["id"] == 1
     # descending-score ordering (no ties: node 3 is strictly less similar)
     assert first["score"] > second["score"]
+
+
+@pytest.mark.parametrize("metric", ["euclidean", "cosine", "dot"])
+def test_match_query_without_a_threshold_keeps_every_scored_row(temp_db_path, metric):
+    """Omitting ``threshold`` means no threshold, under any metric.
+
+    The default used to be 0.0, which a distance metric reads as "distance at
+    most 0": every row but an exact duplicate of the query was dropped.
+    """
+    db = velesdb.Database(temp_db_path)
+    collection = db.create_collection(f"match_no_threshold_{metric}", dimension=4, metric=metric)
+    _seed_collection(collection)
+    collection.upsert([{"id": 4, "vector": [-1.0, 0.0, 0.0, 0.0], "payload": {"name": "D"}}])
+
+    results = collection.match_query("MATCH (n) RETURN n LIMIT 10", vector=[0.5, 0.5, 0.0, 0.0])
+    assert {r["node_id"] for r in results} == {1, 2, 3, 4}
+    assert all(isinstance(r["score"], float) for r in results)
+
+    graph = db.create_graph_collection(f"graph_no_threshold_{metric}", dimension=4, metric=metric)
+    graph.upsert_node(1, {"name": "A"}, [1.0, 0.0, 0.0, 0.0])
+    graph.upsert_node(2, {"name": "B"}, [-1.0, 0.0, 0.0, 0.0])
+    rows = graph.match_query("MATCH (n) RETURN n LIMIT 10", vector=[0.5, 0.5, 0.0, 0.0])
+    assert {r["node_id"] for r in rows} == {1, 2}
+
+
+def test_match_query_threshold_keeps_its_metric_direction(temp_db_path):
+    db = velesdb.Database(temp_db_path)
+    collection = db.create_collection("match_threshold_l2", dimension=4, metric="euclidean")
+    _seed_collection(collection)
+    # Distances from [1,0,0,0]: node 1 -> 0, node 3 -> ~0.14, node 2 -> ~1.41.
+    results = collection.match_query(
+        "MATCH (n) RETURN n LIMIT 10", vector=[1.0, 0.0, 0.0, 0.0], threshold=0.5
+    )
+    assert {r["node_id"] for r in results} == {1, 3}
+
+
+@pytest.mark.parametrize("threshold", [float("nan"), float("inf"), float("-inf")])
+def test_match_query_refuses_a_non_finite_threshold(temp_db_path, threshold):
+    db = velesdb.Database(temp_db_path)
+    collection = db.create_collection("match_threshold_nan", dimension=4, metric="cosine")
+    _seed_collection(collection)
+    with pytest.raises(ValueError, match="threshold"):
+        collection.match_query(
+            "MATCH (n) RETURN n LIMIT 10", vector=[1.0, 0.0, 0.0, 0.0], threshold=threshold
+        )
+    graph = db.create_graph_collection("graph_threshold_nan", dimension=4)
+    graph.upsert_node(1, {"name": "A"}, [1.0, 0.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="threshold"):
+        graph.match_query(
+            "MATCH (n) RETURN n LIMIT 10", vector=[1.0, 0.0, 0.0, 0.0], threshold=threshold
+        )

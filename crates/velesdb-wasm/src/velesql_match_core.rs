@@ -16,11 +16,15 @@
 //!   row carries it as `score`, when the MATCH computes one: a WHERE
 //!   `similarity()` leaf or a query vector ([`crate::velesql_match_score`]).
 //!
-//! `bindings` holds the explicitly aliased nodes only, and `depth` the number
-//! of relationships walked, as in core.
+//! `bindings` holds the explicitly aliased nodes only, each id its exact
+//! decimal string as REST `/match` sends it (`MatchQueryResultItem`), and
+//! `depth` the number of relationships walked, as in core. `projected`
+//! keeps core's VelesQL row contract, shared with `executeQuery` and REST
+//! `/query`: an `alias.id` there is a number.
 
 use std::collections::HashMap;
 
+use velesdb_core::api_types::serde_id;
 use velesdb_core::velesql::json_path::payload_path;
 use velesdb_core::velesql::{
     parse_projection_item, Parser, ProjectionItem, QueryValidator, ReturnClause, ReturnItem,
@@ -70,7 +74,7 @@ fn core_row(candidate: &MatchCandidate, return_clause: &ReturnClause) -> serde_j
     let bindings: serde_json::Map<String, serde_json::Value> = binding
         .nodes
         .iter()
-        .filter_map(|n| Some((n.alias.clone()?, serde_json::json!(n.id))))
+        .filter_map(|n| Some((n.alias.clone()?, serde_id::id_to_json(n.id))))
         .collect();
     let mut projected = HashMap::new();
     for item in &return_clause.items {
@@ -108,11 +112,14 @@ fn project_item(
         }
         ProjectionItem::FunctionCall(_) => {}
         ProjectionItem::PropertyPath { alias, property } => {
-            let Some(element) = find(&binding.nodes, alias).or_else(|| find(&binding.edges, alias))
-            else {
+            let value = if let Some(node) = find(&binding.nodes, alias) {
+                element_property(node, property)
+            } else if let Some(edge) = find(&binding.edges, alias) {
+                edge_property(edge, property)
+            } else {
                 return;
             };
-            if let Some(value) = element_property(element, property) {
+            if let Some(value) = value {
                 projected.insert(projection_key(item), value);
             }
         }
@@ -136,10 +143,20 @@ fn find<'b>(elements: &'b [BoundElement], alias: &str) -> Option<&'b BoundElemen
 /// holds; any other property is a (dot-nested) path in the payload.
 fn element_property(element: &BoundElement, property: &str) -> Option<serde_json::Value> {
     if property == "id" {
-        return Some(serde_json::json!(element.id));
+        return Some(crate::js_value::row_id_json(element.id));
     }
     let payload = element.payload.as_ref()?;
     payload_path(payload, property).cloned()
+}
+
+/// Core's `projected_edge_property`: a relationship's `id` leaves as its
+/// decimal string (a derived edge id is hashed, routinely above 2^53); any
+/// other property reads as on a node.
+fn edge_property(edge: &BoundElement, property: &str) -> Option<serde_json::Value> {
+    if property == "id" {
+        return Some(velesdb_core::api_types::serde_id::id_to_json(edge.id));
+    }
+    element_property(edge, property)
 }
 
 /// Core's `project_all_node_properties`: every payload property but `id`
@@ -153,7 +170,7 @@ fn project_all(node: &BoundElement, projected: &mut HashMap<String, serde_json::
             projected.insert(format!("{alias}.{key}"), value.clone());
         }
     }
-    projected.insert(format!("{alias}.id"), serde_json::json!(node.id));
+    projected.insert(format!("{alias}.id"), crate::js_value::row_id_json(node.id));
 }
 
 /// Core's `projection_key`: the item's `AS` alias, else its expression.

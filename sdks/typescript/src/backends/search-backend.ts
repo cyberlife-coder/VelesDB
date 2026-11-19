@@ -9,6 +9,7 @@
 import type {
   SearchOptions,
   SearchResult,
+  SearchIdResult,
   MultiQuerySearchOptions,
   SparseVector,
   SparseSearchNamedOptions,
@@ -283,10 +284,10 @@ export async function multiQuerySearchIds(
   collection: string,
   vectors: Array<number[] | Float32Array>,
   options?: MultiQuerySearchOptions
-): Promise<Array<{ id: number; score: number }>> {
+): Promise<SearchIdResult[]> {
   requireMultiQueryVectorCount(vectors);
   const response = await transport.requestJson<{
-    results: Array<{ id: number; score: number }>;
+    results: SearchIdResult[];
   }>(
     'POST',
     `${collectionPath(collection)}/search/multi/ids`,
@@ -332,9 +333,9 @@ export async function searchIds(
   collection: string,
   query: number[] | Float32Array,
   options?: SearchOptions
-): Promise<Array<{ id: number; score: number }>> {
+): Promise<SearchIdResult[]> {
   const response = await transport.requestJson<{
-    results: Array<{ id: number; score: number }>;
+    results: SearchIdResult[];
   }>(
     'POST',
     `${collectionPath(collection)}/search/ids`,

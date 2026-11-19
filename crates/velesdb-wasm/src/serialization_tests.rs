@@ -27,7 +27,7 @@ const ALL_MODES: [StorageMode; 5] = [
 ];
 
 #[test]
-fn test_v3_roundtrip_preserves_mode_vectors_and_payloads_in_every_mode() {
+fn test_roundtrip_preserves_mode_vectors_and_payloads_in_every_mode() {
     for mode in ALL_MODES {
         let mut store = create_store(3, DistanceMetric::Euclidean, mode);
         insert_with_payload(
@@ -39,7 +39,7 @@ fn test_v3_roundtrip_preserves_mode_vectors_and_payloads_in_every_mode() {
         insert_with_payload(&mut store, 2, &[-0.75, 0.5, 2.0], None);
 
         let bytes = export_to_bytes(&store);
-        assert_eq!(bytes[4], 3, "{mode:?}: export writes format v3");
+        assert_eq!(bytes[4], 4, "{mode:?}: export writes format v4");
         let restored = import_from_bytes(&bytes).unwrap();
 
         assert_eq!(restored.storage_mode, mode);
@@ -55,12 +55,49 @@ fn test_v3_roundtrip_preserves_mode_vectors_and_payloads_in_every_mode() {
 }
 
 #[test]
-fn test_v3_size_of_one_3d_vector_without_payload() {
-    // Header 19 + id 8 + data blob (8 + 3 * 4) + empty payload blob 8 = 55
-    // (`WASM_PERSISTENCE.md`; the v2 export of the same store was 87 bytes).
+fn test_v4_size_of_one_3d_vector_without_payload() {
+    // Header 19 + id 8 + data blob (8 + 3 * 4) + empty payload blob 8 + empty
+    // sparse section 8 = 63 (`WASM_PERSISTENCE.md`; v3 was 55, v2 87 bytes).
     let mut store = create_store(3, DistanceMetric::Cosine, StorageMode::SQ8);
     insert_with_payload(&mut store, 1, &[1.0, 0.0, 0.0], None);
-    assert_eq!(export_to_bytes(&store).len(), 55);
+    assert_eq!(export_to_bytes(&store).len(), 63);
+}
+
+/// The sparse index survives a save: it used to be dropped, so a loaded
+/// store answered no sparse query.
+#[test]
+fn test_the_sparse_index_survives_the_round_trip() {
+    let mut store = create_store(2, DistanceMetric::Cosine, StorageMode::Full);
+    insert_with_payload(&mut store, 1, &[1.0, 0.0], None);
+    insert_with_payload(&mut store, 2, &[0.0, 1.0], None);
+    let mut index = crate::sparse::SparseIndex::new();
+    index.insert(1, &[7, 9], &[0.5, 2.0]).unwrap();
+    index.insert(2, &[9], &[1.0]).unwrap();
+    store.sparse_index = Some(index);
+
+    let restored = import_from_bytes(&export_to_bytes(&store)).unwrap();
+    let documents = restored
+        .sparse_index
+        .as_ref()
+        .expect("the sparse index is restored")
+        .documents();
+    assert_eq!(
+        documents,
+        vec![(1, vec![(7, 0.5), (9, 2.0)]), (2, vec![(9, 1.0)])]
+    );
+}
+
+/// A v3 blob — no sparse section — still loads, with no sparse index.
+#[test]
+fn test_a_v3_blob_still_loads() {
+    let mut store = create_store(2, DistanceMetric::Cosine, StorageMode::Full);
+    insert_with_payload(&mut store, 1, &[1.0, 0.0], None);
+    let mut bytes = export_to_bytes(&store);
+    bytes.truncate(bytes.len() - 8); // the empty v4 sparse section
+    bytes[4] = 3;
+    let restored = import_from_bytes(&bytes).unwrap();
+    assert_eq!(restored.ids, vec![1]);
+    assert!(restored.sparse_index.is_none());
 }
 
 // ---------------------------------------------------------------------------

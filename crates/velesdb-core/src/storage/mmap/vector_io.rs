@@ -367,6 +367,12 @@ impl VectorStorage for MmapStorage {
 }
 
 impl MmapStorage {
+    /// Returns `true` when a vector is stored under `id` — an index lookup,
+    /// without reading the vector itself.
+    pub(crate) fn contains(&self, id: u64) -> bool {
+        self.index.contains_key(id)
+    }
+
     /// Deletes a whole batch of vectors under ONE durability barrier.
     ///
     /// Batched counterpart of [`VectorStorage::delete`], which pays one WAL

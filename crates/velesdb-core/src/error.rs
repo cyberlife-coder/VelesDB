@@ -227,6 +227,17 @@ pub enum Error {
         /// The maximum schema version this binary supports.
         supported: u32,
     },
+
+    /// Access denied by the database's observer policy (VELES-037).
+    ///
+    /// The variant an observer refuses a read, a DDL statement or a DML
+    /// mutation with (`AccessDecision::Deny`, `on_ddl_request`,
+    /// `on_dml_mutation_request`), so every surface can tell "not allowed"
+    /// from "malformed": REST answers `403 Forbidden`, Python raises
+    /// `PermissionError`. A caller error: retrying it unchanged is refused
+    /// again, and it never counts toward a circuit breaker.
+    #[error("[VELES-037] Access denied: {0}")]
+    AccessDenied(String),
 }
 
 impl Error {
@@ -270,6 +281,7 @@ impl Error {
             Self::InvalidCollectionName { .. } => "VELES-034",
             Self::SnapshotBuildFailed(_) => "VELES-035",
             Self::IncompatibleSchemaVersion { .. } => "VELES-036",
+            Self::AccessDenied(_) => "VELES-037",
         }
     }
 
@@ -331,7 +343,8 @@ impl Error {
             | Self::Overflow(_)
             | Self::InvalidQuantizerConfig(_)
             | Self::InvalidDimension { .. }
-            | Self::InvalidCollectionName { .. } => true,
+            | Self::InvalidCollectionName { .. }
+            | Self::AccessDenied(_) => true,
             Self::GuardRail { kind, .. } => kind.is_caller_error(),
             Self::Storage(_)
             | Self::Index(_)
@@ -361,7 +374,6 @@ impl From<crate::velesql::ParseError> for Error {
 
 /// Conversion from `GuardRailViolation` — surfaces limit violations as
 /// [`Error::GuardRail`], keeping which limit was crossed.
-#[cfg(feature = "persistence")]
 impl From<crate::guardrails::GuardRailViolation> for Error {
     fn from(v: crate::guardrails::GuardRailViolation) -> Self {
         Self::GuardRail {

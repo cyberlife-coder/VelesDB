@@ -17,9 +17,12 @@ use tauri_plugin_velesdb::{Error, VelesDbState};
 
 /// Creates the node payloads the frontend's edges will point at.
 ///
-/// `VelesDbState::with_db` hands you the raw `velesdb_core::Database` the
+/// `VelesDbState::run_db` hands you the raw `velesdb_core::Database` the
 /// plugin opened — the same instance the IPC commands use, so anything written
-/// here is immediately visible to the frontend.
+/// here is immediately visible to the frontend. It runs the closure on the
+/// blocking pool: core calls are synchronous and may fsync, so an `async`
+/// command must not run them on an async runtime worker (`with_db` does, and
+/// is for synchronous callers only).
 ///
 /// The graph collection must already exist. Either the frontend calls
 /// `create_graph_collection` first, or you create it here with the equivalent
@@ -34,7 +37,7 @@ pub async fn seed_graph_nodes(app: AppHandle, collection: String) -> Result<usiz
     let state = app.state::<VelesDbState>();
 
     state
-        .with_db(|db: Arc<velesdb_core::Database>| {
+        .run_db(move |db: Arc<velesdb_core::Database>| {
             let coll = db
                 .get_graph_collection(&collection)
                 .ok_or_else(|| Error::CollectionNotFound(collection.clone()))?;
@@ -52,6 +55,7 @@ pub async fn seed_graph_nodes(app: AppHandle, collection: String) -> Result<usiz
 
             Ok(nodes.len())
         })
+        .await
         .map_err(|e| format!("{e}"))
 }
 
@@ -70,7 +74,7 @@ pub async fn count_matches(app: AppHandle, collection: String) -> Result<usize, 
     let state = app.state::<VelesDbState>();
 
     state
-        .with_db(|db: Arc<velesdb_core::Database>| {
+        .run_db(move |db: Arc<velesdb_core::Database>| {
             let coll = db
                 .get_vector_collection(&collection)
                 .ok_or_else(|| Error::CollectionNotFound(collection.clone()))?;
@@ -80,5 +84,6 @@ pub async fn count_matches(app: AppHandle, collection: String) -> Result<usize, 
                 .map(|r| r.len())
                 .map_err(Error::Database)
         })
+        .await
         .map_err(|e| format!("{e}"))
 }

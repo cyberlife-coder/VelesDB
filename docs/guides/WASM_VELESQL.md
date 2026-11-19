@@ -107,9 +107,14 @@ const rows = JSON.parse(db.executeMatch(
   "MATCH (a)-[:CITES]->(b) RETURN b.title AS cited, b.id",
   JSON.stringify({ _collection: 'docs' })
 ));
-// [{ "bindings": { "a": 1, "b": 2 }, "depth": 1,
+// [{ "bindings": { "a": "1", "b": "2" }, "depth": 1,
 //    "projected": { "cited": "world", "b.id": 2 } }]
 ```
+
+Each `bindings` node id is its exact decimal string, as REST `/match` sends it
+(a JSON number rounds a `u64` past 2^53). `projected` keeps core's VelesQL row
+contract, shared with `executeQuery` and REST `/query`: an `alias.id` there is
+a number.
 
 `projected` follows core's RETURN rules: `alias.property` under its `AS` alias or
 its text, `alias.id` for the element id, a bare alias as every `alias.key` plus
@@ -189,6 +194,7 @@ core's `QueryValidator` first, so a refusal carries the same `[Vnnn]` code.
 | `WHERE`: comparisons, `IN`, `BETWEEN`, `LIKE` / `ILIKE`, `IS NULL`, `AND` / `OR` / `NOT` | Same rows — core's payload filter runs in both | `cases` X001–X020, `number_cases`, `join_cases` J015 (`IS NULL`) |
 | `NEAR`, `similarity()` thresholds, `NEAR` under `OR` | Same ids and scores | `near_cases` N001–N034, `cases` X021–X022 |
 | `NEAR_FUSED` + `USING FUSION` `rrf` / `average` / `maximum` | Same ids and scores; `weighted` / `rsf` refused by both (V012) | `fusion_cases`, `rejected_cases` |
+| `SPARSE_NEAR` alone, or beside a `NEAR` with or without `USING FUSION` | Same ids and scores | `velesql_sparse_parity_tests.rs` (against a core `Database`) |
 | `ORDER BY`, `DISTINCT`, `LIMIT` / `OFFSET`, nulls ordering | Same order; a NaN score ranks last, as in core | `cases`, `null_order_cases`, `near_cases`; NaN: `vector_ops_tests.rs`, `velesql_match_rank_tests.rs` |
 | Projection, aliases, window functions | Same rows | `projection_cases` P001–P009 |
 | `GROUP BY` / `HAVING` / aggregates, vector `GROUP BY` | Same groups and values | `aggregate_cases` G001–G027, `vector_group_cases` V001–V010 |
@@ -260,6 +266,22 @@ One case deserves more than a one-liner:
   best points passing the metadata filter as in core
   (`fusion::branch_depth`), at most `fusion::MAX_FUSED_VECTORS` vectors, and a
   distance metric fuses closest-first.
+- A **`NEAR` beside a `SPARSE_NEAR`** is core's hybrid dense + sparse search:
+  each branch keeps as many best points passing the metadata filter as core
+  (`fusion::dense_sparse_candidate_k`), and the branches fuse by the strategy
+  core maps from the clause (`FusionClause::dense_sparse_strategy`, RRF without
+  one): `rrf`, `average`, `maximum`, `rsf`, `weighted` and `weighted_rrf` all
+  run, with a distance metric read closest-first. A lone `SPARSE_NEAR` ranks
+  by the sparse score. The store's one sparse index is the default index: a
+  store without sparse vectors, or a named index (`USING 'name'`), is refused
+  as core refuses a missing index, with core's error.
+- `DISTINCT` and a vector `GROUP BY` beside a `SPARSE_NEAR` or a
+  `NEAR_FUSED` read every candidate core reads before `LIMIT` / `OFFSET`
+  apply (`SelectStatement::reshapes_rows_before_window`), so the window bounds
+  the distinct rows or groups, not the hits.
+- A `similarity()` threshold beside a `SPARSE_NEAR` bounds both branches,
+  evaluated as on the dense path, under `AND`, `OR` and `NOT`, as core
+  bounds them.
 - The vector-predicate shapes core refuses (`NEAR_FUSED` under `OR` / `NOT` or
   beside another vector predicate, several `SPARSE_NEAR`, several
   `similarity()` under one `OR`) are refused by the same check

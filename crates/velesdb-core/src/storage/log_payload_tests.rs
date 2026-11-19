@@ -1178,3 +1178,93 @@ fn test_torn_tail_after_snapshot_truncated_and_delta_survives_restart() {
         "snapshot + delta replay must see id 99"
     );
 }
+
+// -------------------------------------------------------------------------
+// Offset resync after a failed flush
+// -------------------------------------------------------------------------
+
+/// A writer whose first `write` fails and whose later writes succeed — a
+/// transient ENOSPC, as the `BufWriter` in front of the WAL file sees it.
+#[derive(Default)]
+struct FailsFirstWrite {
+    failed: bool,
+    written: Vec<u8>,
+}
+
+impl std::io::Write for FailsFirstWrite {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if !self.failed {
+            self.failed = true;
+            return Err(std::io::Error::other("transient write failure"));
+        }
+        self.written.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The bytes a failed flush leaves buffered still land in the file on the
+/// next successful flush, so the offset the next record is indexed at must
+/// count them. Resyncing to the file length alone indexed it 30 bytes early,
+/// where `retrieve` read the previous record's payload.
+#[test]
+fn test_wal_end_counts_bytes_a_failed_flush_kept() {
+    use std::io::Write;
+    let mut wal = std::io::BufWriter::new(FailsFirstWrite::default());
+    wal.write_all(&[CRC_STORE_MARKER; 30]).expect("buffered");
+    assert!(wal.flush().is_err(), "precondition: the flush failed");
+
+    let next = super::log_payload_io::wal_end(&wal, 0);
+
+    assert_eq!(next, 30);
+    wal.write_all(&[CRC_STORE_MARKER; 5]).expect("buffered");
+    wal.flush().expect("the retry succeeds");
+    assert_eq!(
+        wal.get_ref().written.len(),
+        35,
+        "the kept bytes landed first"
+    );
+}
+
+/// After a failed flush, the next record is indexed where it lands, so it
+/// reads back as itself, now and after a snapshot and reopen. Resyncing to
+/// the file length indexed record 3 at record 2's position.
+fn assert_recovers_after_failed_flush(
+    store_second: impl FnOnce(&mut LogPayloadStorage) -> std::io::Result<()>,
+) {
+    let (mut storage, temp_dir) = create_test_storage();
+    storage.store(1, &json!({"a": 1})).expect("store 1");
+    {
+        let _fault = super::log_payload_io::fail_next_wal_flush();
+        assert!(
+            store_second(&mut storage).is_err(),
+            "precondition: the flush failed"
+        );
+    }
+    storage.store(3, &json!({"c": 3})).expect("store 3");
+
+    assert_eq!(storage.retrieve(3).expect("read 3"), Some(json!({"c": 3})));
+    assert_eq!(
+        storage.retrieve(2).expect("read 2"),
+        Some(json!({"b": "kept"}))
+    );
+    storage.create_snapshot().expect("snapshot");
+    drop(storage);
+
+    let reopened = LogPayloadStorage::new(temp_dir.path()).expect("reopen");
+    assert_eq!(reopened.retrieve(1).expect("read 1"), Some(json!({"a": 1})));
+    assert_eq!(reopened.retrieve(3).expect("read 3"), Some(json!({"c": 3})));
+}
+
+#[test]
+fn test_store_after_a_failed_flush_reads_back_its_own_payload() {
+    assert_recovers_after_failed_flush(|s| s.store(2, &json!({"b": "kept"})));
+}
+
+#[test]
+fn test_deferred_batch_after_a_failed_flush_reads_back_its_own_payload() {
+    assert_recovers_after_failed_flush(|s| s.store_batch_deferred(&[(2, &json!({"b": "kept"}))]));
+}

@@ -47,7 +47,7 @@ fn run(db: &mut DatabaseInner, sql: &str) -> Vec<serde_json::Value> {
 
 /// Rows sorted by the `b` binding, for order-independent comparison.
 fn by_b(mut rows: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
-    rows.sort_by_key(|r| r["bindings"]["b"].as_u64());
+    rows.sort_by_key(|r| r["bindings"]["b"].as_str().map(str::to_owned));
     rows
 }
 
@@ -64,13 +64,13 @@ fn property_paths_project_under_their_expression_or_alias() {
         rows,
         vec![
             json!({
-                "bindings": {"a": 1, "b": 2},
+                "bindings": {"a": "1", "b": "2"},
                 "depth": 1,
                 "projected": {"a.title": "doc 1", "cited": "doc 2", "r.weight": 0.5},
             }),
             // Edge 11 has no `weight`: the key is absent, as in core.
             json!({
-                "bindings": {"a": 1, "b": 3},
+                "bindings": {"a": "1", "b": "3"},
                 "depth": 1,
                 "projected": {"a.title": "doc 1", "cited": "doc 3"},
             }),
@@ -90,7 +90,7 @@ fn a_bare_alias_projects_every_property_and_the_id() {
     assert_eq!(
         rows,
         vec![json!({
-            "bindings": {"a": 1, "b": 2},
+            "bindings": {"a": "1", "b": "2"},
             "depth": 1,
             "projected": {"b.title": "doc 2", "b._labels": ["Doc"], "b.id": 2},
         })]
@@ -105,7 +105,7 @@ fn a_single_node_row_has_depth_zero_and_reads_id() {
     let rows = run(&mut db, "MATCH (n:Doc) WHERE n.title = 'doc 3' RETURN n.id");
     assert_eq!(
         rows,
-        vec![json!({"bindings": {"n": 3}, "depth": 0, "projected": {"n.id": 3}})]
+        vec![json!({"bindings": {"n": "3"}, "depth": 0, "projected": {"n.id": 3}})]
     );
 }
 
@@ -118,7 +118,7 @@ fn unnamed_nodes_are_not_bound() {
 
     let rows = run(&mut db, "MATCH (a:Doc)-[:CITES]->(:Doc) RETURN a.title");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["bindings"], json!({"a": 1}));
+    assert_eq!(rows[0]["bindings"], json!({"a": "1"}));
 }
 
 #[test]

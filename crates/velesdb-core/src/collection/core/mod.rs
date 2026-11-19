@@ -20,6 +20,8 @@ mod crud_helpers;
 mod crud_histogram;
 mod crud_indexing;
 mod crud_read_delete;
+#[cfg(all(test, feature = "persistence"))]
+mod crud_read_delete_tests;
 #[cfg(test)]
 mod crud_tests;
 mod flush;
@@ -55,6 +57,8 @@ mod scroll;
 mod scroll_tests;
 mod sparse_lifecycle;
 mod statistics;
+#[cfg(feature = "persistence")]
+mod streaming_ops;
 #[cfg(all(test, feature = "persistence"))]
 mod ttl_read_tests;
 

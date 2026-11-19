@@ -9,6 +9,7 @@
 //!   into a JS-friendly shape
 
 use serde::{Deserialize, Serialize};
+use velesdb_core::api_types::serde_id;
 
 // ============================================================================
 // Default value functions (graph-specific)
@@ -36,15 +37,18 @@ pub(crate) fn default_algorithm() -> String {
 pub struct AddEdgeRequest {
     /// Collection name.
     pub collection: String,
-    /// Edge ID.
+    /// Edge ID, as a decimal string or a number.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
-    /// Source node ID.
+    /// Source node ID, as a decimal string or a number (as on REST).
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub source: u64,
-    /// Target node ID.
+    /// Target node ID, as a decimal string or a number (as on REST).
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub target: u64,
     /// Edge label (relationship type).
     pub label: String,
-    /// Optional edge properties.
+    /// Optional edge properties: an object, or null. Anything else is refused.
     #[serde(default)]
     pub properties: Option<serde_json::Value>,
 }
@@ -53,15 +57,18 @@ pub struct AddEdgeRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchEdgeInput {
-    /// Edge ID.
+    /// Edge ID, as a decimal string or a number.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
-    /// Source node ID.
+    /// Source node ID, as a decimal string or a number (as on REST).
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub source: u64,
-    /// Target node ID.
+    /// Target node ID, as a decimal string or a number (as on REST).
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub target: u64,
     /// Edge label (relationship type).
     pub label: String,
-    /// Optional edge properties.
+    /// Optional edge properties: an object, or null. Anything else is refused.
     #[serde(default)]
     pub properties: Option<serde_json::Value>,
 }
@@ -84,9 +91,17 @@ pub struct GetEdgesRequest {
     pub collection: String,
     /// Optional label filter.
     pub label: Option<String>,
-    /// Optional source node filter.
+    /// Optional source node filter, as a decimal string or a number.
+    #[serde(
+        default,
+        deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
+    )]
     pub source: Option<u64>,
-    /// Optional target node filter.
+    /// Optional target node filter, as a decimal string or a number.
+    #[serde(
+        default,
+        deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
+    )]
     pub target: Option<u64>,
 }
 
@@ -96,7 +111,8 @@ pub struct GetEdgesRequest {
 pub struct TraverseGraphRequest {
     /// Collection name.
     pub collection: String,
-    /// Starting node ID.
+    /// Starting node ID, as a decimal string or a number (as on REST).
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub source: u64,
     /// Maximum traversal depth.
     #[serde(default = "default_max_depth")]
@@ -117,7 +133,8 @@ pub struct TraverseGraphRequest {
 pub struct GetNodeDegreeRequest {
     /// Collection name.
     pub collection: String,
-    /// Node ID.
+    /// Node ID, as a decimal string or a number.
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub node_id: u64,
 }
 
@@ -125,11 +142,15 @@ pub struct GetNodeDegreeRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeOutput {
-    /// Edge ID.
+    /// Edge ID, sent as a decimal string: a derived edge id is hashed and
+    /// routinely above 2^53, which a JavaScript number rounds.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
-    /// Source node ID.
+    /// Source node ID, as a decimal string (as REST's `EdgeResponse`).
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub source: u64,
-    /// Target node ID.
+    /// Target node ID, as a decimal string.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub target: u64,
     /// Edge label.
     pub label: String,
@@ -141,11 +162,15 @@ pub struct EdgeOutput {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraversalOutput {
-    /// Target node ID reached.
+    /// Target node ID reached, as a decimal string (as REST's
+    /// `TraversalResultItem`).
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub target_id: u64,
     /// Depth of traversal.
     pub depth: u32,
-    /// Path taken (node IDs).
+    /// Path taken: the ids of the edges walked, in order, sent as decimal
+    /// strings (see [`EdgeOutput::id`]).
+    #[serde(serialize_with = "serde_id::serialize_ids_as_strings")]
     pub path: Vec<u64>,
 }
 
@@ -153,7 +178,8 @@ pub struct TraversalOutput {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeDegreeOutput {
-    /// Node ID.
+    /// Node ID, as a decimal string.
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub node_id: u64,
     /// Number of incoming edges.
     pub in_degree: usize,
@@ -167,7 +193,9 @@ pub struct NodeDegreeOutput {
 pub struct TraverseGraphParallelRequest {
     /// Collection name.
     pub collection: String,
-    /// Source node IDs to start traversal from.
+    /// Source node IDs to start traversal from, each a decimal string or a
+    /// number.
+    #[serde(deserialize_with = "serde_id::deserialize_ids_from_string_or_number")]
     pub sources: Vec<u64>,
     /// Maximum traversal depth.
     #[serde(default = "default_max_depth")]
@@ -178,3 +206,7 @@ pub struct TraverseGraphParallelRequest {
     /// Optional relationship types to follow.
     pub rel_types: Option<Vec<String>>,
 }
+
+#[cfg(test)]
+#[path = "types_graph_tests.rs"]
+mod tests;

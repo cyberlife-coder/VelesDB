@@ -199,8 +199,8 @@ results = collection.hybrid_search(
 points = collection.get([1, 2, 3])
 
 # Every id: all_ids() lists the vector index, all_point_ids() the union of the
-# vector and payload indexes. Both pass the observer's read gate: a deny raises
-# ValueError, and a scope raises PermissionError (bare ids cannot be scoped).
+# vector and payload indexes. Both pass the observer's read gate: a deny, and a
+# scope (bare ids cannot be scoped), raise PermissionError.
 ids = collection.all_ids()
 every_id = collection.all_point_ids()
 

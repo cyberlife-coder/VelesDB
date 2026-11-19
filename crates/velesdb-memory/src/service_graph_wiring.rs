@@ -11,7 +11,7 @@
 use crate::id;
 
 use super::{
-    canonical_entity_name, reject_self_links, strip_reserved_keys, validate_relation, AutographJob,
+    canonical_entity_name, reject_self_links, relation_label, strip_reserved_keys, AutographJob,
     Embedder, EntityProfile, EntityRelation, ExtractedRelation, Extractor, FactStore, GraphStore,
     HashMap, HashSet, Link, MemoryError, MemoryService, Metadata, RememberedExtraction,
     ABOUT_RELATION, HUB_ID_SALT, MENTIONS_RELATION,
@@ -469,7 +469,9 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         S: GraphStore,
     {
         for link in links {
-            self.store.relate(fact_id, link.target, &link.relation)?;
+            // Validated by `validate_links` before any write: the canonical label.
+            self.store
+                .relate(fact_id, link.target, relation_label(&link.relation)?)?;
         }
         Ok(())
     }
@@ -658,15 +660,15 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         S: GraphStore,
     {
         for relation in relations {
-            if validate_relation(&relation.predicate).is_err() {
+            let Ok(predicate) = relation_label(&relation.predicate) else {
                 continue;
-            }
+            };
             let subject_id = self.entity_hub(&relation.subject, entity_ids)?;
             let object_id = self.entity_hub(&relation.object, entity_ids)?;
             if subject_id == object_id {
                 continue;
             }
-            self.add_edge(subject_id, object_id, &relation.predicate, edges)?;
+            self.add_edge(subject_id, object_id, predicate, edges)?;
         }
         Ok(())
     }

@@ -3,6 +3,7 @@
 //! Provides semantic memory for AI agents in the browser.
 
 use serde::{Deserialize, Serialize};
+use velesdb_core::api_types::serde_id;
 use wasm_bindgen::prelude::*;
 
 #[cfg(doc)]
@@ -13,7 +14,12 @@ use crate::{store_insert, StoreState};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticResult {
-    /// Knowledge fact ID.
+    /// Knowledge fact ID: a decimal string in JSON, read back from a string
+    /// or a number.
+    #[serde(
+        serialize_with = "serde_id::serialize_id_as_string",
+        deserialize_with = "serde_id::deserialize_id_from_string_or_number"
+    )]
     pub id: u64,
     /// Similarity score.
     pub score: f32,
@@ -30,11 +36,11 @@ pub struct SemanticResult {
 ///
 /// # Durability
 ///
-/// **Not auto-persisted.** The WASM crate has no `persistence` feature, but the
-/// `VectorStore` binary format (`export_to_bytes`/`save`/`load`, v3) **does**
-/// serialize payloads, so fact content **survives** an explicit `save()` →
-/// `load()` roundtrip. Call `save()` (e.g. to IndexedDB) to keep state across
-/// reloads; nothing is written automatically.
+/// **In-memory only.** `SemanticMemory` exposes no `save`, export or `load`:
+/// its store lives inside this object, so every fact is lost when the object
+/// is dropped or the page reloads. The `VectorStore` persistence methods do not
+/// reach it. To keep facts across reloads, store them again from a source the
+/// application persists itself.
 ///
 /// # Example (JavaScript)
 ///
@@ -95,7 +101,8 @@ impl SemanticMemory {
 
     /// Queries semantic memory by similarity search.
     ///
-    /// Returns a JSON array of {id, score, content} objects.
+    /// Returns a JSON array of `{id, score, content}` objects, `id` a decimal
+    /// string.
     #[wasm_bindgen]
     pub fn query(&self, embedding: &[f32], top_k: usize) -> Result<JsValue, JsValue> {
         let semantic_results: Vec<SemanticResult> = self

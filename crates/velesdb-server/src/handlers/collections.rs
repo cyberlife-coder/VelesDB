@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::types::{CollectionResponse, CreateCollectionRequest, ErrorResponse};
 use crate::AppState;
-use velesdb_core::index::HnswParams;
+use velesdb_core::HnswOverrides;
 use velesdb_core::{DistanceMetric, StorageMode};
 
 use super::helpers::{
@@ -90,35 +90,15 @@ fn parse_storage_mode(raw: &str) -> Result<StorageMode, axum::response::Response
         .map_err(|e| error_response(StatusCode::BAD_REQUEST, e))
 }
 
-/// Build a full `HnswParams` override from the request fields, or return
-/// `None` when the caller supplied no HNSW tuning fields at all.
-///
-/// The base parameters come from `HnswParams::auto(dimension)` so that
-/// unspecified fields inherit the engine's dimension-aware defaults.
-/// `storage_mode` always mirrors the top-level collection `storage_mode`
-/// — callers cannot desync the HNSW inner storage mode from the
-/// collection's advertised quantisation (the `HnswParams::storage_mode`
-/// field is a denormalised copy that the engine keeps in sync).
-fn build_hnsw_params_override(
-    req: &CreateCollectionRequest,
-    dimension: usize,
-    storage_mode: StorageMode,
-) -> Option<HnswParams> {
-    if req.hnsw_m.is_none()
-        && req.hnsw_ef_construction.is_none()
-        && req.hnsw_alpha.is_none()
-        && req.hnsw_max_elements.is_none()
-    {
-        return None;
+/// The HNSW parameters the request pins; core resolves the rest
+/// (`[hnsw]`, then the auto-tuning for the collection's dimension).
+const fn hnsw_overrides(req: &CreateCollectionRequest) -> HnswOverrides {
+    HnswOverrides {
+        m: req.hnsw_m,
+        ef_construction: req.hnsw_ef_construction,
+        max_elements: req.hnsw_max_elements,
+        alpha: req.hnsw_alpha,
     }
-    let base = HnswParams::auto(dimension);
-    Some(HnswParams {
-        max_connections: req.hnsw_m.unwrap_or(base.max_connections),
-        ef_construction: req.hnsw_ef_construction.unwrap_or(base.ef_construction),
-        max_elements: req.hnsw_max_elements.unwrap_or(base.max_elements),
-        storage_mode,
-        alpha: req.hnsw_alpha.unwrap_or(base.alpha),
-    })
 }
 
 /// Create a vector collection, requiring a dimension in the request.
@@ -152,35 +132,17 @@ fn create_vector_collection(
     // collection exists but the advanced fields are missing.
     let advanced = parse_advanced_config(req)?;
 
-    // Phase 1: create the base collection with HNSW params.
-    //
-    // Any of `hnsw_m`, `hnsw_ef_construction`, `hnsw_alpha`, or
-    // `hnsw_max_elements` being present triggers the "with_params"
-    // path so the caller-supplied values flow into a full `HnswParams`
-    // starting from the engine's dimension-aware auto defaults. The
-    // legacy `with_hnsw` helper cannot carry alpha/max_elements and
-    // would silently drop them, re-introducing the PROP-HNSW-ALPHA gap.
-    let base_result = if let Some(hnsw_params) =
-        build_hnsw_params_override(req, dimension, storage_mode)
-    {
-        // Reject out-of-range tunables (e.g. hnsw_alpha < 1.0 or non-finite)
-        // before any collection is created on disk.
-        hnsw_params
-            .validate()
-            .map_err(|e| auto_core_error_response(&e))?;
-        state.db.create_vector_collection_with_params(
-            &req.name,
-            dimension,
-            metric,
-            storage_mode,
-            hnsw_params,
-            None,
-        )
-    } else {
-        state
-            .db
-            .create_vector_collection_with_options(&req.name, dimension, metric, storage_mode)
-    };
+    // Phase 1: create the base collection. Core resolves every HNSW field
+    // the request leaves unset and refuses an out-of-range one (e.g.
+    // `hnsw_alpha < 1.0`) before anything is created on disk.
+    let base_result = state.db.create_vector_collection_with_overrides(
+        &req.name,
+        dimension,
+        metric,
+        storage_mode,
+        hnsw_overrides(req),
+        None,
+    );
     if let Err(e) = base_result {
         return Ok(Err(e));
     }

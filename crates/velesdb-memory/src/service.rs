@@ -465,7 +465,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// nothing has been stored or overwritten yet.
     fn validate_links(&self, links: &[Link]) -> Result<(), MemoryError> {
         for link in links {
-            validate_relation(&link.relation)?;
+            relation_label(&link.relation)?;
         }
         self.ensure_link_targets_exist(links)
     }
@@ -913,9 +913,10 @@ fn reject_self_links(fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
 /// [`MemoryService::remember_with_ttl`]'s auto-date stamp: `metadata` with
 /// today's date added under [`AUTO_DATE_FIELD`], unless `metadata` already
 /// names that key (an explicit, possibly retroactive, caller value is never
-/// overwritten) or no clock is available ([`clock::today_ymd`] returns `None`
-/// on `wasm32-unknown-unknown`). Returns an owned map either way, `None` only
-/// when there is nothing to store at all (no caller metadata AND no clock).
+/// overwritten) or the clock reads before the Unix epoch
+/// ([`clock::today_ymd`] returns `None`). Returns an owned map either way,
+/// `None` only when there is nothing to store at all (no caller metadata AND
+/// no date).
 fn stamp_with_today(metadata: Option<&Metadata>) -> Option<Metadata> {
     if metadata.is_some_and(|meta| meta.contains_key(AUTO_DATE_FIELD)) {
         return metadata.cloned();
@@ -946,12 +947,15 @@ fn with_system_entries(metadata: Option<Metadata>, system: Option<&Metadata>) ->
 /// from reaching the storage layer).
 const MAX_RELATION_BYTES: usize = 512;
 
-/// Validate a caller-supplied relation label: non-empty, within the size cap, and
-/// containing only printable, non-control ASCII characters (32–126) or non-ASCII
-/// Unicode. This prevents null bytes and control characters from reaching the
-/// storage layer while permitting natural-language labels like `"decided_in"` or
-/// `"is a friend of"`.
-fn validate_relation(label: &str) -> Result<(), MemoryError> {
+/// A caller-supplied relation label as the store keeps it: trimmed (the graph
+/// stores trim an edge label, as core's `GraphEdge::new` does, so the label
+/// written, compared on a repeated `relate` and matched by `unrelate` is the
+/// same text), non-empty, within the size cap, and containing only printable,
+/// non-control ASCII characters (32–126) or non-ASCII Unicode. This prevents
+/// null bytes and control characters from reaching the storage layer while
+/// permitting natural-language labels like `"decided_in"` or `"is a friend of"`.
+pub(super) fn relation_label(label: &str) -> Result<&str, MemoryError> {
+    let label = label.trim();
     if label.is_empty() {
         return Err(MemoryError::InvalidRelation(
             "relation label must not be empty".to_owned(),
@@ -968,5 +972,5 @@ fn validate_relation(label: &str) -> Result<(), MemoryError> {
             "relation label must not contain ASCII control characters".to_owned(),
         ));
     }
-    Ok(())
+    Ok(label)
 }

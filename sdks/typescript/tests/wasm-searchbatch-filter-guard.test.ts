@@ -29,7 +29,6 @@ vi.mock('../src/capabilities', async (importOriginal) => {
 
 import { wasmSearchBatch } from '../src/backends/wasm-search';
 import { VelesDBError } from '../src/types';
-import { newSparseIds } from '../src/backends/wasm-sparse';
 import type {
   CollectionData,
   WasmContext,
@@ -59,7 +58,6 @@ function buildCtx(): { ctx: WasmContext; store: WasmVectorStore } {
     config: { dimension: 2, metric: 'cosine' },
     store,
     payloads: new Map(),
-    sparseIds: newSparseIds(),
     createdAt: new Date(),
   };
 
@@ -73,7 +71,7 @@ function buildCtx(): { ctx: WasmContext; store: WasmVectorStore } {
     canonicalPayloadKeyFromResultId: (id) => String(id),
     canonicalPayloadKey: (id) => String(id),
     sparseVectorToArrays: () => ({ indices: [], values: [] }),
-    toNumericId: (id) => (typeof id === 'number' ? id : Number(id) || 0),
+    toPointId: (id) => BigInt(typeof id === 'number' ? id : Number(id) || 0),
   };
   return { ctx, store };
 }

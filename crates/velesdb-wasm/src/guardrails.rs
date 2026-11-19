@@ -1,8 +1,10 @@
 //! Browser-side query guardrails (#2679).
 //!
-//! Core's `guardrails` module (EPIC-048) cannot come along: it is
-//! `persistence`-gated, and its `QueryContext`/`RateLimiter`/`CircuitBreaker`
-//! run on `std::time::Instant`, which aborts on `wasm32-unknown-unknown`.
+//! Core's guard-rail enforcement (EPIC-048) cannot come along: its
+//! `QueryContext`/`RateLimiter`/`CircuitBreaker` run on `std::time::Instant`,
+//! which aborts on `wasm32-unknown-unknown`, so they stay behind core's
+//! `persistence` feature. Its limits and `GuardRailViolation` do not, and
+//! this module reads them from core instead of copying them.
 //! Core's `alloc_guard` byte backstop is also inert here by design — on
 //! non-64-bit targets its ceiling is `usize::MAX` (the browser allocator is
 //! the effective bound). What remains attackable on this surface is exactly
@@ -10,33 +12,35 @@
 //! caller-controlled input.
 //!
 //! So this module bounds the caller-amplified sites with explicit caps in
-//! core's own vocabulary: the *numbers* mirror `QueryLimits`' defaults
+//! core's own vocabulary: the *numbers* are `QueryLimits`' defaults
 //! (`DEFAULT_MAX_CARDINALITY`, `DEFAULT_MEMORY_LIMIT_BYTES`), and the
 //! refusals carry core's [`velesdb_core::Error::GuardRail`] taxonomy
 //! (`VELES-027`) so a
 //! browser refusal reads exactly like a core refusal.
 //!
 //! What is bounded:
-//! - WHERE-scan materialized rows, the same unit core checks post-filter
-//!   and pre-LIMIT (`QueryContext::check_cardinality`).
+//! - WHERE-scan materialized rows and MATCH walk rows, the same unit core
+//!   checks post-filter and pre-LIMIT (`QueryContext::check_cardinality`).
 //! - Batch / fused-search retained footprint (`num_queries × ids`), priced
 //!   in bytes like US-004's memory limit.
 //! - `k`-derived fan-out arithmetic, checked before it can wrap.
 
-/// Maximum rows a single WHERE scan may materialize.
+/// Maximum rows a single WHERE scan or MATCH walk may materialize.
 ///
-/// Same number and same refusal semantics as core's
-/// `DEFAULT_MAX_CARDINALITY` (EPIC-048 US-003): the check fires on the
-/// materialized set *before* `LIMIT` applies, matching the pre-LIMIT point
-/// where `QueryContext::check_cardinality` runs.
-pub(crate) const MAX_INTERMEDIATE_CARDINALITY: usize = 100_000;
+/// Core's `DEFAULT_MAX_CARDINALITY` (EPIC-048 US-003), with its refusal
+/// semantics: the check fires on the materialized set *before* `LIMIT`
+/// applies, matching the pre-LIMIT point where
+/// `QueryContext::check_cardinality` runs.
+pub(crate) const MAX_INTERMEDIATE_CARDINALITY: usize =
+    velesdb_core::guardrails::DEFAULT_MAX_CARDINALITY;
 
 /// Estimated live-result budget for one batch/fused search call, in bytes.
 ///
-/// Same number as core's `DEFAULT_MEMORY_LIMIT_BYTES` (EPIC-048 US-004).
+/// Core's `DEFAULT_MEMORY_LIMIT_BYTES` (EPIC-048 US-004).
 /// 100 MiB is heavy for a browser tab but unreachable by legitimate
 /// workloads: it admits e.g. 64 queries × 64K retained rows (~64 MiB).
-pub(crate) const QUERY_MEMORY_LIMIT_BYTES: usize = 100 * 1024 * 1024;
+pub(crate) const QUERY_MEMORY_LIMIT_BYTES: usize =
+    velesdb_core::guardrails::DEFAULT_MEMORY_LIMIT_BYTES;
 
 /// The retained per-result entry a batch/fused search materializes:
 /// `Vec<(u64, f32)>` items — 16 bytes each (8-byte alignment).
@@ -45,18 +49,20 @@ const RESULT_ENTRY_BYTES: usize = std::mem::size_of::<(u64, f32)>();
 /// Refuses `count` rows of intermediate cardinality above
 /// [`MAX_INTERMEDIATE_CARDINALITY`].
 ///
-/// The `String` error carries `Error::GuardRail`'s `Display`, which embeds
-/// the `[VELES-027]` code — the `VelesQL` executor's `Result<_, String>`
-/// channel pre-dates structured `WasmError`s and degrades every error the
-/// same way; the canonical tag survives in the message.
+/// The `String` error is the `Display` of the error core raises for the
+/// same violation — `Error::from(GuardRailViolation::CardinalityExceeded)`,
+/// which embeds the `[VELES-027]` code. The `VelesQL` executor's
+/// `Result<_, String>` channel pre-dates structured `WasmError`s and
+/// degrades every error the same way; the canonical tag survives in the
+/// message.
 pub(crate) fn check_cardinality(count: usize) -> Result<(), String> {
     if count > MAX_INTERMEDIATE_CARDINALITY {
-        return Err(velesdb_core::Error::GuardRail {
-            kind: velesdb_core::error::GuardRailKind::Cardinality,
-            message: format!(
-                "intermediate result cardinality {count} exceeds WASM limit of {MAX_INTERMEDIATE_CARDINALITY} rows"
-            ),
-        }
+        return Err(velesdb_core::Error::from(
+            velesdb_core::guardrails::GuardRailViolation::CardinalityExceeded {
+                max: MAX_INTERMEDIATE_CARDINALITY,
+                actual: count,
+            },
+        )
         .to_string());
     }
     Ok(())
@@ -90,18 +96,6 @@ pub(crate) fn check_fanout_memory(
         });
     }
     Ok(())
-}
-
-/// Doubles `k` for fused-search over-fetch, refusing a wrapped count.
-///
-/// `k * 2` wraps silently in release and panics in debug; the refusal is
-/// `Error::Overflow` — the request is unrepresentable, not merely large.
-pub(crate) fn checked_fanout_k(k: usize) -> Result<usize, velesdb_core::Error> {
-    k.checked_mul(2).ok_or_else(|| {
-        velesdb_core::Error::Overflow(format!(
-            "k = {k} overflows usize when doubled for fused over-fetch"
-        ))
-    })
 }
 
 #[cfg(test)]

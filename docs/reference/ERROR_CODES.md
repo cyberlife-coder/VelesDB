@@ -369,6 +369,15 @@ version incompatibility, or internal bugs:
 - **Resolution**: Upgrade VelesDB to a version that supports schema version v{found} or higher. Do not attempt to manually edit `config.json` -- this will likely corrupt the collection.
 - **Recoverable**: **No** -- requires a VelesDB upgrade.
 
+### VELES-037: AccessDenied
+
+- **Variant**: `AccessDenied(String)`
+- **Message**: `Access denied: {reason}`
+- **Cause**: The `DatabaseObserver` the database was opened with turned the request down: a read denied by `on_query_request` (`AccessDecision::Deny`), or a DDL statement or DML mutation vetoed by `on_ddl_request` / `on_dml_mutation_request`. The bindings' observers (Python `observer=`, mobile) refuse with it, including a strict-mode refusal when the policy itself failed.
+- **Resolution**: The request is not malformed; it is not allowed. Ask for the access, or run the request as a principal the policy admits. Retrying it unchanged is refused again.
+- **Surfaces**: REST `403 Forbidden` on every endpoint, VelesQL `/query` and `/aggregate` included; Python `PermissionError`; mobile `VelesError.Database` with `code = "VELES-037"`; Tauri `CommandError.code = "VELES-037"`.
+- **Recoverable**: Yes -- a caller error; it never counts toward a circuit breaker.
+
 ---
 
 ## Programmatic Usage
@@ -458,6 +467,7 @@ try {
 | VELES-034 | `InvalidCollectionName` | Yes | Validation |
 | VELES-035 | `SnapshotBuildFailed` | Yes | Graph |
 | VELES-036 | `IncompatibleSchemaVersion` | **No** | Schema |
+| VELES-037 | `AccessDenied` | Yes | Access |
 
 ## Python SDK Exception Hierarchy
 
@@ -468,8 +478,9 @@ VelesDB Python SDK maps core error codes to typed Python exceptions:
 | `VelesDBError` | `Exception` | — | Base for all VelesDB exceptions |
 | `DimensionMismatchError` | `VelesDBError` | VELES-004 | Vector dimension != collection dimension |
 | `CollectionNotFoundError` | `VelesDBError` | VELES-002 | Collection name not found |
+| `PermissionError` (built-in) | `Exception` | VELES-037 | The observer denied a read or vetoed a DDL/DML statement |
 | `VelesQLSyntaxError` | `Exception` | — | VelesQL parse error |
-| `VelesQLParameterError` | `Exception` | — | Missing or wrong-type parameter |
+| `VelesQLParameterError` | `Exception` | — | Reserved, not raised today: a missing or wrong-type parameter raises `ValueError` (VELES-010) |
 
 ### Usage
 

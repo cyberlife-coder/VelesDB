@@ -5,13 +5,11 @@
 
 use pyo3::prelude::*;
 use std::collections::HashMap;
-use velesdb_core::QueryOperationKind;
 
-use crate::collection::deny_if_scoped;
 use crate::collection::query::{
-    build_explain_analyze_dict, build_explain_dict, convert_params, parse_velesql,
-    retarget_to_collection, run_velesql_match, run_velesql_select, run_velesql_select_ids,
-    validate_query,
+    build_explain_analyze_dict, build_explain_dict, convert_params, parse_read_only_velesql,
+    parse_velesql, retarget_to_collection, run_match_on, run_velesql_match, run_velesql_select,
+    run_velesql_select_ids, validate_match_threshold, validate_query,
 };
 use crate::collection_helpers::core_err;
 use crate::graph_collection::PyGraphCollection;
@@ -27,23 +25,32 @@ impl PyGraphCollection {
     /// Returns:
     ///     List of result dicts
     ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
+    ///
+    /// The statement always runs on this collection: its ``FROM`` is
+    /// rewritten to this collection's name, and a ``_collection`` key in
+    /// ``params`` (which picks a bare MATCH's target in
+    /// ``Database.execute_query``) does not retarget it.
+    ///
     /// # Cross-Collection MATCH
     ///
-    /// For MATCH queries that reference nodes from other collections via
-    /// the ``@collection`` annotation, pass ``_collection`` in ``params``
-    /// to specify the primary collection (the one with graph edges).
-    /// Annotated nodes will have their payloads enriched from the named
-    /// collection after traversal.
+    /// A MATCH node annotated ``@collection`` reads its properties from the
+    /// named collection during the walk, while the edges are this
+    /// collection's.
     ///
     /// Example:
     ///     >>> results = graph.query(
     ///     ...     "SELECT * FROM kg WHERE category = 'person' LIMIT 10"
     ///     ... )
-    ///     >>> # Cross-collection MATCH
+    ///     >>> # Cross-collection MATCH: edges here, Category nodes' properties
+    ///     >>> # from the 'categories' collection
     ///     >>> results = graph.query(
     ///     ...     "MATCH (p:Product)-[:IN]->(c:Category@categories) "
-    ///     ...     "RETURN p.name, c.label LIMIT 20",
-    ///     ...     params={"_collection": "product_graph"},
+    ///     ...     "RETURN p.name, c.label LIMIT 20"
     ///     ... )
     #[pyo3(signature = (query_str, params=None))]
     fn query(
@@ -75,45 +82,37 @@ impl PyGraphCollection {
     ///     query_str: VelesQL MATCH query string
     ///     params: Query parameters (default: empty dict)
     ///     vector: Optional query vector for similarity scoring
-    ///     threshold: Similarity threshold (default: 0.0)
+    ///     threshold: Optional score bound for ``vector``: a row scoring below
+    ///         it under a similarity metric (cosine, dot, jaccard), or above
+    ///         it under a distance metric (euclidean, hamming), is dropped.
+    ///         Omitted (the default), every scored row is kept.
     ///
     /// Returns:
     ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
+    ///
+    /// Raises:
+    ///     ValueError: If ``threshold`` is NaN or infinite.
     ///
     /// Example:
     ///     >>> results = graph.match_query(
     ///     ...     "MATCH (a:Person)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10"
     ///     ... )
-    #[pyo3(signature = (query_str, params = None, vector = None, threshold = 0.0))]
+    #[pyo3(signature = (query_str, params = None, vector = None, threshold = None))]
     fn match_query(
         &self,
         py: Python<'_>,
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
         vector: Option<Py<PyAny>>,
-        threshold: f32,
+        threshold: Option<f32>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        // No gated `Database` twin returns `MatchResult`, so the read gate is
-        // consulted here: deny fails closed, and a scope filter also fails
-        // closed because the MATCH leaf takes no metadata filter and
-        // `MatchResult` carries no payload to post-filter (mirrors
-        // `Collection.match_query`, #1405 / #1392).
-        let scope = self
-            .db
-            .authorize_read(&self.name, QueryOperationKind::GraphTraversal, None, None)
-            .map_err(core_err)?;
-        deny_if_scoped(scope, "match_query")?;
-
-        let inner = &self.inner;
+        // Through the owning database (`run_match_on`); a read-gate scope is
+        // refused, since a MATCH row carries no payload to narrow.
+        let threshold = validate_match_threshold(threshold)?;
+        let db = &self.db;
+        let name = &self.name;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
-            if let Some(ref qv) = qv {
-                inner.execute_match_with_similarity(&mc, qv, threshold, &p)
-            } else {
-                // Route through the cost-based planner so RETURN ORDER BY,
-                // deterministic tie-break, and post-sort LIMIT match the SQL
-                // /query path exactly (backlog #1).
-                inner.match_query_ordered(&mc, &p)
-            }
+            run_match_on(db, name, &mc, &p, qv.as_deref(), threshold)
         })
     }
 
@@ -136,7 +135,7 @@ impl PyGraphCollection {
         // set publicly; MATCH still reports a real strategy via from_match's
         // default graph stats.
         let indexed = std::collections::HashSet::new();
-        Ok(build_explain_dict(py, &parsed, &indexed, None))
+        build_explain_dict(py, &parsed, &indexed, None)
     }
 
     /// Execute a query with instrumentation and return plan + actual stats (EXPLAIN ANALYZE).
@@ -150,6 +149,12 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     Dict with keys: plan, actual_stats, node_stats
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     #[pyo3(signature = (query_str, params=None))]
     fn explain_analyze(
         &self,
@@ -157,7 +162,7 @@ impl PyGraphCollection {
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Py<PyAny>> {
-        let parsed = parse_velesql(query_str)?;
+        let parsed = parse_read_only_velesql(query_str)?;
         let rust_params = convert_params(py, params)?;
         // EXPLAIN ANALYZE *executes* the query — route through the gated
         // `Database` facade twin (deny fails closed, and a scope is refused:
@@ -168,7 +173,7 @@ impl PyGraphCollection {
                 .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)
                 .map_err(core_err)
         })?;
-        Ok(build_explain_analyze_dict(py, &output))
+        build_explain_analyze_dict(py, &output)
     }
 
     /// Execute a VelesQL query returning only IDs and scores (no payload).
@@ -179,6 +184,12 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     List of dicts with 'id' and 'score' fields
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     #[pyo3(signature = (velesql, params = None))]
     fn query_ids(
         &self,

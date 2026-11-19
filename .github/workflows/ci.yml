@@ -1587,6 +1587,22 @@ jobs:
           npm ci
           npx vitest run tests/wasm-real-binding.test.ts
 
+      # The browser e2e suite (VectorStore, fusion, VelesQL, memory wedge) in
+      # a real browser, over the package the step above built. Nothing ran
+      # crates/velesdb-wasm/e2e before, so every spec drifted from the API
+      # unnoticed — `VectorStore.new`, numeric ids, `remember()` read as a
+      # bare id string — and the whole suite failed.
+      - name: WASM e2e suite in a browser (Playwright, chromium)
+        if: needs.code-changed.outputs.relevant == 'true'
+        working-directory: crates/velesdb-wasm/e2e
+        env:
+          VELESDB_WASM_PKG: ${{ runner.temp }}/velesdb-wasm-pkg
+        run: |
+          cp -r "$VELESDB_WASM_PKG" pkg
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test --project=chromium
+
   # ===========================================================================
   # OpenAPI Drift Check
   # Regenerates the committed docs/openapi.{json,yaml} snapshots from the

@@ -412,3 +412,58 @@ class TestPayloadNestingCap:
                 "vector": [1.0, 0.0, 0.0, 0.0],
                 "payload": {"v": _nested_lists(127)},
             }])
+
+
+class TestPayloadSequenceTypes:
+    """Only a list, a tuple or a numpy array converts to a JSON array.
+
+    Any other sequence used to convert too, so ``bytes``, ``bytearray`` and
+    ``range`` were stored as lists of ints — in payloads, filters, VelesQL
+    parameters and graph properties alike — although they are not JSON.
+    """
+
+    @pytest.mark.parametrize("value", [b"ab", bytearray(b"ab"), range(3)])
+    def test_a_non_json_sequence_in_a_payload_raises(self, temp_db, value):
+        col = temp_db.create_collection("seq_payload", dimension=4)
+        with pytest.raises(ValueError, match="Unsupported payload type"):
+            col.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"v": value}}])
+        assert col.count() == 0
+
+    def test_a_non_json_sequence_as_a_velesql_parameter_raises(self, temp_db):
+        col = temp_db.create_collection("seq_param", dimension=4)
+        col.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"n": 1}}])
+        with pytest.raises(ValueError, match="Unsupported payload type"):
+            col.query("SELECT * FROM seq_param WHERE n = $n LIMIT 5", params={"n": b"\x01"})
+
+    def test_list_tuple_and_numpy_array_still_convert(self, temp_db):
+        np = pytest.importorskip("numpy")
+        col = temp_db.create_collection("seq_ok", dimension=4)
+        col.upsert([{
+            "id": 1,
+            "vector": [1.0, 0.0, 0.0, 0.0],
+            "payload": {"l": [1, 2], "t": (3, 4), "a": np.array([5, 6])},
+        }])
+        assert col.get([1])[0]["payload"] == {"l": [1, 2], "t": [3, 4], "a": [5, 6]}
+        hits = col.query(
+            "SELECT * FROM seq_ok WHERE vector NEAR $v LIMIT 1",
+            params={"v": np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)},
+        )
+        assert [h["id"] for h in hits] == [1]
+
+
+class TestPayloadNoneRoundTrip:
+    """``get()`` returns ``"payload": None`` for a point stored without one;
+    ``upsert`` takes that dict back, ``None`` meaning no payload."""
+
+    def test_get_output_reupserts(self, temp_db):
+        col = temp_db.create_collection("payload_none", dimension=3)
+        col.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0]}])
+        point = col.get([1])[0]
+        assert point["payload"] is None
+        assert col.upsert([point]) == 1
+        assert col.get([1])[0]["payload"] is None
+
+    def test_upsert_bulk_takes_a_none_payload(self, temp_db):
+        col = temp_db.create_collection("payload_none_bulk", dimension=3)
+        col.upsert_bulk([{"id": 2, "vector": [0.0, 1.0, 0.0], "payload": None}])
+        assert col.get([2])[0]["payload"] is None

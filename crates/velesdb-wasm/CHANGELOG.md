@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`multi_query_search` reads core's per-branch depth.** Each query
+  vector's branch held its `k * 2` best points, where core's
+  `Collection::multi_query_search` and `NEAR_FUSED` hold
+  `fusion::branch_depth(k)`, so the fused ranking could differ from core's.
+  It now reads `branch_depth(k)`; that depth saturates, so the largest `k`
+  answers instead of being refused as an overflow.
+
+- **`denseSparseCandidateK(limit)` exports core's hybrid branch depth.** A
+  caller fusing its own dense and sparse branches with `hybrid_search_fuse`
+  (the TypeScript SDK's typed hybrid search) reads core's
+  `fusion::dense_sparse_candidate_k` here, the depth `NEAR … AND
+  SPARSE_NEAR` already uses, instead of cutting each branch at `k`.
+
+- **`MemoryService` refuses a count it used to wrap.** `k`, `maxHops`,
+  `ttlSeconds`, `fragmentIndex`, `reserveTokens` and `recallFused`'s `hops` /
+  `pool` were `usize`/`u64` parameters, which `wasm-bindgen` coerces silently:
+  `Infinity` or `NaN` became `k = 0` (an empty recall), `-1` became
+  4294967295, and a `-1n` TTL became `u64::MAX` — a fact that never expires.
+  They now take a JS number checked by the validator the Node binding uses
+  (`velesdb_memory::limits::whole_count`) and throw `INVALID_INPUT`, with the
+  Node binding's message. `ttlSeconds` and `reserveTokens` take a number, as
+  on Node, and still a `BigInt`; `recallFused`'s `pool` is now clamped to the
+  recall cap, as on every other surface.
+
+- **`WasmDatabase.addEdge` reads `source` and `target` as REST does: a
+  decimal string or a number, and `getEdges` lists them as decimal
+  strings.** They took and gave numbers only, so a node id past 2^53 could
+  not be named exactly in either direction.
+
+- **Deleting a point deletes the edges it is an end of, as core does
+  (#900).** A VelesQL `DELETE` removed the rows and left their edges, so a
+  later point under the same id inherited them in every MATCH. It now drops
+  them, and the new `WasmDatabase.removePoints(name, ids)` removes points
+  with their edges for a caller that holds the store handle, whose `remove`
+  cannot reach the graph.
+
+- **A `USING FUSION` the strategy refuses is an error, not an empty
+  result.** `velesql_fusion::apply` turned every fusion error (e.g. two
+  `weighted_rrf` weights over three branches) into an empty ranking that
+  read as "nothing matched", and its docs promised an RRF fallback it did
+  not perform.
+
+- **`GraphPersistence.load` no longer drops a row it cannot read.** A node
+  or edge row that did not deserialize was skipped, so the load resolved with
+  a graph silently missing what was saved. The load now rejects, naming the
+  graph and the row kind. Rows write every id as a decimal string (an id
+  above 2^53 made the save throw) and rows saved with numeric ids still
+  load.
+
 - **The `MATCH` read gate asks about every collection the query reads.** The
   observer (`WasmObserver::on_query_request`) was asked about the first
   `@collection` annotation found anywhere in the pattern, or `""`. It was
@@ -109,6 +158,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#1547)
 
 ### Changed
+
+- **BREAKING — point ids come back as decimal strings from every search and
+  read, as REST sends them.** A point id was serialized as a JavaScript
+  number, which the serializer refuses past 2^53 (the call threw) and
+  `JSON.parse` rounds. Now a string: the ids of `search`,
+  `search_with_quality`, `similarity_search`, `multi_query_search` and
+  `batch_search` (`[["id", score], …]`, also `WasmCollectionHandle.search`),
+  `id` of `search_with_filter`, `hybrid_search`, `text_search` and `get`,
+  `doc_id` of `search_sparse`, `sparse_search`, `SparseIndex.search` and
+  `hybrid_search_fuse`, `nodeId` of `query`, `id` of `SemanticMemory.query`,
+  the node ids of `GraphStore.bfs_traverse` / `dfs_traverse` (depths stay
+  numbers), and `WasmDatabase.executeMatch` `bindings` (REST `/match`).
+  `hybrid_search_fuse` takes ids as strings, safe-integer numbers or BigInts.
+  VelesQL rows keep numeric point ids, as REST `/query` does. Ids passed in
+  as `BigInt` are unchanged; `BigInt(id)` turns a returned id into that form.
 
 - **BREAKING (behavior) — an unaliased aggregate is named as in core.**
   `COUNT(*)` comes back as `count` (was `count(*)`), `SUM(price)` as

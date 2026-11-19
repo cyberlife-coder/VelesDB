@@ -81,13 +81,10 @@ impl StoreState {
     /// Returns the storage mode.
     #[must_use]
     pub fn storage_mode(&self) -> String {
-        match self.storage_mode {
-            StorageMode::Full => "full".to_string(),
-            StorageMode::SQ8 => "sq8".to_string(),
-            StorageMode::Binary => "binary".to_string(),
-            StorageMode::ProductQuantization => "pq".to_string(),
-            StorageMode::RaBitQ => "rabitq".to_string(),
-        }
+        // Core names its modes once (`StorageMode::canonical_name`).
+        parsing::wasm_to_core_storage_mode(self.storage_mode)
+            .canonical_name()
+            .to_string()
     }
 
     /// Returns the number of vectors in the store.
@@ -172,9 +169,10 @@ impl StoreState {
         store_insert::remove_at_index(self, idx);
     }
 
-    /// k-NN search. Returns [[id, score], ...].
+    /// k-NN search. Returns `[[id, score], ...]`, each id its exact decimal
+    /// string ([`store_search::scored_points`]).
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
-        store_search::to_js(&self.top_k(query, k)?)
+        store_search::to_js(&store_search::scored_points(self.top_k(query, k)?))
     }
 
     /// [`search_scored`](Self::search_scored) for a caller-supplied query:
@@ -251,7 +249,8 @@ impl StoreState {
         store_search::text_search_impl(query, &self.ids, &self.payloads, field.as_deref(), k)
     }
 
-    /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5).
+    /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5); a
+    /// non-finite weight is refused (`VELES-009`), as core refuses it.
     ///
     /// Computes the exact per-vector score and the text match in a single
     /// pass, in every storage mode.
@@ -388,7 +387,8 @@ impl StoreState {
         )
     }
 
-    /// Batch search for multiple vectors. Returns [[[id, score], ...], ...].
+    /// Batch search for multiple vectors. Returns `[[[id, score], ...], ...]`,
+    /// each id its exact decimal string.
     pub fn batch_search(
         &self,
         vectors: &[f32],
@@ -396,8 +396,10 @@ impl StoreState {
         k: usize,
     ) -> Result<JsValue, JsValue> {
         if num_vectors == 0 {
-            return crate::js_value::to_js_value::<Vec<Vec<(u64, f32)>>>(&vec![])
-                .map_err(|e| JsValue::from_str(&e.to_string()));
+            return crate::js_value::to_js_value::<Vec<Vec<(crate::js_value::PointId, f32)>>>(
+                &vec![],
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()));
         }
         store_search::validate_query_vectors(vectors, num_vectors, self.dimension)
             .map_err(WasmError::into_js_value)?;
@@ -528,8 +530,8 @@ impl StoreState {
         text_query: &str,
         k: usize,
         vector_weight: Option<f32>,
-    ) -> Vec<(u64, f32)> {
-        store_search::hybrid_search_scored(
+    ) -> Result<Vec<(u64, f32)>, WasmError> {
+        let scored = store_search::hybrid_search_scored(
             query_vector,
             text_query,
             &self.ids,
@@ -539,10 +541,11 @@ impl StoreState {
             self.metric,
             k,
             vector_weight,
-        )
-        .into_iter()
-        .map(|(id, score, _)| (id, score))
-        .collect()
+        )?;
+        Ok(scored
+            .into_iter()
+            .map(|(id, score, _)| (id, score))
+            .collect())
     }
 
     /// Scoring entry point behind [`search_sparse`](Self::search_sparse).

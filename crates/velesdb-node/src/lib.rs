@@ -54,11 +54,12 @@ mod dto;
 mod error;
 mod factory;
 mod guards;
+mod json_arg;
 mod tasks;
 
 use std::sync::Arc;
 
-use napi::bindgen_prelude::AsyncTask;
+use napi::bindgen_prelude::{AsyncTask, Unknown};
 use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::anchor::AnchorRoot;
@@ -79,8 +80,8 @@ use crate::factory::{
 pub use crate::factory::NodeMemoryService;
 
 use crate::dto::{
-    AnchoredRecollectionJs, ColumnFilterJs, CompileTranscriptJs, CompiledContextJs, DatedRecallJs,
-    EntityProfileJs, ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs, RememberOutcomeJs,
+    AnchoredRecollectionJs, CompileTranscriptJs, CompiledContextJs, DatedRecallJs, EntityProfileJs,
+    ExplanationJs, FusionOptionsJs, LinkJs, RecollectionJs, RememberOutcomeJs,
     RememberedExtractionJs, UnrelateJs,
 };
 use crate::error::{internal, invalid_input, setting_error, to_napi_err};
@@ -122,8 +123,11 @@ impl NodeMemoryService {
         ollama_model: Option<String>,
         search_quality: Option<String>,
     ) -> napi::Result<Self> {
+        // Every setting is read and checked before the store is opened: an
+        // open refused for its configuration must leave nothing on disk.
         let quality = velesdb_memory::resolve_search_quality(search_quality.as_deref())
             .map_err(setting_error)?;
+        let ingest_roots = ingest_roots_from_env()?;
         let (emb, embedder_model, embedder_semantic) =
             build_embedder(embedder.as_deref(), ollama_url, ollama_model)?;
         let embedder_dimension = emb.dimension();
@@ -133,7 +137,6 @@ impl NodeMemoryService {
             Some(quality) => svc.with_search_quality(quality),
             None => svc,
         };
-        let ingest_roots = ingest_roots_from_env()?;
         warn_hash_embedder_not_semantic(embedder_semantic);
         Ok(Self {
             inner: Arc::new(svc),
@@ -146,10 +149,14 @@ impl NodeMemoryService {
     }
 
     // Every method returns an `AsyncTask` (a Promise) and does ALL validation +
-    // marshalling inside the task closure, so there is exactly one error channel:
-    // a rejected Promise (never a synchronous throw). The cheap DoS/size checks
-    // still run as the closure's first lines, before any embedding or search, so
-    // an oversized input never triggers real work.
+    // marshalling inside the task closure, so a malformed value has exactly one
+    // error channel: a rejected Promise. Two things still throw synchronously,
+    // before the method body runs or by the caller's own code: napi's check of
+    // a typed parameter's JS type (a number passed for a `string` throws a
+    // `TypeError`), and an exception the caller's value raises while it is
+    // read (a throwing getter, a Proxy trap), which propagates unchanged. The
+    // cheap DoS/size checks run as the closure's first lines, before any
+    // embedding or search, so an oversized input never triggers real work.
 
     /// Store a fact; resolves to `{id, similar}` — the decimal-string id plus
     /// the at-most-5 pre-existing memories nearest to it (`{id, score}`, the
@@ -174,17 +181,19 @@ impl NodeMemoryService {
         &self,
         fact: String,
         links: Option<Vec<LinkJs>>,
-        metadata: Option<Value>,
-        ttl_seconds: Option<u32>,
+        metadata: Option<Unknown>,
+        ttl_seconds: Option<f64>,
         anchors: Option<Vec<String>>,
         anchor_root: Option<String>,
     ) -> AsyncTask<Job<RememberOutcomeJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let metadata = json_arg::to_optional_json(metadata.as_ref(), "metadata");
         let svc = Arc::clone(&self.inner);
         let allowlist = anchor_allowlist(self.ingest_roots.as_ref());
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&fact)?;
             let links = convert::to_links(links)?;
-            let metadata = convert::to_metadata(metadata)?;
+            let metadata = convert::to_metadata(metadata?)?;
             // Same call the MCP `remember` tool makes: resolve_request reads
             // each anchored file under the allowlist (containment checked at
             // the sink in AnchorRoot) and refuses before anything is written.
@@ -198,7 +207,7 @@ impl NodeMemoryService {
                 &fact,
                 &links,
                 metadata.as_ref(),
-                ttl_seconds.map(u64::from),
+                guards::count("ttlSeconds", ttl_seconds)?.map(u64::from),
                 anchors.as_ref(),
             )
             .map(RememberOutcomeJs::from)
@@ -218,15 +227,17 @@ impl NodeMemoryService {
     pub fn recall(
         &self,
         query: String,
-        k: Option<u32>,
-        filter: Option<Value>,
+        k: Option<f64>,
+        filter: Option<Unknown>,
         anchor_root: Option<String>,
     ) -> AsyncTask<Job<Vec<AnchoredRecollectionJs>>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         let allowlist = anchor_allowlist(self.ingest_roots.as_ref());
         AsyncTask::new(Job::new(move || {
-            let k = guards::clamp_limit(k.unwrap_or(10));
-            let filter = convert::to_metadata(filter)?;
+            let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
+            let filter = convert::to_metadata(filter?)?;
             let Some(root) = anchor_root else {
                 let hits = svc
                     .recall(&query, k, filter.as_ref())
@@ -257,20 +268,27 @@ impl NodeMemoryService {
     /// their index) are internal scaffolding and never come back, whatever
     /// the predicate — including a `ne` one, which matches facts lacking the
     /// field entirely.
+    ///
+    /// `filters` is read as JSON data like every other structured argument
+    /// ([`json_arg`]), so a `BigInt` compares as the integer it holds and a
+    /// malformed filter rejects with `INVALID_INPUT`.
     #[napi(
         js_name = "recallWhere",
+        ts_args_type = "query: string, filters: Array<ColumnFilterJs>, k?: number | undefined | null",
         ts_return_type = "Promise<Array<RecollectionJs>>"
     )]
     pub fn recall_where(
         &self,
         query: String,
-        filters: Vec<ColumnFilterJs>,
-        k: Option<u32>,
+        filters: Unknown,
+        k: Option<f64>,
     ) -> AsyncTask<Job<Vec<RecollectionJs>>> {
+        // Read on the JS thread, refused in the Promise.
+        let filters = json_arg::to_json(&filters, "filters");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let k = guards::clamp_limit(k.unwrap_or(10));
-            let filters = convert::to_filters(filters)?;
+            let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
+            let filters = convert::to_filters(filters?)?;
             let hits = svc.recall_where(&query, k, &filters).map_err(to_napi_err)?;
             Ok(hits.into_iter().map(RecollectionJs::from).collect())
         }))
@@ -289,15 +307,17 @@ impl NodeMemoryService {
     pub fn recall_fused(
         &self,
         query: String,
-        k: Option<u32>,
-        filter: Option<Value>,
+        k: Option<f64>,
+        filter: Option<Unknown>,
         opts: Option<FusionOptionsJs>,
     ) -> AsyncTask<Job<Vec<RecollectionJs>>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let k = guards::clamp_limit(k.unwrap_or(10));
-            let filter = convert::to_metadata(filter)?;
-            let opts = convert::to_fusion_options(opts);
+            let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
+            let filter = convert::to_metadata(filter?)?;
+            let opts = convert::to_fusion_options(opts)?;
             let hits = svc
                 .recall_fused(&query, k, filter.as_ref(), opts)
                 .map_err(to_napi_err)?;
@@ -319,15 +339,17 @@ impl NodeMemoryService {
         &self,
         query: String,
         date_field: String,
-        k: Option<u32>,
-        filter: Option<Value>,
+        k: Option<f64>,
+        filter: Option<Unknown>,
         opts: Option<FusionOptionsJs>,
     ) -> AsyncTask<Job<DatedRecallJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let k = guards::clamp_limit(k.unwrap_or(10));
-            let filter = convert::to_metadata(filter)?;
-            let opts = convert::to_fusion_options(opts);
+            let k = guards::clamp_limit(guards::count("k", k)?.unwrap_or(10));
+            let filter = convert::to_metadata(filter?)?;
+            let opts = convert::to_fusion_options(opts)?;
             let (hits, ctx) = svc
                 .recall_fused_dated(&query, k, filter.as_ref(), opts, &date_field)
                 .map_err(to_napi_err)?;
@@ -414,13 +436,15 @@ impl NodeMemoryService {
     pub fn why(
         &self,
         decision: String,
-        max_hops: Option<u32>,
-        filter: Option<Value>,
+        max_hops: Option<f64>,
+        filter: Option<Unknown>,
     ) -> AsyncTask<Job<ExplanationJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let max_hops = guards::clamp_hops(max_hops.unwrap_or(2));
-            let filter = convert::to_metadata(filter)?;
+            let max_hops = guards::clamp_hops(guards::count("maxHops", max_hops)?.unwrap_or(2));
+            let filter = convert::to_metadata(filter?)?;
             svc.why(&decision, max_hops, filter.as_ref())
                 .map(ExplanationJs::from)
                 .map_err(to_napi_err)
@@ -479,13 +503,13 @@ impl NodeMemoryService {
         js_name = "compileContext",
         ts_return_type = "Promise<CompiledContextJs>"
     )]
-    pub fn compile_context(&self, request: Value) -> AsyncTask<Job<CompiledContextJs>> {
+    pub fn compile_context(&self, request: Unknown) -> AsyncTask<Job<CompiledContextJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let request = json_arg::to_json(&request, "request");
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
-            let mut request = request;
-            convert::parse_fragment_id_strings(&mut request)?;
-            let mut request: CompileRequest = serde_json::from_value(request)
+            let mut request: CompileRequest = serde_json::from_value(request?)
                 .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
             resolve_fragments(&mut request.fragments, ingest_roots.as_ref())
                 .map_err(to_napi_err)?;
@@ -504,7 +528,7 @@ impl NodeMemoryService {
     /// delegation to [`velesdb_memory`]'s bridge — zero logic in the binding.
     #[napi(
         js_name = "contextSavings",
-        // u64 counters arrive as BigInt past u32::MAX — `number | bigint`, not `number`.
+        // u64 counters arrive as BigInt past 2^53 − 1 — `number | bigint`, not `number`.
         ts_return_type = "Promise<{ events: number | bigint; tokens_in: number | bigint; tokens_out: number | bigint; tokens_saved: number | bigint; cost_saved_micros_by_currency: Record<string, number | bigint>; truncated: boolean }>"
     )]
     pub fn context_savings(&self, project: Option<String>) -> AsyncTask<Job<JsonOut>> {
@@ -540,23 +564,24 @@ impl NodeMemoryService {
     )]
     pub fn explain_compilation(
         &self,
-        request: Value,
+        request: Unknown,
         fragment_id: String,
-        fragment_index: Option<u32>,
+        fragment_index: Option<f64>,
     ) -> AsyncTask<Job<JsonOut>> {
+        // Read on the JS thread, refused in the Promise.
+        let request = json_arg::to_json(&request, "request");
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
-            let mut request = request;
-            convert::parse_fragment_id_strings(&mut request)?;
-            let mut request: CompileRequest = serde_json::from_value(request)
+            let mut request: CompileRequest = serde_json::from_value(request?)
                 .map_err(|err| invalid_input(format!("invalid compile request: {err}")))?;
             // Same pre-pass as compile_context (the MCP tool shares it):
             // `path` fragments resolve under the ingest-roots allowlist.
             resolve_fragments(&mut request.fragments, ingest_roots.as_ref())
                 .map_err(to_napi_err)?;
             let fragment_id = convert::parse_id(&fragment_id)?;
-            let fragment_index = fragment_index.map(|i| i as usize);
+            let fragment_index =
+                guards::count("fragmentIndex", fragment_index)?.map(|i| i as usize);
             let decision = svc
                 .explain_compilation(&request, fragment_id, fragment_index)
                 .map_err(to_napi_err)?;
@@ -598,13 +623,13 @@ impl NodeMemoryService {
         &self,
         project: String,
         session: String,
-        working: Value,
+        working: Unknown,
     ) -> AsyncTask<Job<String>> {
+        // Read on the JS thread, refused in the Promise.
+        let working = json_arg::to_json(&working, "working");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
-            let mut working = working;
-            convert::parse_id_fields(&mut working)?;
-            let working: WorkingContext = serde_json::from_value(working)
+            let working: WorkingContext = serde_json::from_value(working?)
                 .map_err(|err| invalid_input(format!("invalid working context: {err}")))?;
             svc.save_working_context(&project, &session, &working)
                 .map(convert::id_to_string)
@@ -666,7 +691,7 @@ impl NodeMemoryService {
     /// — zero logic in the binding.
     #[napi(
         js_name = "listWorkingContexts",
-        // saved_at is a u64 epoch second — BigInt past u32::MAX (year 2106+).
+        // saved_at is a u64 epoch second — BigInt past 2^53 − 1 (never, in practice).
         ts_return_type = "Promise<{ sessions: Array<{ session: string; saved_at: number | bigint }> }>"
     )]
     pub fn list_working_contexts(&self, project: String) -> AsyncTask<Job<JsonOut>> {
@@ -706,7 +731,9 @@ impl NodeMemoryService {
         js_name = "compileTranscript",
         ts_return_type = "Promise<CompileTranscriptJs>"
     )]
-    pub fn compile_transcript(&self, request: Value) -> AsyncTask<Job<CompileTranscriptJs>> {
+    pub fn compile_transcript(&self, request: Unknown) -> AsyncTask<Job<CompileTranscriptJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let request = json_arg::to_json(&request, "request");
         let svc = Arc::clone(&self.inner);
         let ingest_roots = self.ingest_roots.clone();
         AsyncTask::new(Job::new(move || {
@@ -714,7 +741,7 @@ impl NodeMemoryService {
             // input struct: resolve it under the allowlist and feed the text
             // back as `transcript` — exactly the MCP tool's
             // transcript-or-path resolution.
-            let request = convert::resolve_transcript_input(request, ingest_roots.as_ref())?;
+            let request = convert::resolve_transcript_input(request?, ingest_roots.as_ref())?;
             let input: convert::CompileTranscriptInput =
                 serde_json::from_value(request).map_err(|err| {
                     invalid_input(format!("invalid compile_transcript request: {err}"))
@@ -740,10 +767,9 @@ impl NodeMemoryService {
     /// in the table — an honest "unknown", never a guess; the table is
     /// extended in a new release rather than worked around here.
     ///
-    /// `reserveTokens` is a `u32` for the same reason `ttlSeconds` is: napi
-    /// marshals a `u64` as a `BigInt`, and 4 billion reserved tokens is
-    /// already three orders of magnitude past the largest window in the
-    /// table.
+    /// `reserveTokens` is a whole number in `0..=u32::MAX`, checked like every
+    /// count ([`guards::count`]): 4 billion reserved tokens is already three
+    /// orders of magnitude past the largest window in the table.
     #[napi(
         js_name = "suggestBudget",
         ts_return_type = "Promise<{ window: number | null; suggested_budget: number | null; source: string }>"
@@ -751,11 +777,13 @@ impl NodeMemoryService {
     pub fn suggest_budget(
         &self,
         target_model: String,
-        reserve_tokens: Option<u32>,
+        reserve_tokens: Option<f64>,
     ) -> AsyncTask<Job<JsonOut>> {
         AsyncTask::new(Job::new(move || {
-            let budget =
-                suggest_token_budget(&target_model, u64::from(reserve_tokens.unwrap_or(0)));
+            let budget = suggest_token_budget(
+                &target_model,
+                u64::from(guards::count("reserveTokens", reserve_tokens)?.unwrap_or(0)),
+            );
             let value = serde_json::to_value(&budget)
                 .map_err(|err| internal(format!("suggested budget serialization: {err}")))?;
             Ok(JsonOut(value))
@@ -773,7 +801,7 @@ impl NodeMemoryService {
     /// walk" state.
     #[napi(
         js_name = "memoryStatus",
-        // the counters are u64/usize — they arrive as BigInt past u32::MAX.
+        // the counters are u64/usize — they arrive as BigInt past 2^53 − 1.
         ts_return_type = "Promise<{ embedder: { model: string | null; dimension: number | bigint | null; semantic: boolean | null }; provenance: { recorded: boolean; model: string | null; dimension: number | bigint | null }; extraction: { configured: boolean; autograph_active: boolean; autograph_dropped: number | bigint; autograph_failed: number | bigint }; memory: { facts: number | bigint; edges: number | bigint | null } }>"
     )]
     pub fn memory_status(&self) -> AsyncTask<Job<JsonOut>> {
@@ -828,10 +856,12 @@ impl NodeMemoryService {
     pub fn list_memories(
         &self,
         cursor: Option<String>,
-        limit: Option<u32>,
-        filter: Option<Value>,
+        limit: Option<f64>,
+        filter: Option<Unknown>,
         include_internal: Option<bool>,
     ) -> AsyncTask<Job<JsonOut>> {
+        // Read on the JS thread, refused in the Promise.
+        let filter = json_arg::to_optional_json(filter.as_ref(), "filter");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             let cursor = match cursor {
@@ -842,11 +872,11 @@ impl NodeMemoryService {
                 })?),
                 None => None,
             };
-            let filter = convert::to_metadata(filter)?;
+            let filter = convert::to_metadata(filter?)?;
             let (memories, next) = svc
                 .list(
                     cursor,
-                    limit.unwrap_or(50) as usize,
+                    guards::count("limit", limit)?.unwrap_or(50) as usize,
                     filter.as_ref(),
                     include_internal.unwrap_or(false),
                 )
@@ -905,13 +935,15 @@ impl NodeMemoryService {
         text: String,
         model: Option<String>,
         url: Option<String>,
-        metadata: Option<Value>,
+        metadata: Option<Unknown>,
         extractor: Option<String>,
     ) -> AsyncTask<Job<RememberedExtractionJs>> {
+        // Read on the JS thread, refused in the Promise.
+        let metadata = json_arg::to_optional_json(metadata.as_ref(), "metadata");
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&text)?;
-            let metadata = convert::to_metadata(metadata)?;
+            let metadata = convert::to_metadata(metadata?)?;
             // Explicit argument > VELESDB_MEMORY_EXTRACTOR > "ollama" — the
             // same precedence the embedder factory applies (#1886).
             let env_backend = std::env::var("VELESDB_MEMORY_EXTRACTOR").ok();

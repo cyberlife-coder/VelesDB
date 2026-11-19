@@ -112,23 +112,23 @@ pub fn parse_fusion_strategy(
     .map_err(|e| Error::InvalidConfig(e.to_string()))
 }
 
-/// Parses a sparse vector from JSON string-keyed map to core `SparseVector`.
+/// Converts a sparse vector from the JSON string-keyed map the frontend sends
+/// (`{ "42": 0.8, "7": 1.2 }`) to a core `SparseVector`.
 ///
-/// JSON only supports string keys, so the frontend sends `{ "42": 0.8, "7": 1.2 }`.
-/// This function parses each key to `u32` and constructs a sorted `SparseVector`.
+/// Delegates to core's API-boundary conversion
+/// ([`SparseVectorInput::into_sparse_vector`](velesdb_core::api_types::SparseVectorInput::into_sparse_vector)),
+/// the one REST uses, so the same keys, values and size cap
+/// ([`MAX_SPARSE_NNZ`](velesdb_core::api_types::MAX_SPARSE_NNZ)) are refused.
 pub fn parse_sparse_vector<S: std::hash::BuildHasher>(
     sparse: &std::collections::HashMap<String, f32, S>,
 ) -> Result<velesdb_core::sparse_index::SparseVector> {
-    let mut pairs = Vec::with_capacity(sparse.len());
-    for (key, &value) in sparse {
-        let index: u32 = key.parse().map_err(|_| {
-            Error::InvalidConfig(format!(
-                "Sparse vector key '{key}' is not a valid u32 dimension index"
-            ))
-        })?;
-        pairs.push((index, value));
-    }
-    Ok(velesdb_core::sparse_index::SparseVector::new(pairs))
+    let dict = sparse
+        .iter()
+        .map(|(key, &value)| (key.clone(), value))
+        .collect();
+    velesdb_core::api_types::SparseVectorInput::Dict(dict)
+        .into_sparse_vector()
+        .map_err(Error::InvalidConfig)
 }
 
 /// Converts a core `SearchResult` into the Tauri `SearchResult` DTO.
@@ -154,36 +154,71 @@ pub fn map_core_results(
 
 /// Looks up a collection by name, returning a typed error on miss.
 ///
-/// Every known variant is accepted: graph and metadata collections are
-/// re-wrapped through `into_vector_view`, the purely structural re-wrap
-/// the Python binding uses for the same purpose — so data-plane commands
-/// (points, scroll, flush, guardrails, …) work on any creatable
-/// collection. Vector-semantic operations stay guarded by the engine
-/// itself (a metadata collection reports dimension 0, so a dense query
-/// still fails its dimension check). An unknown future variant keeps
-/// the previous rejection shape.
+/// Every command resolves a collection through this one rule, core's
+/// [`Database::get_collection_view`](velesdb_core::Database::get_collection_view):
+/// a vector collection as is, a graph or metadata collection through its
+/// structural vector view — the lookup core's gated reads use too. So a
+/// command never answers "not found" for a collection that exists;
+/// vector-semantic operations stay guarded by the engine (a metadata
+/// collection reports dimension 0, so a dense query fails its dimension
+/// check).
 pub fn require_collection(
     db: &velesdb_core::Database,
     name: &str,
 ) -> Result<velesdb_core::VectorCollection> {
-    let any_coll = db
-        .get_any_collection(name)
-        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?;
-    Ok(match any_coll {
-        velesdb_core::AnyCollection::Vector(c) => c,
-        velesdb_core::AnyCollection::Graph(g) => g.into_vector_view(),
-        velesdb_core::AnyCollection::Metadata(m) => m.into_vector_view(),
-        // `AnyCollection` is `#[non_exhaustive]`; a variant added later has
-        // no vector view to offer.
-        _ => {
-            return Err(Error::InvalidConfig(format!(
-                "Collection '{name}' is not a supported collection kind"
-            )));
-        }
-    })
+    db.get_collection_view(name)
+        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
 }
 
-/// Looks up a `VectorCollection` by name, returning a typed error on miss.
+/// The [`CollectionInfo`](crate::types::CollectionInfo) of a collection, read
+/// from its persisted configuration — the one shape every command answers
+/// (`create_*`, `get_collection`, `list_collections`).
+///
+/// `storageMode` names the kind where it is not a vector one: `graph` and
+/// `metadata_only` (metric `none`, dimension 0), as the guest bindings
+/// document.
+#[must_use]
+pub fn collection_info(
+    name: String,
+    collection: &velesdb_core::AnyCollection,
+) -> crate::types::CollectionInfo {
+    let config = collection.config();
+    let (dimension, metric, storage_mode) = match collection {
+        velesdb_core::AnyCollection::Metadata(_) => (0, "none", "metadata_only"),
+        velesdb_core::AnyCollection::Graph(_) => {
+            (config.dimension, metric_to_string(config.metric), "graph")
+        }
+        _ => (
+            config.dimension,
+            metric_to_string(config.metric),
+            storage_mode_to_string(config.storage_mode),
+        ),
+    };
+    crate::types::CollectionInfo {
+        name,
+        dimension,
+        metric: metric.to_string(),
+        count: config.point_count,
+        storage_mode: storage_mode.to_string(),
+    }
+}
+
+/// [`collection_info`] by name: `CollectionNotFound` when it does not exist.
+pub fn collection_info_of(
+    db: &velesdb_core::Database,
+    name: &str,
+) -> Result<crate::types::CollectionInfo> {
+    db.get_any_collection(name)
+        .map(|collection| collection_info(name.to_string(), &collection))
+        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+}
+
+/// Looks up a vector collection by name: `CollectionNotFound` for a graph or
+/// metadata collection as well as a missing one.
+#[deprecated(
+    since = "8.3.0",
+    note = "use require_collection: it resolves every collection kind, so an existing graph or metadata collection is never reported as not found"
+)]
 pub fn require_vector_collection(
     db: &velesdb_core::Database,
     name: &str,
@@ -192,13 +227,27 @@ pub fn require_vector_collection(
         .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
 }
 
-/// Looks up a `GraphCollection` by name, returning a typed error on miss.
+/// Looks up a `GraphCollection` by name.
+///
+/// `CollectionNotFound` (VELES-002) when no collection has the name, core's
+/// `GraphNotSupported` (VELES-018) when one of another kind does — the answer
+/// core's own graph statements give for the same name.
 pub fn require_graph_collection(
     db: &velesdb_core::Database,
     name: &str,
 ) -> Result<velesdb_core::GraphCollection> {
-    db.get_graph_collection(name)
-        .ok_or_else(|| Error::CollectionNotFound(name.to_string()))
+    if let Some(graph) = db.get_graph_collection(name) {
+        return Ok(graph);
+    }
+    if db.get_any_collection(name).is_none() {
+        return Err(Error::CollectionNotFound(name.to_string()));
+    }
+    Err(Error::Database(velesdb_core::Error::GraphNotSupported(
+        format!(
+            "'{name}' is not a graph collection; graph commands need one created by \
+             create_graph_collection"
+        ),
+    )))
 }
 
 /// Parses an optional JSON filter value into a core `Filter`.
@@ -225,7 +274,8 @@ pub fn parse_filter(filter: &Option<serde_json::Value>) -> Result<Option<velesdb
 pub fn reject_unsupported_quality(quality: Option<&String>) -> crate::error::Result<()> {
     match quality {
         Some(_) => Err(crate::error::Error::InvalidConfig(
-            "the `quality` parameter requires the `persistence` feature; this build              was compiled without it"
+            "the `quality` parameter requires the `persistence` feature; this build \
+             was compiled without it"
                 .into(),
         )),
         None => Ok(()),

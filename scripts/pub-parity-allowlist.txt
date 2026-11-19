@@ -27,3 +27,52 @@ crates/velesdb-wasm/src/store_search.rs fn search
 # metadata-only and finite-component checks core runs: `store_search` is a
 # private module of the cdylib, so it was unreachable from the published package.
 crates/velesdb-wasm/src/store_search.rs fn validate_dimension
+# Renamed to the infallible `shared()`: `Database::open_shared` returned a
+# Result it could never fail with. It is a Rust method of the PyO3 cdylib,
+# not exposed to Python (#[pymethods] does not list it), so no published
+# surface loses it.
+crates/velesdb-python/src/database.rs fn open_shared
+
+# The Node wrappers of velesdb-memory's (now deprecated) string-to-number id
+# walks: every id the binding reads back deserializes from a decimal string,
+# and `convert` is a private module of the cdylib, so they were unreachable
+# from the published package.
+crates/velesdb-node/src/convert.rs fn parse_fragment_id_strings
+crates/velesdb-node/src/convert.rs fn parse_id_fields
+# Collection's streaming entry points moved, unchanged, from types.rs into
+# collection/core/streaming_ops.rs (types.rs crossed its file budget): same
+# inherent impl, same public path, not a removal.
+crates/velesdb-core/src/collection/types.rs fn stream_insert
+crates/velesdb-core/src/collection/types.rs fn stream_insert_batch
+crates/velesdb-core/src/collection/types.rs fn enable_streaming
+# velesdb-python's to_pyobject logged a failed conversion and returned None,
+# leaving a result dict silently wrong; every caller now converts and
+# propagates the error instead. The crate is the Python extension: no Rust
+# crate depends on it, so this helper was never a consumable API.
+crates/velesdb-python/src/utils.rs fn to_pyobject
+# Moved to tauri-plugin-velesdb/src/types_memory.rs when types.rs reached the
+# file budget, and re-exported from types.rs by `pub use`: the public path
+# is unchanged, not a removal.
+crates/tauri-plugin-velesdb/src/types.rs enum MemoryKindDto
+crates/tauri-plugin-velesdb/src/types.rs struct EpisodicDeleteRequest
+crates/tauri-plugin-velesdb/src/types.rs struct EpisodicOlderThanRequest
+crates/tauri-plugin-velesdb/src/types.rs struct EpisodicRecallSimilarRequest
+crates/tauri-plugin-velesdb/src/types.rs struct EpisodicRecentRequest
+crates/tauri-plugin-velesdb/src/types.rs struct EpisodicRecordRequest
+crates/tauri-plugin-velesdb/src/types.rs struct EpisodicResult
+crates/tauri-plugin-velesdb/src/types.rs struct EpisodicSimilarResult
+crates/tauri-plugin-velesdb/src/types.rs struct EvictLowConfidenceRequest
+crates/tauri-plugin-velesdb/src/types.rs struct ExpireResultDto
+crates/tauri-plugin-velesdb/src/types.rs struct LoadSnapshotVersionRequest
+crates/tauri-plugin-velesdb/src/types.rs struct MemoryQueryRequest
+crates/tauri-plugin-velesdb/src/types.rs struct MemoryTtlRequest
+crates/tauri-plugin-velesdb/src/types.rs struct ProceduralDeleteRequest
+crates/tauri-plugin-velesdb/src/types.rs struct ProceduralLearnRequest
+crates/tauri-plugin-velesdb/src/types.rs struct ProceduralMatchResult
+crates/tauri-plugin-velesdb/src/types.rs struct ProceduralRecallRequest
+crates/tauri-plugin-velesdb/src/types.rs struct ProceduralReinforceRequest
+crates/tauri-plugin-velesdb/src/types.rs struct SemanticDeleteRequest
+crates/tauri-plugin-velesdb/src/types.rs struct SemanticQueryRequest
+crates/tauri-plugin-velesdb/src/types.rs struct SemanticQueryResult
+crates/tauri-plugin-velesdb/src/types.rs struct SemanticStoreRequest
+crates/tauri-plugin-velesdb/src/types.rs struct SemanticStoreWithTtlRequest

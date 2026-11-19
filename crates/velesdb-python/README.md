@@ -189,7 +189,9 @@ so your IDE and mypy/pyright are the reference. Task-oriented guides:
 - **Concurrent WAL writing is not exposed** — Enterprise feature.
 - **No GPU in the published wheels.** The `gpu` Cargo feature exists but is not enabled by `[tool.maturin]`; it requires building from source.
 - **`Collection.search(vector, top_k=...)`** is the keyword shorthand over `search_request(SearchOptions(...))`, which adds fusion, `include_vectors` and the read-gate options.
-- **Read-gate refusals.** An observer *deny* raises `ValueError`; a scope on an ids-only read (`all_ids`, `all_point_ids`, `search_ids`, `count`) raises `PermissionError` (the scope cannot be applied to bare ids).
+- **`SearchOptions` knobs apply to one path each.** `ef_search` and `quality` tune a dense-only search and `fusion` a hybrid one (both `vector` and `sparse_vector`); `search_request` raises `ValueError` for a knob the request's path does not take instead of ignoring it.
+- **Read-gate refusals.** An observer *deny* or *veto* raises `PermissionError` (core's `VELES-037`, `AccessDenied`); so does a scope on an ids-only read (`all_ids`, `all_point_ids`, `search_ids`, `count`), which cannot be applied to bare ids.
+- **A collection's query methods run reads only.** `query`, `query_ids` and `explain_analyze` on a `Collection` or `GraphCollection` raise `ValueError` for DDL and DML (a write names its own target collection); run those through `Database.execute_query`.
 - **`add_edge(source, target, label, id=n)`** takes the positional value as the source; `id=` together with `source=` raises `ValueError`.
 - **Graph persistence** goes through `Database.create_graph_collection()`; `Collection.get_graph_store()` (a standalone in-memory graph) was removed in 8.0.0.
 
@@ -224,7 +226,9 @@ The typed collection exceptions (`DimensionMismatchError`, `CollectionNotFoundEr
 `velesdb.VelesDBError`. The VelesQL parse exceptions (`VelesQLSyntaxError`,
 `VelesQLParameterError`) do not — they derive from `Exception` directly, so a
 catch-all needs `except (velesdb.VelesDBError, velesdb.VelesQLSyntaxError,
-velesdb.VelesQLParameterError)` or plain `except Exception`.
+velesdb.VelesQLParameterError)` or plain `except Exception`. No call raises
+`VelesQLParameterError` today: an unbound or mistyped `$name` parameter raises
+`ValueError` (`[VELES-010]`).
 
 ---
 

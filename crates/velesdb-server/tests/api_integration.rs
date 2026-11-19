@@ -5077,10 +5077,13 @@ async fn test_delete_point_by_id() {
         .await
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
+    // The TypeScript SDK's REST test fakes reproduce this exact shape.
+    assert_eq!(json["message"], "Point deleted");
     assert_eq!(json["id"], "7"); // ID emitted as a string (JS precision-safety)
 
     // GET after delete returns 404
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/collections/del_pt/points/7")
@@ -5090,6 +5093,44 @@ async fn test_delete_point_by_id() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // DELETE of the point that is now gone answers like GET: 404 VELES-003,
+    // so a client can tell "deleted" from "was not there".
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/collections/del_pt/points/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "VELES-003");
+
+    // A missing collection stays VELES-002, never the point's miss.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/collections/no_such_coll/points/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "VELES-002");
 }
 
 // ────────────────────────────────────────────────────────────────────────────

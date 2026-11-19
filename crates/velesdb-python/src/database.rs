@@ -127,28 +127,6 @@ pub struct Database {
     path: PathBuf,
 }
 
-/// Internal dispatch plan computed under the GIL by
-/// [`Database::create_collection`] and consumed inside a
-/// `py.allow_threads` closure.
-///
-/// Wave 3 Commit 10 introduces the typed-options surface: `Full`
-/// carries fully-materialized [`HnswParams`] plus an explicit
-/// `pq_rescore_oversampling` override so the closure can call
-/// [`CoreDatabase::create_vector_collection_with_params`] in one step.
-/// `Default` defers every parameter to the engine.
-#[derive(Clone)]
-enum CreatePlan {
-    /// Use `create_vector_collection_with_params` with the given
-    /// fully-materialized HNSW params and PQ rescore factor.
-    Full {
-        hnsw_params: velesdb_core::index::hnsw::HnswParams,
-        pq_rescore_oversampling: Option<u32>,
-    },
-    /// Use `create_vector_collection_with_options` — engine picks
-    /// every HNSW field.
-    Default,
-}
-
 #[pymethods]
 impl Database {
     /// Create or open a VelesDB database at the specified path.
@@ -158,25 +136,34 @@ impl Database {
     ///     config: Optional typed configuration (limits, etc.) applied
     ///         at open time. See :class:`VelesConfigOptions`.
     ///     observer: Optional callable invoked on collection lifecycle
-    ///         events and before every gated read. Called as
+    ///         events, after every write and delete, and before every gated
+    ///         read and VelesQL mutation. Called as
     ///         ``observer(event, **fields)`` where ``event`` is one of
     ///         ``"collection_created"``, ``"collection_deleted"``,
-    ///         ``"upsert"``, ``"query"``, or ``"query_request"``:
+    ///         ``"upsert"``, ``"delete"``, ``"query"``, ``"query_request"``,
+    ///         ``"ddl_request"``, or ``"dml_mutation_request"``:
     ///
     ///         - ``collection_created`` → ``name``, ``kind``
     ///           (``"vector"``/``"metadata"``/``"graph"``/``"unknown"``)
     ///         - ``collection_deleted`` → ``name``
-    ///         - ``upsert`` → ``collection``, ``point_count``
+    ///         - ``upsert`` → ``collection``, ``point_count`` (after every
+    ///           completed write, SDK or VelesQL)
+    ///         - ``delete`` → ``collection``, ``point_count`` (after every
+    ///           completed point delete, SDK or VelesQL ``DELETE``)
     ///         - ``query`` → ``collection``, ``duration_us`` (after execution)
     ///         - ``query_request`` → ``collection``, ``operation``,
     ///           ``principal``, ``tenant`` (before execution — **veto point**)
+    ///         - ``ddl_request`` / ``dml_mutation_request`` → ``operation``,
+    ///           ``collection`` (before a VelesQL DDL statement or mutation —
+    ///           **veto point**: ``None``/``True`` allow, ``False`` or a
+    ///           string reason deny)
     ///
     ///         The observer is immutable once the database is opened
     ///         (there is no post-open setter). For the *notify* events the
     ///         return value is ignored and a raised exception is swallowed so
     ///         it never breaks a core operation. For ``"query_request"`` the
     ///         callback governs the read: return ``False`` or a string reason to
-    ///         **deny** it (raising a query error), ``None``/``True`` to allow,
+    ///         **deny** it (raising ``PermissionError``), ``None``/``True`` to allow,
     ///         or a ``dict`` to **allow with a narrowing scope**. The dict MUST
     ///         carry an enforceable ``"filter"`` (a VelesQL WHERE-predicate
     ///         string such as ``"tenant = 'acme'"``, AND-composed into the
@@ -321,15 +308,12 @@ impl Database {
         let distance_metric = parse_metric(metric)?;
         let mode = parse_storage_mode(storage_mode)?;
 
-        // Compute the dispatch plan under the GIL — cheap.
-        let plan = if let Some(opts) = hnsw {
-            CreatePlan::Full {
-                hnsw_params: opts.to_hnsw_params()?,
-                pq_rescore_oversampling: opts.pq_rescore_oversampling,
-            }
-        } else {
-            CreatePlan::Default
-        };
+        // Read the options under the GIL — cheap. Core resolves every HNSW
+        // field they leave unset (`[hnsw]`, then the auto-tuning for this
+        // dimension) and refuses an out-of-range one (ValueError).
+        let (overrides, pq_rescore_oversampling) = hnsw
+            .map(|opts| (opts.to_overrides(), opts.pq_rescore_oversampling))
+            .unwrap_or_default();
 
         // Convert AutoReindexOptions to a manager under the GIL so the
         // closure doesn't have to touch Python types. `Arc<AutoReindexManager>`
@@ -343,24 +327,15 @@ impl Database {
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let name_for_closure = name_owned.clone();
-        py.detach(move || match plan {
-            CreatePlan::Full {
-                hnsw_params,
-                pq_rescore_oversampling,
-            } => inner.create_vector_collection_with_params(
+        py.detach(move || {
+            inner.create_vector_collection_with_overrides(
                 &name_for_closure,
                 dimension,
                 distance_metric,
                 mode,
-                hnsw_params,
+                overrides,
                 pq_rescore_oversampling,
-            ),
-            CreatePlan::Default => inner.create_vector_collection_with_options(
-                &name_for_closure,
-                dimension,
-                distance_metric,
-                mode,
-            ),
+            )
         })
         .map_err(core_err)?;
 
@@ -696,7 +671,7 @@ impl Database {
         let results = py
             .detach(move || inner.execute_query(&parsed, &rust_params))
             .map_err(core_err)?;
-        Ok(search_results_to_multimodel_dicts(py, results))
+        search_results_to_multimodel_dicts(py, results)
     }
 
     /// Toggle automatic re-indexing on a collection at runtime.
@@ -783,7 +758,7 @@ impl Database {
             .map_err(core_err)?;
         let json = serde_json::to_value(&stats)
             .map_err(|e| PyRuntimeError::new_err(format!("Serialization failed: {e}")))?;
-        Ok(utils::json_to_python(py, &json))
+        utils::json_to_python(py, &json)
     }
 
     /// Get cached collection statistics (or None if never analyzed).
@@ -829,7 +804,7 @@ impl Database {
                 let json = serde_json::to_value(&stats).map_err(|e| {
                     PyRuntimeError::new_err(format!("stats serialization failed: {e}"))
                 })?;
-                Ok(utils::json_to_python(py, &json))
+                utils::json_to_python(py, &json)
             })
             .transpose()
     }
@@ -846,12 +821,13 @@ impl Database {
         &self.path
     }
 
-    /// Return a shared `Arc<CoreDatabase>` handle to the already-opened database.
+    /// A shared `Arc<CoreDatabase>` handle to this already-opened database.
     ///
     /// Used by subsystems (e.g., AgentMemory) that need `Arc` ownership.
-    /// The handle shares the same in-memory registries and file lock as the
-    /// parent `Database`, avoiding VELES-031 re-entrant lock errors.
-    pub fn open_shared(&self) -> std::result::Result<Arc<CoreDatabase>, String> {
-        Ok(Arc::clone(&self.inner))
+    /// The handle is the same database — same in-memory registries, same
+    /// observer, same file lock — so it cannot hit a VELES-031 re-entrant
+    /// lock error, and it cannot fail.
+    pub fn shared(&self) -> Arc<CoreDatabase> {
+        Arc::clone(&self.inner)
     }
 }

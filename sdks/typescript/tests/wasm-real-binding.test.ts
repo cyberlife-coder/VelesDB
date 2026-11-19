@@ -23,6 +23,10 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { VelesDB } from '../src/client';
+import { WasmBackend } from '../src/backends/wasm';
+import { InvalidCollectionNameError } from '../src/errors';
+import { VelesDBError } from '../src/types';
+import type { AddEdgeRequest } from '../src/types';
 
 const PKG = process.env.VELESDB_WASM_PKG;
 
@@ -136,5 +140,370 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     await expect(
       db.query('docs', 'SELECT category, COUNT(*) FROM docs GROUP BY category')
     ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
+  });
+
+  it('graph: edges between stored points are listed, counted and matched with REST shapes', async () => {
+    await db.addEdge('docs', { id: 10, source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } });
+
+    expect(await db.getEdges('docs', { label: 'NEXT' })).toEqual([
+      { id: '10', source: '1', target: '2', label: 'NEXT', properties: { weight: 0.5 } },
+    ]);
+    expect(await db.getEdgeCount('docs')).toBe(1);
+
+    // The collection's points are the MATCH's nodes: their payloads project.
+    const response = await db.matchQuery('docs', 'MATCH (a)-[r:NEXT]->(b) RETURN a.title, b.category, r.weight');
+    expect(response.results).toEqual([
+      {
+        bindings: { a: '1', b: '2' },
+        depth: 1,
+        projected: { 'a.title': 'hello rust', 'b.category': 'docs', 'r.weight': 0.5 },
+      },
+    ]);
+    expect(response.count).toBe(1);
+    expect(response.meta.velesqlContractVersion).toMatch(/^\d+\.\d+\.\d+$/);
+
+    expect(await db.removeEdge('docs', 10)).toBe(true);
+    expect(await db.getEdgeCount('docs')).toBe(0);
+  });
+
+  it('graph: a derived edge id past 2^53 is listed and removed exactly', async () => {
+    await db.addEdge('docs', { id: '9007199254740993', source: 1, target: 2, label: 'BIG' });
+
+    const [edge] = await db.getEdges('docs', { label: 'BIG' });
+    expect(edge?.id).toBe('9007199254740993');
+    expect(await db.removeEdge('docs', edge!.id)).toBe(true);
+    expect(await db.getEdges('docs', { label: 'BIG' })).toEqual([]);
+  });
+
+  it('graph: deleting a point deletes its edges, so a new point under its id starts unconnected', async () => {
+    await db.addEdge('docs', { id: 30, source: 1, target: 2, label: 'GONE' });
+
+    expect(await db.delete('docs', 2)).toBe(true);
+    expect(await db.getEdges('docs', { label: 'GONE' })).toEqual([]);
+
+    await db.upsert('docs', { id: 2, vector: [0, 1], payload: NOTES });
+    const response = await db.matchQuery('docs', 'MATCH (a)-[:GONE]->(b) RETURN b.id');
+    expect(response.results).toEqual([]);
+  });
+
+  it('graph: an edge to a point that does not exist is NOT_FOUND, as on REST', async () => {
+    await expect(
+      db.addEdge('docs', { id: 11, source: 1, target: 99, label: 'NEXT' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('graph: matchQuery scores the points\' vectors with similarity(), as on REST', async () => {
+    await db.addEdge('docs', { id: 20, source: 1, target: 2, label: 'SEES' });
+    await db.addEdge('docs', { id: 21, source: 1, target: 3, label: 'SEES' });
+
+    // Cosine to [0, 1]: point 2 ([0, 1]) 1.0, point 3 ([0.6, 0.8]) 0.8.
+    const where = await db.matchQuery(
+      'docs',
+      'MATCH (a)-[:SEES]->(b) WHERE similarity(b.embedding, $v) > 0.5 RETURN b.id ORDER BY similarity() DESC',
+      { v: [0, 1] }
+    );
+    expect(where.results.map(r => r.bindings.b)).toEqual(['2', '3']);
+    expect(where.results[0]!.score).toBeCloseTo(1, 4);
+
+    const scored = await db.matchQuery('docs', 'MATCH (a)-[:SEES]->(b) RETURN b.id', undefined, {
+      vector: [0, 1],
+      threshold: 0.9,
+    });
+    expect(scored.results.map(r => r.bindings.b)).toEqual(['2']);
+  });
+
+  it('an upsert replaces the whole point: a payload or sparse vector it leaves out is gone', async () => {
+    await db.createCollection('replace', { dimension: 2, metric: 'cosine' });
+    await db.upsert('replace', { id: 1, vector: [1, 0], payload: RUST, sparseVector: { 1: 1 } });
+    await db.upsert('replace', { id: 1, vector: [1, 0] });
+
+    expect((await db.get('replace', 1))?.payload ?? null).toBeNull();
+    const [hit] = await db.search('replace', [1, 0], { k: 1 });
+    expect(hit!.payload).toBeUndefined();
+    // Point 1 lost term 1 with its sparse vector: only point 2 still ranks
+    // on the sparse side, which lifts it above point 1 in the fusion.
+    await db.upsert('replace', { id: 2, vector: [0, 1], sparseVector: { 1: 0.5 } });
+    const fused = await db.search('replace', [1, 0], { k: 2, sparseVector: { 1: 1 } });
+    expect(fused.map(r => r.id)).toEqual(['2', '1']);
+  });
+
+  it('upsertBatch with a repeated id keeps the last version whole, as core does', async () => {
+    await db.createCollection('dupes', { dimension: 2, metric: 'cosine' });
+    await db.upsertBatch('dupes', [
+      { id: 1, vector: [1, 0] },
+      { id: 1, vector: [0, 1], payload: NOTES },
+    ]);
+    const first = await db.get('dupes', 1);
+    expect(Array.from(first!.vector)).toEqual([0, 1]);
+    expect(first!.payload).toEqual(NOTES);
+
+    await db.upsertBatch('dupes', [
+      { id: 2, vector: [0, 1], payload: RUST },
+      { id: 2, vector: [1, 0] },
+    ]);
+    const second = await db.get('dupes', 2);
+    expect(Array.from(second!.vector)).toEqual([1, 0]);
+    expect(second!.payload ?? null).toBeNull();
+  });
+
+  it('a point id past 2^53 comes back exactly from every search and read', async () => {
+    // The binding threw serializing such an id as a number, and the SDK
+    // refused it up front; it now leaves every surface as its decimal string.
+    const big = '9007199254740993';
+    await db.createCollection('big', { dimension: 2, metric: 'cosine' });
+    await db.upsert('big', { id: big, vector: [1, 0], payload: RUST, sparseVector: { 1: 1 } });
+    await db.upsert('big', { id: 5, vector: [0, 1], payload: NOTES, sparseVector: { 1: 0.5 } });
+
+    const [hit] = await db.search('big', [1, 0], { k: 1 });
+    expect(hit).toMatchObject({ id: big, payload: RUST });
+    expect(await db.get('big', big)).toEqual({ id: big, vector: [1, 0], payload: RUST });
+    const fused = await db.search('big', [1, 0], { k: 2, sparseVector: { 1: 1 } });
+    expect(fused.map(r => r.id)).toEqual([big, '5']);
+    expect((await db.textSearch('big', 'rust', { k: 2 })).map(r => r.id)).toEqual([big]);
+    expect((await db.hybridSearch('big', [1, 0], 'rust', { k: 1 }))[0]!.id).toBe(big);
+    expect((await db.multiQuerySearch('big', [[1, 0]], { k: 1 }))[0]!.id).toBe(big);
+
+    expect(await db.delete('big', big)).toBe(true);
+    expect(await db.get('big', big)).toBeNull();
+    expect((await db.search('big', [1, 0], { k: 2, sparseVector: { 1: 1 } })).map(r => r.id)).toEqual(['5']);
+  });
+});
+
+/**
+ * VelesQL `SPARSE_NEAR` through the SDK, over the store the backend writes
+ * sparse vectors into. The dataset is `velesql_sparse_parity_tests.rs`'s,
+ * and every expected ranking below is what a core `Database` returns for the
+ * same points and statement (that file pins the executor against core).
+ */
+describe.skipIf(!PKG)('VelesQL SPARSE_NEAR through the WASM backend, on the real binding', () => {
+  const db = new VelesDB({ backend: 'wasm' });
+  // The client refuses dimension 0 (core's `validate_dimension`); the
+  // exported backend creates the sparse-only collection a browser app keeps.
+  const sparseOnly = new WasmBackend();
+  // (id, vector, cat, sparse terms): dense similarity to Q is 1 > 0.8 > 0.6
+  // > 0.3 > 0; `{1: 1.0}` scores 4 (2.0) > 3 (1.0) > 5 (0.5).
+  const POINTS: Array<[number, number[], string, Record<number, number> | undefined]> = [
+    [1, [1, 0, 0, 0], 'a', { 2: 0.3 }],
+    [2, [0.8, 0.6, 0, 0], 'a', undefined],
+    [3, [0.6, 0, 0.8, 0], 'b', { 1: 1 }],
+    [4, [0, 0.6, 0, 0.8], 'b', { 1: 2, 2: 0.5 }],
+    [5, [0.3, 0, 0, 0.954], 'b', { 1: 0.5 }],
+  ];
+  const Q = [1, 0, 0, 0];
+  const S = { 1: 1 };
+
+  beforeAll(async () => {
+    await db.init();
+    await db.createCollection('sp', { dimension: 4, metric: 'cosine' });
+    await sparseOnly.init();
+    await sparseOnly.createCollection('sponly', { dimension: 0 });
+    await db.createCollection('dense', { dimension: 4, metric: 'cosine' });
+    await db.upsertBatch('sp', POINTS.map(([id, vector, cat, sparseVector]) =>
+      ({ id, vector, payload: { cat }, sparseVector })));
+    for (const [id, , cat, sparseVector] of POINTS) {
+      await sparseOnly.upsert('sponly', { id, vector: [], payload: { cat }, sparseVector });
+    }
+    await db.upsert('dense', { id: 1, vector: Q });
+  });
+
+  afterAll(async () => {
+    await db.close();
+    await sparseOnly.close();
+  });
+
+  /** The ids a `SELECT *` returns, in order (its rows carry the columns, not the score). */
+  async function ids(collection: string, sql: string, params?: Record<string, unknown>) {
+    const target = collection === 'sponly' ? sparseOnly : db;
+    const response = await target.query(collection, sql, params);
+    if (!('results' in response)) { throw new Error('expected rows'); }
+    return response.results.map(r => String(r.id));
+  }
+  const close = (xs: number[]) => xs.map(x => expect.closeTo(x, 5));
+
+  it.each(['sp', 'sponly'])('a lone SPARSE_NEAR ranks by the sparse score, as core does (%s)', async (c) => {
+    expect(await ids(c, `SELECT * FROM ${c} WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 5`)).toEqual(['4', '3', '5']);
+    expect(await ids(c, `SELECT * FROM ${c} WHERE vector SPARSE_NEAR $s LIMIT 5`, { s: S })).toEqual(['4', '3', '5']);
+  });
+
+  it.each(['sp', 'sponly'])('a WHERE filter bounds a lone SPARSE_NEAR, as core does (%s)', async (c) => {
+    const all = `SELECT * FROM ${c} WHERE vector SPARSE_NEAR {1: 1.0, 2: 1.0} LIMIT 5`;
+    expect(await ids(c, all)).toEqual(['4', '3', '5', '1']);
+    const kept = `SELECT * FROM ${c} WHERE vector SPARSE_NEAR {1: 1.0, 2: 1.0} AND cat = 'b' LIMIT 5`;
+    expect(await ids(c, kept)).toEqual(['4', '3', '5']);
+    expect(await ids(c, `SELECT * FROM ${c} WHERE vector SPARSE_NEAR $s AND cat = 'a' LIMIT 5`, { s: { 2: 1 } }))
+      .toEqual(['1']);
+  });
+
+  it('NEAR + SPARSE_NEAR fuses both branches by RRF without USING FUSION, as core does', async () => {
+    expect(await ids('sp', 'SELECT * FROM sp WHERE vector NEAR $q AND vector SPARSE_NEAR {1: 1.0} LIMIT 5', { q: Q }))
+      .toEqual(['3', '4', '5', '1', '2']);
+    expect(await ids(
+      'sp', "SELECT * FROM sp WHERE vector NEAR $q AND vector SPARSE_NEAR $s AND cat = 'b' LIMIT 5", { q: Q, s: S }
+    )).toEqual(['3', '4', '5']);
+  });
+
+  // Each group holds the points core ranks there; within a group core's
+  // scores tie (maximum: 1 = 3 = 1.0; average: 1 = 4 = 1.0, 2 = 3 = 0.8)
+  // and neither engine promises a tie order.
+  it.each([
+    ["strategy = 'rrf', k = 10", [['3'], ['4'], ['5'], ['1'], ['2']]],
+    ["strategy = 'rsf', dense_w = 0.7, sparse_w = 0.3", [['1'], ['2'], ['3'], ['4'], ['5']]],
+    ["strategy = 'weighted_rrf', dense_w = 0.8, sparse_w = 0.2", [['3'], ['5'], ['4'], ['1'], ['2']]],
+    ["strategy = 'weighted', dense_w = 0.8, sparse_w = 0.2", [['3'], ['5'], ['4'], ['1'], ['2']]],
+    ["strategy = 'maximum'", [['4'], ['1', '3'], ['2'], ['5']]],
+    ["strategy = 'average'", [['1', '4'], ['2', '3'], ['5']]],
+  ])('USING FUSION (%s) ranks as core does', async (fusion, groups) => {
+    const got = await ids(
+      'sp', `SELECT * FROM sp WHERE vector NEAR $q AND vector SPARSE_NEAR {1: 1.0} LIMIT 5 USING FUSION (${fusion})`, { q: Q }
+    );
+    let at = 0;
+    for (const group of groups) {
+      expect(got.slice(at, at + group.length).sort()).toEqual(group);
+      at += group.length;
+    }
+    expect(got).toHaveLength(at);
+  });
+
+  it('a deleted or replaced point leaves SPARSE_NEAR with it', async () => {
+    await db.createCollection('churn', { dimension: 1 });
+    await db.upsert('churn', { id: 1, vector: [1], sparseVector: { 1: 1 } });
+    await db.upsert('churn', { id: 2, vector: [1], sparseVector: { 1: 0.5 } });
+    await db.upsert('churn', { id: 3, vector: [1], sparseVector: { 1: 0.2 } });
+    await db.upsert('churn', { id: 2, vector: [1] });
+    await db.delete('churn', 3);
+
+    expect(await ids('churn', 'SELECT * FROM churn WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 5')).toEqual(['1']);
+  });
+
+  it("only a genuinely missing index is refused, with core's message", async () => {
+    await expect(db.query('dense', 'SELECT * FROM dense WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 5'))
+      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: "[VELES-009] Configuration error: Sparse index '<default>' not found" });
+    await expect(db.query('sp', "SELECT * FROM sp WHERE vector SPARSE_NEAR {1: 1.0} USING 'splade' LIMIT 5"))
+      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: "[VELES-009] Configuration error: Sparse index 'splade' not found" });
+  });
+
+  it('the typed sparse and hybrid searches read the same store and rank as before', async () => {
+    const sparse = await sparseOnly.search('sponly', [], { k: 5, sparseVector: S });
+    expect(sparse.map(r => r.id)).toEqual(['4', '3', '5']);
+    expect(sparse.map(r => r.score)).toEqual(close([2, 1, 0.5]));
+    expect(sparse[0]!.payload).toEqual({ cat: 'b' });
+    // RRF (k = 60) of the dense ranking [1, 2, 3, 5, 4] and the sparse one [4, 3, 5].
+    const hybrid = await db.search('sp', Q, { k: 5, sparseVector: S });
+    expect(hybrid.map(r => r.id)).toEqual(['3', '4', '5', '1', '2']);
+    expect(hybrid.map(r => r.score)).toEqual(close([0.032002047, 0.031778056, 0.031498015, 0.016393442, 0.016129032]));
+  });
+});
+
+/**
+ * The typed searches and `query()` answer as core does for the same points:
+ * the same rows for the same statement shape, and the same per-branch
+ * depth before a fusion (each expected id is core's answer, see the
+ * comments and `store_search_tests.rs`).
+ */
+describe.skipIf(!PKG)('the WASM backend answers as core does, on the real binding', () => {
+  const db = new VelesDB({ backend: 'wasm' });
+
+  beforeAll(async () => {
+    await db.init();
+  });
+
+  afterAll(async () => {
+    await db.close();
+  });
+
+  it('a pure NEAR returns the rows a NEAR with a WHERE does: the id and the payload columns', async () => {
+    await db.createCollection('shape', { dimension: 2, metric: 'cosine' });
+    await db.upsert('shape', { id: 1, vector: [1, 0], payload: { title: 'a' } });
+    await db.upsert('shape', { id: 2, vector: [0, 1], payload: { title: 'b' } });
+
+    const pure = await db.query('shape', 'SELECT * FROM shape WHERE vector NEAR $v LIMIT 1', { v: [1, 0] });
+    const filtered = await db.query(
+      'shape', "SELECT * FROM shape WHERE vector NEAR $v AND title = 'a' LIMIT 1", { v: [1, 0] }
+    );
+
+    expect('results' in filtered && filtered.results).toEqual([{ id: 1, title: 'a' }]);
+    expect('results' in pure && pure.results).toEqual([{ id: 1, title: 'a' }]);
+  });
+
+  it('a VelesQL row keeps a point id past 2^53 exact, as its decimal string', async () => {
+    // JSON.parse rounds a number past Number.MAX_SAFE_INTEGER: 2^53 + 1 read
+    // back as 2^53, a different point. Ids up to 2^53 - 1 stay numbers.
+    const big = '9007199254740993';
+    await db.createCollection('bigid', { dimension: 2, metric: 'cosine' });
+    await db.upsert('bigid', { id: big, vector: [1, 0], payload: { title: 'big' } });
+    await db.upsert('bigid', { id: 7, vector: [0, 1], payload: { title: 'small' } });
+
+    const pure = await db.query('bigid', 'SELECT * FROM bigid WHERE vector NEAR $v LIMIT 1', { v: [1, 0] });
+    const filtered = await db.query(
+      'bigid', "SELECT * FROM bigid WHERE vector NEAR $v AND title = 'big' LIMIT 1", { v: [1, 0] }
+    );
+    const named = await db.query('bigid', "SELECT id, title FROM bigid WHERE title = 'big'");
+    const small = await db.query('bigid', "SELECT id FROM bigid WHERE title = 'small'");
+
+    expect('results' in pure && pure.results).toEqual([{ id: big, title: 'big' }]);
+    expect('results' in filtered && filtered.results).toEqual([{ id: big, title: 'big' }]);
+    expect('results' in named && named.results).toEqual([{ id: big, title: 'big' }]);
+    expect('results' in small && small.results).toEqual([{ id: 7 }]);
+  });
+
+  it('a typed dense + sparse search fuses as deep a branch as VelesQL and core do', async () => {
+    // Dense ranking to [1, 0]: 1, 3, 4, 2. Sparse ranking of {1: 1}: 2, 3.
+    // Cut to k = 1 per branch, RRF ties 1 and 2 on one rank each; core reads
+    // `dense_sparse_candidate_k(1)` points per branch, where 3 ranks second
+    // in both and wins.
+    await db.createCollection('hyb', { dimension: 2, metric: 'cosine' });
+    await db.upsertBatch('hyb', [
+      { id: 1, vector: [1, 0], sparseVector: { 2: 1 } },
+      { id: 2, vector: [0, 1], sparseVector: { 1: 1 } },
+      { id: 3, vector: [0.9, 0.436], sparseVector: { 1: 0.5 } },
+      { id: 4, vector: [0.5, 0.5] },
+    ]);
+
+    const typed = await db.search('hyb', [1, 0], { k: 1, sparseVector: { 1: 1 } });
+    const velesql = await db.query(
+      'hyb', 'SELECT * FROM hyb WHERE vector NEAR $v AND vector SPARSE_NEAR $s LIMIT 1', { v: [1, 0], s: { 1: 1 } }
+    );
+
+    expect('results' in velesql && velesql.results.map(r => String(r.id))).toEqual(['3']);
+    expect(typed.map(r => r.id)).toEqual(['3']);
+  });
+
+  it('multiQuerySearch fuses as deep a branch as NEAR_FUSED and core do', async () => {
+    // Cosine to [1, 0] ranks 1, 4, 6, 3, …; to [0, 1] ranks 2, 5, 7, 3, ….
+    // Two points per branch leave 3 out, and 1 averages its one score
+    // (0.9988); core's `branch_depth(1)` keeps every point, and 3, at 0.707
+    // in both branches, has the best average.
+    await db.createCollection('mq', { dimension: 2, metric: 'cosine' });
+    await db.upsertBatch('mq', [
+      [1, [1, 0.05]], [2, [0.05, 1]], [3, [1, 1]], [4, [1, 0.3]],
+      [5, [0.3, 1]], [6, [1, 0.6]], [7, [0.6, 1]],
+    ].map(([id, vector]) => ({ id: id as number, vector: vector as number[] })));
+
+    const typed = await db.multiQuerySearch('mq', [[1, 0], [0, 1]], { k: 1, fusion: 'average' });
+    const velesql = await db.query(
+      'mq', "SELECT * FROM mq WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'average' LIMIT 1", { a: [1, 0], b: [0, 1] }
+    );
+
+    expect('results' in velesql && velesql.results.map(r => String(r.id))).toEqual(['3']);
+    expect(typed.map(r => r.id)).toEqual(['3']);
+  });
+
+  it('an invalid collection name is refused with InvalidCollectionNameError, as on REST', async () => {
+    await expect(db.createCollection('bad.name', { dimension: 2 }))
+      .rejects.toBeInstanceOf(InvalidCollectionNameError);
+    expect(await db.getCollection('bad.name')).toBeNull();
+  });
+
+  it('an edge without an id is BAD_REQUEST, as on REST, naming what it got', async () => {
+    await db.createCollection('edges', { dimension: 2, metric: 'cosine' });
+    await db.upsert('edges', { id: 1, vector: [1, 0] });
+    await db.upsert('edges', { id: 2, vector: [0, 1] });
+
+    for (const id of [undefined, null]) {
+      const edge = { id, source: 1, target: 2, label: 'L' } as unknown as AddEdgeRequest;
+      const error = await db.addEdge('edges', edge).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(VelesDBError);
+      expect(error).toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining(String(id)) });
+    }
   });
 });

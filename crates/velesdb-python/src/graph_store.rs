@@ -8,7 +8,7 @@
 //! [EPIC-016/US-030, US-032]
 
 use parking_lot::RwLock;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -170,7 +170,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Gets outgoing edges from a node.
@@ -184,7 +184,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Alias for `get_outgoing`.
@@ -204,7 +204,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Alias for `get_incoming`.
@@ -230,7 +230,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Performs streaming BFS traversal from a start node.
@@ -264,8 +264,7 @@ impl GraphStore {
         // result cap from the visited-set memory bound.
         let rel_types: Vec<String> = config.relationship_types.unwrap_or_default();
         let core_config = CoreStreamingConfig {
-            max_depth: u32::try_from(config.max_depth)
-                .map_err(|_| PyRuntimeError::new_err("max_depth exceeds u32::MAX"))?,
+            max_depth: max_depth_u32(config.max_depth)?,
             max_visited_size: config.max_visited,
             rel_types,
             limit: config.limit.or(Some(config.max_visited)),
@@ -376,8 +375,7 @@ impl GraphStore {
     ) -> PyResult<Vec<TraversalResult>> {
         let core_config = CoreTraversalConfig {
             min_depth: 1,
-            max_depth: u32::try_from(config.max_depth)
-                .map_err(|_| PyRuntimeError::new_err("max_depth exceeds u32::MAX"))?,
+            max_depth: max_depth_u32(config.max_depth)?,
             limit: config.limit.unwrap_or(config.max_visited),
             rel_types: config.relationship_types.clone().unwrap_or_default(),
             deadline: config
@@ -417,8 +415,7 @@ impl GraphStore {
         let config = config.unwrap_or_else(|| StreamingConfig::new(3, 10_000, None, None, None));
         let core_config = CoreTraversalConfig {
             min_depth: 1,
-            max_depth: u32::try_from(config.max_depth)
-                .map_err(|_| PyRuntimeError::new_err("max_depth exceeds u32::MAX"))?,
+            max_depth: max_depth_u32(config.max_depth)?,
             limit: config.limit.unwrap_or(config.max_visited),
             rel_types: config.relationship_types.clone().unwrap_or_default(),
             deadline: config
@@ -435,7 +432,7 @@ impl GraphStore {
                 }
                 "both" | "bidirectional" => bfs_traverse_both(&store, source_id, &core_config),
                 other => {
-                    return Err(PyRuntimeError::new_err(format!(
+                    return Err(PyValueError::new_err(format!(
                         "unknown direction '{other}'; expected 'forward', 'reverse' or 'both'"
                     )))
                 }
@@ -457,7 +454,7 @@ impl GraphStore {
             let store = self.inner.read();
             store.get_edge(edge_id).cloned()
         });
-        Ok(edge.map(|e| edge_to_dict(py, &e)))
+        edge.map(|e| edge_to_dict(py, &e)).transpose()
     }
 
     /// List all edges in the store.
@@ -467,7 +464,7 @@ impl GraphStore {
             let store = self.inner.read();
             store.all_edges().into_iter().cloned().collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Gets incoming edges to a node filtered by label.
@@ -487,7 +484,7 @@ impl GraphStore {
                 .cloned()
                 .collect::<Vec<_>>()
         });
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Remove all edges touching a node (both directions).
@@ -538,6 +535,13 @@ fn to_py_result(
         edge_id,
         path: r.path.clone(),
     })
+}
+
+/// A traversal depth as core takes it. A depth past `u32::MAX` is the
+/// caller's argument to fix: `ValueError`, like every other bad argument of
+/// this binding.
+fn max_depth_u32(max_depth: usize) -> PyResult<u32> {
+    u32::try_from(max_depth).map_err(|_| PyValueError::new_err("max_depth exceeds u32::MAX"))
 }
 
 #[cfg(test)]

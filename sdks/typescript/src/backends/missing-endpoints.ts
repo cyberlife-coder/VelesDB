@@ -34,6 +34,7 @@ import type {
   GraphSearchResponse,
   GraphSearchResultItem,
   GraphEdge,
+  GraphNodeId,
   MatchQueryOptions,
   MatchQueryResponse,
   MatchQueryResultItem,
@@ -41,8 +42,8 @@ import type {
   AggregateResponse,
 } from '../types';
 import type { BaseTransport } from './shared';
-import { throwOnError, collectionPath, toNumberArray } from './shared';
-import { parseVelesError, EdgeNotFoundError } from '../errors';
+import { throwOnError, collectionPath, toNumberArray, isAddressedResourceAbsent } from './shared';
+import { EdgeNotFoundError } from '../errors';
 
 // ============================================================================
 // Admin
@@ -286,33 +287,13 @@ export async function matchQuery(
 export async function removeEdge(
   transport: BaseTransport,
   collection: string,
-  edgeId: number
+  edgeId: GraphNodeId
 ): Promise<boolean> {
   const response = await transport.requestJson(
     'DELETE',
-    `${collectionPath(collection)}/graph/edges/${edgeId}`
+    `${collectionPath(collection)}/graph/edges/${encodeURIComponent(String(edgeId))}`
   );
-  if (response.error !== undefined) {
-    const { code, message } = response.error;
-    // Typed path: only EdgeNotFoundError counts as "absent edge".
-    // Any other VELES code (CollectionNotFound, etc.) must propagate
-    // so the caller sees the real error instead of a misleading
-    // `false` return.
-    const err = parseVelesError(code, message);
-    if (err instanceof EdgeNotFoundError) {
-      return false;
-    }
-    // Legacy path: the server omitted the VELES code and the
-    // transport filled in `'NOT_FOUND'`. At this URL the only 404
-    // the handler produces is edge-not-found (collection 404 is
-    // emitted upstream by `get_graph_collection_or_404` which now
-    // always carries VELES-002, handled by the typed branch above).
-    if (code === 'NOT_FOUND') {
-      return false;
-    }
-    throwOnError(response, `Collection '${collection}'`);
-  }
-  return true;
+  return !isAddressedResourceAbsent(response, EdgeNotFoundError);
 }
 
 /** Total edge count in the graph collection. */

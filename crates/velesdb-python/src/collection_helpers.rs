@@ -2,7 +2,9 @@
 //!
 //! Extracted from collection.rs to reduce file size and improve maintainability.
 
-use pyo3::exceptions::{PyKeyError, PyMemoryError, PyOverflowError, PyValueError};
+use pyo3::exceptions::{
+    PyKeyError, PyMemoryError, PyOverflowError, PyPermissionError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::{BTreeMap, HashMap};
@@ -62,6 +64,7 @@ use velesdb_core::{Filter, Point, SearchResult};
 /// | VELES-034  | `InvalidCollectionName`   | `ValueError`                  |
 /// | VELES-035  | `SnapshotBuildFailed`     | `VelesDBError`                |
 /// | VELES-036  | `IncompatibleSchemaVersion` | `VelesDBError`              |
+/// | VELES-037  | `AccessDenied`            | `PermissionError`             |
 ///
 /// The wildcard arm at the bottom handles future variants added under
 /// the `#[non_exhaustive]` attribute on `velesdb_core::Error`. New
@@ -105,6 +108,8 @@ pub fn core_err(e: velesdb_core::Error) -> PyErr {
         | E::InvalidCollectionName { .. } => PyValueError::new_err(e.to_string()),
 
         // Numeric overflow / allocation failure — specific Python builtins
+        // An observer turned the request down: not a malformed request.
+        E::AccessDenied(_) => PyPermissionError::new_err(e.to_string()),
         E::Overflow(_) => PyOverflowError::new_err(e.to_string()),
         E::AllocationFailed(_) => PyMemoryError::new_err(e.to_string()),
 
@@ -174,10 +179,10 @@ pub fn parse_optional_filter(
 
 /// Convert payload to Python object (shared helper to avoid duplication).
 #[inline]
-fn payload_to_python(py: Python<'_>, payload: &Option<serde_json::Value>) -> Py<PyAny> {
+fn payload_to_python(py: Python<'_>, payload: &Option<serde_json::Value>) -> PyResult<Py<PyAny>> {
     match payload {
         Some(p) => json_to_python(py, p),
-        None => py.None(),
+        None => Ok(py.None()),
     }
 }
 
@@ -189,71 +194,115 @@ pub fn search_result_to_dict(
     py: Python<'_>,
     result: &SearchResult,
     include_vectors: bool,
-) -> Py<PyAny> {
+) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
     // PyString::intern reuses the same Python string object across calls
-    let _ = dict.set_item(PyString::intern(py, "id"), result.point.id);
-    let _ = dict.set_item(PyString::intern(py, "score"), result.score);
-    let _ = dict.set_item(
+    dict.set_item(PyString::intern(py, "id"), result.point.id)?;
+    dict.set_item(PyString::intern(py, "score"), result.score)?;
+    dict.set_item(
         PyString::intern(py, "payload"),
-        payload_to_python(py, &result.point.payload),
-    );
+        payload_to_python(py, &result.point.payload)?,
+    )?;
     if include_vectors {
-        let _ = dict.set_item(
+        dict.set_item(
             PyString::intern(py, "vector"),
             result.point.vector.as_slice(),
-        );
+        )?;
     }
-    // Per-component score breakdown (vector_score / bm25_score / ...) when the
-    // engine tagged it — hybrid and fused searches carry it, plain dense does not.
+    set_component_scores(py, &dict, result)?;
+    Ok(dict.into_any().unbind())
+}
+
+/// Sets `component_scores` on `dict`: the per-component breakdown
+/// (`vector_score`, `bm25_score`, ...) when the engine tagged the result —
+/// hybrid, fused and text searches carry it. An untagged result gets no key.
+fn set_component_scores(
+    py: Python<'_>,
+    dict: &Bound<'_, PyDict>,
+    result: &SearchResult,
+) -> PyResult<()> {
     if let Some(components) = &result.component_scores {
         let comp = PyDict::new(py);
         for (name, value) in components.iter() {
-            let _ = comp.set_item(*name, *value);
+            comp.set_item(*name, *value)?;
         }
-        let _ = dict.set_item(PyString::intern(py, "component_scores"), comp);
+        dict.set_item(PyString::intern(py, "component_scores"), comp)?;
     }
-    dict.into_any().unbind()
+    Ok(())
+}
+
+/// The score the engine tagged `result` with for component `name`, `None`
+/// when it recorded none (a BM25-only row has no vector score).
+fn component_score(result: &SearchResult, name: &str) -> Option<f32> {
+    result
+        .component_scores
+        .as_ref()?
+        .iter()
+        .find(|(component, _)| *component == name)
+        .map(|(_, value)| *value)
+}
+
+/// The `vector_score` of a multi-model row: the tagged component, or — on a
+/// result core left untagged — its own score, the value core's `ScoreContext`
+/// resolves `vector_score` to on such a row. Some dense paths still return
+/// untagged rows (a `NEAR` with a metadata filter), so dropping the fallback
+/// would blank their vector score.
+fn vector_score(result: &SearchResult) -> Option<f32> {
+    match result.component_scores {
+        Some(_) => component_score(result, "vector_score"),
+        None => Some(result.score),
+    }
 }
 
 /// Convert a `SearchResult` to a multi-model Python dict (EPIC-031).
-pub fn search_result_to_multimodel_dict(py: Python<'_>, result: &SearchResult) -> Py<PyAny> {
+///
+/// `vector_score` follows [`vector_score`]; `graph_score` is the tagged
+/// component of that name, `None` when absent (core tags none today);
+/// `fused_score` is the row's final score.
+pub fn search_result_to_multimodel_dict(
+    py: Python<'_>,
+    result: &SearchResult,
+) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
     let none = py.None();
-    let payload_py = payload_to_python(py, &result.point.payload);
+    let payload_py = payload_to_python(py, &result.point.payload)?;
 
     // Multi-model fields
-    let _ = dict.set_item(PyString::intern(py, "node_id"), result.point.id);
-    let _ = dict.set_item(PyString::intern(py, "vector_score"), result.score);
-    let _ = dict.set_item(PyString::intern(py, "graph_score"), &none);
-    let _ = dict.set_item(PyString::intern(py, "fused_score"), result.score);
-    let _ = dict.set_item(PyString::intern(py, "bindings"), payload_py.clone_ref(py));
-    let _ = dict.set_item(PyString::intern(py, "column_data"), &none);
+    dict.set_item(PyString::intern(py, "node_id"), result.point.id)?;
+    dict.set_item(PyString::intern(py, "vector_score"), vector_score(result))?;
+    dict.set_item(
+        PyString::intern(py, "graph_score"),
+        component_score(result, "graph_score"),
+    )?;
+    dict.set_item(PyString::intern(py, "fused_score"), result.score)?;
+    dict.set_item(PyString::intern(py, "bindings"), payload_py.clone_ref(py))?;
+    dict.set_item(PyString::intern(py, "column_data"), &none)?;
 
     // Legacy fields for compatibility
-    let _ = dict.set_item(PyString::intern(py, "id"), result.point.id);
-    let _ = dict.set_item(PyString::intern(py, "score"), result.score);
-    let _ = dict.set_item(PyString::intern(py, "payload"), payload_py);
+    dict.set_item(PyString::intern(py, "id"), result.point.id)?;
+    dict.set_item(PyString::intern(py, "score"), result.score)?;
+    dict.set_item(PyString::intern(py, "payload"), payload_py)?;
+    set_component_scores(py, &dict, result)?;
 
-    dict.into_any().unbind()
+    Ok(dict.into_any().unbind())
 }
 
 /// Convert a `Point` to a Python dict.
 ///
 /// Omits the `vector` field when empty (e.g., graph collections
 /// without embeddings) to avoid misleading empty arrays.
-pub fn point_to_dict(py: Python<'_>, point: &Point) -> Py<PyAny> {
+pub fn point_to_dict(py: Python<'_>, point: &Point) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
-    let _ = dict.set_item(PyString::intern(py, "id"), point.id);
+    dict.set_item(PyString::intern(py, "id"), point.id)?;
     if !point.vector.is_empty() {
         let np_vector = numpy::PyArray1::from_slice(py, &point.vector);
-        let _ = dict.set_item(PyString::intern(py, "vector"), np_vector);
+        dict.set_item(PyString::intern(py, "vector"), np_vector)?;
     }
-    let _ = dict.set_item(
+    dict.set_item(
         PyString::intern(py, "payload"),
-        payload_to_python(py, &point.payload),
-    );
-    dict.into_any().unbind()
+        payload_to_python(py, &point.payload)?,
+    )?;
+    Ok(dict.into_any().unbind())
 }
 
 /// Convert a list of `SearchResult`s to Python dicts.
@@ -261,7 +310,7 @@ pub fn search_results_to_dicts(
     py: Python<'_>,
     results: Vec<SearchResult>,
     include_vectors: bool,
-) -> Vec<Py<PyAny>> {
+) -> PyResult<Vec<Py<PyAny>>> {
     results
         .into_iter()
         .map(|r| search_result_to_dict(py, &r, include_vectors))
@@ -272,7 +321,7 @@ pub fn search_results_to_dicts(
 pub fn search_results_to_multimodel_dicts(
     py: Python<'_>,
     results: Vec<SearchResult>,
-) -> Vec<Py<PyAny>> {
+) -> PyResult<Vec<Py<PyAny>>> {
     results
         .into_iter()
         .map(|r| search_result_to_multimodel_dict(py, &r))
@@ -280,14 +329,17 @@ pub fn search_results_to_multimodel_dicts(
 }
 
 /// Convert a list of (id, score) pairs to Python dicts.
-pub fn id_score_pairs_to_dicts(py: Python<'_>, results: Vec<(u64, f32)>) -> Vec<Py<PyAny>> {
+pub fn id_score_pairs_to_dicts(
+    py: Python<'_>,
+    results: Vec<(u64, f32)>,
+) -> PyResult<Vec<Py<PyAny>>> {
     results
         .into_iter()
         .map(|(id, score)| {
             let dict = PyDict::new(py);
-            let _ = dict.set_item(PyString::intern(py, "id"), id);
-            let _ = dict.set_item(PyString::intern(py, "score"), score);
-            dict.into_any().unbind()
+            dict.set_item(PyString::intern(py, "id"), id)?;
+            dict.set_item(PyString::intern(py, "score"), score)?;
+            Ok(dict.into_any().unbind())
         })
         .collect()
 }
@@ -459,18 +511,22 @@ pub fn parse_point_dicts(
 }
 
 /// Parse an optional payload `Py<PyAny>` into a JSON value.
+///
+/// A `"payload": None` entry reads as no payload, like an absent key — the
+/// shape `get()` returns for a point stored without one, so its output can be
+/// upserted back.
 pub fn parse_payload(
     py: Python<'_>,
     payload_obj: Option<&Py<PyAny>>,
 ) -> PyResult<Option<serde_json::Value>> {
     match payload_obj {
-        Some(p) => {
+        Some(p) if !p.is_none(py) => {
             let dict: HashMap<String, Py<PyAny>> = p
                 .extract(py)
                 .map_err(|_| PyValueError::new_err("payload must be a dict[str, Any]"))?;
             Ok(Some(dict_to_json_map(py, &dict)?))
         }
-        None => Ok(None),
+        _ => Ok(None),
     }
 }
 

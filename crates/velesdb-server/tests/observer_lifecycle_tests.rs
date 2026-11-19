@@ -725,3 +725,75 @@ async fn every_read_endpoint_fires_on_query_exactly_once() {
         "/aggregate must fire on_query exactly once"
     );
 }
+
+/// Refuses every read and every DDL statement with core's `AccessDenied`,
+/// once `deny` is set.
+#[derive(Default)]
+struct AccessDeniedObserver {
+    deny: AtomicBool,
+}
+impl DatabaseObserver for AccessDeniedObserver {
+    fn on_query_request(
+        &self,
+        _ctx: &velesdb_core::observer::QueryAccessContext,
+    ) -> velesdb_core::Result<velesdb_core::observer::AccessDecision> {
+        if self.deny.load(Ordering::SeqCst) {
+            return Ok(velesdb_core::observer::AccessDecision::Deny(
+                velesdb_core::Error::AccessDenied("closed".to_string()),
+            ));
+        }
+        Ok(velesdb_core::observer::AccessDecision::Allow)
+    }
+
+    fn on_ddl_request(&self, _operation: &str, _collection: &str) -> velesdb_core::Result<()> {
+        if self.deny.load(Ordering::SeqCst) {
+            return Err(velesdb_core::Error::AccessDenied("closed".to_string()));
+        }
+        Ok(())
+    }
+}
+
+/// A `VelesQL` statement the observer refuses answers `403` with `VELES-037`,
+/// as a refused search does — not the `422` of an invalid statement, which
+/// it used to be indistinguishable from.
+#[tokio::test]
+async fn velesql_access_denials_answer_403() {
+    let dir = TempDir::new().expect("test: dir");
+    let observer = Arc::new(AccessDeniedObserver::default());
+    let app =
+        create_test_app_with_observer(&dir, Arc::clone(&observer) as Arc<dyn DatabaseObserver>);
+    let status = post(
+        &app,
+        "/collections",
+        json!({"name": COLLECTION, "dimension": DIM, "metric": "cosine"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    observer.deny.store(true, Ordering::SeqCst);
+
+    for statement in [
+        format!("SELECT * FROM {COLLECTION} LIMIT 1"),
+        format!("DROP COLLECTION {COLLECTION}"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/query")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(json!({ "query": statement }).to_string()))
+                    .expect("test: build POST request"),
+            )
+            .await
+            .expect("test: POST request");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{statement}");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("test: read body");
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("closed"),
+            "{statement}: the refusal's message reaches the caller"
+        );
+    }
+}

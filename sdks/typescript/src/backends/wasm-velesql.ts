@@ -20,9 +20,11 @@
  * @packageDocumentation
  */
 
+import { parseVelesError } from '../errors';
 import { VelesDBError } from '../types';
 import type { QueryResponse } from '../types';
-import { describeWasmThrow } from './wasm-helpers';
+import { describeWasmThrow, paramsJson, tryRead } from './wasm-helpers';
+import { WasmGraph } from './wasm-graph';
 import type {
   WasmModule,
   WasmParsedQuery,
@@ -31,15 +33,8 @@ import type {
   WasmVelesQLParser,
 } from './wasm-types';
 
-/** Serialize `params` for the executor: typed arrays become JSON arrays. */
-function paramsJson(params: Record<string, unknown> | undefined): string | undefined {
-  if (params === undefined) { return undefined; }
-  return JSON.stringify(params, (_key, value: unknown) =>
-    ArrayBuffer.isView(value) && !(value instanceof DataView)
-      ? Array.from(value as unknown as ArrayLike<number>)
-      : value
-  );
-}
+/** A core error code, as velesdb-wasm sets it on the `Error` it throws. */
+const VELES_CODE = /^VELES-\d{3}$/;
 
 /**
  * Whether the executor takes the statement: a `SELECT` the parser does not
@@ -71,9 +66,32 @@ export class WasmVelesQL {
     return new WasmVelesQL(db, mod.VelesQL);
   }
 
-  /** Share `store` with the executor as collection `name`. */
+  /**
+   * Share `store` with the executor as collection `name`. The binding's
+   * refusal keeps its core code (`error.code`, e.g. VELES-034 for a name core
+   * refuses) as the matching typed error; one without a code is
+   * `BAD_REQUEST`.
+   */
   attach(name: string, store: WasmVectorStore): void {
-    this.db.attachStore!(name, store);
+    try {
+      this.db.attachStore!(name, store);
+    } catch (error) {
+      const message = describeWasmThrow(error);
+      const code = tryRead(() => (error as { code?: unknown }).code).value;
+      throw typeof code === 'string' && VELES_CODE.test(code)
+        ? parseVelesError(code, message)
+        : new VelesDBError(message, 'BAD_REQUEST');
+    }
+  }
+
+  /**
+   * Remove points `ids` of collection `name` with the edges they are an end
+   * of, as core's delete does; `null` when the binding has no such call, and
+   * the caller removes them through the store (which has no edges to keep).
+   */
+  removePoints(name: string, ids: bigint[]): number | null {
+    if (typeof this.db.removePoints !== 'function') { return null; }
+    return this.db.removePoints(name, BigUint64Array.from(ids));
   }
 
   /** Drop collection `name`; call before freeing its store. */
@@ -101,6 +119,15 @@ export class WasmVelesQL {
       );
     }
     return this.execute(queryString, params);
+  }
+
+  /**
+   * Graph operations over this executor's database — the graph store a
+   * MATCH on each attached collection reads — or `null` when the binding
+   * lacks the edge API or `executeMatch`.
+   */
+  graph(mod: WasmModule, hasCollection: (name: string) => boolean): WasmGraph | null {
+    return WasmGraph.create(mod, this.db, hasCollection);
   }
 
   /** Release the executor; the stores stay owned by their handles. */

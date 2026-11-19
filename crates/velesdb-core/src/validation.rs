@@ -79,6 +79,54 @@ pub fn validate_vector_is_finite(vector: &[f32]) -> Result<()> {
     Ok(())
 }
 
+/// Validates that every weight of a sparse vector is finite.
+///
+/// The sparse twin of [`validate_vector_is_finite`]: a `NaN` weight makes
+/// every score that touches its term `NaN`, and an infinite one swamps them,
+/// whether it sits in a stored document or in a query. Only the REST request
+/// parser refused them; the engine boundary now does, for every surface.
+///
+/// # Errors
+///
+/// Returns [`crate::error::Error::InvalidVector`] naming the first offending
+/// term and its weight.
+pub fn validate_sparse_vector_is_finite(vector: &crate::sparse_index::SparseVector) -> Result<()> {
+    for (&term, &weight) in vector.indices.iter().zip(&vector.values) {
+        if !weight.is_finite() {
+            return Err(Error::InvalidVector(format!(
+                "sparse weight of term {term} is not finite: {weight}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Dense/text blend of a hybrid search when the caller supplies none.
+pub const DEFAULT_HYBRID_VECTOR_WEIGHT: f32 = 0.5;
+
+/// Resolves a hybrid search's dense/text blend: the caller's `vector_weight`
+/// (or [`DEFAULT_HYBRID_VECTOR_WEIGHT`]), clamped to `0.0..=1.0`.
+///
+/// The one validator for every hybrid blend — the collection's RRF fusion and
+/// the WASM store's score blend both call it — because the clamp alone is not
+/// a guard: `f32::NAN.clamp(0.0, 1.0)` is `NaN`, which turns every fused score
+/// into `NaN` and the ranking arbitrary. A non-finite weight is refused rather
+/// than given a meaning; an infinity is refused with it, since "infinitely
+/// dense" is a caller error, not a request for `1.0`.
+///
+/// # Errors
+///
+/// Returns [`Error::Config`] when `vector_weight` is `NaN` or infinite.
+pub fn resolve_hybrid_vector_weight(vector_weight: Option<f32>) -> Result<f32> {
+    let weight = vector_weight.unwrap_or(DEFAULT_HYBRID_VECTOR_WEIGHT);
+    if !weight.is_finite() {
+        return Err(Error::Config(format!(
+            "hybrid vector_weight must be a finite number in 0.0..=1.0, got {weight}"
+        )));
+    }
+    Ok(weight.clamp(0.0, 1.0))
+}
+
 /// Validates that a collection name is safe for use as a filesystem directory.
 ///
 /// # Rules

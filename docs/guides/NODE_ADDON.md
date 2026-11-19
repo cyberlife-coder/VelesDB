@@ -48,8 +48,9 @@ documented in the [MCP tool reference](../reference/MCP_TOOLS.md).
 **1. Everything is async and off-thread.** Each method schedules its work on
 the libuv pool and resolves a `Promise`; the event loop is never blocked. The
 one exception is the `MemoryService.open` factory, which is synchronous —
-with `embedder="ollama"` it performs a single blocking probe of the embedding
-endpoint at open time.
+with a remote embedder (`"ollama"` or `"openai"`) it performs a single
+blocking probe of the embedding endpoint at open time, to learn the vector
+dimension; the default `"hash"` embedder does no I/O.
 
 **2. Ids are decimal strings, never numbers.** A JS `number` is an f64 and
 silently loses precision above 2^53, so every id (`remember`'s return,
@@ -70,7 +71,7 @@ category travels as a token at the front of the message:
 
 | Code | Meaning | Typical trigger |
 |---|---|---|
-| `[INVALID_INPUT]` | Bad caller input | empty fact, oversized metadata, unknown filter operator, malformed id |
+| `[INVALID_INPUT]` | Bad caller input | empty fact, oversized metadata, unknown filter operator, malformed id, a count (`k`, `ttlSeconds`, `maxHops`, `limit`, …) that is not a whole number in `0..=2^32-1` |
 | `[NOT_FOUND]` | A referenced id or handle does not exist | `feedback` on an unknown id, `relate` to a missing endpoint, an expired `ctx://source/` handle |
 | `[INTERNAL]` | Storage, embedding or extraction failure | store locked by another process, Ollama unreachable |
 
@@ -92,8 +93,13 @@ const semantic = MemoryService.open(
 )
 ```
 
-Any other embedder name rejects with
-`[INVALID_INPUT] unknown embedder '<name>' (expected 'hash' or 'ollama')`.
+`embedder="openai"` reaches any OpenAI-compatible server (oMLX, llama.cpp,
+LM Studio, vLLM or a hosted provider); its URL, model and credential come from
+the `VELESDB_MEMORY_EMBEDDER_*` environment only, never from an argument — see
+[MCP_SERVER_SETUP.md](MCP_SERVER_SETUP.md#embedding-backend). Any other
+embedder name rejects with `[INVALID_INPUT] unknown embedding backend '<name>'
+(expected 'hash' for the offline deterministic embedder, 'ollama' for a local
+model, or 'openai' for any OpenAI-compatible server — …)`.
 
 A store is fixed to one embedder: the vector dimension is decided when the
 store is created, so pointing an `ollama` service at a store first written
@@ -359,6 +365,53 @@ silently reduced instead.
 | `why` hops | 10 (default 2) | clamped |
 | Fragments per compile request | 1024 | rejects |
 | Fragment `content` size | 1 MiB | rejects |
+
+### JSON arguments: metadata, filters, requests, working contexts
+
+These arguments must be JSON data, what `JSON.parse` can produce: `null`,
+booleans, finite numbers, strings, arrays and plain objects (an object
+literal, or `Object.create(null)`), plus a `bigint` in the 64-bit range
+(below). Anything else rejects with `INVALID_INPUT`, naming where it sits
+(`metadata.when is a Date, not a plain object`): a `Date`, a `Map`, a `Set`,
+a class instance, a typed array, a function, a symbol, a `bigint` outside
+`-(2n ** 63n)..=2n ** 64n - 1n`, `NaN` or an infinity. They used to be stored
+as `{}` (or `null`) without a word; convert them first (`date.toISOString()`,
+`Object.fromEntries(map)`). As with `JSON.stringify`, only an object's own
+enumerable string keys are read (never one inherited from its prototype),
+and a property set to `undefined` is left out. The `filters` of
+`recallWhere` follow the same rules.
+
+One argument holds at most 1,000,000 values in all, every level counted:
+past that, including an array whose `length` merely claims more, it rejects
+with `INVALID_INPUT` before anything is allocated.
+
+### Numbers in metadata and filters
+
+A JS `number` that holds a whole value — up to `Number.MAX_SAFE_INTEGER`
+(2^53 − 1) — is stored as an integer, whatever its size: `{ ts: 5000000000 }`
+reads back as the integer `5000000000` from Python or Rust, and an exact
+metadata filter on it matches what the other bindings stored. Fractions, and
+whole numbers past 2^53 − 1 (which JS cannot hold exactly), stay floats.
+
+An integer past 2^53 − 1 that another binding stored (a nanosecond
+timestamp, a large serial) comes back as a `bigint`. Pass a `bigint` to store
+or filter on such an integer: one in `-(2n ** 63n)..=2n ** 64n - 1n` is read
+exactly as that integer, so the value read back filters on itself
+(`listMemories(null, 50, { serial: profile.serial })`). Do not convert it to
+a decimal string: a string never equals the stored integer, and the filter
+silently matches nothing.
+
+### Argument errors
+
+A value the binding refuses — a JSON argument that is not JSON data, a count
+out of range, a malformed id — rejects the returned `Promise` with an
+`[INVALID_INPUT]` error. An argument of the wrong JS type for a typed
+parameter (a number where a string is expected) is refused by napi before the
+method runs: that call throws synchronously, with napi's own `code`
+(`StringExpected`, `NumberExpected`, …) and no `[CODE]` prefix.
+The same holds for a JSON argument whose getter or `Proxy` trap throws while
+the binding reads it: napi offers no safe way to take that pending JS
+exception back, so it surfaces synchronously, as the getter's own error.
 
 ---
 

@@ -7,6 +7,7 @@
 //! them. Each adapter formats its own transport-native error; only the values
 //! and the clamping policy are shared.
 
+use crate::error::MemoryError;
 use crate::service::Metadata;
 
 /// Default hop budget for `why` traversal when the caller supplies none.
@@ -265,8 +266,36 @@ pub fn clamp_recall_limit(k: usize) -> usize {
     k.min(MAX_RECALL_LIMIT)
 }
 
+/// A caller-supplied count — a result limit, a TTL, a hop budget, a token
+/// reserve, an index — read as a JavaScript number gives it: a finite whole
+/// number in `0..=u32::MAX`, refused with [`MemoryError::InvalidCount`]
+/// (`INVALID_INPUT`) otherwise.
+///
+/// The one validator for every JS binding (Node and WASM). Their hosts'
+/// integer argument conversions wrap instead of refusing — napi's `u32` is JS
+/// `ToUint32` (`Infinity` → 0, `-1` → 4294967295, `2**32 + 60` → 60), and
+/// `wasm-bindgen` truncates the same way into `usize`/`u64` — so a count
+/// crosses the boundary as `f64` and is checked here. `None` (an omitted
+/// argument) stays `None`, for the caller's default.
+pub fn whole_count(name: &'static str, value: Option<f64>) -> Result<Option<u32>, MemoryError> {
+    value
+        .map(|v| {
+            if v.is_finite() && v.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&v) {
+                // Reason: range-checked just above — a whole number in 0..=u32::MAX.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                return Ok(v as u32);
+            }
+            Err(MemoryError::InvalidCount { name, value: v })
+        })
+        .transpose()
+}
+
 /// Clamp a caller-supplied `why` hop budget to [`MAX_WHY_HOPS`].
 #[must_use]
 pub fn clamp_hops(hops: usize) -> usize {
     hops.min(MAX_WHY_HOPS)
 }
+
+#[cfg(test)]
+#[path = "limits_tests.rs"]
+mod tests;

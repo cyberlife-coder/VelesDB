@@ -6,11 +6,22 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+use crate::js_value::PointId;
+
 /// A graph node for knowledge graph construction.
+///
+/// In JSON (`to_json`, `IndexedDB` rows) every id of this module's classes is
+/// a decimal string, as `JSON.stringify` writes a `BigInt`'s digits: a JSON
+/// number cannot hold a `u64` above 2^53 (serializing one threw). A row
+/// saved with a numeric id still reads back.
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct GraphNode {
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     id: u64,
     label: String,
     properties: std::collections::HashMap<String, serde_json::Value>,
@@ -96,8 +107,23 @@ impl GraphNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct GraphEdge {
+    /// A decimal string in JSON (`to_json`, IndexedDB), as every id here
+    /// (see [`GraphNode`]): a derived edge id is hashed and routinely above
+    /// 2^53. A number still reads back.
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     id: u64,
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     source: u64,
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     target: u64,
     label: String,
     properties: std::collections::HashMap<String, serde_json::Value>,
@@ -309,7 +335,8 @@ impl GraphStore {
     ///
     /// # Returns
     ///
-    /// Array of reachable node IDs with their depths.
+    /// Array of `[nodeId, depth]` pairs: each node id its exact decimal
+    /// string, each depth a number.
     #[wasm_bindgen]
     pub fn bfs_traverse(
         &self,
@@ -317,35 +344,8 @@ impl GraphStore {
         max_depth: usize,
         limit: usize,
     ) -> Result<JsValue, JsValue> {
-        use std::collections::{HashSet, VecDeque};
-
-        let mut results: Vec<(u64, usize)> = Vec::new();
-        let mut visited: HashSet<u64> = HashSet::new();
-        let mut queue: VecDeque<(u64, usize)> = VecDeque::new();
-
-        queue.push_back((source_id, 0));
-        visited.insert(source_id);
-
-        while let Some((node_id, depth)) = queue.pop_front() {
-            if results.len() >= limit {
-                break;
-            }
-
-            if depth > 0 {
-                results.push((node_id, depth));
-            }
-
-            if depth < max_depth {
-                for edge in self.get_outgoing(node_id) {
-                    if !visited.contains(&edge.target) {
-                        visited.insert(edge.target);
-                        queue.push_back((edge.target, depth + 1));
-                    }
-                }
-            }
-        }
-
-        crate::js_value::to_js_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+        crate::js_value::to_js_value(&self.bfs(source_id, max_depth, limit))
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Removes a node and all connected edges.
@@ -404,7 +404,8 @@ impl GraphStore {
     ///
     /// # Returns
     ///
-    /// Array of reachable node IDs with their depths (depth-first order).
+    /// Array of `[nodeId, depth]` pairs in depth-first order: each node id
+    /// its exact decimal string, each depth a number.
     #[wasm_bindgen]
     pub fn dfs_traverse(
         &self,
@@ -412,43 +413,8 @@ impl GraphStore {
         max_depth: usize,
         limit: usize,
     ) -> Result<JsValue, JsValue> {
-        use std::collections::HashSet;
-
-        let mut results: Vec<(u64, usize)> = Vec::new();
-        let mut visited: HashSet<u64> = HashSet::new();
-
-        // Recursive DFS helper using stack to avoid recursion limits
-        let mut stack: Vec<(u64, usize)> = vec![(source_id, 0)];
-
-        while let Some((node_id, depth)) = stack.pop() {
-            if results.len() >= limit {
-                break;
-            }
-
-            if visited.contains(&node_id) {
-                continue;
-            }
-            visited.insert(node_id);
-
-            if depth > 0 {
-                results.push((node_id, depth));
-            }
-
-            if depth < max_depth {
-                // Push neighbors in reverse order for correct DFS traversal
-                let neighbors: Vec<_> = self
-                    .get_outgoing(node_id)
-                    .into_iter()
-                    .filter(|e| !visited.contains(&e.target))
-                    .collect();
-
-                for edge in neighbors.into_iter().rev() {
-                    stack.push((edge.target, depth + 1));
-                }
-            }
-        }
-
-        crate::js_value::to_js_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+        crate::js_value::to_js_value(&self.dfs(source_id, max_depth, limit))
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Gets all nodes with a specific label.
@@ -534,6 +500,92 @@ impl GraphStore {
     /// Returns all edges in the graph (for persistence - internal use).
     pub(crate) fn get_all_edges_internal(&self) -> Vec<GraphEdge> {
         self.edges.values().cloned().collect()
+    }
+
+    /// The nodes [`Self::bfs_traverse`] reaches, breadth first, with their
+    /// depths; the source itself is not listed.
+    pub(crate) fn bfs(
+        &self,
+        source_id: u64,
+        max_depth: usize,
+        limit: usize,
+    ) -> Vec<(PointId, usize)> {
+        use std::collections::{HashSet, VecDeque};
+
+        let mut results: Vec<(PointId, usize)> = Vec::new();
+        let mut visited: HashSet<u64> = HashSet::new();
+        let mut queue: VecDeque<(u64, usize)> = VecDeque::new();
+
+        queue.push_back((source_id, 0));
+        visited.insert(source_id);
+
+        while let Some((node_id, depth)) = queue.pop_front() {
+            if results.len() >= limit {
+                break;
+            }
+
+            if depth > 0 {
+                results.push((PointId(node_id), depth));
+            }
+
+            if depth < max_depth {
+                for edge in self.get_outgoing(node_id) {
+                    if !visited.contains(&edge.target) {
+                        visited.insert(edge.target);
+                        queue.push_back((edge.target, depth + 1));
+                    }
+                }
+            }
+        }
+
+        results
+    }
+
+    /// The nodes [`Self::dfs_traverse`] reaches, depth first, with their
+    /// depths; the source itself is not listed.
+    pub(crate) fn dfs(
+        &self,
+        source_id: u64,
+        max_depth: usize,
+        limit: usize,
+    ) -> Vec<(PointId, usize)> {
+        use std::collections::HashSet;
+
+        let mut results: Vec<(PointId, usize)> = Vec::new();
+        let mut visited: HashSet<u64> = HashSet::new();
+
+        // Recursive DFS helper using stack to avoid recursion limits
+        let mut stack: Vec<(u64, usize)> = vec![(source_id, 0)];
+
+        while let Some((node_id, depth)) = stack.pop() {
+            if results.len() >= limit {
+                break;
+            }
+
+            if visited.contains(&node_id) {
+                continue;
+            }
+            visited.insert(node_id);
+
+            if depth > 0 {
+                results.push((PointId(node_id), depth));
+            }
+
+            if depth < max_depth {
+                // Push neighbors in reverse order for correct DFS traversal
+                let neighbors: Vec<_> = self
+                    .get_outgoing(node_id)
+                    .into_iter()
+                    .filter(|e| !visited.contains(&e.target))
+                    .collect();
+
+                for edge in neighbors.into_iter().rev() {
+                    stack.push((edge.target, depth + 1));
+                }
+            }
+        }
+
+        results
     }
 }
 

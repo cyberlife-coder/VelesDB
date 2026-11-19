@@ -31,3 +31,16 @@ fn test_get_app_data_dir_different_apps() {
     // Assert - different apps should have different paths
     assert_ne!(path1, path2);
 }
+
+/// The builder records the agent-memory dimension, defaulting to core's.
+#[test]
+fn the_builder_records_the_memory_dimension() {
+    let default = crate::Builder::new("./unused");
+    assert_eq!(
+        default.memory_dimension(),
+        velesdb_core::agent::DEFAULT_DIMENSION
+    );
+
+    let configured = crate::Builder::new("./unused").with_memory_dimension(768);
+    assert_eq!(configured.memory_dimension(), 768);
+}

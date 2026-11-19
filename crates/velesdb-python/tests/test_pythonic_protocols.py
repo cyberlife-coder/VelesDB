@@ -96,5 +96,79 @@ class TestGraphCollectionContextManager:
         graph.close()
 
 
+class TestGraphCollectionLen:
+    def test_len_forwards_to_count(self, temp_db):
+        graph = temp_db.create_graph_collection("g_len", dimension=4)
+        graph.upsert_node(1, {"x": 1}, [1.0, 0.0, 0.0, 0.0])
+        graph.upsert_node(2, {"x": 2}, [0.0, 1.0, 0.0, 0.0])
+        assert len(graph) == graph.count() == 2
+
+
+# ---------------------------------------------------------------------------
+# Facade id coercion: an id is an integer, never a truncated float or str
+# ---------------------------------------------------------------------------
+
+NOT_AN_ID = [1.9, "7"]
+
+
+class TestFacadeRefusesNonIntegerIds:
+    @pytest.mark.parametrize("bad", NOT_AN_ID)
+    def test_collection_upsert(self, temp_db, bad):
+        coll = temp_db.create_collection("ids_upsert", dimension=3)
+        with pytest.raises(TypeError):
+            coll.upsert(bad, [1.0, 0.0, 0.0])
+        assert coll.count() == 0
+
+    @pytest.mark.parametrize("bad", NOT_AN_ID)
+    def test_pending_collection_upsert_creates_nothing(self, temp_db, bad):
+        coll = temp_db.create_collection("ids_pending")
+        with pytest.raises(TypeError):
+            coll.upsert(bad, [1.0, 0.0, 0.0])
+        assert "ids_pending" not in temp_db.list_collections()
+
+    def test_collection_contains(self, temp_db):
+        coll = temp_db.create_collection("ids_in", dimension=3)
+        coll.upsert(1, [1.0, 0.0, 0.0])
+        with pytest.raises(TypeError):
+            _ = 1.5 in coll
+
+    def test_integer_like_ids_still_accepted(self, temp_db):
+        np = pytest.importorskip("numpy")
+        coll = temp_db.create_collection("ids_ok", dimension=3)
+        coll.upsert(np.int64(4), [1.0, 0.0, 0.0])
+        # bool is an int subclass, as the compiled binding accepts it.
+        coll.upsert(True, [0.0, 1.0, 0.0])
+        assert 4 in coll and 1 in coll and coll.count() == 2
+
+    @pytest.mark.parametrize("bad", NOT_AN_ID)
+    def test_graph_collection(self, temp_db, bad):
+        graph = temp_db.create_graph_collection("ids_graph", dimension=3)
+        graph.add_node(1, {"x": 1})
+        graph.add_node(2, {"x": 2})
+        with pytest.raises(TypeError):
+            graph.add_node(bad, {"x": 3})
+        with pytest.raises(TypeError):
+            _ = bad in graph
+        with pytest.raises(TypeError):
+            graph.has_edge(bad)
+        with pytest.raises(TypeError):
+            graph.add_edge(bad, source=1, target=2, label="L")
+        with pytest.raises(TypeError):
+            graph.add_edge(1, bad, "L")
+        assert graph.all_node_ids() == [1, 2]
+        assert graph.edge_count() == 0
+
+    @pytest.mark.parametrize("bad", NOT_AN_ID)
+    def test_graph_store(self, bad):
+        store = velesdb.GraphStore()
+        with pytest.raises(TypeError):
+            store.add_edge(bad, 2, "L")
+        with pytest.raises(TypeError):
+            store.add_edge(1, 2, "L", id=bad)
+        with pytest.raises(TypeError):
+            store.has_edge(bad)
+        assert store.edge_count() == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

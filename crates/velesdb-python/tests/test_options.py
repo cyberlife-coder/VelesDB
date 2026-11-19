@@ -76,6 +76,38 @@ def test_hnsw_options_create_collection_round_trip(tmp_db_path):
     assert col is not None
 
 
+def _persisted_hnsw(db_path, name):
+    """The HNSW parameters the collection persisted in its `config.json`."""
+    import json
+
+    return json.loads((db_path / name / "config.json").read_text())["hnsw_params"]
+
+
+def test_hnsw_options_unset_fields_follow_the_collections_dimension(tmp_db_path):
+    """A partial HnswOptions is completed for the collection's own dimension.
+
+    Before, unset fields came from the 768-dimension profile whatever the
+    dimension: a 64-dim collection pinning only `alpha` got 768-dim M.
+    """
+    db = Database(str(tmp_db_path))
+    db.create_collection("small", dimension=64, hnsw=HnswOptions(alpha=1.2))
+    params = _persisted_hnsw(tmp_db_path, "small")
+    auto = HnswOptions.balanced(64)  # the auto-tuning for 64 dims: M=24, not 768-dim M=32
+    assert params["max_connections"] == auto.m
+    assert params["ef_construction"] == auto.ef_construction
+    assert params["alpha"] == pytest.approx(1.2)
+
+
+def test_hnsw_options_unset_fields_follow_the_hnsw_config_section(tmp_db_path):
+    """A field HnswOptions leaves unset comes from the database's [hnsw] section."""
+    cfg = VelesConfigOptions(hnsw=velesdb.HnswConfigOptions(m=48))
+    db = Database(str(tmp_db_path), config=cfg)
+    db.create_collection("docs", dimension=64, hnsw=HnswOptions(ef_construction=300))
+    params = _persisted_hnsw(tmp_db_path, "docs")
+    assert params["max_connections"] == 48
+    assert params["ef_construction"] == 300
+
+
 @pytest.mark.parametrize("bad_alpha", [0.5, 0.0, -1.0, float("nan"), float("inf")])
 def test_hnsw_options_create_collection_rejects_invalid_alpha(tmp_db_path, bad_alpha):
     # alpha must be finite and >= 1.0 (valid VAMANA range); an out-of-range

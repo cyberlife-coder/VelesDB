@@ -5,7 +5,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList, PyTuple};
 use pyo3::IntoPyObjectExt;
 use std::collections::HashMap;
 use velesdb_core::{DistanceMetric, StorageMode, MAX_JSON_NESTING};
@@ -64,9 +64,11 @@ pub fn reject_nan_vector(vector: &[f32]) -> PyResult<()> {
 /// Returns an error if the object is neither a list nor a numpy array,
 /// or if the extracted vector contains NaN values.
 pub fn extract_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<Vec<f32>> {
-    // Try numpy array first (most common in ML workflows)
+    // Try numpy array first (most common in ML workflows). Read through the
+    // array view, not `as_slice`: a column or strided slice (`m[:, 0]`) is
+    // not contiguous, and `as_slice` refuses it with a TypeError.
     if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f32>>(py) {
-        let vec = array.as_slice()?.to_vec();
+        let vec = array.as_array().to_vec();
         reject_nan_vector(&vec)?;
         return Ok(vec);
     }
@@ -75,7 +77,7 @@ pub fn extract_vector(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<Vec<f32>> {
     if let Ok(array) = obj.extract::<numpy::PyReadonlyArray1<f64>>(py) {
         // Reason: intentional f64->f32 narrowing for numpy float64 arrays
         #[allow(clippy::cast_possible_truncation)]
-        let vec: Vec<f32> = array.as_slice()?.iter().map(|&x| x as f32).collect();
+        let vec: Vec<f32> = array.as_array().iter().map(|&x| x as f32).collect();
         reject_nan_vector(&vec)?;
         return Ok(vec);
     }
@@ -110,7 +112,10 @@ pub fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
 /// Convert a Python object to a `serde_json::Value`.
 ///
 /// Returns `Err` for unsupported Python types (datetime, UUID, bytes, custom objects)
-/// instead of silently dropping them.
+/// instead of silently dropping them. A JSON array comes from a `list`, a
+/// `tuple` or a numpy array only ([`is_json_array_source`]): any other
+/// sequence — `bytes`, `bytearray`, `range` — is refused rather than stored
+/// as a list of its items.
 ///
 /// Lists and dicts nest at most [`MAX_JSON_NESTING`] deep, the depth
 /// `serde_json` reads back, the outermost container counting as the first
@@ -173,7 +178,8 @@ pub(crate) fn python_to_json_within(
     if obj.is_none(py) {
         return Ok(serde_json::Value::Null);
     }
-    if let Ok(list) = obj.extract::<Vec<Py<PyAny>>>(py) {
+    if is_json_array_source(obj.bind(py)) {
+        let list = obj.extract::<Vec<Py<PyAny>>>(py)?;
         let depth = container_depth(enclosing)?;
         let arr: Vec<serde_json::Value> = list
             .iter()
@@ -196,8 +202,18 @@ pub(crate) fn python_to_json_within(
         .map(|n| n.to_string())
         .unwrap_or_else(|_| "<unknown>".to_string());
     Err(PyValueError::new_err(format!(
-        "Unsupported payload type '{type_name}'. Supported: str, int, float, bool, None, list, dict"
+        "Unsupported payload type '{type_name}'. Supported: str, int, float, bool, None, \
+         list, tuple, numpy array, dict"
     )))
+}
+
+/// Whether `obj` converts to a JSON array: a `list`, a `tuple`, or a numpy
+/// array (VelesQL vector parameters are documented to take one, read through
+/// the sequence protocol as nested lists).
+fn is_json_array_source(obj: &Bound<'_, PyAny>) -> bool {
+    obj.is_instance_of::<PyList>()
+        || obj.is_instance_of::<PyTuple>()
+        || obj.is_instance_of::<numpy::PyUntypedArray>()
 }
 
 /// The depth of a list or dict inside `enclosing` containers, refused past
@@ -213,59 +229,47 @@ fn container_depth(enclosing: usize) -> PyResult<usize> {
     Ok(depth)
 }
 
-/// Helper to convert a value to `Py<PyAny>` using the `IntoPyObject` trait.
-///
-/// Returns `py.None()` on conversion failure instead of panicking,
-/// which preserves the existing `-> Py<PyAny>` signature for 18 callers.
-/// Failures are logged to help diagnose unexpected `None` values in results.
-#[inline]
-pub fn to_pyobject<'py, T>(py: Python<'py>, value: T) -> Py<PyAny>
-where
-    T: IntoPyObjectExt<'py>,
-{
-    value.into_py_any(py).unwrap_or_else(|e| {
-        eprintln!("[velesdb] to_pyobject conversion failed, returning None: {e}");
-        py.None()
-    })
-}
-
 /// Convert a `serde_json::Value` to a Python object.
 ///
 /// Builds `PyDict`/`PyList` directly instead of going through `HashMap`/`Vec`
 /// intermediaries to avoid unnecessary allocations.
-pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> Py<PyAny> {
-    use pyo3::types::{PyDict, PyList};
-
+///
+/// # Errors
+///
+/// Propagates any Python error raised while building a value, so a failed
+/// conversion raises instead of coming back as a silently missing key.
+pub fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
     match value {
-        serde_json::Value::Null => py.None(),
-        serde_json::Value::Bool(b) => to_pyobject(py, *b),
+        serde_json::Value::Null => Ok(py.None()),
+        serde_json::Value::Bool(b) => (*b).into_py_any(py),
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                to_pyobject(py, i)
+                i.into_py_any(py)
             } else if let Some(u) = n.as_u64() {
                 // A u64 that does not fit i64 (e.g. a `stable_id` above
                 // i64::MAX) — convert directly instead of falling through to
                 // f64, which would silently lose precision.
-                to_pyobject(py, u)
+                u.into_py_any(py)
             } else if let Some(f) = n.as_f64() {
-                to_pyobject(py, f)
+                f.into_py_any(py)
             } else {
-                py.None()
+                Ok(py.None())
             }
         }
-        serde_json::Value::String(s) => to_pyobject(py, s.as_str()),
+        serde_json::Value::String(s) => s.as_str().into_py_any(py),
         serde_json::Value::Array(arr) => {
-            let items: Vec<Py<PyAny>> = arr.iter().map(|v| json_to_python(py, v)).collect();
-            // PyList::new is infallible for Vec<Py<PyAny>> items.
-            let list = PyList::new(py, &items).unwrap_or_else(|_| PyList::empty(py));
-            list.into_any().unbind()
+            let items = arr
+                .iter()
+                .map(|v| json_to_python(py, v))
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(PyList::new(py, items)?.into_any().unbind())
         }
         serde_json::Value::Object(map) => {
             let dict = PyDict::new(py);
             for (k, v) in map {
-                let _ = dict.set_item(k.as_str(), json_to_python(py, v));
+                dict.set_item(k.as_str(), json_to_python(py, v)?)?;
             }
-            dict.into_any().unbind()
+            Ok(dict.into_any().unbind())
         }
     }
 }

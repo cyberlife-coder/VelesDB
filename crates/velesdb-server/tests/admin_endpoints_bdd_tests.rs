@@ -179,7 +179,8 @@ async fn bulk_delete_empty_payload_returns_200_noop() {
 
 #[tokio::test]
 async fn bulk_delete_unknown_ids_silently_skipped() {
-    // Idempotent: deleting non-existent IDs returns 200, count = batch size.
+    // Idempotent: deleting non-existent IDs returns 200, and the count is
+    // what the delete removed — none of them.
     let temp_dir = TempDir::new().expect("test: temp dir");
     let app = create_test_app(&temp_dir);
     seed_collection(app.clone(), 2).await;
@@ -191,6 +192,30 @@ async fn bulk_delete_unknown_ids_silently_skipped() {
                 .uri(format!("/collections/{TEST_COLLECTION}/points/delete"))
                 .header("Content-Type", "application/json")
                 .body(Body::from(json!({ "ids": [999, 1000] }).to_string()))
+                .expect("test: build delete request"),
+        )
+        .await
+        .expect("test: delete request");
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = read_json(response).await;
+    assert_eq!(json["deleted_count"], 0);
+}
+
+#[tokio::test]
+async fn bulk_delete_counts_only_points_that_existed() {
+    // A batch mixing live, missing and repeated ids reports the points it
+    // actually removed: each live id once.
+    let temp_dir = TempDir::new().expect("test: temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_collection(app.clone(), 3).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/collections/{TEST_COLLECTION}/points/delete"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(json!({ "ids": [1, 2, 2, 999] }).to_string()))
                 .expect("test: build delete request"),
         )
         .await

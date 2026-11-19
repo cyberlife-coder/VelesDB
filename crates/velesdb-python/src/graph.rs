@@ -65,35 +65,35 @@ pub fn dict_to_edge(py: Python<'_>, dict: &HashMap<String, Py<PyAny>>) -> PyResu
 ///
 /// Uses `PyDict::new()` + `PyString::intern()` for static keys to avoid
 /// repeated string allocation.
-pub fn edge_to_dict(py: Python<'_>, edge: &GraphEdge) -> Py<PyAny> {
+pub fn edge_to_dict(py: Python<'_>, edge: &GraphEdge) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
-    let _ = dict.set_item(PyString::intern(py, "id"), edge.id());
-    let _ = dict.set_item(PyString::intern(py, "source"), edge.source());
-    let _ = dict.set_item(PyString::intern(py, "target"), edge.target());
-    let _ = dict.set_item(PyString::intern(py, "label"), edge.label());
+    dict.set_item(PyString::intern(py, "id"), edge.id())?;
+    dict.set_item(PyString::intern(py, "source"), edge.source())?;
+    dict.set_item(PyString::intern(py, "target"), edge.target())?;
+    dict.set_item(PyString::intern(py, "label"), edge.label())?;
 
     let props = edge.properties();
     if !props.is_empty() {
         let props_dict = PyDict::new(py);
         for (k, v) in props {
-            let _ = props_dict.set_item(k.as_str(), json_to_python(py, v));
+            props_dict.set_item(k.as_str(), json_to_python(py, v)?)?;
         }
-        let _ = dict.set_item(PyString::intern(py, "properties"), props_dict);
+        dict.set_item(PyString::intern(py, "properties"), props_dict)?;
     }
 
-    dict.into_any().unbind()
+    Ok(dict.into_any().unbind())
 }
 
 /// Convert a `TraversalResult` to a Python dict, bypassing `HashMap` intermediary.
 ///
 /// Uses `PyDict::new()` + `PyString::intern()` for static keys to avoid
 /// repeated string allocation.
-pub fn traversal_to_dict(py: Python<'_>, result: &TraversalResult) -> Py<PyAny> {
+pub fn traversal_to_dict(py: Python<'_>, result: &TraversalResult) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
-    let _ = dict.set_item(PyString::intern(py, "target_id"), result.target_id);
-    let _ = dict.set_item(PyString::intern(py, "path"), result.path.to_vec());
-    let _ = dict.set_item(PyString::intern(py, "depth"), result.depth);
-    dict.into_any().unbind()
+    dict.set_item(PyString::intern(py, "target_id"), result.target_id)?;
+    dict.set_item(PyString::intern(py, "path"), result.path.to_vec())?;
+    dict.set_item(PyString::intern(py, "depth"), result.depth)?;
+    Ok(dict.into_any().unbind())
 }
 
 #[cfg(test)]

@@ -101,12 +101,14 @@ fn build_store(ds: &Dataset) -> StoreState {
 fn run_case(store: &StoreState, case: &Case, query: &[f32]) -> Vec<(u64, f32)> {
     match case.kind.as_str() {
         "near" => store.search_scored(query, case.top_k),
-        "hybrid_rrf" => store.hybrid_search_scored(
-            query,
-            case.text.as_deref().expect("hybrid case text"),
-            case.top_k,
-            case.vector_weight,
-        ),
+        "hybrid_rrf" => store
+            .hybrid_search_scored(
+                query,
+                case.text.as_deref().expect("hybrid case text"),
+                case.top_k,
+                case.vector_weight,
+            )
+            .expect("hybrid case search"),
         other => panic!("unknown case kind {other:?}"),
     }
 }

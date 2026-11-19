@@ -145,13 +145,15 @@ impl VectorStore {
             .insert_with_payload(id, vector, payload)
     }
 
-    /// Gets a vector by ID. Returns {id, vector, payload} or null.
+    /// Gets a vector by ID. Returns `{id, vector, payload}` (`id` a decimal
+    /// string) or null.
     #[wasm_bindgen]
     pub fn get(&self, id: u64) -> Result<JsValue, JsValue> {
         self.state.borrow().get(id)
     }
 
-    /// Searches with metadata filtering. Returns [{id, score, payload}].
+    /// Searches with metadata filtering. Returns `[{id, score, payload}]`,
+    /// `id` the point's exact decimal string.
     #[wasm_bindgen]
     pub fn search_with_filter(
         &self,
@@ -162,7 +164,8 @@ impl VectorStore {
         self.state.borrow().search_with_filter(query, k, filter)
     }
 
-    /// k-NN search. Returns [[id, score], ...].
+    /// k-NN search. Returns `[[id, score], ...]`, each id the point's exact
+    /// decimal string (as REST sends it), each score a number.
     #[wasm_bindgen]
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
         self.state.borrow().search(query, k)
@@ -179,7 +182,8 @@ impl VectorStore {
     /// The quality parameter is parsed and validated for API parity and
     /// forward-compatibility with future HNSW-backed WASM stores.
     ///
-    /// Returns `[[id, score], ...]` sorted by relevance.
+    /// Returns `[[id, score], ...]` sorted by relevance, each id a decimal
+    /// string.
     #[wasm_bindgen]
     pub fn search_with_quality(
         &self,
@@ -191,6 +195,8 @@ impl VectorStore {
     }
 
     /// Similarity search with threshold. Operators: >, >=, <, <=, =, !=.
+    ///
+    /// Returns `[[id, score], ...]`, each id a decimal string.
     #[wasm_bindgen]
     pub fn similarity_search(
         &self,
@@ -208,6 +214,7 @@ impl VectorStore {
     ///
     /// Returns `[{id, score, payload}, ...]` in insertion order, truncated to
     /// `k`, with `score: null`: a substring match selects, it does not rank.
+    /// `id` is a decimal string.
     #[wasm_bindgen]
     pub fn text_search(
         &self,
@@ -218,13 +225,14 @@ impl VectorStore {
         self.state.borrow().text_search(query, k, field)
     }
 
-    /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5).
+    /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5); a
+    /// non-finite weight is refused (`VELES-009`), as core refuses it.
     ///
     /// Computes the exact per-vector score and the text match in a single
     /// pass, in every storage mode.
     ///
     /// Returns `[{id, score, payload}, ...]` sorted by combined score
-    /// descending, truncated to `k` results.
+    /// descending, truncated to `k` results. `id` is a decimal string.
     #[wasm_bindgen]
     pub fn hybrid_search(
         &self,
@@ -248,7 +256,7 @@ impl VectorStore {
     /// recall-verified [`sparse::SparseIndex`] kernel.
     ///
     /// Returns a JSON array of `{doc_id, score}` objects sorted by score
-    /// descending, truncated to `k`.
+    /// descending, truncated to `k`. `doc_id` is a decimal string.
     #[wasm_bindgen]
     pub fn search_sparse(
         &self,
@@ -271,7 +279,8 @@ impl VectorStore {
     /// * `k` - Number of results to return
     ///
     /// # Returns
-    /// Array of `{nodeId, vectorScore, graphScore, fusedScore, bindings, columnData}`
+    /// Array of `{nodeId, vectorScore, graphScore, fusedScore, bindings, columnData}`,
+    /// `nodeId` a decimal string.
     #[wasm_bindgen]
     pub fn query(&self, query_vector: &[f32], k: usize) -> Result<JsValue, JsValue> {
         self.state.borrow().query(query_vector, k)
@@ -283,6 +292,8 @@ impl VectorStore {
     /// used only by the `"weighted"` strategy. When omitted, core's canonical
     /// default weights are used (`avg=0.6, max=0.3, hit=0.1`) — see issue
     /// #1545. Passing a slice of any length other than 3 is an error.
+    ///
+    /// Returns `[[id, score], ...]`, each id a decimal string.
     #[wasm_bindgen]
     #[allow(clippy::too_many_arguments)]
     pub fn multi_query_search(
@@ -304,7 +315,8 @@ impl VectorStore {
         )
     }
 
-    /// Batch search for multiple vectors. Returns [[[id, score], ...], ...].
+    /// Batch search for multiple vectors. Returns `[[[id, score], ...], ...]`,
+    /// each id a decimal string.
     #[wasm_bindgen]
     pub fn batch_search(
         &self,
@@ -381,13 +393,15 @@ impl VectorStore {
             .insert_batch_raw(ids, vectors, dimension)
     }
 
-    /// Exports to binary format for IndexedDB/localStorage.
+    /// Exports to binary format for IndexedDB/localStorage: ids, dense
+    /// vectors, payloads, configuration and the sparse index (format v4).
     #[wasm_bindgen]
     pub fn export_to_bytes(&self) -> Result<Vec<u8>, JsValue> {
         self.state.borrow().export_to_bytes()
     }
 
-    /// Saves to `IndexedDB`.
+    /// Saves to `IndexedDB`, as [`Self::export_to_bytes`] serializes the
+    /// store, sparse index included.
     #[wasm_bindgen]
     pub async fn save(&self, db_name: &str) -> Result<(), JsValue> {
         let bytes = self.state.borrow().export_to_bytes()?;
@@ -438,7 +452,8 @@ impl VectorStore {
 
     /// Searches the internal sparse index.
     ///
-    /// Returns a JSON array of `{doc_id, score}` objects sorted by score descending.
+    /// Returns a JSON array of `{doc_id, score}` objects sorted by score
+    /// descending, `doc_id` a decimal string.
     #[wasm_bindgen]
     pub fn sparse_search(
         &self,

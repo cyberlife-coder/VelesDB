@@ -39,21 +39,29 @@ type StoreParams<M extends keyof BindingVectorStore> = AllParams<BindingVectorSt
 // ---------------------------------------------------------------------------
 
 /**
- * Dense search result: [id, score] tuple returned by VectorStore.search() and
- * multi_query_search(). Ids go into the binding as BigInt and come back as
- * plain numbers.
+ * A point id as the binding returns it: its exact decimal string, as REST
+ * sends `SearchResultResponse.id`. Ids go into the binding as `BigInt`. A
+ * binding before this release returned a plain number, which threw past
+ * 2^53; every reader here takes either (`String(id)`, `BigInt(id)`,
+ * {@link WasmContext.canonicalPayloadKeyFromResultId}).
  */
-export type WasmDenseResult = [number, number];
+export type WasmPointId = string;
+
+/**
+ * Dense search result: [id, score] tuple returned by VectorStore.search(),
+ * search_with_quality() and multi_query_search().
+ */
+export type WasmDenseResult = [WasmPointId, number];
 
 /** Sparse/hybrid search result returned by sparse_search / hybrid_search_fuse. */
 export interface WasmSparseResult {
-  doc_id: bigint | number;
+  doc_id: WasmPointId;
   score: number;
 }
 
 /** Filtered search result returned by VectorStore.search_with_filter(). */
 export interface WasmFilteredResult {
-  id: number;
+  id: WasmPointId;
   score: number;
   payload?: Record<string, unknown> | null;
 }
@@ -63,7 +71,7 @@ export interface WasmFilteredResult {
  * velesdb-wasm 8.0.0 (#2332), `payload` null when the point has none.
  */
 export interface WasmHybridResult {
-  id: bigint | number;
+  id: WasmPointId;
   score: number;
   payload?: Record<string, unknown> | null;
 }
@@ -74,14 +82,14 @@ export interface WasmHybridResult {
  * `score` is always null.
  */
 export interface WasmTextResult {
-  id: number;
+  id: WasmPointId;
   score: null;
   payload: Record<string, unknown>;
 }
 
 /** Point returned by VectorStore.get(). */
 export interface WasmPoint {
-  id: bigint | number;
+  id: WasmPointId;
   vector: number[] | Float32Array;
   payload?: Record<string, unknown> | null;
 }
@@ -110,7 +118,10 @@ export interface WasmVectorStore {
   /** Pre-allocate memory for additional vectors. */
   reserve(...args: StoreParams<'reserve'>): void;
 
-  /** Remove a vector by ID. Returns true if found. It leaves the ID's sparse postings in place. */
+  /**
+   * Remove a vector by ID. Returns true if found. velesdb-wasm 8.2.0 leaves
+   * the ID's sparse postings in place; later releases remove them too.
+   */
   remove(...args: StoreParams<'remove'>): boolean;
 
   /** Get a point by ID. Returns point object or null. */
@@ -138,20 +149,19 @@ export interface WasmVectorStore {
   search_with_filter(...args: StoreParams<'search_with_filter'>): WasmFilteredResult[];
 
   /**
-   * Add a document's sparse postings (`wasm-sparse.ts`). On velesdb-wasm
-   * 8.0.0 nothing removes them afterwards; newer bindings take them out
-   * through {@link sparse_remove} and re-inserts replace the document.
+   * Index a document's sparse vector, replacing the one it had
+   * (`wasm-sparse.ts`). Throws the binding's refusal of a non-finite weight
+   * before changing anything.
    */
   sparse_insert(...args: StoreParams<'sparse_insert'>): void;
 
   /**
-   * Remove a document's sparse postings; `true` when it had any. Absent on
-   * velesdb-wasm 8.0.0 — the version the SDK's declared range still admits —
-   * so callers must feature-test before using it (`wasm-sparse.ts`), which
-   * is also why it is declared here by hand rather than via `StoreParams`:
-   * the published declaration this type reads has no such method yet.
+   * Remove a document's sparse postings; `true` when it had any. Present
+   * since velesdb-wasm 8.2.0, the floor of the SDK's dependency range;
+   * declared by hand rather than via `StoreParams` so the type does not
+   * depend on which binding happens to be installed.
    */
-  sparse_remove?(doc_id: bigint): boolean;
+  sparse_remove(doc_id: bigint): boolean;
 
   /** Sparse index search. Returns array of {doc_id, score}. */
   sparse_search(...args: StoreParams<'sparse_search'>): WasmSparseResult[];
@@ -172,7 +182,7 @@ export interface WasmVectorStore {
    */
   multi_query_search(...args: StoreParams<'multi_query_search'>): WasmDenseResult[];
 
-  /** VelesQL-style query returning multi-model results. */
+  /** VelesQL-style query returning multi-model results; `nodeId` is a {@link WasmPointId}. */
   query(...args: StoreParams<'query'>): Record<string, unknown>[];
 }
 
@@ -185,7 +195,7 @@ export interface WasmVectorStoreConstructor {
   /** Create a store holding its vectors in `mode` (`full`, `sq8`, `binary`, …). */
   new_with_mode(...args: AllParams<typeof BindingVectorStore.new_with_mode>): WasmVectorStore;
 
-  /** Create a store with no vectors: it holds a collection's sparse index (`wasm-sparse.ts`). */
+  /** Create a store with no vectors: the scratch store sparse vectors are validated in (`wasm-sparse.ts`). */
   new_metadata_only(
     ...args: AllParams<typeof BindingVectorStore.new_metadata_only>
   ): WasmVectorStore;
@@ -218,7 +228,7 @@ export interface WasmVelesQLDatabase {
   /**
    * Register an existing store as collection `name`, sharing it rather than
    * copying it. Declared by hand, like {@link WasmVectorStore.sparse_remove}:
-   * velesdb-wasm 8.0.0, the floor of the SDK's dependency range, has no such
+   * velesdb-wasm 8.2.0, the floor of the SDK's dependency range, has no such
    * method, and the backend then keeps its pre-executor behaviour.
    */
   attachStore?(name: string, store: WasmVectorStore): void;
@@ -226,6 +236,32 @@ export interface WasmVelesQLDatabase {
   delete_collection(...args: AllParams<BindingWasmDatabase['delete_collection']>): void;
   /** Execute one VelesQL statement; `params_json` is a JSON object or `null`. */
   executeQuery(sql: string, params_json: string | null): WasmQueryResult;
+  /**
+   * Run a `MATCH`; returns a JSON array of core-shaped rows
+   * (`{ bindings, depth, projected, score? }`). `vector` and `threshold` are
+   * REST `/match`'s. Declared by hand and optional, like
+   * the edge methods below: bindings before it do not have it.
+   */
+  executeMatch?(sql: string, params_json: string | null, vector?: Float32Array, threshold?: number): string;
+  /**
+   * Add an edge given as JSON `{ id?, source, target, label, properties? }`
+   * (ids as decimal strings or numbers); returns its id as a decimal string.
+   */
+  addEdge?(name: string, edge_json: string): string;
+  /**
+   * The edges of a collection, as a JSON array, optionally only one label.
+   * Each edge's `id`, `source` and `target` is a decimal string.
+   */
+  getEdges?(name: string, label?: string): string;
+  /**
+   * Remove points with the edges they are an end of, as core's delete does;
+   * returns how many points were there. Optional: bindings before it lack it.
+   */
+  removePoints?(name: string, ids: BigUint64Array): number;
+  /** Remove an edge by its decimal-string id; `false` when it was absent. */
+  removeEdge?(name: string, id: string): boolean;
+  /** The number of edges in a collection. */
+  edgeCount?(name: string): number;
   /** Release the database's WASM memory. */
   free(): void;
 }
@@ -278,31 +314,18 @@ export interface WasmModule {
   /** The VelesQL parser the backend classifies statements with (`wasm-velesql.ts`). */
   VelesQL?: WasmVelesQLParser;
 
+  /** The VelesQL contract version the binding implements (core's constant). */
+  velesqlContractVersion?(): string;
+
   /** Fuse dense + sparse search results via Reciprocal Rank Fusion. */
   hybrid_search_fuse(...args: AllParams<typeof bindingHybridSearchFuse>): WasmSparseResult[];
-}
 
-/**
- * Sparse bookkeeping for one collection: each sparse upsert is indexed under
- * a fresh sparse id, and a replaced or deleted point's id is retired. A
- * binding that exposes `sparse_remove` deletes the retired id's postings;
- * an older one (velesdb-wasm 8.0.0) keeps them, so they are tombstoned and
- * the index is rebuilt once retired ids outnumber live ones
- * (`backends/wasm-sparse.ts`).
- */
-export interface SparseIds {
-  /** The metadata-only store holding the sparse index; `null` until the first sparse upsert. */
-  store: WasmVectorStore | null;
-  /** Live sparse id of each point that has a sparse vector, by numeric point id. */
-  byPoint: Map<number, bigint>;
-  /** Point behind each live sparse id. */
-  byId: Map<bigint, number>;
-  /** Each live sparse id's vector, kept to rebuild the index from when the binding cannot remove. */
-  vectors: Map<bigint, { indices: Uint32Array; values: Float32Array }>;
-  /** Retired ids a remove-incapable binding still holds; a search over-fetches by this many. */
-  dead: number;
-  /** Next sparse id to hand out. */
-  next: bigint;
+  /**
+   * Core's `fusion::dense_sparse_candidate_k`: how many of each branch's
+   * best points a hybrid dense + sparse search fuses when `limit` results
+   * are wanted. Declared by hand and optional: bindings before it lack it.
+   */
+  denseSparseCandidateK?(limit: number): number;
 }
 
 /** In-memory collection storage */
@@ -310,7 +333,6 @@ export interface CollectionData {
   config: CollectionConfig;
   store: WasmVectorStore;
   payloads: Map<string, Record<string, unknown>>;
-  sparseIds: SparseIds;
   createdAt: Date;
 }
 
@@ -326,5 +348,5 @@ export interface WasmContext {
   canonicalPayloadKeyFromResultId(id: bigint | number | string): string;
   canonicalPayloadKey(id: string | number): string;
   sparseVectorToArrays(sv: SparseVector): { indices: number[]; values: number[] };
-  toNumericId(id: string | number): number;
+  toPointId(id: string | number): bigint;
 }

@@ -651,8 +651,9 @@ jobs:
           # The PUBLISHED package pins @wiscale/velesdb-wasm to this release
           # (the memory wedge needs the wasm build shipping WasmMemoryService),
           # so npm enforces the capability floor at install/upgrade time. The
-          # in-repo range stays ^3.0.0 because CI's npm ci must resolve against
-          # the committed lockfile before the new wasm version exists on npm —
+          # in-repo range stays on a release already on npm, because CI's npm ci
+          # must resolve against the committed lockfile before the new wasm
+          # version exists on npm (a `^<this version>` range fails ETARGET) —
           # same patch-at-publish pattern as the wasm package.json above.
           # Patched AFTER install/build: publish doesn't resolve ranges, but
           # install would fail on a not-yet-published sibling version.

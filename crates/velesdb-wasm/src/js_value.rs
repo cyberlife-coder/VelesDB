@@ -12,16 +12,20 @@
 //! - maps arrive as **plain objects**;
 //! - an absent value (`None`, `serde_json::Value::Null`, `()`) arrives as
 //!   **`null`**, which `JSON.stringify` keeps, not `undefined`, which it drops;
-//! - the binding's id contract is unchanged: `u64` still arrives as a JS
-//!   `number` and one above `Number.MAX_SAFE_INTEGER` still fails
-//!   serialization, because `json_compatible` leaves
-//!   `serialize_large_number_types_as_bigints` at `false` like the default.
+//! - a bare `u64` still arrives as a JS `number` and one above
+//!   `Number.MAX_SAFE_INTEGER` fails serialization, because
+//!   `json_compatible` leaves `serialize_large_number_types_as_bigints` at
+//!   `false` like the default. That is right for a count, a depth or a
+//!   payload integer, and wrong for an id: a point id travels as a
+//!   [`PointId`], an edge id through `serde_id` directly, and both arrive as
+//!   their exact decimal string.
 //!
 //! Every outbound `serde_wasm_bindgen` call in this crate goes through
 //! [`to_js_value`]; `js_value_tests` fails on one that does not.
 
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_wasm_bindgen::Serializer;
+use velesdb_core::api_types::serde_id;
 use wasm_bindgen::JsValue;
 
 /// Serializes `value` for JavaScript as plain objects, arrays and `null`.
@@ -29,6 +33,46 @@ pub(crate) fn to_js_value<T: Serialize + ?Sized>(
     value: &T,
 ) -> Result<JsValue, serde_wasm_bindgen::Error> {
     value.serialize(&Serializer::json_compatible())
+}
+
+/// A point id as it crosses into JavaScript: its exact decimal string, as
+/// REST sends `SearchResultResponse.id` and `/match` `bindings`
+/// (`serde_id`). As a bare `u64` it would make [`to_js_value`] throw past
+/// `Number.MAX_SAFE_INTEGER`, and a JSON number past it is rounded by
+/// `JSON.parse`.
+///
+/// It reads back from a decimal string, a safe-integer number or a `BigInt`
+/// (`serde_id::deserialize_id_from_string_or_number`), so a result handed
+/// back to the binding (`hybrid_search_fuse`) keeps its exact id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PointId(pub(crate) u64);
+
+impl Serialize for PointId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serde_id::serialize_id_as_string(&self.0, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PointId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        serde_id::deserialize_id_from_string_or_number(deserializer).map(Self)
+    }
+}
+
+/// The largest integer a JS `number` holds exactly (`2^53 - 1`).
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
+/// A point or node id as it sits in a VelesQL row the TypeScript SDK parses
+/// with `JSON.parse`: a number up to `Number.MAX_SAFE_INTEGER`, as core's
+/// `SELECT *` writes it, and past that its exact decimal string — a JSON
+/// number there would come back rounded to another point's id. The SDK's
+/// `RestPointId` is the same `number | string`.
+pub(crate) fn row_id_json(id: u64) -> serde_json::Value {
+    if id <= MAX_SAFE_INTEGER {
+        serde_json::Value::from(id)
+    } else {
+        serde_id::id_to_json(id)
+    }
 }
 
 // Reads the source tree with `std::fs`, which a wasm32 test run cannot.

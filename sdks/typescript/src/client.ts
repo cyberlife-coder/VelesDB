@@ -9,6 +9,7 @@ import type {
   VectorDocument,
   SearchOptions,
   SearchResult,
+  SearchIdResult,
   BatchSearchItem,
   HybridSearchOptions,
   TextSearchResult,
@@ -226,12 +227,27 @@ export class VelesDB {
     return this.backend.upsertBatchRaw(collection, docs);
   }
 
+  /**
+   * Delete one point.
+   *
+   * @returns `true` when the point existed and was removed, `false` when no
+   *   point carried `id` (the delete is idempotent).
+   * @throws {CollectionNotFoundError} when `collection` does not exist — a
+   *   misspelt collection is an error, never an absent point.
+   */
   async delete(collection: string, id: string | number): Promise<boolean> {
     this.ensureInitialized();
     validateRestPointId(id, this.config);
     return this.backend.delete(collection, id);
   }
 
+  /**
+   * Delete several points in one request.
+   *
+   * @returns the number of points actually removed: an id that held no point
+   *   is skipped and not counted, and an id repeated in `ids` counts once.
+   * @throws {CollectionNotFoundError} when `collection` does not exist.
+   */
   async bulkDelete(collection: string, ids: Array<string | number>): Promise<number> {
     this.ensureInitialized();
     for (const id of ids) { validateRestPointId(id, this.config); }
@@ -299,7 +315,7 @@ export class VelesDB {
   }
 
   /** Multi-query fusion search returning only IDs and scores (no payloads). */
-  async multiQuerySearchIds(collection: string, vectors: Array<number[] | Float32Array>, options?: MultiQuerySearchOptions): Promise<Array<{ id: number; score: number }>> {
+  async multiQuerySearchIds(collection: string, vectors: Array<number[] | Float32Array>, options?: MultiQuerySearchOptions): Promise<SearchIdResult[]> {
     this.ensureInitialized();
     return searchMethods.multiQuerySearchIds(this.backend, collection, vectors, options);
   }
@@ -358,7 +374,7 @@ export class VelesDB {
     return searchMethods.streamUpsertPoints(this.backend, this.config, collection, docs);
   }
 
-  async searchIds(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<Array<{ id: number; score: number }>> {
+  async searchIds(collection: string, query: number[] | Float32Array, options?: SearchOptions): Promise<SearchIdResult[]> {
     this.ensureInitialized();
     refuseRestOnlyOptions(this.config.backend, options, ['efSearch', 'timeoutMs', 'fusion', 'sparseVectors']);
     return searchMethods.searchIds(this.backend, collection, query, options);
@@ -508,7 +524,7 @@ export class VelesDB {
     return graphMethods.matchQuery(this.backend, collection, queryString, params, options);
   }
 
-  async removeEdge(collection: string, edgeId: number): Promise<boolean> {
+  async removeEdge(collection: string, edgeId: GraphNodeId): Promise<boolean> {
     this.ensureInitialized();
     return graphMethods.removeEdge(this.backend, collection, edgeId);
   }

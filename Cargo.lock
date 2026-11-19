@@ -7046,6 +7046,7 @@ dependencies = [
  "ureq",
  "velesdb-core",
  "velesdb-rustdoc-guard",
+ "web-time",
 ]
 
 [[package]]
@@ -7168,6 +7169,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+ "web-time",
 ]
 
 [[package]]

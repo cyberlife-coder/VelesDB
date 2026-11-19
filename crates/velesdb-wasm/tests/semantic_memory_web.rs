@@ -12,7 +12,8 @@ use velesdb_wasm::SemanticMemory;
 
 #[derive(Debug, Deserialize)]
 struct Fact {
-    id: u64,
+    /// The fact's id: its exact decimal string.
+    id: String,
     score: f32,
     content: String,
 }
@@ -36,8 +37,8 @@ fn query_returns_the_nearest_facts_with_their_content() {
     let found = memory().query(&[1.0, 0.0, 0.0], 2).expect("query runs");
     let facts: Vec<Fact> = serde_wasm_bindgen::from_value(found).expect("an array of facts");
 
-    let ids: Vec<u64> = facts.iter().map(|f| f.id).collect();
-    assert_eq!(ids, vec![1, 3], "nearest first, top_k honoured");
+    let ids: Vec<&str> = facts.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(ids, vec!["1", "3"], "nearest first, top_k honoured");
     assert_eq!(facts[0].content, "Paris is the capital of France");
     assert_eq!(facts[1].content, "Lyon is a city in France");
     assert!(facts[0].score > facts[1].score);

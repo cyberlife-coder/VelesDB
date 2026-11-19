@@ -43,6 +43,12 @@ impl Collection {
     /// Returns:
     ///     List of dicts with ``id``, ``score``, and ``payload`` keys.
     ///
+    /// Raises:
+    ///     ValueError: If a knob does not apply to the path the options
+    ///         select: ``ef_search`` or ``quality`` with a ``sparse_vector``
+    ///         (they tune a dense-only search), or ``fusion`` without both
+    ///         ``vector`` and ``sparse_vector``.
+    ///
     /// Example:
     ///     >>> opts = SearchOptions(vector=my_emb, k=20, filter={"lang": "en"})
     ///     >>> results = collection.search_request(opts)
@@ -106,7 +112,7 @@ impl Collection {
         let results = py.detach(|| self.dispatch_search(plan, identity))?;
 
         // Phase 3: Convert results (GIL held — required for Py<PyAny> creation)
-        Ok(search_results_to_dicts(py, results, include_vectors))
+        search_results_to_dicts(py, results, include_vectors)
     }
 
     /// Search for similar vectors with custom HNSW ef_search parameter.
@@ -145,7 +151,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Search with a named quality mode (fast, balanced, accurate, perfect, autotune).
@@ -188,7 +194,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Search returning only IDs and scores.
@@ -221,7 +227,7 @@ impl Collection {
         })?;
 
         let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
-        Ok(id_score_pairs_to_dicts(py, tuples))
+        id_score_pairs_to_dicts(py, tuples)
     }
 
     /// Search with metadata filtering.
@@ -261,7 +267,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Search with metadata filtering and an optional quality tuning.
@@ -324,7 +330,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Full-text search using BM25 ranking.
@@ -369,7 +375,7 @@ impl Collection {
                 })
             })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Hybrid search combining vector similarity and text search.
@@ -378,7 +384,8 @@ impl Collection {
     ///     vector: Query embedding.
     ///     query: Query text for the BM25 branch.
     ///     top_k: Number of results (default: 10).
-    ///     vector_weight: Dense/text blend `alpha` (default: 0.5).
+    ///     vector_weight: Dense/text blend `alpha` (default: 0.5), clamped to
+    ///         0..1; a NaN or infinite weight raises `ValueError`.
     ///     filter: Optional metadata filter dict.
     ///     principal / tenant: Read-gate identity hints.
     ///     rrf_k: RRF fusion constant (default: None = core's 60). Threaded
@@ -424,7 +431,7 @@ impl Collection {
                 .map_err(core_err)
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Batch search for multiple query vectors in parallel.
@@ -463,7 +470,7 @@ impl Collection {
             })
         })?;
 
-        Ok(Self::convert_batch_results(py, results))
+        Self::convert_batch_results(py, results)
     }
 
     /// Multi-query search with result fusion.
@@ -503,7 +510,7 @@ impl Collection {
             })
         })?;
 
-        Ok(search_results_to_dicts(py, results, false))
+        search_results_to_dicts(py, results, false)
     }
 
     /// Parallel batch search for multiple query vectors.
@@ -555,7 +562,7 @@ impl Collection {
             })
         })?;
 
-        Ok(Self::convert_batch_results(py, results))
+        Self::convert_batch_results(py, results)
     }
 
     /// Multi-query search returning only IDs and fused scores.
@@ -593,7 +600,7 @@ impl Collection {
         })?;
 
         let tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
-        Ok(id_score_pairs_to_dicts(py, tuples))
+        id_score_pairs_to_dicts(py, tuples)
     }
 }
 
@@ -713,7 +720,7 @@ impl Collection {
     fn convert_batch_results(
         py: Python<'_>,
         results: Vec<Vec<SearchResult>>,
-    ) -> Vec<Vec<Py<PyAny>>> {
+    ) -> PyResult<Vec<Vec<Py<PyAny>>>> {
         results
             .iter()
             .map(|query_results| {
@@ -730,8 +737,9 @@ impl Collection {
 /// no `i64` holds (`2**64`, say) is outside that range too, so pyo3's
 /// `OverflowError` for it becomes the `ValueError` every other out-of-range
 /// value raises, with the one message naming the value as Python prints it
-/// (#2274); a value that is not an `int` keeps its `TypeError`.
-fn ef_search_from_py(ef_search: &Bound<'_, PyAny>) -> PyResult<usize> {
+/// (#2274); a value that is not an `int` keeps its `TypeError`. `SearchOptions`
+/// reads its `ef_search` through it too, at construction and assignment.
+pub(crate) fn ef_search_from_py(ef_search: &Bound<'_, PyAny>) -> PyResult<usize> {
     let ef = ef_search.extract::<i64>().map_err(|err| {
         if err.is_instance_of::<PyOverflowError>(ef_search.py()) {
             PyValueError::new_err(velesdb_core::api_types::ef_search_out_of_range(ef_search))

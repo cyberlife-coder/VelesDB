@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -1778,10 +1778,11 @@ test('anchored remember + recall(anchorRoot) reports fresh, then stale with the 
     assert.deepEqual(staleHit.freshness.changed, ['notes.md'])
 
     const plain = await store.recall('deploy broke', 5, null, null)
-    assert.equal(
-      plain.find((h) => h.id === id)?.freshness ?? null,
-      null,
-      'no anchorRoot: no freshness verdict on the hit',
+    const plainHit = plain.find((h) => h.id === id)
+    assert.ok(plainHit, 'the fact is recalled')
+    assert.ok(
+      !('freshness' in plainHit),
+      'no anchorRoot: the freshness field is absent, as documented (not null)',
     )
   } finally {
     delete process.env.VELESDB_MEMORY_INGEST_ROOTS
@@ -1822,6 +1823,22 @@ test('anchors fail closed: missing root, root outside the allowlist, ingestion d
   } finally {
     cleanup()
   }
+})
+
+test('an open refused for its ingest roots leaves no store behind', (t) => {
+  // The roots were read after the store was opened, so a bad
+  // VELESDB_MEMORY_INGEST_ROOTS threw only once the store directory, its
+  // lock and its files existed on disk.
+  const parent = mkdtempSync(join(tmpdir(), 'velesdb-refused-'))
+  t.after(() => rmStoreDir(parent))
+  const dir = join(parent, 'store')
+  process.env.VELESDB_MEMORY_INGEST_ROOTS = join(parent, 'no-such-root')
+  try {
+    assert.throws(() => MemoryService.open(dir, 'hash'), /INVALID_INPUT/)
+  } finally {
+    delete process.env.VELESDB_MEMORY_INGEST_ROOTS
+  }
+  assert.ok(!existsSync(dir), 'a refused open creates nothing')
 })
 
 test('compileContext resolves a path fragment under the ingest roots; refuses it when disabled', async (t) => {
@@ -1920,5 +1937,102 @@ test('rememberExtracted: openai without env config is INVALID_INPUT; unknown ext
     }
   } finally {
     cleanup()
+  }
+})
+
+test('a count argument outside 0..=2^32-1, fractional or non-finite is refused, never wrapped', async () => {
+  // napi reads a `u32` with JS ToUint32, which wraps: recall(q, Infinity)
+  // became k = 0, remember(..., -1) a 136-year TTL, 2**32 + 60 a 60 s TTL.
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    await store.remember('a fact to recall', [])
+    const invalid = (err) => err instanceof Error && err.message.includes('INVALID_INPUT')
+    for (const bad of [Infinity, NaN, -1, 2 ** 32, 1.5]) {
+      await assert.rejects(store.recall('fact', bad), invalid, `recall k=${bad}`)
+      await assert.rejects(store.remember('f', [], null, bad), invalid, `remember ttl=${bad}`)
+      await assert.rejects(store.why('fact', bad), invalid, `why hops=${bad}`)
+      await assert.rejects(store.listMemories(null, bad), invalid, `listMemories limit=${bad}`)
+      await assert.rejects(
+        store.recallFused('fact', 3, null, { hops: bad }),
+        invalid,
+        `recallFused hops=${bad}`,
+      )
+    }
+    assert.equal((await store.recall('fact', 5)).length, 1, 'a valid count still works')
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('metadata and filters that are not JSON data are refused, never stored as {}', async () => {
+  // napi read any object's own enumerable properties: a Date, a Map, a Set or
+  // a class instance became `{}` and was stored so, silently.
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    class Tag {
+      constructor() {
+        this.name = 'x'
+      }
+    }
+    const invalid = (err) => err instanceof Error && err.message.includes('INVALID_INPUT')
+    const notJson = [
+      ['a Date', { when: new Date(0) }],
+      ['a Map', { tags: new Map([['a', 1]]) }],
+      ['a Set', { tags: new Set([1]) }],
+      ['a class instance', { tag: new Tag() }],
+      ['a function', { f: () => 1 }],
+      ['a symbol', { s: Symbol('s') }],
+      // A BigInt in the 64-bit range is an integer (json_arg.spec.mjs); past it, JSON holds no such integer.
+      ['a bigint past 64 bits', { n: 2n ** 64n }],
+      ['NaN', { n: NaN }],
+      ['Infinity', { list: [1, Infinity] }],
+    ]
+    for (const [what, metadata] of notJson) {
+      await assert.rejects(store.remember('a fact', [], metadata), invalid, `remember with ${what}`)
+      await assert.rejects(store.recall('a fact', 5, metadata), invalid, `recall filter with ${what}`)
+    }
+    await assert.rejects(store.recall('a fact', 5, new Date(0)), invalid, 'a Date as the filter itself')
+    assert.equal((await store.listMemories(null, 50, null, null)).memories.length, 0, 'a refused remember stores nothing')
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('a JSON argument the binding refuses rejects the Promise, it does not throw', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    let pending
+    assert.doesNotThrow(() => {
+      pending = store.remember('a fact', [], { when: new Date(0) })
+    })
+    assert.ok(pending instanceof Promise)
+    await assert.rejects(pending, (err) => err.message.includes('INVALID_INPUT'))
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('plain JSON metadata is kept as JSON.stringify would keep it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash')
+    const bare = Object.create(null)
+    bare.kind = 'note'
+    const { id } = await store.remember('a fact with metadata', [], {
+      bare,
+      nested: { list: [1, 2.5, 'x', null, true] },
+      dropped: undefined,
+      ts: 5_000_000_000,
+    })
+    const [hit] = await store.recall('a fact with metadata', 1, { ts: 5_000_000_000 })
+    assert.equal(hit.id, id, 'an integer past u32 still matches by equality')
+    assert.deepEqual(hit.metadata.bare, { kind: 'note' }, 'a null-prototype object is plain data')
+    assert.deepEqual(hit.metadata.nested, { list: [1, 2.5, 'x', null, true] })
+    assert.ok(!('dropped' in hit.metadata), 'an undefined property is left out')
+  } finally {
+    rmStoreDir(dir)
   }
 })

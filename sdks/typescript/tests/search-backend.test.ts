@@ -10,7 +10,7 @@
  * error routing.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, expectTypeOf, vi, beforeEach } from 'vitest';
 import {
   search,
   searchBatch,
@@ -23,7 +23,7 @@ import {
   type SearchTransport,
 } from '../src/backends/search-backend';
 import type { TransportResponse } from '../src/backends/shared';
-import type { FusionStrategy } from '../src/types/search';
+import type { FusionStrategy, SearchResult } from '../src/types/search';
 import { CollectionNotFoundError } from '../src/errors';
 import { ValidationError } from '../src/types';
 
@@ -456,7 +456,7 @@ describe('multiQuerySearchIds', () => {
   it('POSTs to /search/multi/ids with defaults strategy=rrf and rrf_k=60', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      data: { results: [{ id: 1, score: 0.9 }] },
+      data: { results: [{ id: '1', score: 0.9 }] },
     });
 
     const result = await multiQuerySearchIds(transport, 'docs', [[0.1], [0.2]]);
@@ -471,7 +471,7 @@ describe('multiQuerySearchIds', () => {
     expect(body.vectors).toEqual([[0.1], [0.2]]);
     // No filter given, so none is sent.
     expect(body.filter).toBeUndefined();
-    expect(result).toEqual([{ id: 1, score: 0.9 }]);
+    expect(result).toEqual([{ id: '1', score: 0.9 }]);
   });
 
   it('forwards a filter, so the server refuses it rather than the SDK dropping it (#2095)', async () => {
@@ -551,7 +551,7 @@ describe('searchIds', () => {
   it('POSTs to /search/ids with defaults', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      data: { results: [{ id: 1, score: 0.9 }] },
+      data: { results: [{ id: '1', score: 0.9 }] },
     });
 
     const result = await searchIds(transport, 'docs', [0.1]);
@@ -561,7 +561,7 @@ describe('searchIds', () => {
     expect(call[1]).toBe('/collections/docs/search/ids');
     const body = call[2] as Record<string, unknown>;
     expect(body.top_k).toBe(10);
-    expect(result).toEqual([{ id: 1, score: 0.9 }]);
+    expect(result).toEqual([{ id: '1', score: 0.9 }]);
   });
 
   it('forwards k / filter / quality', async () => {
@@ -668,5 +668,28 @@ describe('sparseSearchNamed', () => {
     await expect(
       sparseSearchNamed(transport, 'missing', { 1: 1 }, 'idx')
     ).rejects.toThrow(CollectionNotFoundError);
+  });
+});
+
+describe('ids-only search id contract', () => {
+  // The server serializes `IdScoreResult.id` as a decimal string
+  // (`serde_id::serialize_id_as_string`), so an ids-only hit carries the same
+  // id type as a full `SearchResult` — one contract, not a narrower `number`.
+  type IdsHit = Awaited<ReturnType<typeof searchIds>>[number];
+  type MultiIdsHit = Awaited<ReturnType<typeof multiQuerySearchIds>>[number];
+
+  it('types an ids-only hit with SearchResult\'s id', () => {
+    expectTypeOf<IdsHit>().toEqualTypeOf<Pick<SearchResult, 'id' | 'score'>>();
+    expectTypeOf<MultiIdsHit>().toEqualTypeOf<Pick<SearchResult, 'id' | 'score'>>();
+  });
+
+  it('passes a u64 id above 2^53 through as the exact decimal string', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: { results: [{ id: '18446744073709551615', score: 0.5 }] },
+    });
+
+    const [hit] = await searchIds(transport, 'docs', [0.1]);
+    expect(hit?.id).toBe('18446744073709551615');
   });
 });

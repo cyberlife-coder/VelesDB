@@ -60,6 +60,8 @@ The WASM backend runs entirely in-process -- no server required. Ideal for brows
 
 > **Binding version:** the WASM backend reads its results from `@wiscale/velesdb-wasm` since 8.0.0, the floor this SDK release pins (`^8.0.0` in `package.json`). velesdb-wasm 6.x and 7.x return `textSearch`, `hybridSearch`, filtered `search` and `get` records as ES2015 `Map`s, which the SDK cannot read: those calls throw on any row (#2332, fixed in velesdb-wasm 8.0.0).
 
+The package published to npm depends on the `@wiscale/velesdb-wasm` of its own release, and needs it. That binding returns point ids as decimal strings: earlier ones throw inside a search, `get` or `query` over a point id past `Number.MAX_SAFE_INTEGER`. Its VelesQL executor also runs `SPARSE_NEAR` over the sparse vectors the SDK keeps in each collection's store, which earlier ones cannot.
+
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
 
@@ -365,7 +367,7 @@ await db.upsert('docs', {
 });
 ```
 
-> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. A later `sparseVector` for the same id replaces it, an upsert without one keeps it (as core does), and a deleted point never comes back in sparse results. Replaced and deleted sparse vectors are purged from the index once they outnumber the live ones.
+> **WASM backend:** a `sparseVector` is indexed with the point, so sparse search finds it. An upsert replaces the whole point, as core does: a later `sparseVector` for the same id replaces it, an upsert without one drops it — and its payload too when it carries none — and a deleted point never comes back in sparse results. A sparse vector the binding refuses (a non-finite weight) fails the upsert before the point is written, and so does a key that is not a `u32` term id (decimal digits up to 4294967295, as REST parses it), refused with `BAD_REQUEST` on upsert and on a sparse or hybrid search alike, never coerced into another term. The sparse vector lives in the collection's own store, under the point's id, so VelesQL `SPARSE_NEAR` in `query()` ranks the same points as sparse search.
 
 #### `db.upsertBatch(collection, documents)`
 
@@ -403,11 +405,11 @@ await db.streamInsert('docs', largeDocumentArray);
 
 #### `db.get(collection, id)`
 
-Get a document by ID. Returns `null` if not found.
+Get a document by ID. Returns `null` if not found. A missing collection throws on both backends (`CollectionNotFoundError` on REST).
 
 #### `db.delete(collection, id)`
 
-Delete a document by ID. Returns `true` if deleted, `false` if not found.
+Delete a document by ID. Returns `true` if deleted, `false` if not found. A missing collection throws on both backends (`CollectionNotFoundError` on REST). Over REST, `false` needs a server that answers a delete of an absent point with `404 VELES-003`, which it does since the release after 8.2.0; an older server answers `200`, read as `true`.
 
 ---
 
@@ -484,7 +486,7 @@ Lightweight search returning only IDs and scores (no payloads).
 
 ```typescript
 const hits = await db.searchIds('docs', queryVector, { k: 100 });
-// Returns: Array<{ id: number, score: number }>
+// Returns: SearchIdResult[] — Array<{ id: string | number, score: number }>; REST sends the id as a decimal string
 ```
 
 #### `db.scroll(collection, request)`
@@ -690,8 +692,14 @@ Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, 
 > - pure top-k vector queries, `SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]`
 >   (`vector` is the grammar keyword, not a column name), on every binding;
 > - with a velesdb-wasm binding that has `WasmDatabase.attachStore`,
->   any other read-only `SELECT` — `WHERE` predicates, `ORDER BY`, and the rest of what
+>   any other read-only `SELECT` — `WHERE` predicates, `vector SPARSE_NEAR` alone or fused with
+>   `NEAR` (RRF, or the `USING FUSION` strategy core maps), `ORDER BY`, and the rest of what
 >   velesdb-wasm's executor evaluates — over the points the SDK wrote, in REST's `/query` shape.
+>   A `SPARSE_NEAR` on a collection that was never given a sparse vector, or naming an index
+>   (`USING '<name>'`: WASM keeps only the default one), is refused as core refuses a missing index.
+>
+> A pure `NEAR` returns core's `SELECT *` rows on every binding, as REST does and as the same
+> statement with a `WHERE` does: the point `id` and its payload fields.
 >
 > Aggregations (`GROUP BY`, `COUNT`, …), `MATCH`, DDL and mutations through `query()`, and
 > every non-`NEAR` statement on a binding shipped before `attachStore`, throw `NOT_SUPPORTED`
@@ -858,6 +866,26 @@ await db.alterCollection('docs', { autoReindex: false });
 
 ### Knowledge Graph API
 
+> **WASM backend:** with a velesdb-wasm binding that has the `WasmDatabase` edge API and
+> `executeMatch`, `addEdge`, `getEdges`, `removeEdge`, `getEdgeCount` and `matchQuery` run in
+> the browser with REST's shapes. A collection's points are its nodes, labelled by their
+> `_labels` payload key, so an edge's `source` and `target` must be stored points, as on the
+> server. Every id crosses to the binding as its exact decimal string: `getEdges` lists an
+> edge's `id`, `source` and `target` as strings, as REST does (a derived edge id is routinely
+> past `Number.MAX_SAFE_INTEGER`), which `removeEdge` takes back as is; an id that is not a
+> non-negative integer is refused with `BAD_REQUEST`, never hashed into another id. `delete` and
+> `bulkDelete` remove a point's edges with it, as the server does. A decimal point id past
+> `Number.MAX_SAFE_INTEGER` (up to `u64::MAX`) is addressed exactly, as on REST: the binding
+> returns every point id as its decimal string, so `search`, `get` and the other reads give it
+> back as it went in; one past `u64::MAX` is refused with `BAD_REQUEST`, and so is a numeric
+> point id that is not a non-negative integer up to `Number.MAX_SAFE_INTEGER` (`-1`, `1.5`,
+> `2 ** 64`), which would otherwise reach the binding wrapped into another id. `matchQuery` names the
+> collection for the MATCH and returns REST's `{ bindings, depth, projected, score? }` rows,
+> each binding's node id a decimal string as on REST: the points' vectors score `similarity()` as on the server,
+> and `options.vector` / `threshold` behave as on REST `/match`. Traversal (`traverseGraph`, `traverseParallel`)
+> and `getNodeDegree` stay server-only, so `capabilities().graphTraversal` is `false`. An older
+> binding refuses every graph method with `NOT_SUPPORTED`.
+
 #### `db.addEdge(collection, edge)`
 
 Add a directed edge between two nodes.
@@ -892,6 +920,19 @@ Query edges, optionally filtered by label.
 
 ```typescript
 const edges = await db.getEdges('social', { label: 'FOLLOWS' });
+```
+
+#### `db.removeEdge(collection, edgeId)`
+
+Remove an edge by id; `true` if it was removed, `false` if it did not exist.
+`edgeId` is a `GraphNodeId` (`number | string`): pass back the `id` an edge
+read returned as is. A derived edge id is hashed and routinely above
+`Number.MAX_SAFE_INTEGER`, so it arrives as a decimal string — converting it to
+a `number` would round it to another id.
+
+```typescript
+const [edge] = await db.getEdges('social', { label: 'FOLLOWS' });
+const removed = await db.removeEdge('social', edge.id); // e.g. '9007199254740993'
 ```
 
 #### `db.traverseGraph(collection, request)`
@@ -949,7 +990,10 @@ A traversal has no cursor: `result.hasMore` is `true` when it stopped at
 Stream a graph traversal over SSE (`GET .../graph/traverse/stream`) as an
 async iterable of `TraverseStreamEvent` — `node` (one per visited node, with
 `depth` and `path`), `stats` (progress), `done` (totals), and `error`.
-**REST backend only** (the WASM backend throws `NOT_SUPPORTED`).
+**REST backend only** (the WASM backend throws `NOT_SUPPORTED`). The client
+`timeout` bounds the wait for the response, then each wait for the next
+event, not the length of the stream; a stream silent for longer fails with
+`ConnectionError('Request timeout')`.
 
 ```typescript
 for await (const event of db.streamTraverse('social', {
@@ -1047,7 +1091,8 @@ Returns `true` if the specified index exists.
 
 #### `db.dropIndex(collection, label, property)`
 
-Drop an index. Returns `true` if the index existed and was removed.
+Drop an index. Returns `true` if the index existed and was removed, `false` if
+no such index exists; a missing collection throws `CollectionNotFoundError`.
 
 ---
 

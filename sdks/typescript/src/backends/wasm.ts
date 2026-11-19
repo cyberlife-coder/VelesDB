@@ -14,6 +14,7 @@ import type {
   SearchOptions,
   SearchQuality,
   SearchResult,
+  SearchIdResult,
   TextSearchResult,
   MultiQuerySearchOptions,
   CreateIndexOptions,
@@ -45,12 +46,14 @@ import { WASM_CAPABILITIES } from '../capabilities';
 import { ConnectionError, NotFoundError, VelesDBError } from '../types';
 import type { WasmModule, CollectionData, WasmVectorStore } from './wasm-types';
 import { requireWasmFieldsListed, requireWasmValueListed } from './wasm-capability-guards';
-import { freeSparse, indexSparse, newSparseIds, retireSparse } from './wasm-sparse';
+import { validateSparse, writeSparse } from './wasm-sparse';
+import { validateCollectionName } from './shared';
 
 // Internal helpers
 import {
-  toNumericId,
+  toPointId,
   canonicalPayloadKey,
+  canonicalPayloadKeyFromResultId,
   buildWasmContext,
   buildCollectionInfo,
   describeWasmThrow,
@@ -58,6 +61,7 @@ import {
 
 // VelesQL executor over the attached stores
 import { WasmVelesQL } from './wasm-velesql';
+import type { WasmGraph } from './wasm-graph';
 
 // Search & query delegates
 import {
@@ -67,7 +71,6 @@ import {
   wasmHybridSearch,
   wasmMultiQuerySearch,
   wasmQuery,
-  isPureNearQuery,
 } from './wasm-search';
 
 // Unsupported-feature stubs (pre-Wave 4)
@@ -136,8 +139,11 @@ export class WasmBackend implements IVelesDBBackend {
   private wasmModule: WasmModule | null = null;
   private collections: Map<string, CollectionData> = new Map();
   // VelesQL over the collections' stores, when the binding can share them
-  // (`wasm-velesql.ts`); `null` on velesdb-wasm 8.0.0.
+  // (`wasm-velesql.ts`); `null` on velesdb-wasm 8.2.0 and older.
   private velesql: WasmVelesQL | null = null;
+  // Graph operations and matchQuery over the same database, when the binding
+  // has the edge API and executeMatch (`wasm-graph.ts`).
+  private graph: WasmGraph | null = null;
   private _initialized = false;
   // Memoized single-shot init promise. Subsequent concurrent calls to init()
   // await the same in-flight initialization instead of racing into duplicate
@@ -150,8 +156,8 @@ export class WasmBackend implements IVelesDBBackend {
   // close() during an in-flight init() would let the racy completion of
   // runInit() flip _initialized back to true after close() set it false.
   private _initGen = 0;
-  // Creates the metadata-only store that holds a collection's sparse index.
-  private readonly newSparseStore = (): WasmVectorStore =>
+  // Creates the scratch store the binding validates sparse vectors in.
+  private readonly newScratchStore = (): WasmVectorStore =>
     this.wasmModule!.VectorStore.new_metadata_only();
 
   // ========================================================================
@@ -198,6 +204,7 @@ export class WasmBackend implements IVelesDBBackend {
       if (this._initGen !== gen) { return; }
       this.wasmModule = mod;
       this.velesql = WasmVelesQL.create(mod);
+      this.graph = this.velesql?.graph(mod, (name) => this.collections.has(name)) ?? null;
       this._initialized = true;
     } catch (error) {
       // Probed on 6.0.0: this loader rejects with a
@@ -218,9 +225,9 @@ export class WasmBackend implements IVelesDBBackend {
   async close(): Promise<void> {
     for (const [, data] of this.collections) {
       data.store.free();
-      freeSparse(data.sparseIds);
     }
     this.collections.clear();
+    this.graph = null;
     this.velesql?.free();
     this.velesql = null;
     this._initialized = false;
@@ -247,6 +254,9 @@ export class WasmBackend implements IVelesDBBackend {
 
   async createCollection(name: string, config: CollectionConfig): Promise<void> {
     this.ensureInitialized();
+    // Core's name rules, refused as REST refuses them (VELES-034), before
+    // the binding is handed a name it would throw on.
+    validateCollectionName(name);
     if (this.collections.has(name)) {
       throw new VelesDBError(`Collection '${name}' already exists`, 'COLLECTION_EXISTS');
     }
@@ -261,12 +271,17 @@ export class WasmBackend implements IVelesDBBackend {
     const dimension = config.dimension ?? 0;
     const metric = config.metric ?? 'cosine';
     const store = this.wasmModule!.VectorStore.new_with_mode(dimension, metric, mode);
-    this.velesql?.attach(name, store);
+    try {
+      this.velesql?.attach(name, store);
+    } catch (error) {
+      // No handle reaches the store but this one: free it, or it leaks.
+      store.free();
+      throw error;
+    }
     this.collections.set(name, {
       config: { ...config, metric },
       store,
       payloads: new Map(),
-      sparseIds: newSparseIds(),
       createdAt: new Date(),
     });
   }
@@ -278,7 +293,6 @@ export class WasmBackend implements IVelesDBBackend {
     // The executor shares the store: drop its reference before freeing it.
     this.velesql?.detach(name);
     collection.store.free();
-    freeSparse(collection.sparseIds);
     this.collections.delete(name);
   }
 
@@ -306,7 +320,7 @@ export class WasmBackend implements IVelesDBBackend {
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
 
-    const id = toNumericId(doc.id);
+    const id = toPointId(doc.id);
     const vector = doc.vector instanceof Float32Array
       ? doc.vector
       : new Float32Array(doc.vector);
@@ -318,18 +332,13 @@ export class WasmBackend implements IVelesDBBackend {
       );
     }
 
-    if (doc.payload) {
-      collection.store.insert_with_payload(BigInt(id), vector, doc.payload);
-    } else {
-      collection.store.insert(BigInt(id), vector);
-    }
-    if (doc.sparseVector) {
-      indexSparse(collection.sparseIds, this.newSparseStore, id, doc.sparseVector);
-    }
-
-    if (doc.payload) {
-      collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
-    }
+    this.replacePoints(collection, [doc], () => {
+      if (doc.payload) {
+        collection.store.insert_with_payload(id, vector, doc.payload);
+      } else {
+        collection.store.insert(id, vector);
+      }
+    });
   }
 
   async upsertBatch(collectionName: string, docs: VectorDocument[]): Promise<void> {
@@ -345,28 +354,57 @@ export class WasmBackend implements IVelesDBBackend {
         );
       }
     }
+    // Every id is checked before any point is written.
+    const ids = docs.map((doc) => toPointId(doc.id));
 
-    collection.store.reserve(docs.length);
-    const batch: Array<[bigint, number[]]> = [];
+    // Points are written in input order, so an id repeated in `docs` keeps
+    // its last version, as core's upsert does: the run of payload-less docs
+    // pending in `batch` is flushed before each payload doc is written.
+    this.replacePoints(collection, docs, () => {
+      collection.store.reserve(docs.length);
+      let batch: Array<[bigint, number[]]> = [];
+      const flush = (): void => {
+        if (batch.length > 0) { collection.store.insert_batch(batch); }
+        batch = [];
+      };
+      docs.forEach((doc, i) => {
+        const id = ids[i]!;
+        const vector = doc.vector instanceof Float32Array
+          ? doc.vector
+          : new Float32Array(doc.vector);
+        if (doc.payload) {
+          flush();
+          collection.store.insert_with_payload(id, vector, doc.payload);
+        } else {
+          batch.push([id, Array.from(vector)]);
+        }
+      });
+      flush();
+    });
+  }
+
+  /**
+   * Replace each of `docs`' points whole, as core's upsert does. The binding
+   * validates their sparse vectors first, so one it refuses fails the call
+   * before `writeDense` touches any point; once it has written them, each
+   * point's sparse vector and SDK-side payload become the ones its new version
+   * carries — none where it carries none (`writeSparse`).
+   */
+  private replacePoints(
+    collection: CollectionData,
+    docs: VectorDocument[],
+    writeDense: () => void
+  ): void {
+    const sparse = docs.map((doc) => doc.sparseVector ?? undefined);
+    validateSparse(this.newScratchStore, sparse);
+    writeDense();
+    writeSparse(collection.store, docs.map((doc) => toPointId(doc.id)), sparse);
     for (const doc of docs) {
-      const id = BigInt(toNumericId(doc.id));
-      const vector = doc.vector instanceof Float32Array
-        ? doc.vector
-        : new Float32Array(doc.vector);
+      const key = canonicalPayloadKey(doc.id);
       if (doc.payload) {
-        collection.store.insert_with_payload(id, vector, doc.payload);
+        collection.payloads.set(key, doc.payload);
       } else {
-        batch.push([id, Array.from(vector)]);
-      }
-    }
-    if (batch.length > 0) { collection.store.insert_batch(batch); }
-
-    for (const doc of docs) {
-      if (doc.payload) {
-        collection.payloads.set(canonicalPayloadKey(doc.id), doc.payload);
-      }
-      if (doc.sparseVector) {
-        indexSparse(collection.sparseIds, this.newSparseStore, toNumericId(doc.id), doc.sparseVector);
+        collection.payloads.delete(key);
       }
     }
   }
@@ -374,32 +412,27 @@ export class WasmBackend implements IVelesDBBackend {
   async upsertBatchRaw(c: string, d: VectorDocument[]): Promise<number> { return wasmUpsertBatchRaw(c, d); }
 
   async delete(collectionName: string, id: string | number): Promise<boolean> {
-    this.ensureInitialized();
-    const collection = this.collections.get(collectionName);
-    if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
-    const numericId = toNumericId(id);
-    const removed = collection.store.remove(BigInt(numericId));
-    if (removed) {
-      collection.payloads.delete(canonicalPayloadKey(id));
-      retireSparse(collection.sparseIds, this.newSparseStore, numericId);
-    }
-    return removed;
+    return (await this.bulkDelete(collectionName, [id])) > 0;
   }
 
+  /**
+   * Remove points, their sparse postings and their bookkeeping. Through the
+   * database when it can, so the edges a removed point is an end of go with
+   * it, as core's delete cascades (#900); otherwise through the store, which
+   * then has no edges. The postings are removed by id: the binding's
+   * `remove` drops them only since the release after 8.2.0.
+   */
   async bulkDelete(collectionName: string, ids: Array<string | number>): Promise<number> {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
-    let count = 0;
-    for (const id of ids) {
-      const numericId = toNumericId(id);
-      const removed = collection.store.remove(BigInt(numericId));
-      if (removed) {
-        collection.payloads.delete(canonicalPayloadKey(id));
-        retireSparse(collection.sparseIds, this.newSparseStore, numericId);
-        count += 1;
-      }
-    }
+    const pointIds = ids.map((id) => toPointId(id));
+    const count = this.velesql?.removePoints(collectionName, pointIds)
+      ?? pointIds.filter((id) => collection.store.remove(id)).length;
+    ids.forEach((id, i) => {
+      collection.payloads.delete(canonicalPayloadKey(id));
+      collection.store.sparse_remove(pointIds[i]!);
+    });
     return count;
   }
 
@@ -407,10 +440,10 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     const collection = this.collections.get(collectionName);
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
-    const numericId = toNumericId(id);
-    const point = collection.store.get(BigInt(numericId));
+    const pointId = toPointId(id);
+    const point = collection.store.get(pointId);
     if (!point) { return null; }
-    const payload = point.payload ?? collection.payloads.get(canonicalPayloadKey(numericId));
+    const payload = point.payload ?? collection.payloads.get(canonicalPayloadKeyFromResultId(pointId));
     return {
       id: String(point.id),
       vector: Array.isArray(point.vector) ? point.vector : Array.from(point.vector),
@@ -462,7 +495,9 @@ export class WasmBackend implements IVelesDBBackend {
 
   async query(c: string, q: string, p?: Record<string, unknown>): Promise<QueryApiResponse> {
     this.ensureInitialized();
-    if (this.velesql && !isPureNearQuery(q)) {
+    // Every read-only SELECT the executor takes, the pure `NEAR` shape
+    // included: it returns core's rows, whatever the WHERE clause holds.
+    if (this.velesql) {
       if (!this.collections.has(c)) { throw new NotFoundError(`Collection '${c}'`); }
       const selected = this.velesql.trySelect(c, q, p);
       if (selected) { return selected; }
@@ -486,8 +521,8 @@ export class WasmBackend implements IVelesDBBackend {
   async listIndexes(c: string): Promise<IndexInfo[]> { this.ensureInitialized(); return wasmListIndexes(c); }
   async hasIndex(c: string, l: string, p: string): Promise<boolean> { this.ensureInitialized(); return wasmHasIndex(c, l, p); }
   async dropIndex(c: string, l: string, p: string): Promise<boolean> { this.ensureInitialized(); return wasmDropIndex(c, l, p); }
-  async addEdge(c: string, e: AddEdgeRequest): Promise<void> { this.ensureInitialized(); return wasmAddEdge(c, e); }
-  async getEdges(c: string, o?: GetEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return wasmGetEdges(c, o); }
+  async addEdge(c: string, e: AddEdgeRequest): Promise<void> { this.ensureInitialized(); return this.graph ? this.graph.addEdge(c, e) : wasmAddEdge(c, e); }
+  async getEdges(c: string, o?: GetEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return this.graph ? this.graph.getEdges(c, o) : wasmGetEdges(c, o); }
   async traverseGraph(c: string, r: TraverseRequest): Promise<TraverseResponse> { this.ensureInitialized(); return wasmTraverseGraph(c, r); }
   async traverseParallel(c: string, r: TraverseParallelRequest): Promise<TraverseResponse> { this.ensureInitialized(); return wasmTraverseParallel(c, r); }
   async getNodeDegree(c: string, n: number): Promise<DegreeResponse> { this.ensureInitialized(); return wasmGetNodeDegree(c, n); }
@@ -499,8 +534,8 @@ export class WasmBackend implements IVelesDBBackend {
   async getCollectionStats(c: string): Promise<CollectionStatsResponse | null> { this.ensureInitialized(); return wasmGetCollectionStats(c); }
   async analyzeCollection(c: string): Promise<CollectionStatsResponse> { this.ensureInitialized(); return wasmAnalyzeCollection(c); }
   async getCollectionConfig(c: string): Promise<CollectionConfigResponse> { this.ensureInitialized(); return wasmGetCollectionConfig(c); }
-  async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return wasmSearchIds(c, q, o); }
-  async multiQuerySearchIds(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<Array<{ id: number; score: number }>> { this.ensureInitialized(); return wasmMultiQuerySearchIds(c, v, o); }
+  async searchIds(c: string, q: number[] | Float32Array, o?: SearchOptions): Promise<SearchIdResult[]> { this.ensureInitialized(); return wasmSearchIds(c, q, o); }
+  async multiQuerySearchIds(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<SearchIdResult[]> { this.ensureInitialized(); return wasmMultiQuerySearchIds(c, v, o); }
   async storeSemanticFact(c: string, e: SemanticEntry): Promise<void> { this.ensureInitialized(); return wasmStoreSemanticFact(c, e); }
   async searchSemanticMemory(c: string, e: number[], k?: number): Promise<SearchResult[]> { this.ensureInitialized(); return wasmSearchSemanticMemory(c, e, k); }
   async recordEpisodicEvent(c: string, e: EpisodicEvent): Promise<string> { this.ensureInitialized(); return wasmRecordEpisodicEvent(c, e); }
@@ -515,9 +550,9 @@ export class WasmBackend implements IVelesDBBackend {
   async getGuardrails(): Promise<import('../types').GuardRailsConfigResponse> { this.ensureInitialized(); return wasmGetGuardrails(); }
   async updateGuardrails(r: import('../types').GuardRailsUpdateRequest): Promise<import('../types').GuardRailsConfigResponse> { this.ensureInitialized(); return wasmUpdateGuardrails(r); }
   async aggregate(_q: string, _p?: Record<string, unknown>, _o?: import('../types').AggregateQueryOptions): Promise<import('../types').AggregateResponse> { this.ensureInitialized(); return wasmAggregate(_q, _p, _o); }
-  async matchQuery(c: string, q: string, p?: Record<string, unknown>, o?: import('../types').MatchQueryOptions): Promise<import('../types').MatchQueryResponse> { this.ensureInitialized(); return wasmMatchQuery(c, q, p, o); }
-  async removeEdge(c: string, id: number): Promise<boolean> { this.ensureInitialized(); return wasmRemoveEdge(c, id); }
-  async getEdgeCount(c: string): Promise<number> { this.ensureInitialized(); return wasmGetEdgeCount(c); }
+  async matchQuery(c: string, q: string, p?: Record<string, unknown>, o?: import('../types').MatchQueryOptions): Promise<import('../types').MatchQueryResponse> { this.ensureInitialized(); return this.graph ? this.graph.match(c, q, p, o) : wasmMatchQuery(c, q, p, o); }
+  async removeEdge(c: string, id: import('../types').GraphNodeId): Promise<boolean> { this.ensureInitialized(); return this.graph ? this.graph.removeEdge(c, id) : wasmRemoveEdge(c, id); }
+  async getEdgeCount(c: string): Promise<number> { this.ensureInitialized(); return this.graph ? this.graph.edgeCount(c) : wasmGetEdgeCount(c); }
   async listNodes(c: string): Promise<import('../types').ListNodesResponse> { this.ensureInitialized(); return wasmListNodes(c); }
   async getNodeEdges(c: string, id: number, o?: import('../types').GetNodeEdgesOptions): Promise<GraphEdge[]> { this.ensureInitialized(); return wasmGetNodeEdges(c, id, o); }
   async getNodePayload(c: string, id: number): Promise<import('../types').NodePayloadResponse> { this.ensureInitialized(); return wasmGetNodePayload(c, id); }

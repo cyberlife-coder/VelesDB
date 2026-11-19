@@ -208,6 +208,18 @@ impl MetadataCollection {
         self.inner.delete(ids)
     }
 
+    /// Deletes items by IDs and returns how many of them held an item.
+    ///
+    /// Same delete as [`delete`](Self::delete); the count is what it
+    /// removed — a missing id counts zero, an id repeated in `ids` once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage operations fail.
+    pub fn delete_counted(&self, ids: &[u64]) -> Result<usize> {
+        self.inner.delete_counted(ids)
+    }
+
     // -------------------------------------------------------------------------
     // Text search
     // -------------------------------------------------------------------------

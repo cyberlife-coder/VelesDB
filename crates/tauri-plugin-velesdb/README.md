@@ -14,11 +14,12 @@ embedded vector store onto the frontend and hand-roll the IPC, the permissions,
 and the persistence path.
 
 This plugin removes that choice. Registering it in your `tauri::Builder` opens a
-VelesDB database inside the app process and exposes up to 69 typed commands
+VelesDB database inside the app process and exposes 70 typed commands
 to the webview — vector search, BM25, hybrid fusion, VelesQL, knowledge
 graph, agent memory — under Tauri's own capability model. Two of them
-(`stream_insert`, `enable_streaming`) sit behind the `persistence` feature;
-the default surface is 67. Nothing leaves the device.
+(`stream_insert`, `enable_streaming`) sit behind the `persistence` feature,
+which `default` includes; without it the surface is 68. Nothing leaves the
+device.
 
 It is the desktop face of **VelesDB, the explainable, local-first memory engine
 for AI agents**: one engine fusing vector, graph and columnar data under
@@ -123,18 +124,19 @@ Expected output in the webview console:
 inserted: 2
 {
   "results": [
-    { "id": 1, "score": 1.0, "payload": { "title": "north" } },
-    { "id": 2, "score": 0.0, "payload": { "title": "east" } }
+    { "id": "1", "score": 1.0, "payload": { "title": "north" } },
+    { "id": "2", "score": 0.0, "payload": { "title": "east" } }
   ],
   "timingMs": 0.42
 }
 ```
 
 **How to read it.** With the `cosine` metric the score is a similarity: `1.0`
-means identical, `0.0` means orthogonal. Success is *`id: 1` ranked first with a
+means identical, `0.0` means orthogonal. Success is *`id: "1"` ranked first with a
 score close to `1.0`*. The last decimals and `timingMs` will differ on your
-machine — that is normal. A directory `./velesdb_data` now exists next to the
-running binary.
+machine — that is normal. Ids come back as decimal strings, exact past 2^53
+where a JavaScript number rounds; a command takes an id as a string or a
+number. A directory `./velesdb_data` now exists next to the running binary.
 
 **If it failed instead**, the rejection is a `{ message, code }` object:
 `code: "VELES-002"` means the collection was not found (step 3 ran before
@@ -173,13 +175,30 @@ Only the engine sections of the file are read (`[search]`, `[hnsw]`,
 belonging to another VelesDB component in a shared file is ignored, not
 rejected. Field reference: [configuration guide](../../docs/guides/CONFIGURATION.md).
 
+### Agent memory dimension
+
+The agent memory (`semantic_*`, `episodic_*`, `procedural_*` and `memory_*`
+commands) takes embeddings of 384 dimensions by default. For another model, set
+its size on the builder:
+
+```rust
+let plugin = tauri_plugin_velesdb::Builder::new("./my_data")
+    .with_memory_dimension(768)
+    .build();
+```
+
+The three memory collections are created with that dimension on first use. If
+they already exist with another one, the first memory command fails with a
+dimension mismatch rather than mixing sizes.
+
 ### Cargo features
 
-`default` pulls in `velesdb-core/default`, which includes `persistence` —
-mmap storage and WAL. The `stream_insert`/`enable_streaming` commands and the
-`quality` argument on `search`/`search_ids` are gated on the plugin's own
-`persistence` feature — pass `features = ["persistence"]` for the full
-69-command surface (67 under `default`). The other features
+`default` pulls in `velesdb-core/default` and the plugin's own `persistence`
+feature — mmap storage and WAL. The `stream_insert`/`enable_streaming` commands
+and the `quality` argument on `search`/`search_ids` are gated on that
+`persistence` feature, so the default build has the full 70-command surface; a
+build with `default-features = false` and no `persistence` has 68. The other
+features
 (`gpu`, `openapi`, `update-check`, `loom`, `internal-bench`, `bench-sift1m`,
 `test-fault-injection`) forward to the matching `velesdb-core` feature; the last
 two must never be enabled in a shipping bundle.
@@ -216,11 +235,10 @@ two must never be enabled in a shipping bundle.
   endpoints have no stored node payload (#1442). No IPC command upserts a node
   payload — do it from Rust through `VelesDbState::with_db`
   ([recipe](../../docs/guides/TAURI_PLUGIN_RECIPES.md#knowledge-graph)).
-- **`quality` is ignored when a `filter` is supplied** on `search` /
-  `search_ids` (known limitation #457): the filtered path takes precedence.
-- **`query` has no `collection` field.** The target collection comes from the
-  `FROM` clause or the `MATCH` pattern inside the VelesQL string; any extra
-  field in the request is silently dropped.
+- **A top-level `MATCH` needs `collection`.** A `SELECT` reads its `FROM`, but
+  a `MATCH` pattern names no collection: pass `collection` in the `query`
+  request (or `params._collection`, which takes precedence), as on the REST
+  server's `/query`. Without either it is refused with `VELES-010`.
 - **No embedding model.** The plugin stores and searches vectors; producing
   them is your app's job (the demo uses `fastembed`).
 - **Desktop only.** The plugin ships no Android/iOS bindings, and the

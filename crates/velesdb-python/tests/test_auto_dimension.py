@@ -107,6 +107,16 @@ class TestAutoDimensionDetection:
         assert col._collection is not None
         assert col._collection._inner.dimension == 2
 
+    def test_upsert_with_a_one_shot_iterator_writes_the_whole_vector(self, temp_db):
+        """Measuring the dimension used to consume the iterator: the
+        collection was created with dimension 3, then the empty remainder
+        was written (DimensionMismatch, expected 3, got 0)."""
+        col = temp_db.create_collection("iter_test")
+        col.upsert(1, iter([0.1, 0.2, 0.3]))
+
+        assert col._collection._inner.dimension == 3
+        assert col.count() == 1
+
     def test_upsert_without_vector_raises_helpful_error(self, temp_db):
         col = temp_db.create_collection("no_vec_err")
         with pytest.raises(ValueError, match="auto-detect"):
@@ -159,3 +169,85 @@ class TestAutoDimensionDetection:
             len(col)
         with pytest.raises(RuntimeError, match="dimension"):
             1 in col
+
+
+class TestPendingDataFrameUpsert:
+    """The dimension comes from the first non-null vector; a frame with none
+    raises the documented ``ValueError`` and creates nothing."""
+
+    def test_skips_leading_null_vectors(self, temp_db):
+        pd = pytest.importorskip("pandas")
+        col = temp_db.create_collection("pending_df_nulls")
+        df = pd.DataFrame({"id": [1, 2], "vector": [None, [0.1, 0.2, 0.3]]})
+        with pytest.raises(ValueError):
+            # Row 1 carries no vector, which a vector collection refuses —
+            # but only once the dimension (3) was read from row 2.
+            col.upsert_from_dataframe(df)
+        assert col.dimension == 3
+
+    def test_writes_a_frame_whose_first_vector_is_set(self, temp_db):
+        pd = pytest.importorskip("pandas")
+        col = temp_db.create_collection("pending_df_ok")
+        df = pd.DataFrame({"id": [1, 2], "vector": [[1.0, 0.0], [0.0, 1.0]], "tag": ["a", "b"]})
+        assert col.upsert_from_dataframe(df) == 2
+        assert col.dimension == 2
+
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            {"id": [1, 2]},
+            {"id": [1, 2], "vector": [None, None]},
+            {"id": [], "vector": []},
+        ],
+        ids=["no_vector_column", "only_null_vectors", "empty_frame"],
+    )
+    def test_without_a_vector_raises_value_error(self, temp_db, frame):
+        pd = pytest.importorskip("pandas")
+        col = temp_db.create_collection("pending_df_none")
+        with pytest.raises(ValueError, match="dimension"):
+            col.upsert_from_dataframe(pd.DataFrame(frame))
+        assert "pending_df_none" not in temp_db.list_collections()
+
+    def test_refuses_the_vector_column_keyword_the_binding_does_not_take(self, temp_db):
+        pd = pytest.importorskip("pandas")
+        col = temp_db.create_collection("pending_df_kw")
+        df = pd.DataFrame({"id": [1], "emb": [[1.0, 0.0]]})
+        with pytest.raises(TypeError):
+            col.upsert_from_dataframe(df, vector_column="emb")
+        assert "pending_df_kw" not in temp_db.list_collections()
+
+
+class TestPendingNumpyBulkUpsert:
+    """``upsert_bulk_numpy`` on a pending collection validates its input before
+    creating the collection, and converts float64 as the docs promise."""
+
+    def test_float64_is_converted(self, temp_db):
+        np = pytest.importorskip("numpy")
+        col = temp_db.create_collection("pending_np_f64")
+        vectors = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+        assert col.upsert_bulk_numpy(vectors, [1, 2]) == 2
+        assert col.dimension == 3
+        assert col.get([2])[0]["vector"].tolist() == [0.0, 1.0, 0.0]
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda np: np.array([[1, 0, 0]], dtype=np.int64),
+            lambda np: [[1.0, 0.0, 0.0]],
+            lambda np: np.array([1.0, 0.0, 0.0], dtype=np.float32),
+        ],
+        ids=["int_array", "list_of_lists", "one_dimensional"],
+    )
+    def test_refused_input_creates_nothing(self, temp_db, make):
+        np = pytest.importorskip("numpy")
+        col = temp_db.create_collection("pending_np_bad")
+        with pytest.raises(TypeError):
+            col.upsert_bulk_numpy(make(np), [1])
+        assert "pending_np_bad" not in temp_db.list_collections()
+
+    def test_mismatched_ids_create_nothing(self, temp_db):
+        np = pytest.importorskip("numpy")
+        col = temp_db.create_collection("pending_np_ids")
+        with pytest.raises(ValueError, match="ids length"):
+            col.upsert_bulk_numpy(np.zeros((2, 3), dtype=np.float32), [1])
+        assert "pending_np_ids" not in temp_db.list_collections()

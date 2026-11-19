@@ -72,8 +72,8 @@ use dto::{
 };
 use errors::{invalid_input, to_js_err, CODE_INTERNAL};
 use marshal::{
-    id_to_string, parse_fragment_id_strings, parse_id, parse_id_fields, stringify_id_fields,
-    to_filters, to_fusion_options, to_links, to_metadata,
+    id_to_string, parse_id, stringify_id_fields, to_filters, to_fusion_options, to_links,
+    to_metadata,
 };
 
 use serde::Serialize;
@@ -120,9 +120,11 @@ impl WasmMemoryService {
     /// deciding which candidates deserve an explicit `links` edge. `links` is
     /// an array of `{target, relation}` edges to existing memories; `metadata`
     /// is an optional plain object; `ttlSeconds` makes the fact expire after that
-    /// many seconds. Omit it for a permanent memory, including when re-storing
-    /// a fact that already had an expiry — only what this call supplies is
-    /// applied. An explicit `0` is REFUSED, because a caller writing `0` means
+    /// many seconds (a whole number of seconds as a JS number, like every count
+    /// of this binding: a fraction, a negative, `NaN` or `Infinity` is refused
+    /// with `INVALID_INPUT` rather than wrapped). Omit it for a permanent
+    /// memory, including when re-storing a fact that already had an expiry —
+    /// only what this call supplies is applied. An explicit `0` is REFUSED, because a caller writing `0` means
     /// "expire now", not "never".
     #[wasm_bindgen(js_name = remember)]
     pub fn remember(
@@ -130,7 +132,8 @@ impl WasmMemoryService {
         fact: &str,
         links: JsValue,
         metadata: JsValue,
-        ttl_seconds: Option<u64>,
+        #[wasm_bindgen(unchecked_optional_param_type = "number | bigint | null")]
+        ttl_seconds: Option<JsValue>,
     ) -> Result<JsValue, JsValue> {
         if fact.len() > velesdb_memory::limits::MAX_FACT_BYTES {
             return Err(invalid_input(format!(
@@ -139,6 +142,8 @@ impl WasmMemoryService {
                 fact.len()
             )));
         }
+        let ttl_seconds = marshal::number_or_bigint("ttlSeconds", ttl_seconds)?;
+        let ttl_seconds = marshal::ttl_seconds(ttl_seconds).map_err(to_js_err)?;
         let links = to_links(links)?;
         let metadata = to_metadata(metadata)?;
         let outcome = self
@@ -151,13 +156,8 @@ impl WasmMemoryService {
     /// Recall up to `k` (default 10, capped) memories similar to `query`,
     /// optionally narrowed by an exact-match metadata `filter`.
     #[wasm_bindgen(js_name = recall)]
-    pub fn recall(
-        &self,
-        query: &str,
-        k: Option<usize>,
-        filter: JsValue,
-    ) -> Result<JsValue, JsValue> {
-        let k = velesdb_memory::limits::clamp_recall_limit(k.unwrap_or(10));
+    pub fn recall(&self, query: &str, k: Option<f64>, filter: JsValue) -> Result<JsValue, JsValue> {
+        let k = marshal::recall_limit(k).map_err(to_js_err)?;
         let filter = to_metadata(filter)?;
         let hits = self
             .inner
@@ -184,9 +184,9 @@ impl WasmMemoryService {
         &self,
         query: &str,
         filters: JsValue,
-        k: Option<usize>,
+        k: Option<f64>,
     ) -> Result<JsValue, JsValue> {
-        let k = velesdb_memory::limits::clamp_recall_limit(k.unwrap_or(10));
+        let k = marshal::recall_limit(k).map_err(to_js_err)?;
         let filters = to_filters(filters)?;
         let hits = self
             .inner
@@ -207,11 +207,11 @@ impl WasmMemoryService {
     pub fn recall_fused(
         &self,
         query: &str,
-        k: Option<usize>,
+        k: Option<f64>,
         filter: JsValue,
         opts: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let k = velesdb_memory::limits::clamp_recall_limit(k.unwrap_or(10));
+        let k = marshal::recall_limit(k).map_err(to_js_err)?;
         let filter = to_metadata(filter)?;
         let opts = to_fusion_options(opts)?;
         let hits = self
@@ -237,11 +237,11 @@ impl WasmMemoryService {
         &self,
         query: &str,
         date_field: &str,
-        k: Option<usize>,
+        k: Option<f64>,
         filter: JsValue,
         opts: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let k = velesdb_memory::limits::clamp_recall_limit(k.unwrap_or(10));
+        let k = marshal::recall_limit(k).map_err(to_js_err)?;
         let filter = to_metadata(filter)?;
         let opts = to_fusion_options(opts)?;
         let (hits, ctx) = self
@@ -306,12 +306,10 @@ impl WasmMemoryService {
     pub fn why(
         &self,
         decision: &str,
-        max_hops: Option<usize>,
+        max_hops: Option<f64>,
         filter: JsValue,
     ) -> Result<JsValue, JsValue> {
-        let max_hops = velesdb_memory::limits::clamp_hops(
-            max_hops.unwrap_or(velesdb_memory::limits::DEFAULT_WHY_HOPS),
-        );
+        let max_hops = marshal::why_hops(max_hops).map_err(to_js_err)?;
         let filter = to_metadata(filter)?;
         let explanation = self
             .inner
@@ -407,9 +405,8 @@ impl WasmMemoryService {
     /// within the current browser session (no persistence in WASM).
     #[wasm_bindgen(js_name = compileContext)]
     pub fn compile_context(&self, request: JsValue) -> Result<JsValue, JsValue> {
-        let mut request: Value = serde_wasm_bindgen::from_value(request)
+        let request: Value = serde_wasm_bindgen::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
-        parse_fragment_id_strings(&mut request)?;
         let request: CompileRequest = serde_json::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
         // Annotated, not inferred: this binding relays the SERVER'S own
@@ -499,14 +496,14 @@ impl WasmMemoryService {
         &self,
         request: JsValue,
         fragment_id: &str,
-        fragment_index: Option<usize>,
+        fragment_index: Option<f64>,
     ) -> Result<JsValue, JsValue> {
-        let mut request: Value = serde_wasm_bindgen::from_value(request)
+        let request: Value = serde_wasm_bindgen::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
-        parse_fragment_id_strings(&mut request)?;
         let request: CompileRequest = serde_json::from_value(request)
             .map_err(|e| invalid_input(format!("invalid compile request: {e}")))?;
         let fragment_id = parse_id(fragment_id)?;
+        let fragment_index = marshal::fragment_index(fragment_index).map_err(to_js_err)?;
         // Type annotated for the same reason as `compile_context`: the
         // relayed shape is the server's own `ContextDecision`.
         let decision: ContextDecision = self
@@ -531,12 +528,14 @@ impl WasmMemoryService {
     pub fn suggest_budget(
         &self,
         target_model: &str,
-        reserve_tokens: Option<u64>,
+        #[wasm_bindgen(unchecked_optional_param_type = "number | bigint | null")]
+        reserve_tokens: Option<JsValue>,
     ) -> Result<JsValue, JsValue> {
         // Type annotated for the same reason as `compile_context`: the
         // relayed shape is the server's own `SuggestedBudget`.
-        let budget: SuggestedBudget =
-            suggest_token_budget(target_model, reserve_tokens.unwrap_or(0));
+        let reserve_tokens = marshal::number_or_bigint("reserveTokens", reserve_tokens)?;
+        let reserve_tokens = marshal::reserve_tokens(reserve_tokens).map_err(to_js_err)?;
+        let budget: SuggestedBudget = suggest_token_budget(target_model, reserve_tokens);
         to_js(&budget)
     }
 
@@ -592,9 +591,8 @@ impl WasmMemoryService {
         session: &str,
         working: JsValue,
     ) -> Result<String, JsValue> {
-        let mut working: Value = serde_wasm_bindgen::from_value(working)
+        let working: Value = serde_wasm_bindgen::from_value(working)
             .map_err(|e| invalid_input(format!("invalid working context: {e}")))?;
-        parse_id_fields(&mut working)?;
         let working: WorkingContext = serde_json::from_value(working)
             .map_err(|e| invalid_input(format!("invalid working context: {e}")))?;
         self.inner

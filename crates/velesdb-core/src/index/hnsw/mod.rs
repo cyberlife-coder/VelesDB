@@ -36,6 +36,7 @@ pub(crate) use native_inner::auto_walks;
 /// directly (`Placed::for_test`).
 #[cfg(test)]
 pub(crate) use native_inner::Placed;
+mod overrides;
 mod params;
 pub(crate) mod persistence;
 mod sharded_mappings;
@@ -65,6 +66,7 @@ mod sidecar_removal_tests;
 // ============================================================================
 // Public API
 // ============================================================================
+pub use overrides::HnswOverrides;
 pub use params::{HnswParams, SearchQuality};
 
 /// Main HNSW index for vector search operations.

@@ -167,52 +167,30 @@ fn test_create_collection_request_with_partial_hnsw_params() {
 }
 
 #[test]
-fn test_build_hnsw_params_uses_auto_defaults() {
-    use crate::commands::build_hnsw_params;
+fn test_hnsw_overrides_pins_nothing_by_default() {
+    use crate::commands::hnsw_overrides;
 
     let json = r#"{"name": "test", "dimension": 768}"#;
     let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    let params = build_hnsw_params(&request, velesdb_core::StorageMode::Full);
-
-    let auto = velesdb_core::HnswParams::auto(768);
-    assert_eq!(params.max_connections, auto.max_connections);
-    assert_eq!(params.ef_construction, auto.ef_construction);
-    assert_eq!(params.max_elements, auto.max_elements);
-    assert!((params.alpha - auto.alpha).abs() < f32::EPSILON);
+    assert!(hnsw_overrides(&request).is_empty());
 }
 
 #[test]
-fn test_build_hnsw_params_overrides_selectively() {
-    use crate::commands::build_hnsw_params;
+fn test_hnsw_overrides_carries_each_field_it_was_given() {
+    use crate::commands::hnsw_overrides;
 
-    let json = r#"{"name": "test", "dimension": 128, "hnswM": 64, "hnswAlpha": 1.0}"#;
+    let json = r#"{"name": "test", "dimension": 128, "hnswM": 64, "hnswEfConstruction": 300,
+        "hnswMaxElements": 5000, "hnswAlpha": 1.0}"#;
     let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    let params = build_hnsw_params(&request, velesdb_core::StorageMode::SQ8);
-
-    let auto = velesdb_core::HnswParams::auto(128);
-    assert_eq!(params.max_connections, 64);
-    assert_eq!(params.ef_construction, auto.ef_construction);
-    assert_eq!(params.max_elements, auto.max_elements);
-    assert!((params.alpha - 1.0).abs() < f32::EPSILON);
-    assert_eq!(params.storage_mode, velesdb_core::StorageMode::SQ8);
-}
-
-#[test]
-fn test_has_advanced_params_false_when_all_none() {
-    use crate::commands::has_advanced_params;
-
-    let json = r#"{"name": "test", "dimension": 768}"#;
-    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    assert!(!has_advanced_params(&request));
-}
-
-#[test]
-fn test_has_advanced_params_true_when_any_set() {
-    use crate::commands::has_advanced_params;
-
-    let json = r#"{"name": "test", "dimension": 768, "pqRescoreOversampling": 4}"#;
-    let request: CreateCollectionRequest = serde_json::from_str(json).unwrap();
-    assert!(has_advanced_params(&request));
+    assert_eq!(
+        hnsw_overrides(&request),
+        velesdb_core::HnswOverrides {
+            m: Some(64),
+            ef_construction: Some(300),
+            max_elements: Some(5000),
+            alpha: Some(1.0),
+        }
+    );
 }
 
 #[test]
@@ -387,7 +365,7 @@ fn test_point_output_serialize() {
     };
     let json = serde_json::to_string(&point).unwrap();
 
-    assert!(json.contains("\"id\":1"));
+    assert!(json.contains("\"id\":\"1\""));
     assert!(json.contains("\"vector\":[0.1,0.2,0.3]"));
     assert!(json.contains("\"key\":\"value\""));
 }
@@ -512,7 +490,7 @@ fn test_hybrid_result_serialize() {
     };
     let json = serde_json::to_string(&result).unwrap();
 
-    assert!(json.contains("\"nodeId\":42"));
+    assert!(json.contains("\"nodeId\":\"42\""));
     assert!(json.contains("\"vectorScore\":0.95"));
     assert!(json.contains("\"graphScore\":0.88"));
     assert!(json.contains("\"fusedScore\":0.92"));
@@ -531,7 +509,7 @@ fn test_hybrid_result_serialize_minimal() {
     };
     let json = serde_json::to_string(&result).unwrap();
 
-    assert!(json.contains("\"nodeId\":1"));
+    assert!(json.contains("\"nodeId\":\"1\""));
     assert!(json.contains("\"fusedScore\":0.5"));
     assert!(json.contains("\"vectorScore\":null"));
 }
@@ -580,8 +558,8 @@ fn test_query_response_serialize() {
 
     assert!(json.contains("\"results\""));
     assert!(json.contains("\"timingMs\":2.5"));
-    assert!(json.contains("\"nodeId\":1"));
-    assert!(json.contains("\"nodeId\":2"));
+    assert!(json.contains("\"nodeId\":\"1\""));
+    assert!(json.contains("\"nodeId\":\"2\""));
 }
 
 #[test]
@@ -671,6 +649,44 @@ fn test_build_rs_commands_match_lib_rs_registration() {
     );
 }
 
+/// Extracts the command names the guest-js bindings invoke: every
+/// `'plugin:velesdb|<name>'` literal in `guest-js/index.ts`.
+fn commands_invoked_by_guest_js() -> Vec<String> {
+    const PREFIX: &str = "'plugin:velesdb|";
+    include_str!("../guest-js/index.ts")
+        .split(PREFIX)
+        .skip(1)
+        .filter_map(|rest| rest.split_once('\''))
+        .map(|(cmd, _)| cmd.to_string())
+        .collect()
+}
+
+/// Drift gate: the guest-js surface must mirror the `invoke_handler`
+/// registration in `lib.rs` 1:1. A registered command with no binding is
+/// reachable from the webview only through a raw, untyped `invoke`; a
+/// binding for an unregistered command fails at runtime on every call.
+#[test]
+fn test_guest_js_bindings_match_lib_rs_registration() {
+    let registered: std::collections::BTreeSet<String> =
+        commands_registered_in_lib_rs().into_iter().collect();
+    let invoked: std::collections::BTreeSet<String> =
+        commands_invoked_by_guest_js().into_iter().collect();
+    let missing: Vec<&String> = registered.difference(&invoked).collect();
+    let orphaned: Vec<&String> = invoked.difference(&registered).collect();
+    assert!(
+        missing.is_empty(),
+        "Commands registered in lib.rs invoke_handler but with no binding in \
+         guest-js/index.ts: {missing:?}.\n\
+         Add an exported function invoking 'plugin:velesdb|<name>' for each."
+    );
+    assert!(
+        orphaned.is_empty(),
+        "guest-js/index.ts invokes commands not registered in lib.rs invoke_handler: \
+         {orphaned:?}.\n\
+         Remove the stale bindings or register the commands."
+    );
+}
+
 /// Parses `permissions/default.toml` and returns the `[default]` permission
 /// strings.
 fn default_permission_strings() -> Vec<String> {
@@ -725,6 +741,30 @@ fn test_default_permissions_count_matches_commands() {
     );
 }
 
+/// Drift gate: the crate README states the command count, in full and
+/// without the `persistence` feature; both numbers must be what `lib.rs`
+/// registers. They said 69 and 67 while 70 and 68 were registered.
+#[test]
+fn test_readme_command_counts_match_lib_rs_registration() {
+    let total = commands_registered_in_lib_rs().len();
+    let registration = extract_block(include_str!("lib.rs"), "velesdb_invoke_handler!(", "));");
+    let persistence_only = extract_block(registration, "persistence_only:", "]")
+        .lines()
+        .filter(|line| line.contains("::"))
+        .count();
+    let readme = include_str!("../README.md");
+    for claim in [
+        format!("exposes {total} typed commands"),
+        format!("without it the surface is {}", total - persistence_only),
+    ] {
+        assert!(
+            readme.contains(&claim),
+            "README.md must say \"{claim}\" ({total} registered, {persistence_only} \
+             persistence-only)"
+        );
+    }
+}
+
 // ============================================================================
 // Scroll DTO Tests
 // ============================================================================
@@ -761,8 +801,8 @@ fn test_scroll_response_serialize() {
         next_cursor: Some(2),
     };
     let json = serde_json::to_string(&resp).unwrap();
-    assert!(json.contains("\"nextCursor\":2"));
-    assert!(json.contains("\"id\":1"));
+    assert!(json.contains("\"nextCursor\":\"2\""));
+    assert!(json.contains("\"id\":\"1\""));
 }
 
 // ============================================================================
@@ -844,7 +884,7 @@ fn test_episodic_result_serialize() {
         timestamp: 1_700_000_000,
     };
     let json = serde_json::to_string(&result).unwrap();
-    assert!(json.contains("\"id\":42"));
+    assert!(json.contains("\"id\":\"42\""));
     assert!(json.contains("\"content\":\"found key\""));
     assert!(json.contains("\"timestamp\":1700000000"));
 }
@@ -860,7 +900,7 @@ fn test_procedural_match_result_serialize() {
         score: 0.85,
     };
     let json = serde_json::to_string(&result).unwrap();
-    assert!(json.contains("\"id\":1"));
+    assert!(json.contains("\"id\":\"1\""));
     assert!(json.contains("\"name\":\"login\""));
     assert!(json.contains("\"steps\""));
     assert!(json.contains("\"confidence\":0.9"));
@@ -907,7 +947,7 @@ fn test_id_score_output_serialize() {
     use crate::types::IdScoreOutput;
     let out = IdScoreOutput { id: 7, score: 0.42 };
     let json = serde_json::to_string(&out).unwrap();
-    assert!(json.contains("\"id\":7"));
+    assert!(json.contains("\"id\":\"7\""));
     assert!(json.contains("\"score\":0.42"));
 }
 

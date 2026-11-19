@@ -9,6 +9,7 @@
 //! through the same read gate as `SELECT EDGES`.
 
 use serde::{Deserialize, Serialize};
+use velesdb_core::api_types::serde_id;
 
 use crate::database::DatabaseInner;
 use crate::graph_store::WasmEdge;
@@ -17,20 +18,34 @@ use crate::observer::WasmQueryOperationKind;
 /// An edge as the client sends it (`GraphEdge` of the TS SDK and REST).
 #[derive(Debug, Deserialize)]
 pub(crate) struct EdgeInput {
-    /// Explicit edge id; derived from (source, target, label) when absent.
+    /// Explicit edge id, as a decimal string or a number; derived from
+    /// (source, target, label) when absent.
+    #[serde(
+        default,
+        deserialize_with = "serde_id::deserialize_option_id_from_string_or_number"
+    )]
     pub id: Option<u64>,
+    /// Source node id, as a decimal string or a number (as on REST).
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub source: u64,
+    /// Target node id, as a decimal string or a number (as on REST).
+    #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub target: u64,
     pub label: String,
     /// Edge properties: any JSON object.
     pub properties: Option<serde_json::Value>,
 }
 
-/// An edge as the client reads it.
+/// An edge as the client reads it, as REST's `EdgeResponse`: its id and its
+/// ends are decimal strings. A derived edge id is hashed and routinely above
+/// 2^53, and a node id may be, which `JSON.parse` would round.
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct EdgeOutput {
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub id: u64,
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub source: u64,
+    #[serde(serialize_with = "serde_id::serialize_id_as_string")]
     pub target: u64,
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,6 +62,17 @@ impl From<&WasmEdge> for EdgeOutput {
             properties: edge.payload.clone(),
         }
     }
+}
+
+/// An edge id as JavaScript passes it: the decimal string every edge read
+/// answers (`getEdges`, `addEdge`, SELECT EDGES, MATCH `r.id`).
+///
+/// # Errors
+///
+/// Returns an error for anything but a decimal `u64`.
+pub(crate) fn parse_edge_id(id: &str) -> Result<u64, String> {
+    id.parse::<u64>()
+        .map_err(|_| format!("Invalid edge id '{id}': expected a decimal u64 string"))
 }
 
 impl DatabaseInner {
@@ -108,6 +134,35 @@ impl DatabaseInner {
         Ok(self
             .get_graph_store(collection)
             .is_some_and(|store| store.borrow_mut().delete_edge_by_id(id)))
+    }
+
+    /// Removes the points `ids` of `collection` and the edges they are an
+    /// end of, as core's `Collection::delete` cascades (#900); returns how
+    /// many points were there. Points and edges live in separate stores, so
+    /// a removal through the store handle alone would leave the edges behind
+    /// and reconnect a later point under the same id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the collection does not exist.
+    pub(crate) fn remove_points(&mut self, collection: &str, ids: &[u64]) -> Result<usize, String> {
+        let store = self.get_shared_store(collection)?;
+        let removed = ids
+            .iter()
+            .filter(|&&id| store.borrow_mut().remove(id))
+            .count();
+        self.drop_edges_of(collection, ids);
+        Ok(removed)
+    }
+
+    /// Drops every edge of `collection` that `ids` are an end of.
+    pub(crate) fn drop_edges_of(&self, collection: &str, ids: &[u64]) {
+        if let Some(graph) = self.get_graph_store(collection) {
+            let ids: std::collections::HashSet<u64> = ids.iter().copied().collect();
+            graph
+                .borrow_mut()
+                .delete_edges_where(|e| ids.contains(&e.source) || ids.contains(&e.target));
+        }
     }
 
     /// The number of edges in `collection`.

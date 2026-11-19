@@ -9,6 +9,17 @@ use wasm_bindgen_test::*;
 
 use velesdb_wasm::VectorStore;
 
+/// A dense search result read as JavaScript receives it: `[[id, score], …]`,
+/// each id its exact decimal string, parsed back to the `u64` it names.
+fn ranked(results: JsValue) -> Vec<(u64, f32)> {
+    let pairs: Vec<(String, f32)> =
+        serde_wasm_bindgen::from_value(results).expect("results deserialize as [id, score] pairs");
+    pairs
+        .into_iter()
+        .map(|(id, score)| (id.parse().expect("an id is a decimal string"), score))
+        .collect()
+}
+
 // =============================================================================
 // Constructor Tests
 // =============================================================================
@@ -133,8 +144,7 @@ fn test_search_cosine_similarity() {
 
     let query = vec![1.0_f32, 0.0, 0.0, 0.0];
     let results = store.search(&query, 3).expect("Search should succeed");
-    let ranked: Vec<(u64, f32)> =
-        serde_wasm_bindgen::from_value(results).expect("results deserialize as (id, score) pairs");
+    let ranked = ranked(results);
     assert_eq!(ranked.len(), 3, "all three vectors returned");
     // ID 1 (identical to query) ranks first with cosine ~1.0
     assert_eq!(ranked[0].0, 1, "highest cosine similarity must rank first");
@@ -161,8 +171,7 @@ fn test_search_top_k() {
 
     let query = vec![50.0_f32, 0.0, 0.0, 0.0];
     let results = store.search(&query, 5).expect("Search should succeed");
-    let ranked: Vec<(u64, f32)> =
-        serde_wasm_bindgen::from_value(results).expect("results deserialize");
+    let ranked = ranked(results);
     assert_eq!(ranked.len(), 5, "top-k must truncate 100 candidates to k=5");
 }
 
@@ -488,8 +497,7 @@ fn test_search_in_10k_vectors() {
 
     let query = vec![5000.0_f32; 128];
     let results = store.search(&query, 10).expect("Search should succeed");
-    let ranked: Vec<(u64, f32)> =
-        serde_wasm_bindgen::from_value(results).expect("results deserialize");
+    let ranked = ranked(results);
     // truncate(k) over 10k candidates yields exactly k.
     assert_eq!(ranked.len(), 10);
     // Every returned id must be one we inserted (0..10_000), and distinct.
@@ -532,17 +540,19 @@ fn batch_search_refuses_caller_sized_fanout() {
 }
 
 #[wasm_bindgen_test]
-fn multi_query_search_refuses_wrapping_k() {
+fn multi_query_search_takes_the_largest_k_without_wrapping() {
     // `k = usize::MAX` made the fused `k * 2` over-fetch wrap (wasm32) or
-    // panic (debug) before #2679; now refused as VELES-023.
+    // panic (debug) before #2679. Each branch now reads core's
+    // `branch_depth(k)`, which saturates, so the search answers as core's
+    // `multi_query_search` does: every point, once.
     let mut store = VectorStore::new(4, "cosine").unwrap();
     store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
 
     let queries = vec![1.0_f32, 0.0, 0.0, 0.0];
-    let err = store
+    let hits = store
         .multi_query_search(&queries, 1, usize::MAX, "rrf", None, None)
-        .unwrap_err();
-    assert_eq!(js_error_code(&err).as_deref(), Some("VELES-023"));
+        .expect("a saturated depth is no refusal");
+    assert_eq!(js_sys::Array::from(&hits).length(), 1);
 }
 
 #[wasm_bindgen_test]

@@ -19,10 +19,10 @@
     <div id="results"></div>
 
     <script type="module">
-        import init, { VectorStore, MemoryService } from './pkg/velesdb_wasm.js';
+        import init, { VectorStore, MemoryService, VelesQL } from './pkg/velesdb_wasm.js';
 
         // Expose to window for Playwright tests
-        window.VelesDB = { ready: false, VectorStore: null, MemoryService: null, error: null };
+        window.VelesDB = { ready: false, VectorStore: null, MemoryService: null, VelesQL: null, error: null };
 
         async function initWasm() {
             const status = document.getElementById('status');
@@ -32,22 +32,23 @@
                 await init();
                 window.VelesDB.VectorStore = VectorStore;
                 window.VelesDB.MemoryService = MemoryService;
+                window.VelesDB.VelesQL = VelesQL;
                 window.VelesDB.ready = true;
                 status.className = 'success';
                 status.textContent = 'WASM module loaded successfully!';
 
                 // Run basic smoke test
-                const store = VectorStore.new(4, 'cosine');
-                store.insert(1, new Float32Array([1.0, 0.0, 0.0, 0.0]));
-                store.insert(2, new Float32Array([0.9, 0.1, 0.0, 0.0]));
-                store.insert(3, new Float32Array([0.0, 1.0, 0.0, 0.0]));
+                const store = new VectorStore(4, 'cosine');
+                store.insert(1n, new Float32Array([1.0, 0.0, 0.0, 0.0]));
+                store.insert(2n, new Float32Array([0.9, 0.1, 0.0, 0.0]));
+                store.insert(3n, new Float32Array([0.0, 1.0, 0.0, 0.0]));
 
                 const searchResults = store.search(new Float32Array([1.0, 0.0, 0.0, 0.0]), 2);
                 
                 results.innerHTML = `
                     <h2>Smoke Test Results</h2>
-                    <p><strong>Store dimension:</strong> ${store.dimension()}</p>
-                    <p><strong>Store size:</strong> ${store.len()}</p>
+                    <p><strong>Store dimension:</strong> ${store.dimension}</p>
+                    <p><strong>Store size:</strong> ${store.len}</p>
                     <p><strong>Search results:</strong></p>
                     <pre>${JSON.stringify(searchResults, null, 2)}</pre>
                 `;

@@ -124,7 +124,7 @@ impl ColumnStore {
     /// Returns an error when `pk` is missing or points to a deleted row.
     pub fn set_ttl(&mut self, pk: i64, ttl_seconds: u64) -> Result<(), ColumnStoreError> {
         let row_idx = self.resolve_live_row(pk)?;
-        let expiry_ts = Self::now_timestamp() + ttl_seconds;
+        let expiry_ts = Self::now_timestamp().saturating_add(ttl_seconds);
         self.row_expiry.insert(row_idx, expiry_ts);
         Ok(())
     }
@@ -172,6 +172,9 @@ impl ColumnStore {
 
         let pk_value = Self::extract_pk_value(values, &pk_col)?;
         Self::validate_columns_exist(&self.columns, values, &pk_col)?;
+        // Checked once for both branches: `insert_row` alone would coerce a
+        // mismatched value to NULL instead of refusing it.
+        Self::validate_value_types(&self.columns, values, Some(&pk_col))?;
 
         if let Some(&row_idx) = self.primary_index.get(&pk_value) {
             self.upsert_existing_row(values, row_idx, &pk_col)
@@ -196,6 +199,8 @@ impl ColumnStore {
     }
 
     /// Handles upsert for an existing row (either deleted or live).
+    ///
+    /// Value types are validated by the caller, [`Self::upsert`].
     fn upsert_existing_row(
         &mut self,
         values: &[(&str, ColumnValue)],
@@ -203,7 +208,6 @@ impl ColumnStore {
         pk_col: &str,
     ) -> Result<UpsertResult, ColumnStoreError> {
         if self.is_row_deleted_bitmap(row_idx) {
-            Self::validate_value_types(&self.columns, values, Some(pk_col))?;
             if let Ok(idx) = u32::try_from(row_idx) {
                 self.deletion_bitmap.remove(idx);
             }
@@ -212,7 +216,6 @@ impl ColumnStore {
             return Ok(UpsertResult::Inserted);
         }
 
-        Self::validate_value_types(&self.columns, values, Some(pk_col))?;
         self.update_non_pk_values(values, row_idx, pk_col)?;
         Ok(UpsertResult::Updated)
     }

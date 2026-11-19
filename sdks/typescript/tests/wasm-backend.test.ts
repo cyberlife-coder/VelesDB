@@ -4,34 +4,35 @@
  * Tests the WasmBackend class with mock WASM module
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
 import { VelesDBError, NotFoundError, ConnectionError } from '../src/types';
 import { FakeSparseIndex } from './helpers/fake-sparse-index';
 
-// Mock WASM module with class-based VectorStore
+// Mock WASM module with class-based VectorStore. Like the binding, it takes
+// ids as BigInt and returns each point id as its decimal string.
 class MockVectorStore {
   insert = vi.fn();
   insert_with_payload = vi.fn();
   insert_batch = vi.fn();
   search = vi.fn((_q: Float32Array, _k: number) => [
-    [BigInt(1), 0.95],
-    [BigInt(2), 0.85],
+    ['1', 0.95],
+    ['2', 0.85],
   ]);
   // The binding parses the preset, then runs the same brute-force search
   // (`search_with_quality` in velesdb-wasm's `vector_store.rs`).
   search_with_quality = vi.fn((q: Float32Array, k: number) => this.search(q, k));
   search_with_filter = vi.fn(() => [
-    { id: BigInt(1), score: 0.95, payload: { title: 'filtered' } },
+    { id: '1', score: 0.95, payload: { title: 'filtered' } },
   ]);
   get = vi.fn((id: bigint) => ({
-    id,
+    id: String(id),
     vector: [1, 0, 0, 0],
     payload: { title: 'Stored' },
   }));
   // velesdb-wasm 8.0.0's text_search ranks nothing: `score` is null.
-  text_search = vi.fn(() => [{ id: 1, score: null, payload: { title: 'Text' } }]);
-  hybrid_search = vi.fn(() => [{ id: BigInt(1), score: 0.91, payload: { title: 'Hybrid' } }]);
+  text_search = vi.fn(() => [{ id: '1', score: null, payload: { title: 'Text' } }]);
+  hybrid_search = vi.fn(() => [{ id: '1', score: 0.91, payload: { title: 'Hybrid' } }]);
   query = vi.fn(() => [
     { id: 1, a: 1 },
   ]);
@@ -44,7 +45,7 @@ class MockVectorStore {
       _strategy: string,
       _rrfK: number,
       _weights: Float32Array | null
-    ) => [[BigInt(1), 0.95]]
+    ) => [['1', 0.95]]
   );
   remove = vi.fn((_id: bigint) => true);
   clear = vi.fn();
@@ -58,6 +59,7 @@ class MockVectorStore {
   sparse_insert = vi.fn((id: bigint, indices: Uint32Array, values: Float32Array) =>
     this.sparse.insert(id, indices, values)
   );
+  sparse_remove = vi.fn((id: bigint) => this.sparse.remove(id));
   sparse_search = vi.fn((indices: Uint32Array, values: Float32Array, k: number) =>
     this.sparse.search(indices, values, k)
   );
@@ -74,30 +76,6 @@ class MockVectorStore {
 
   static new_metadata_only(): MockVectorStore {
     return new MockVectorStore(0, 'cosine');
-  }
-}
-
-/**
- * A store whose `sparse_remove` deletes postings, as velesdb-wasm does after
- * 8.0.0 (#2287): the SDK then removes retired ids outright instead of
- * tombstoning them. `MockVectorStore` itself models 8.0.0 — the published
- * floor the SDK's dependency range still admits — which has no such method.
- */
-class MockVectorStoreWithSparseRemove extends MockVectorStore {
-  sparse_remove = vi.fn((id: bigint) => this.sparse.remove(id));
-
-  static override new_with_mode(
-    dimension: number,
-    metric: string,
-    mode: string
-  ): MockVectorStoreWithSparseRemove {
-    const store = new MockVectorStoreWithSparseRemove(dimension, metric);
-    store.storage_mode = mode;
-    return store;
-  }
-
-  static override new_metadata_only(): MockVectorStoreWithSparseRemove {
-    return new MockVectorStoreWithSparseRemove(0, 'cosine');
   }
 }
 
@@ -281,6 +259,32 @@ describe('WasmBackend', () => {
       expect(doc?.payload).toEqual({ title: 'Stored' });
     });
 
+    // An upsert replaces the whole point, as on core: a version without a
+    // payload leaves none behind for a search or a get to return.
+    it('drops the payload a re-upsert leaves out', async () => {
+      await backend.upsert('vectors', { id: '1', vector: [1, 0, 0, 0], payload: { title: 'Old' } });
+      await backend.upsert('vectors', { id: '1', vector: [1, 0, 0, 0] });
+      const store = storeOf(backend, 'vectors');
+      // The binding's own record: `insert` stored no payload.
+      store.get.mockImplementation((id: bigint) => ({
+        id: String(id), vector: [1, 0, 0, 0], payload: null,
+      }) as never);
+
+      const [hit] = await backend.search('vectors', [1, 0, 0, 0], { k: 1 });
+      expect(hit).toEqual({ id: '1', score: 0.95 });
+      expect((await backend.get('vectors', '1'))?.payload).toBeUndefined();
+    });
+
+    it('upsertBatch drops the payload a re-upsert leaves out', async () => {
+      await backend.upsertBatch('vectors', [
+        { id: '1', vector: [1, 0, 0, 0], payload: { title: 'Old' } },
+      ]);
+      await backend.upsertBatch('vectors', [{ id: '1', vector: [1, 0, 0, 0] }]);
+
+      const [hit] = await backend.search('vectors', [1, 0, 0, 0], { k: 1 });
+      expect(hit).toEqual({ id: '1', score: 0.95 });
+    });
+
     it('should throw on dimension mismatch', async () => {
       await expect(backend.upsert('vectors', {
         id: '1',
@@ -347,6 +351,23 @@ describe('WasmBackend', () => {
       ]);
     });
 
+    it('upsertBatch writes a repeated id in input order, so the last version wins as in core', async () => {
+      const { collections } = backend as unknown as { collections: Map<string, { store: MockVectorStore }> };
+      const store = collections.get('vectors')!.store;
+      const P = { v: 2 };
+
+      await backend.upsertBatch('vectors', [
+        { id: 1, vector: [1, 0, 0, 0] },
+        { id: 1, vector: [0, 1, 0, 0], payload: P },
+      ]);
+      // The payload-less first version must reach the store BEFORE the
+      // second; written last, it would replace the vector P came with.
+      expect(store.insert_batch).toHaveBeenCalledWith([[1n, [1, 0, 0, 0]]]);
+      expect(store.insert_with_payload).toHaveBeenCalledWith(1n, new Float32Array([0, 1, 0, 0]), P);
+      expect(store.insert_batch.mock.invocationCallOrder[0]!)
+        .toBeLessThan(store.insert_with_payload.mock.invocationCallOrder[0]!);
+    });
+
     it.each([
       ['first', [{ id: '1', vector: [1.0, 0.0] }, { id: '2', vector: [0.0, 1.0, 0.0, 0.0] }], '1'],
       ['last', [{ id: '1', vector: [1.0, 0.0, 0.0, 0.0] }, { id: '2', vector: [0.0, 1.0] }], '2'],
@@ -377,6 +398,48 @@ describe('WasmBackend', () => {
     it('should delete a vector', async () => {
       const deleted = await backend.delete('vectors', '1');
       expect(deleted).toBe(true);
+    });
+
+    it('addresses a decimal id past 2^53 exactly on upsert, get and delete', async () => {
+      // A point id is a u64; the binding returns it as its decimal string,
+      // so the backend no longer refuses one past Number.MAX_SAFE_INTEGER.
+      const big = '9007199254740993';
+      await backend.upsert('vectors', { id: big, vector: [1.0, 0.0, 0.0, 0.0], payload: { title: 'Big' } });
+      const store = (backend as any).collections.get('vectors').store as MockVectorStore;
+      expect(store.insert_with_payload).toHaveBeenCalledWith(9007199254740993n, expect.any(Float32Array), { title: 'Big' });
+
+      expect(await backend.get('vectors', big)).toMatchObject({ id: big });
+      expect(store.get).toHaveBeenLastCalledWith(9007199254740993n);
+
+      expect(await backend.delete('vectors', big)).toBe(true);
+      expect(store.remove).toHaveBeenLastCalledWith(9007199254740993n);
+    });
+
+    it('refuses a decimal id past u64::MAX', async () => {
+      await expect(
+        backend.upsert('vectors', { id: '18446744073709551616', vector: [1.0, 0.0, 0.0, 0.0] })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    });
+
+    it('refuses an out-of-range numeric id on upsert, upsertBatch, get and delete before touching the store', async () => {
+      const { collections } = backend as unknown as { collections: Map<string, { store: MockVectorStore }> };
+      const store = collections.get('vectors')!.store;
+      for (const bad of [-1, 2 ** 64, 1.5]) {
+        const vector = [1.0, 0.0, 0.0, 0.0];
+        await expect(backend.upsert('vectors', { id: bad, vector }), String(bad))
+          .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(
+          backend.upsertBatch('vectors', [{ id: 1, vector }, { id: bad, vector, payload: { p: 1 } }]),
+          String(bad)
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(backend.get('vectors', bad), String(bad)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(backend.delete('vectors', bad), String(bad)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      }
+      expect(store.insert).not.toHaveBeenCalled();
+      expect(store.insert_with_payload).not.toHaveBeenCalled();
+      expect(store.insert_batch).not.toHaveBeenCalled();
+      expect(store.get).not.toHaveBeenCalled();
+      expect(store.remove).not.toHaveBeenCalled();
     });
 
     it('should not use partial numeric parsing for mixed string IDs', async () => {
@@ -519,31 +582,6 @@ function expectRefusal(outcome: unknown, capability: string): void {
   expect(err.message).toContain(capability);
 }
 
-function sparseIdsOf(
-  backend: WasmBackend,
-  collection: string
-): {
-  store: MockVectorStore | null;
-  dead: number;
-  byId: Map<bigint, unknown>;
-  vectors: Map<bigint, unknown>;
-} {
-  const internals = backend as unknown as {
-    collections: Map<
-      string,
-      {
-        sparseIds: {
-          store: MockVectorStore | null;
-          dead: number;
-          byId: Map<bigint, unknown>;
-          vectors: Map<bigint, unknown>;
-        };
-      }
-    >;
-  };
-  return internals.collections.get(collection)!.sparseIds;
-}
-
 function storeOf(backend: WasmBackend, collection: string): MockVectorStore {
   const internals = backend as unknown as {
     collections: Map<string, { store: MockVectorStore }>;
@@ -551,7 +589,7 @@ function storeOf(backend: WasmBackend, collection: string): MockVectorStore {
   return internals.collections.get(collection)!.store;
 }
 
-describe('WasmBackend — upsert indexes sparse vectors; sparse search sees live ones only (#2095)', () => {
+describe('WasmBackend — sparse vectors live in the collection store, under the point id (#2095)', () => {
   let backend: WasmBackend;
   const hitIds = async (sparseVector: Record<number, number>, k = 10) =>
     (await backend.search('s', [], { k, sparseVector })).map((r) => r.id);
@@ -561,6 +599,17 @@ describe('WasmBackend — upsert indexes sparse vectors; sparse search sees live
     backend = new WasmBackend();
     await backend.init();
     await backend.createCollection('s', { dimension: 0 });
+  });
+
+  // VelesQL's SPARSE_NEAR runs over the collection's own store: a sparse
+  // vector kept anywhere else is one it cannot see.
+  it("indexes the sparse vector in the collection's own store, under the point's id", async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
+
+    const store = storeOf(backend, 's');
+    expect(store.sparse_insert).toHaveBeenCalledTimes(1);
+    expect(store.sparse_insert.mock.calls[0]![0]).toBe(1n);
+    expect(store.sparse.size).toBe(1);
   });
 
   it('finds a point by the sparse vector it was upserted with', async () => {
@@ -577,12 +626,47 @@ describe('WasmBackend — upsert indexes sparse vectors; sparse search sees live
     ]);
 
     expect(await hitIds({ 7: 1 })).toEqual(['1', '2']);
+    expect(storeOf(backend, 's').sparse.size).toBe(2);
   });
 
-  it('never returns a deleted point, though the binding keeps its postings', async () => {
+  // REST refuses these keys (core's `SparseVectorInput::convert_dict`); a
+  // Uint32Array would coerce them to another term instead: 'foo' -> 0,
+  // '-1' -> 4294967295, '4294967296' -> 0, '1.5' -> 1.
+  const badKeys = ['foo', '-1', '4294967296', '1.5', '', ' 1'];
+
+  it('refuses a sparse key that is not a u32 term id on upsert and upsertBatch, writing nothing', async () => {
+    const store = storeOf(backend, 's');
+    for (const key of badKeys) {
+      const sparseVector = { [key]: 1 } as unknown as Record<number, number>;
+      await expect(backend.upsert('s', { id: 1, vector: [], sparseVector }), key)
+        .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        backend.upsertBatch('s', [{ id: 2, vector: [] }, { id: 3, vector: [], sparseVector }]),
+        key
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(store.sparse_insert).not.toHaveBeenCalled();
+    expect(store.insert_batch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a sparse query key that is not a u32 term id', async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 0: 1, 4294967295: 1 } });
+    for (const key of badKeys) {
+      const sparseVector = { [key]: 1 } as unknown as Record<number, number>;
+      await expect(backend.search('s', [], { k: 5, sparseVector }), key)
+        .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    // The bounds themselves are term ids: 0 and u32::MAX.
+    expect(await hitIds({ 4294967295: 1 })).toEqual(['1']);
+  });
+
+  it("a delete removes the point's sparse postings", async () => {
     await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
     await backend.delete('s', 1);
 
+    const store = storeOf(backend, 's');
+    expect(store.sparse_remove).toHaveBeenLastCalledWith(1n);
+    expect(store.sparse.size).toBe(0);
     expect(await hitIds({ 7: 1 })).toEqual([]);
   });
 
@@ -592,6 +676,7 @@ describe('WasmBackend — upsert indexes sparse vectors; sparse search sees live
     await backend.bulkDelete('s', [1]);
 
     expect(await hitIds({ 7: 1 })).toEqual(['2']);
+    expect(storeOf(backend, 's').sparse.size).toBe(1);
   });
 
   it('drops the terms a re-upsert leaves out', async () => {
@@ -600,172 +685,94 @@ describe('WasmBackend — upsert indexes sparse vectors; sparse search sees live
 
     expect(await hitIds({ 7: 1 })).toEqual([]);
     expect(await hitIds({ 9: 1 })).toEqual(['1']);
+    expect(storeOf(backend, 's').sparse.size).toBe(1);
   });
 
-  it('keeps the sparse vector when a re-upsert brings none, as core does', async () => {
+  // Core replaces the whole point on upsert: a version without a sparse
+  // vector drops the one it had (`dropped_sparse_entries`, #2834).
+  it('drops the sparse vector when a re-upsert brings none, as core does', async () => {
     await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
     await backend.upsert('s', { id: 1, vector: [], payload: { v: 2 } });
 
-    expect(await hitIds({ 7: 1 })).toEqual(['1']);
+    expect(await hitIds({ 7: 1 })).toEqual([]);
+    expect(storeOf(backend, 's').sparse.size).toBe(0);
   });
 
-  it('caps a sparse search at k when retired ids rank below live ones', async () => {
+  it('upsertBatch drops the sparse vector a re-upsert leaves out', async () => {
+    await backend.upsertBatch('s', [
+      { id: 1, vector: [], sparseVector: { 7: 1 } },
+      { id: 2, vector: [], sparseVector: { 7: 0.5 } },
+    ]);
+    await backend.upsertBatch('s', [{ id: 1, vector: [] }]);
+
+    expect(await hitIds({ 7: 1 })).toEqual(['2']);
+  });
+
+  it('refuses a non-finite sparse vector before writing the point', async () => {
+    await backend.upsert('s', { id: 1, vector: [], payload: { v: 1 }, sparseVector: { 7: 1 } });
+    const refused = await backend
+      .upsert('s', { id: 1, vector: [], payload: { v: 2 }, sparseVector: { 7: Number.NaN } })
+      .catch((err: unknown) => err);
+
+    expect(String(refused)).toContain('not finite');
+    expect(storeOf(backend, 's').insert_with_payload).toHaveBeenCalledTimes(1);
+    const [hit] = await backend.search('s', [], { sparseVector: { 7: 1 } });
+    expect(hit).toMatchObject({ id: '1', score: 1, payload: { v: 1 } });
+  });
+
+  it('upsertBatch refuses a non-finite sparse vector before writing any point', async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
+    const refused = await backend
+      .upsertBatch('s', [
+        { id: 1, vector: [], payload: { v: 1 }, sparseVector: { 9: 1 } },
+        { id: 2, vector: [], sparseVector: { 7: Number.POSITIVE_INFINITY } },
+      ])
+      .catch((err: unknown) => err);
+
+    expect(String(refused)).toContain('not finite');
+    expect(storeOf(backend, 's').insert_with_payload).not.toHaveBeenCalled();
+    expect(storeOf(backend, 's').insert_batch).not.toHaveBeenCalled();
+    // Point 1 keeps the sparse vector it had; neither batch vector landed.
+    expect(await hitIds({ 7: 1 })).toEqual(['1']);
+    expect(await hitIds({ 9: 1 })).toEqual([]);
+  });
+
+  it('frees the scratch store the binding validates sparse vectors in', async () => {
+    const scratch: MockVectorStore[] = [];
+    const spy = vi.spyOn(MockVectorStore, 'new_metadata_only').mockImplementation(() => {
+      const store = new MockVectorStore(0, 'cosine');
+      scratch.push(store);
+      return store;
+    });
+    try {
+      await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
+      await backend.upsert('s', { id: 2, vector: [] });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(scratch).toHaveLength(1);
+    expect(scratch[0]!.free).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps a sparse search at k', async () => {
     await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
     await backend.upsert('s', { id: 2, vector: [], sparseVector: { 7: 3 } });
     await backend.upsert('s', { id: 3, vector: [], sparseVector: { 7: 2 } });
-    await backend.delete('s', 1);
 
     expect(await hitIds({ 7: 1 }, 1)).toEqual(['2']);
   });
 
-  it('keeps retired sparse ids no more numerous than live ones', async () => {
+  it('deleteCollection and close free the collection store', async () => {
     await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
-    await backend.upsert('s', { id: 2, vector: [], sparseVector: { 8: 1 } });
-    for (let i = 0; i < 50; i += 1) {
-      await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1, [100 + i]: 1 } });
-      const ids = sparseIdsOf(backend, 's');
-      expect(ids.dead).toBeLessThanOrEqual(ids.byId.size);
-      expect(ids.vectors.size).toBe(ids.byId.size);
-    }
-  });
-
-  it("rebuilds without the retired vectors, so none can take a live point's place", async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 5 } });
-    await backend.upsert('s', { id: 2, vector: [], sparseVector: { 7: 1 } });
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 8: 1 } });
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 9: 1 } });
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 10: 1 } });
-
-    expect(sparseIdsOf(backend, 's').dead).toBe(0);
-    expect(await hitIds({ 7: 1 }, 1)).toEqual(['2']);
-  });
-
-  it('never returns a replaced or deleted point, before or after the sparse index is rebuilt', async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
-    await backend.upsert('s', { id: 2, vector: [], sparseVector: { 7: 0.5 } });
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 9: 1 } });
-    expect(await hitIds({ 7: 1 })).toEqual(['2']);
-    expect(await hitIds({ 9: 1 })).toEqual(['1']);
-
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 11: 1 } });
-    await backend.delete('s', 2);
-
-    expect(sparseIdsOf(backend, 's').dead).toBe(0);
-    expect(await hitIds({ 7: 1 })).toEqual([]);
-    expect(await hitIds({ 9: 1 })).toEqual([]);
-    const [hit] = await backend.search('s', [], { sparseVector: { 11: 2 } });
-    expect(hit).toMatchObject({ id: '1', score: 2 });
-  });
-
-  it('frees the sparse store a rebuild replaces', async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
-    await backend.upsert('s', { id: 2, vector: [], sparseVector: { 8: 1 } });
-    const replaced = sparseIdsOf(backend, 's').store!;
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 9: 1 } });
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 10: 1 } });
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 11: 1 } });
-
-    const current = sparseIdsOf(backend, 's').store!;
-    expect(current).not.toBe(replaced);
-    expect(replaced.free).toHaveBeenCalledTimes(1);
-    expect(current.free).not.toHaveBeenCalled();
-  });
-
-  it('frees the sparse store when a rebuild leaves no live sparse vector', async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
-    const replaced = sparseIdsOf(backend, 's').store!;
-    await backend.delete('s', 1);
-
-    expect(sparseIdsOf(backend, 's').store).toBeNull();
-    expect(replaced.free).toHaveBeenCalledTimes(1);
-  });
-
-  it('deleteCollection frees the vector store and the sparse store', async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
-    const vectors = storeOf(backend, 's');
-    const sparse = sparseIdsOf(backend, 's').store!;
+    const deleted = storeOf(backend, 's');
     await backend.deleteCollection('s');
+    expect(deleted.free).toHaveBeenCalledTimes(1);
 
-    expect(vectors.free).toHaveBeenCalledTimes(1);
-    expect(sparse.free).toHaveBeenCalledTimes(1);
-  });
-
-  it('close frees the vector store and the sparse store', async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
-    const vectors = storeOf(backend, 's');
-    const sparse = sparseIdsOf(backend, 's').store!;
-    await backend.close();
-
-    expect(vectors.free).toHaveBeenCalledTimes(1);
-    expect(sparse.free).toHaveBeenCalledTimes(1);
-  });
-
-  it('still returns k live points when dead postings outrank them', async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 2 } });
-    await backend.upsert('s', { id: 2, vector: [], sparseVector: { 7: 1 } });
-    await backend.delete('s', 1);
-
-    expect(await hitIds({ 7: 1 }, 1)).toEqual(['2']);
-  });
-});
-
-describe('WasmBackend — a sparse_remove-capable binding deletes retired ids (#2287)', () => {
-  let backend: WasmBackend;
-  const hitIds = async (sparseVector: Record<number, number>, k = 10) =>
-    (await backend.search('s', [], { k, sparseVector })).map((r) => r.id);
-  const sparseStore = () =>
-    sparseIdsOf(backend, 's').store as MockVectorStoreWithSparseRemove;
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    mockWasmModule.VectorStore = MockVectorStoreWithSparseRemove;
-    backend = new WasmBackend();
-    await backend.init();
     await backend.createCollection('s', { dimension: 0 });
-  });
-
-  afterEach(() => {
-    mockWasmModule.VectorStore = MockVectorStore;
-  });
-
-  it("removes a deleted point's postings instead of tombstoning them", async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
-    await backend.delete('s', 1);
-
-    const store = sparseStore();
-    expect(store.sparse_remove).toHaveBeenCalledTimes(1);
-    expect(store.sparse.size).toBe(0);
-    expect(sparseIdsOf(backend, 's').dead).toBe(0);
-    expect(await hitIds({ 7: 1 })).toEqual([]);
-  });
-
-  it('keeps the sparse entry count bounded by the live points', async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
-    await backend.upsert('s', { id: 2, vector: [], sparseVector: { 8: 1 } });
-    for (let i = 0; i < 50; i += 1) {
-      await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1, [100 + i]: 1 } });
-    }
-
-    const store = sparseStore();
-    expect(store.sparse_remove).toHaveBeenCalledTimes(50);
-    expect(sparseIdsOf(backend, 's').dead).toBe(0);
-    // Point 1's latest vector holds 2 terms, point 2's holds 1: the index
-    // holds exactly the live postings, none of the 50 superseded vectors'.
-    expect(store.sparse.size).toBe(3);
-    expect(await hitIds({ 7: 1 })).toEqual(['1']);
-  });
-
-  it('never rebuilds nor frees the sparse store', async () => {
-    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
-    const store = sparseIdsOf(backend, 's').store!;
-    for (let i = 0; i < 10; i += 1) {
-      await backend.upsert('s', { id: 1, vector: [], sparseVector: { 9: 1 } });
-    }
-
-    expect(sparseIdsOf(backend, 's').store).toBe(store);
-    expect(store.free).not.toHaveBeenCalled();
-    expect(await hitIds({ 7: 1 })).toEqual([]);
-    expect(await hitIds({ 9: 1 })).toEqual(['1']);
+    const closed = storeOf(backend, 's');
+    await backend.close();
+    expect(closed.free).toHaveBeenCalledTimes(1);
   });
 });
 

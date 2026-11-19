@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
 
+/**
+ * VectorStore E2E Tests for WASM SDK: `new VectorStore(dimension, metric)`,
+ * `BigInt` ids in, `[[id, score], …]` out with each id a decimal string
+ * (docs/guides/WASM_API.md).
+ */
 test.describe('VelesDB WASM VectorStore', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
@@ -10,11 +15,11 @@ test.describe('VelesDB WASM VectorStore', () => {
   test('should create VectorStore with cosine metric', async ({ page }) => {
     const result = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
-      const store = VectorStore.new(128, 'cosine');
+      const store = new VectorStore(128, 'cosine');
       return {
-        dimension: store.dimension(),
-        len: store.len(),
-        isEmpty: store.is_empty(),
+        dimension: store.dimension,
+        len: store.len,
+        isEmpty: store.is_empty,
       };
     });
 
@@ -26,8 +31,8 @@ test.describe('VelesDB WASM VectorStore', () => {
   test('should create VectorStore with euclidean metric', async ({ page }) => {
     const result = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
-      const store = VectorStore.new(768, 'euclidean');
-      return { dimension: store.dimension() };
+      const store = new VectorStore(768, 'euclidean');
+      return { dimension: store.dimension };
     });
 
     expect(result.dimension).toBe(768);
@@ -36,41 +41,41 @@ test.describe('VelesDB WASM VectorStore', () => {
   test('should insert and search vectors', async ({ page }) => {
     const results = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
-      const store = VectorStore.new(4, 'cosine');
+      const store = new VectorStore(4, 'cosine');
 
       // Insert vectors
-      store.insert(1, new Float32Array([1.0, 0.0, 0.0, 0.0]));
-      store.insert(2, new Float32Array([0.9, 0.1, 0.0, 0.0]));
-      store.insert(3, new Float32Array([0.5, 0.5, 0.0, 0.0]));
-      store.insert(4, new Float32Array([0.0, 1.0, 0.0, 0.0]));
+      store.insert(1n, new Float32Array([1.0, 0.0, 0.0, 0.0]));
+      store.insert(2n, new Float32Array([0.9, 0.1, 0.0, 0.0]));
+      store.insert(3n, new Float32Array([0.5, 0.5, 0.0, 0.0]));
+      store.insert(4n, new Float32Array([0.0, 1.0, 0.0, 0.0]));
 
       // Search
       const query = new Float32Array([1.0, 0.0, 0.0, 0.0]);
       const searchResults = store.search(query, 3);
 
       return {
-        storeLen: store.len(),
+        storeLen: store.len,
         results: searchResults,
       };
     });
 
     expect(results.storeLen).toBe(4);
     expect(results.results).toHaveLength(3);
-    // First result should be exact match (id=1)
-    expect(results.results[0].id).toBe(1);
+    // First result should be the exact match: ids come back as decimal strings
+    expect(results.results[0][0]).toBe('1');
   });
 
   test('should handle batch insert', async ({ page }) => {
     const result = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
-      const store = VectorStore.new(4, 'cosine');
+      const store = new VectorStore(4, 'cosine');
 
       // Batch insert 100 vectors
       for (let i = 0; i < 100; i++) {
-        store.insert(i, new Float32Array([i / 100, 0.0, 0.0, 0.0]));
+        store.insert(BigInt(i), new Float32Array([i / 100, 0.0, 0.0, 0.0]));
       }
 
-      return { len: store.len() };
+      return { len: store.len };
     });
 
     expect(result.len).toBe(100);
@@ -80,10 +85,11 @@ test.describe('VelesDB WASM VectorStore', () => {
     const error = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
       try {
-        VectorStore.new(128, 'invalid_metric');
+        new VectorStore(128, 'invalid_metric');
         return null;
       } catch (e) {
-        return e.message;
+        // The constructor rejects with core's message, thrown as a string.
+        return typeof e === 'string' ? e : e.message;
       }
     });
 
@@ -94,9 +100,9 @@ test.describe('VelesDB WASM VectorStore', () => {
   test('should reject dimension mismatch on insert', async ({ page }) => {
     const error = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
-      const store = VectorStore.new(4, 'cosine');
+      const store = new VectorStore(4, 'cosine');
       try {
-        store.insert(1, new Float32Array([1.0, 0.0, 0.0])); // Wrong dimension
+        store.insert(1n, new Float32Array([1.0, 0.0, 0.0])); // Wrong dimension
         return null;
       } catch (e) {
         return e.message;
@@ -109,14 +115,14 @@ test.describe('VelesDB WASM VectorStore', () => {
   test('should remove vectors', async ({ page }) => {
     const result = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
-      const store = VectorStore.new(4, 'cosine');
+      const store = new VectorStore(4, 'cosine');
 
-      store.insert(1, new Float32Array([1.0, 0.0, 0.0, 0.0]));
-      store.insert(2, new Float32Array([0.0, 1.0, 0.0, 0.0]));
+      store.insert(1n, new Float32Array([1.0, 0.0, 0.0, 0.0]));
+      store.insert(2n, new Float32Array([0.0, 1.0, 0.0, 0.0]));
 
-      const lenBefore = store.len();
-      store.remove(1);
-      const lenAfter = store.len();
+      const lenBefore = store.len;
+      store.remove(1n);
+      const lenAfter = store.len;
 
       return { lenBefore, lenAfter };
     });
@@ -128,15 +134,15 @@ test.describe('VelesDB WASM VectorStore', () => {
   test('should clear all vectors', async ({ page }) => {
     const result = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
-      const store = VectorStore.new(4, 'cosine');
+      const store = new VectorStore(4, 'cosine');
 
       for (let i = 0; i < 10; i++) {
-        store.insert(i, new Float32Array([i, 0, 0, 0]));
+        store.insert(BigInt(i), new Float32Array([i, 0, 0, 0]));
       }
 
-      const lenBefore = store.len();
+      const lenBefore = store.len;
       store.clear();
-      const lenAfter = store.len();
+      const lenAfter = store.len;
 
       return { lenBefore, lenAfter };
     });
@@ -148,37 +154,37 @@ test.describe('VelesDB WASM VectorStore', () => {
   test('should support dot product metric', async ({ page }) => {
     const results = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
-      const store = VectorStore.new(4, 'dot');
+      const store = new VectorStore(4, 'dot');
 
-      store.insert(1, new Float32Array([1.0, 0.0, 0.0, 0.0]));
-      store.insert(2, new Float32Array([0.5, 0.5, 0.0, 0.0]));
+      store.insert(1n, new Float32Array([1.0, 0.0, 0.0, 0.0]));
+      store.insert(2n, new Float32Array([0.5, 0.5, 0.0, 0.0]));
 
       return store.search(new Float32Array([1.0, 0.0, 0.0, 0.0]), 2);
     });
 
     expect(results).toHaveLength(2);
     // [1,0,0,0]·query = 1.0 > [0.5,0.5,0,0]·query = 0.5 -> id=1 ranks first
-    expect(results[0].id).toBe(1);
-    expect(results[1].id).toBe(2);
+    expect(results[0][0]).toBe('1');
+    expect(results[1][0]).toBe('2');
     // dot product is a similarity metric: scores must be sorted descending
-    expect(results[0].score).toBeGreaterThan(results[1].score);
+    expect(results[0][1]).toBeGreaterThan(results[1][1]);
   });
 
   test('should handle large vectors (1536 dim - OpenAI embeddings)', async ({ page }) => {
     const result = await page.evaluate(() => {
       const { VectorStore } = window['VelesDB'];
-      const store = VectorStore.new(1536, 'cosine');
+      const store = new VectorStore(1536, 'cosine');
 
       // Create random 1536-dim vectors
       const vec1 = new Float32Array(1536).fill(0.1);
       const vec2 = new Float32Array(1536).fill(0.2);
 
-      store.insert(1, vec1);
-      store.insert(2, vec2);
+      store.insert(1n, vec1);
+      store.insert(2n, vec2);
 
       return {
-        dimension: store.dimension(),
-        len: store.len(),
+        dimension: store.dimension,
+        len: store.len,
       };
     });
 

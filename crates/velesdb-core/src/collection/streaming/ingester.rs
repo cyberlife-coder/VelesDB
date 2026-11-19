@@ -126,6 +126,13 @@ pub enum BackpressureError {
     /// and the collection may need to be reconfigured.
     #[error("streaming drain task has exited; the ingestion pipeline is dead")]
     DrainTaskDead,
+
+    /// A point fails the checks an upsert runs (dimension, finite components,
+    /// ingest limits); nothing of the call was queued.
+    /// [`VectorCollection::validate_points_for_upsert`](crate::collection::VectorCollection::validate_points_for_upsert)
+    /// names the refusal with core's code.
+    #[error("invalid point: it fails the checks an upsert runs; nothing was queued")]
+    InvalidPoint,
 }
 
 /// Streaming ingestion handle for a single collection.

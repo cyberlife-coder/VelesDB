@@ -245,6 +245,8 @@ pub use model::{
 };
 #[cfg(feature = "embedder-http")]
 pub use remote_endpoint::embedder_env_endpoint;
+#[cfg(feature = "extractor-http")]
+pub use remote_endpoint::extractor_env_endpoint;
 #[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub use remote_endpoint::{role_auth, RemoteEndpoint};
 pub use rerank::{DynReranker, RerankError, Reranker};

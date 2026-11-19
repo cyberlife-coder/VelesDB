@@ -12,6 +12,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
+import { InvalidCollectionNameError } from '../src/errors';
 import { VelesDBError } from '../src/types';
 
 const calls: string[] = [];
@@ -20,6 +21,8 @@ class MockVectorStore {
   insert = vi.fn();
   insert_with_payload = vi.fn();
   query = vi.fn(() => [{ id: 1, score: 0.9 }]);
+  sparse_insert = vi.fn();
+  sparse_remove = vi.fn(() => false);
   free = vi.fn(() => calls.push('store.free'));
   len = 0;
   is_empty = true;
@@ -75,7 +78,10 @@ class MockWasmDatabase {
  */
 const PARSED: Record<string, { isSelect: boolean; isAggregation?: boolean; collectionName?: string }> = {
   "SELECT * FROM docs WHERE category = 'tech' LIMIT 10": { isSelect: true, isAggregation: false, collectionName: 'docs' },
+  'SELECT * FROM docs WHERE vector NEAR $v LIMIT 3': { isSelect: true, isAggregation: false, collectionName: 'docs' },
   'SELECT * FROM docs WHERE vector NEAR $v AND category = $c LIMIT 5': { isSelect: true, isAggregation: false, collectionName: 'docs' },
+"SELECT * FROM docs WHERE vector SPARSE_NEAR {7: 1.0} LIMIT 5": { isSelect: true, isAggregation: false, collectionName: 'docs' },
+  'SELECT * FROM docs WHERE vector NEAR $v AND vector SPARSE_NEAR $s LIMIT 5': { isSelect: true, isAggregation: false, collectionName: 'docs' },
   "SELECT * FROM other WHERE category = 'x'": { isSelect: true, isAggregation: false, collectionName: 'other' },
   "SELECT * FROM docs WHERE title = 'Having fun'": { isSelect: true, isAggregation: false, collectionName: 'docs' },
   'SELECT "from archive" FROM docs': { isSelect: true, isAggregation: false, collectionName: 'docs' },
@@ -134,6 +140,45 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
     expect(db.attached.has('docs')).toBe(true);
   });
 
+  it('when the name is not a valid collection name, then it is refused with InvalidCollectionNameError before any store is built', async () => {
+    const backend = new WasmBackend();
+    await backend.init();
+    const build = vi.spyOn(MockVectorStore, 'new_with_mode');
+
+    await expect(backend.createCollection('bad.name', { dimension: 2 }))
+      .rejects.toBeInstanceOf(InvalidCollectionNameError);
+
+    expect(build).not.toHaveBeenCalled();
+    expect(MockWasmDatabase.last!.attachStore).not.toHaveBeenCalled();
+    build.mockRestore();
+  });
+
+  it('when the binding refuses to attach the store, then the store is freed and the refusal keeps its VELES code', async () => {
+    const backend = new WasmBackend();
+    await backend.init();
+    // velesdb-wasm throws an `Error` whose `code` property is core's code.
+    const refusal = Object.assign(new Error('[VELES-034] Invalid collection name'), { code: 'VELES-034' });
+    MockWasmDatabase.last!.attachStore.mockImplementationOnce(() => { throw refusal; });
+
+    const error = await backend.createCollection('docs', { dimension: 2 }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(InvalidCollectionNameError);
+    expect((error as InvalidCollectionNameError).message).toBe('[VELES-034] Invalid collection name');
+    expect(calls).toEqual(['store.free']);
+    expect(await backend.getCollection('docs')).toBeNull();
+  });
+
+  it('when the binding refuses to attach with a bare string, then the store is freed and the refusal is BAD_REQUEST', async () => {
+    const backend = new WasmBackend();
+    await backend.init();
+    MockWasmDatabase.last!.attachStore.mockImplementationOnce(() => { throw "Collection 'docs' already exists"; });
+
+    await expect(backend.createCollection('docs', { dimension: 2 }))
+      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: "Collection 'docs' already exists" });
+    expect(calls).toEqual(['store.free']);
+    expect(await backend.getCollection('docs')).toBeNull();
+  });
+
   it('when the collection is deleted, then the database drops it before the store is freed', async () => {
     const backend = await backendWithDocs();
 
@@ -155,6 +200,26 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
     });
   });
 
+  // The executor runs SPARSE_NEAR over the store it shares: the sparse vector
+  // must be in that store, under the point's id, for the query to see it.
+  it('when a point carries a sparse vector, then SPARSE_NEAR runs over the attached store that holds it', async () => {
+    const backend = await backendWithDocs();
+    await backend.upsert('docs', { id: 3, vector: [1, 0], sparseVector: { 7: 1 } });
+    const attached = MockWasmDatabase.last!.attached.get('docs')!;
+    expect(attached.sparse_insert).toHaveBeenCalledTimes(1);
+    expect(attached.sparse_insert.mock.calls[0]![0]).toBe(3n);
+    MockWasmDatabase.last!.nextRows = [{ id: '3', score: 1 }];
+
+    const alone = "SELECT * FROM docs WHERE vector SPARSE_NEAR {7: 1.0} LIMIT 5";
+    const fused = 'SELECT * FROM docs WHERE vector NEAR $v AND vector SPARSE_NEAR $s LIMIT 5';
+    expect(await backend.query('docs', alone)).toMatchObject({ results: [{ id: '3', score: 1 }] });
+    await backend.query('docs', fused, { v: [1, 0], s: { 7: 1 } });
+
+    const executed = MockWasmDatabase.last!.executeQuery.mock.calls;
+    expect(executed.map((c) => c[0])).toEqual([alone, fused]);
+    expect(JSON.parse(executed[1]![1] as string)).toEqual({ v: [1, 0], s: { 7: 1 } });
+  });
+
   it('when params hold a Float32Array, then they reach the executor as a JSON array', async () => {
     const backend = await backendWithDocs();
     const sql = 'SELECT * FROM docs WHERE vector NEAR $v AND category = $c LIMIT 5';
@@ -165,12 +230,15 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
     expect(JSON.parse(json)).toEqual({ v: [1, 0], c: 'tech' });
   });
 
-  it('when the query is the pure NEAR shape, then it keeps the store.query fast path', async () => {
+  it('when the query is the pure NEAR shape, then the executor answers it too, with the rows a WHERE gets', async () => {
     const backend = await backendWithDocs();
+    const sql = 'SELECT * FROM docs WHERE vector NEAR $v LIMIT 3';
 
-    await backend.query('docs', 'SELECT * FROM docs WHERE vector NEAR $v LIMIT 3', { v: [1, 0] });
+    const response = await backend.query('docs', sql, { v: [1, 0] });
 
-    expect(MockWasmDatabase.last!.executeQuery).not.toHaveBeenCalled();
+    expect(MockWasmDatabase.last!.executeQuery).toHaveBeenCalledWith(sql, JSON.stringify({ v: [1, 0] }));
+    expect(MockWasmDatabase.last!.attached.get('docs')!.query).not.toHaveBeenCalled();
+    expect(response).toMatchObject({ results: [{ id: 1, category: 'tech' }], stats: { strategy: 'select' } });
   });
 
   it('when the SELECT targets another collection, then it is refused as BAD_REQUEST', async () => {

@@ -113,7 +113,11 @@ fn test_match_relationship_id_reads_the_edge_id() {
         .first()
         .and_then(|r| r.point.payload.as_ref())
         .and_then(|p| p.get("r.id").cloned());
-    assert_eq!(projected, Some(json!(100)), "got {hits:?}");
+    assert_eq!(
+        projected,
+        Some(json!("100")),
+        "an edge id is returned as its decimal string; got {hits:?}"
+    );
 
     let misses = run(
         &db,

@@ -40,13 +40,7 @@ pub async fn create_graph_collection<R: Runtime>(
             } else {
                 db.create_graph_collection(&request.name, schema)?;
             }
-            Ok(CollectionInfo {
-                name: request.name.clone(),
-                dimension: request.dimension.unwrap_or(0),
-                metric: request.metric.clone(),
-                count: 0,
-                storage_mode: "graph".to_string(),
-            })
+            crate::helpers::collection_info_of(&db, &request.name)
         })
         .await
         .map_err(CommandError::from)?;
@@ -55,8 +49,8 @@ pub async fn create_graph_collection<R: Runtime>(
 }
 
 /// Builds a core [`GraphEdge`](velesdb_core::GraphEdge) from raw edge fields,
-/// validating the edge and normalizing properties. Shared by [`add_edge`] and
-/// [`add_edges_batch`].
+/// validating the edge and its properties, which must be an object or null
+/// (absent), as REST requires. Shared by [`add_edge`] and [`add_edges_batch`].
 fn build_edge(
     id: u64,
     source: u64,
@@ -66,7 +60,12 @@ fn build_edge(
 ) -> std::result::Result<velesdb_core::GraphEdge, Error> {
     let properties: std::collections::HashMap<String, serde_json::Value> = match properties {
         Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
-        _ => std::collections::HashMap::new(),
+        None | Some(serde_json::Value::Null) => std::collections::HashMap::new(),
+        Some(_) => {
+            return Err(Error::InvalidConfig(
+                "Properties must be an object or null".to_string(),
+            ))
+        }
     };
     velesdb_core::GraphEdge::new(id, source, target, label)
         .map_err(Error::Database)
@@ -101,6 +100,25 @@ fn build_traversal_config(
     TraversalConfig::with_range(1, max_depth)
         .with_limit(limit)
         .with_rel_types(rel_types.unwrap_or_default())
+}
+
+/// The traversal orders a [`traverse_graph`] request may name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TraversalAlgorithm {
+    Bfs,
+    Dfs,
+}
+
+/// Parses a request's `algorithm` case-insensitively, as the REST traverse
+/// endpoint does, and refuses any other name rather than running BFS.
+fn parse_algorithm(name: &str) -> std::result::Result<TraversalAlgorithm, Error> {
+    match name.to_lowercase().as_str() {
+        "bfs" => Ok(TraversalAlgorithm::Bfs),
+        "dfs" => Ok(TraversalAlgorithm::Dfs),
+        _ => Err(Error::InvalidConfig(format!(
+            "Invalid algorithm '{name}'. Use 'bfs' or 'dfs'."
+        ))),
+    }
 }
 
 /// Maps core traversal results into the API [`TraversalOutput`] shape. Shared by
@@ -223,15 +241,15 @@ pub async fn traverse_graph<R: Runtime>(
                 velesdb_core::observer::QueryOperationKind::GraphTraversal,
                 "graph reads",
             )?;
+            let algorithm = parse_algorithm(&request.algorithm)?;
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let config =
                 build_traversal_config(request.max_depth, request.limit, request.rel_types);
 
-            let results = if request.algorithm == "dfs" {
-                coll.traverse_dfs(request.source, &config)
-            } else {
-                coll.traverse_bfs(request.source, &config)
+            let results = match algorithm {
+                TraversalAlgorithm::Bfs => coll.traverse_bfs(request.source, &config),
+                TraversalAlgorithm::Dfs => coll.traverse_dfs(request.source, &config),
             };
 
             Ok(to_traversal_outputs(results))

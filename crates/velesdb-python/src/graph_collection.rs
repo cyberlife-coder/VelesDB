@@ -60,6 +60,8 @@ impl PyGraphSchema {
 /// Example:
 ///     >>> db = velesdb.Database("./data")
 ///     >>> graph = db.create_graph_collection("knowledge")
+///     >>> graph.upsert_node_payload(10, {"name": "Alice"})
+///     >>> graph.upsert_node_payload(20, {"name": "Bob"})
 ///     >>> graph.add_edge({"id": 1, "source": 10, "target": 20, "label": "KNOWS"})
 ///     >>> edges = graph.get_edges()
 #[pyclass(name = "GraphCollection")]
@@ -109,7 +111,7 @@ impl PyGraphCollection {
     ///     GraphSchema: The schema configuration
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     #[getter]
     fn schema(&self) -> PyResult<PyGraphSchema> {
@@ -126,7 +128,7 @@ impl PyGraphCollection {
     ///     bool: True if vector search is available
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     #[getter]
     fn has_embeddings(&self) -> PyResult<bool> {
@@ -136,11 +138,22 @@ impl PyGraphCollection {
 
     /// Add an edge between two nodes.
     ///
+    /// Both endpoints must already be stored as nodes (``upsert_node`` or
+    /// ``upsert_node_payload``).
+    ///
     /// Args:
     ///     edge: Dict with keys: id (int), source (int), target (int),
     ///           label (str), properties (dict, optional)
     ///
+    /// Raises:
+    ///     KeyError: If the source or target node is not stored.
+    ///     EdgeExistsError: If an edge with that id already exists.
+    ///
     /// Example:
+    ///     >>> graph.upsert_node_payloads([
+    ///     ...     {"id": 10, "payload": {"name": "Alice"}},
+    ///     ...     {"id": 20, "payload": {"name": "Bob"}},
+    ///     ... ])
     ///     >>> graph.add_edge({
     ///     ...     "id": 1, "source": 10, "target": 20,
     ///     ...     "label": "KNOWS", "properties": {"since": 2020}
@@ -157,12 +170,17 @@ impl PyGraphCollection {
     /// eliminating per-edge rebuild overhead.
     ///
     /// Args:
-    ///     edges: List of edge dicts (same format as add_edge)
+    ///     edges: List of edge dicts (same format as add_edge); every
+    ///         endpoint must already be stored as a node
     ///
     /// Returns:
     ///     Number of edges successfully added
     ///
     /// Example:
+    ///     >>> graph.upsert_node_payloads([
+    ///     ...     {"id": n, "payload": {"name": name}}
+    ///     ...     for n, name in [(10, "Alice"), (20, "Bob"), (30, "Carol")]
+    ///     ... ])
     ///     >>> graph.add_edges_batch([
     ///     ...     {"id": 1, "source": 10, "target": 20, "label": "KNOWS"},
     ///     ...     {"id": 2, "source": 20, "target": 30, "label": "FOLLOWS"},
@@ -195,7 +213,7 @@ impl PyGraphCollection {
     fn get_edges(&self, py: Python<'_>, label: Option<String>) -> PyResult<Vec<Py<PyAny>>> {
         self.authorize("get_edges")?;
         let edges = py.detach(|| self.inner.get_edges(label.as_deref()));
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Get outgoing edges from a node.
@@ -209,13 +227,13 @@ impl PyGraphCollection {
     fn get_outgoing(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
         self.authorize("get_outgoing")?;
         let edges = py.detach(|| self.inner.get_outgoing(node_id));
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Returns `true` if an edge with the given ID exists.
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     #[pyo3(signature = (edge_id))]
     fn has_edge(&self, edge_id: u64) -> PyResult<bool> {
@@ -243,7 +261,7 @@ impl PyGraphCollection {
     fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
         self.authorize("get_incoming")?;
         let edges = py.detach(|| self.inner.get_incoming(node_id));
-        Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
+        edges.iter().map(|e| edge_to_dict(py, e)).collect()
     }
 
     /// Alias for `get_incoming`.
@@ -266,7 +284,7 @@ impl PyGraphCollection {
     fn get_edge(&self, py: Python<'_>, edge_id: u64) -> PyResult<Option<Py<PyAny>>> {
         self.authorize("get_edge")?;
         let edge = py.detach(|| self.inner.get_edge(edge_id));
-        Ok(edge.map(|e| edge_to_dict(py, &e)))
+        edge.map(|e| edge_to_dict(py, &e)).transpose()
     }
 
     /// Bounded outgoing-edge read: at most ``cap`` edges plus the true total
@@ -432,7 +450,11 @@ impl PyGraphCollection {
                 .scroll_batch(cursor, batch_size, filter_obj.as_ref())
                 .map_err(core_err)
         })?;
-        let points: Vec<Py<PyAny>> = batch.points.iter().map(|p| point_to_dict(py, p)).collect();
+        let points = batch
+            .points
+            .iter()
+            .map(|p| point_to_dict(py, p))
+            .collect::<PyResult<Vec<_>>>()?;
         Ok((points, batch.next_cursor))
     }
 
@@ -454,11 +476,11 @@ impl PyGraphCollection {
             )
         });
         let out = PyDict::new(py);
-        let _ = out.set_item("edges_total", edges_total);
-        let _ = out.set_item("edge_inserts_total", inserts);
-        let _ = out.set_item("edge_deletes_total", deletes);
-        let _ = out.set_item("traversals_total", traversals);
-        let _ = out.set_item("traversal_nodes_visited", visited);
+        out.set_item("edges_total", edges_total)?;
+        out.set_item("edge_inserts_total", inserts)?;
+        out.set_item("edge_deletes_total", deletes)?;
+        out.set_item("traversals_total", traversals)?;
+        out.set_item("traversal_nodes_visited", visited)?;
         Ok(out.into_any().unbind())
     }
 
@@ -500,7 +522,7 @@ impl PyGraphCollection {
     fn get_node_payload(&self, py: Python<'_>, node_id: u64) -> PyResult<Option<Py<PyAny>>> {
         self.authorize("get_node_payload")?;
         let value = py.detach(|| self.inner.get_node_payload(node_id).map_err(core_err))?;
-        Ok(value.map(|v| json_to_python(py, &v)))
+        value.map(|v| json_to_python(py, &v)).transpose()
     }
 
     /// Get all node IDs that have a stored payload.
@@ -509,7 +531,7 @@ impl PyGraphCollection {
     ///     List of node IDs
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (ids carry no
     ///         payload to filter — fail closed).
     fn all_node_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
@@ -554,7 +576,7 @@ impl PyGraphCollection {
         let config =
             build_traversal_config(min_depth, max_depth, limit, effective_rel_types, timeout_ms);
         let results = py.detach(|| self.inner.traverse_bfs(source_id, &config));
-        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
+        results.iter().map(|r| traversal_to_dict(py, r)).collect()
     }
 
     /// Perform DFS traversal from a source node.
@@ -591,7 +613,7 @@ impl PyGraphCollection {
         let config =
             build_traversal_config(min_depth, max_depth, limit, effective_rel_types, timeout_ms);
         let results = py.detach(|| self.inner.traverse_dfs(source_id, &config));
-        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
+        results.iter().map(|r| traversal_to_dict(py, r)).collect()
     }
 
     /// Perform multi-source BFS traversal with deduplication.
@@ -629,7 +651,7 @@ impl PyGraphCollection {
         let config =
             build_traversal_config(min_depth, max_depth, limit, effective_rel_types, timeout_ms);
         let results = py.detach(|| self.inner.traverse_bfs_parallel(&source_ids, &config));
-        Ok(results.iter().map(|r| traversal_to_dict(py, r)).collect())
+        results.iter().map(|r| traversal_to_dict(py, r)).collect()
     }
 
     /// Search for similar nodes by embedding vector.
@@ -645,8 +667,9 @@ impl PyGraphCollection {
     ///     List of result dicts with keys: id, score, payload
     ///
     /// Raises:
-    ///     RuntimeError: If the collection has no embeddings
-    ///     PermissionError / RuntimeError: If the read gate denies the read.
+    ///     ValueError: If the collection has no embeddings (``VELES-014``)
+    ///         or the query's dimension is not the collection's.
+    ///     PermissionError: If the read gate denies the read.
     ///
     /// The `principal` argument is caller-supplied and only meaningful when a
     /// trusted embedder forwards a verified identity (local-SDK trust boundary):
@@ -663,34 +686,36 @@ impl PyGraphCollection {
         let vec = extract_vector(py, &query)?;
         let top_k = k.unwrap_or(10);
 
-        // Route the vector read through the control-plane gate. The graph leaf
-        // takes no metadata filter, so authorize first (Deny ⇒ Err, fail closed)
-        // then apply any observer scope filter as a post-filter (narrow-only),
-        // mirroring the sparse / parallel-batch paths on `Collection`.
+        // Route the vector read through the database's read gate, which
+        // reports it to the observer's `on_query` once it completes, as every
+        // other search of this binding does. The graph leaf takes no metadata
+        // filter, so any observer scope filter applies as a post-filter
+        // (narrow-only); a denial never runs the search (fail closed).
         let results = py.detach(|| {
-            let scope = self
-                .db
-                .authorize_read(
+            self.db
+                .run_gated_read(
                     &self.name,
                     QueryOperationKind::VectorSearch,
                     principal.as_deref(),
                     tenant.as_deref(),
+                    |scope| {
+                        let mut results = self
+                            .inner
+                            .search_by_embedding(&vec, top_k)
+                            .map_err(core_err)?;
+                        if let Some(scope_filter) = scope {
+                            retain_by_filters(&mut results, None, Some(&scope_filter));
+                        }
+                        Ok::<_, PyErr>(results)
+                    },
                 )
-                .map_err(core_err)?;
-            let mut results = self
-                .inner
-                .search_by_embedding(&vec, top_k)
-                .map_err(core_err)?;
-            if let Some(scope_filter) = scope {
-                retain_by_filters(&mut results, None, Some(&scope_filter));
-            }
-            Ok::<_, PyErr>(results)
+                .map_err(core_err)?
         })?;
 
-        Ok(results
+        results
             .iter()
             .map(|r| search_result_to_dict(py, r, false))
-            .collect())
+            .collect()
     }
 
     /// Flush all graph state to disk.
@@ -706,7 +731,7 @@ impl PyGraphCollection {
     ///     int: Edge count
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn edge_count(&self) -> PyResult<usize> {
         self.authorize("edge_count")?;
@@ -721,62 +746,70 @@ impl PyGraphCollection {
         py.detach(|| self.inner.flush_full().map_err(core_err))
     }
 
-    /// Returns the number of points (nodes with payload) in the graph.
+    /// Returns the number of nodes stored with an embedding vector (through
+    /// ``upsert_node(..., vector=...)``): core's ``GraphCollection::len``, the
+    /// count of points in vector storage. A payload-only node is not counted —
+    /// in a graph without embeddings that is every node, so this is 0 there;
+    /// ``all_node_ids()`` lists payload nodes.
     ///
     /// Returns:
     ///     int: Point count
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn __len__(&self) -> PyResult<usize> {
         self.authorize("__len__")?;
         Ok(self.inner.len())
     }
 
-    /// Returns the number of points (nodes with payload) in the graph,
-    /// through the same read gate as ``__len__``.
+    /// Returns the number of nodes stored with an embedding vector, through the
+    /// same read gate as ``__len__`` (see there: payload-only nodes are not
+    /// counted).
     ///
     /// Returns:
     ///     int: Point count
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn count(&self) -> PyResult<usize> {
         self.authorize("count")?;
         Ok(self.inner.len())
     }
 
-    /// Check if the graph collection has no stored points.
+    /// Check if the graph collection has no node stored with an embedding
+    /// vector (``count() == 0``): a graph holding only payload nodes is empty.
     ///
     /// Returns:
     ///     bool: True if empty
     ///
     /// Raises:
-    ///     ValueError: If the read gate denies the read.
+    ///     PermissionError: If the read gate denies the read.
     ///     PermissionError: If the read gate returns a scope (fail closed).
     fn is_empty(&self) -> PyResult<bool> {
         self.authorize("is_empty")?;
         Ok(self.inner.is_empty())
     }
 
-    /// Get points by their IDs.
+    /// Get the nodes stored with an embedding vector, by id.
+    ///
+    /// A payload-only node reads as ``None``, as a missing one does; read its
+    /// properties with ``get_node_payload``.
     ///
     /// Args:
     ///     ids: List of point IDs to retrieve
     ///
     /// Returns:
-    ///     List of point dicts (or None for missing IDs)
+    ///     List of point dicts (or None for missing and payload-only IDs)
     #[pyo3(signature = (ids))]
     fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<Py<PyAny>>>> {
         self.authorize("get")?;
         let points = py.detach(|| self.inner.get(&ids));
-        let py_points = points
+        points
             .into_iter()
-            .map(|opt_point| opt_point.map(|p| point_to_dict(py, &p)))
-            .collect();
-        Ok(py_points)
+            .map(|opt_point| opt_point.map(|p| point_to_dict(py, &p)).transpose())
+            .collect()
     }
 
     /// Delete points by their IDs.
@@ -896,10 +929,10 @@ fn bounded_edges_to_dict(
     let out = PyDict::new(py);
     let list = PyList::empty(py);
     for edge in &edges {
-        let _ = list.append(edge_to_dict(py, edge));
+        list.append(edge_to_dict(py, edge)?)?;
     }
-    let _ = out.set_item("edges", list);
-    let _ = out.set_item("total", total);
+    out.set_item("edges", list)?;
+    out.set_item("total", total)?;
     Ok(out.into_any().unbind())
 }
 

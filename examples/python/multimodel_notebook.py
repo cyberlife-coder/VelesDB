@@ -179,8 +179,8 @@ try:
     # | Field | Type | Description |
     # |-------|------|-------------|
     # | `node_id` | int | Point/node identifier |
-    # | `vector_score` | float | Vector similarity (0-1) |
-    # | `graph_score` | float | Graph relevance |
+    # | `vector_score` | float or None | Vector similarity, None when no vector ranked the row |
+    # | `graph_score` | float or None | Graph relevance, None when not reported |
     # | `fused_score` | float | Combined score |
     # | `bindings` | dict | Matched properties |
 

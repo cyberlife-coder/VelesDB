@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`limits::whole_count`: the count validator every JS binding shares.** A
+  count a binding reads from JavaScript (`k`, `ttlSeconds`, `maxHops`, a token
+  reserve, an index) must be a finite whole number in `0..=u32::MAX`; anything
+  else is refused with the new `MemoryError::InvalidCount` (`InvalidInput`).
+  The Node binding carried this check privately while the WASM binding took
+  `usize`/`u64` parameters that `wasm-bindgen` wraps silently; both now call
+  this one function. `MemoryError` is `non_exhaustive`, so the variant breaks
+  no caller.
+
 - **`compile-stdin --tool-output`: line-level pruning of one command's
   output** (`context::prune_tool_output`). The fragment compiler's critical
   rules are existence tests, so on tool output — digits on nearly every line
@@ -27,6 +36,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure 8 487 → 3 892 tokens with the failure kept verbatim — both `medium`
   where the fragment path was `high`. The default `compile-stdin` path is
   unchanged.
+
+### Deprecated
+
+- **`context::wire::parse_id_fields` and `parse_fragment_id_strings`.** They
+  rewrote a JS binding's decimal-string ids into numbers before serde, a
+  second id parser beside the domain's own: every id the Node and WASM
+  bindings read back (`WorkingContext`, `CompileRequest.fragments[].id`)
+  already deserializes from a number or a decimal string. Hand the JSON
+  straight to `serde_json::from_value` instead. The bindings no longer call
+  them, so the two parsers' disagreement on surrounding whitespace is gone:
+  `" 7"`, accepted by the MCP tools, is now accepted by Node and WASM too.
+
+### Fixed
+
+- **A relation label is its trimmed text.** The graph stores trim an edge
+  label (core's `GraphEdge::new`), but `relate` and `unrelate` compared and
+  wrote the label as given: `relate(a, b, " decided_in ")` stored
+  `decided_in`, a repeated call was refused as a hash collision on the WASM
+  store, and `unrelate` with the same label reported `found: false` and left
+  the edge. `relate`, `unrelate`, `remember`'s links and the autograph now
+  validate and write the canonical label; a whitespace-only label is refused.
 
 ## [0.18.0] - 2026-11-11
 

@@ -391,7 +391,7 @@ fn test_resolve_sparse_vector_structured() {
     );
 
     let expr = crate::velesql::SparseVectorExpr::Parameter("sv".to_string());
-    let sv = Collection::resolve_sparse_vector(&expr, &params).expect("resolve failed");
+    let sv = expr.resolve(&params).expect("resolve failed");
     assert_eq!(sv.indices, vec![1, 2, 3]);
     assert_eq!(sv.values, vec![0.5, 0.3, 0.1]);
 }
@@ -405,7 +405,7 @@ fn test_resolve_sparse_vector_shorthand() {
     );
 
     let expr = crate::velesql::SparseVectorExpr::Parameter("sv".to_string());
-    let sv = Collection::resolve_sparse_vector(&expr, &params).expect("resolve failed");
+    let sv = expr.resolve(&params).expect("resolve failed");
     assert_eq!(sv.nnz(), 2);
     // Values should be present (order from BTreeMap is sorted by string key)
     assert!(sv.indices.contains(&10));
@@ -424,6 +424,41 @@ fn test_resolve_sparse_vector_shorthand() {
 fn test_resolve_sparse_vector_missing_param() {
     let params = HashMap::new();
     let expr = crate::velesql::SparseVectorExpr::Parameter("missing".to_string());
-    let result = Collection::resolve_sparse_vector(&expr, &params);
+    let result = expr.resolve(&params);
     assert!(result.is_err());
+}
+
+/// A JSON weight past `f32::MAX` narrows to infinity: VelesQL refuses it as
+/// every typed sparse search does, in both parameter shapes.
+#[test]
+fn test_resolve_sparse_vector_refuses_a_weight_past_f32() {
+    let expr = crate::velesql::SparseVectorExpr::Parameter("sv".to_string());
+    for shape in [
+        serde_json::json!({ "10": 1e300 }),
+        serde_json::json!({ "indices": [10], "values": [1e300] }),
+    ] {
+        let params = HashMap::from([("sv".to_string(), shape.clone())]);
+        let err = expr
+            .resolve(&params)
+            .expect_err("an infinite weight is refused");
+        assert_eq!(err.code(), "VELES-005", "{shape}: {err}");
+    }
+}
+
+/// A scalar `ORDER BY` on a `SPARSE_NEAR` query ranks the whole match set, not
+/// the `LIMIT` best-scoring rows: the setup scores higher ids higher, so a
+/// fetch capped at `LIMIT 2` returned ids 10 and 11, sorted, instead of 0 and 1.
+#[test]
+fn test_sparse_near_scalar_order_by_ranks_every_match() {
+    let (_dir, col) = setup_hybrid_collection();
+
+    let results = col
+        .execute_query_str(
+            "SELECT * FROM docs WHERE vector SPARSE_NEAR {1: 1.0} ORDER BY idx ASC LIMIT 2",
+            &HashMap::new(),
+        )
+        .expect("SPARSE_NEAR ORDER BY idx must execute");
+
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, [0, 1]);
 }

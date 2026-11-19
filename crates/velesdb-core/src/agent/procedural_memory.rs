@@ -100,7 +100,7 @@ pub struct ProceduralMemory {
 }
 
 impl ProceduralMemory {
-    const COLLECTION_NAME: &'static str = "_procedural_memory";
+    pub(super) const COLLECTION_NAME: &'static str = "_procedural_memory";
 
     /// Returns the name of the underlying `VelesDB` collection.
     #[must_use]
@@ -128,8 +128,19 @@ impl ProceduralMemory {
         dimension: usize,
         ttl: Arc<MemoryTtl>,
     ) -> Result<Self, AgentMemoryError> {
+        Self::open(db, dimension, ttl, memory_helpers::OnMissing::Create)
+    }
+
+    /// Opens the collection, creating or refusing it when absent as
+    /// `on_missing` says.
+    pub(super) fn open(
+        db: Arc<Database>,
+        dimension: usize,
+        ttl: Arc<MemoryTtl>,
+        on_missing: memory_helpers::OnMissing,
+    ) -> Result<Self, AgentMemoryError> {
         let (collection_name, dimension, stored_ids) =
-            memory_helpers::init_tracked_memory(&db, Self::COLLECTION_NAME, dimension)?;
+            memory_helpers::init_tracked_memory(&db, Self::COLLECTION_NAME, dimension, on_missing)?;
         memory_helpers::rebuild_ttl_from_payloads(
             &db,
             &collection_name,

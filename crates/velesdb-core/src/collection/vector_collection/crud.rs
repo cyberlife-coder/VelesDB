@@ -99,6 +99,18 @@ impl VectorCollection {
         self.inner.delete(ids)
     }
 
+    /// Deletes points by IDs and returns how many of them held a point.
+    ///
+    /// Same delete as [`delete`](Self::delete); the count is what it
+    /// removed — a missing id counts zero, an id repeated in `ids` once.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if storage operations fail.
+    pub fn delete_counted(&self, ids: &[u64]) -> Result<usize> {
+        self.inner.delete_counted(ids)
+    }
+
     /// Inserts or updates metadata-only points (no vectors).
     ///
     /// # Errors

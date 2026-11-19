@@ -22,7 +22,12 @@ pub use super::velesql_helpers::register_velesql_module;
 // VelesQL syntax error exception.
 pyo3::create_exception!(velesdb, VelesQLSyntaxError, pyo3::exceptions::PyException);
 
-// VelesQL parameter error exception.
+// VelesQL parameter error exception — reserved: no call raises it. Core
+// reports an unbound or mistyped `$name` as a plain `Error::Query` (VELES-010)
+// whose cases differ only in message text, so the binding cannot single a
+// parameter error out without matching strings; it raises the `ValueError`
+// every `Error::Query` maps to. Still exported, so an existing
+// `except VelesQLParameterError` clause keeps resolving.
 pyo3::create_exception!(
     velesdb,
     VelesQLParameterError,

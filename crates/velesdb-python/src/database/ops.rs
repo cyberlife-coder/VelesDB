@@ -114,7 +114,7 @@ impl Database {
         let limits = self.inner.guardrail_limits();
         let value = serde_json::to_value(&limits)
             .map_err(|e| PyRuntimeError::new_err(format!("guardrail serialization failed: {e}")))?;
-        Ok(crate::utils::json_to_python(py, &value))
+        crate::utils::json_to_python(py, &value)
     }
 
     /// Flush every collection (vector, graph, metadata) to disk.
@@ -155,7 +155,7 @@ impl Database {
         let plan = py
             .detach(move || inner.explain_query_with_params(&parsed, &rust_params))
             .map_err(core_err)?;
-        Ok(plan_to_dict(py, &plan))
+        plan_to_dict(py, &plan)
     }
 
     /// Explain a VelesQL statement at database scope WITH execution, returning
@@ -185,7 +185,7 @@ impl Database {
         let output = py
             .detach(move || inner.explain_analyze_query(&parsed, &rust_params))
             .map_err(core_err)?;
-        Ok(build_explain_analyze_dict(py, &output))
+        build_explain_analyze_dict(py, &output)
     }
 
     /// Train a quantizer on a collection (typed counterpart of

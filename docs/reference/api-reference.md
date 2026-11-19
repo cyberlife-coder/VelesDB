@@ -465,6 +465,9 @@ Delete a point by ID.
 }
 ```
 
+When no point is stored under the id, the answer is the same `404` as
+`GET`'s, with code `VELES-003`; a missing collection is `404` `VELES-002`.
+
 ### POST /collections/:name/points/delete
 
 Bulk-delete points by ID in a single call (idempotent: missing IDs are skipped,
@@ -477,7 +480,8 @@ Bulk-delete points by ID in a single call (idempotent: missing IDs are skipped,
 }
 ```
 
-**Response:** `200` with the number of points submitted for deletion.
+**Response:** `200` with `deleted_count`, the number of points the delete
+removed — a missing ID is not counted, a repeated one counts once.
 
 ### POST /collections/:name/points/scroll
 

@@ -72,16 +72,10 @@ pub(crate) fn match_candidates(
         params,
         annotations,
         scoring,
+        row_cap: row_cap(&clause.return_clause, scoring),
         seen: std::cell::RefCell::default(),
     };
-    let mut out = Vec::new();
-    let mut path = PathState::default();
-    // The label index narrows the start nodes; every pattern check is the
-    // full one ([`PathWalk::node_matches`]).
-    let first_label = pattern.nodes[0].labels.first().map(String::as_str);
-    for start in nodes.candidates(first_label) {
-        walk.start_from(&nodes, start, &mut path, &mut out)?;
-    }
+    let mut out = walk.walk_all(&nodes)?;
     let higher_is_better = nodes
         .vector_space()
         .is_none_or(|(_, metric)| metric.higher_is_better());
@@ -101,6 +95,25 @@ pub(crate) fn match_candidates(
         &order,
     )?;
     Ok(out)
+}
+
+/// The row count the walk may stop at: `LIMIT`, when nothing reorders the
+/// rows before it applies — no RETURN `ORDER BY`, and no REST `/match`
+/// query vector, whose score sort runs first. [`order_and_limit`] then keeps
+/// the first `LIMIT` rows in walk order, which are exactly the rows the walk
+/// stopped at. Core's MATCH walk (its `RowBound`) stops at `LIMIT` on the
+/// same condition. Under an order every row is a candidate, so the walk runs
+/// to the end, bounded by [`crate::guardrails::check_cardinality`].
+fn row_cap(
+    return_clause: &velesdb_core::velesql::ReturnClause,
+    scoring: Option<&MatchScoring>,
+) -> Option<usize> {
+    if return_clause.order_by.is_some() || scoring.is_some() {
+        return None;
+    }
+    return_clause
+        .limit
+        .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
 }
 
 /// Most similar first: descending score, ascending distance. A NaN or absent
@@ -142,6 +155,8 @@ struct PathWalk<'p> {
     annotations: Annotations,
     /// REST `/match`'s query vector and threshold, when given.
     scoring: Option<&'p MatchScoring>,
+    /// Stop once this many rows are collected ([`row_cap`]).
+    row_cap: Option<usize>,
     /// Signatures of the rows already emitted: one row per distinct binding
     /// of the named elements, as core dedups (`binding_signature`).
     seen: std::cell::RefCell<std::collections::HashSet<Vec<(u8, String, u64)>>>,
@@ -164,6 +179,27 @@ struct PathState {
 }
 
 impl PathWalk<'_> {
+    /// Walks the pattern from every start node and returns its rows, in walk
+    /// order. The label index narrows the start nodes; every pattern check
+    /// is the full one ([`Self::node_matches`]).
+    fn walk_all(&self, nodes: &MatchNodes<'_>) -> Result<Vec<MatchCandidate>, String> {
+        let mut out = Vec::new();
+        let mut path = PathState::default();
+        let first_label = self.pattern.nodes[0].labels.first().map(String::as_str);
+        for start in nodes.candidates(first_label) {
+            if self.is_full(&out) {
+                break;
+            }
+            self.start_from(nodes, start, &mut path, &mut out)?;
+        }
+        Ok(out)
+    }
+
+    /// Whether the walk has every row it may return ([`row_cap`]).
+    fn is_full(&self, out: &[MatchCandidate]) -> bool {
+        self.row_cap.is_some_and(|cap| out.len() >= cap)
+    }
+
     fn start_from(
         &self,
         nodes: &MatchNodes<'_>,
@@ -201,6 +237,9 @@ impl PathWalk<'_> {
         let anchor = path.nodes[depth - 1];
         let rel = &self.pattern.relationships[depth - 1];
         for edge in directed_filter_edges(nodes.graph(), anchor, rel) {
+            if self.is_full(out) {
+                break;
+            }
             // Relationship isomorphism (Cypher, and core's `follow_edge`).
             if path.edges.contains(&edge.id) {
                 continue;
@@ -309,6 +348,9 @@ impl PathWalk<'_> {
         if !self.seen.borrow_mut().insert(row_signature(&bound, &edges)) {
             return Ok(());
         }
+        // Core's cardinality bound on the rows the walk holds before
+        // ORDER BY / LIMIT, refused with core's error.
+        crate::guardrails::check_cardinality(out.len() + 1)?;
         out.push(build_match_row(&bound, edges, score)?);
         Ok(())
     }
@@ -531,7 +573,7 @@ fn with_id(
         Some(serde_json::Value::Object(map)) => map.clone(),
         _ => serde_json::Map::new(),
     };
-    map.insert("id".to_string(), serde_json::json!(id));
+    map.insert("id".to_string(), crate::js_value::row_id_json(id));
     map
 }
 
@@ -629,7 +671,7 @@ fn node_json(id: u64, data: &WasmGraphNode) -> serde_json::Value {
             map.insert(k.clone(), v.clone());
         }
     }
-    map.insert("id".to_string(), serde_json::json!(id));
+    map.insert("id".to_string(), crate::js_value::row_id_json(id));
     map.insert("labels".to_string(), serde_json::json!(data.labels.clone()));
     serde_json::Value::Object(map)
 }
@@ -649,3 +691,13 @@ mod points_tests;
 #[cfg(test)]
 #[path = "velesql_match_rank_tests.rs"]
 mod rank_tests;
+
+#[cfg(test)]
+#[path = "velesql_match_guard_tests.rs"]
+mod guard_tests;
+
+// Host-only: compares against a `velesdb-core` database, which needs core's
+// `persistence` feature (see `Cargo.toml`).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "velesql_match_guard_parity_tests.rs"]
+mod guard_parity_tests;

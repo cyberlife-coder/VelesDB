@@ -54,7 +54,9 @@ describe('trainPq', () => {
     );
   });
 
-  it('appends opq=true when options.opq is set', async () => {
+  // The VelesQL TRAIN parameter is `type=opq`; core refuses an `opq` key
+  // (it used to ignore it and train plain PQ).
+  it('sends type=opq when options.opq is set', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       data: { message: 'ok' },
@@ -65,7 +67,7 @@ describe('trainPq', () => {
     expect(transport.requestJson).toHaveBeenCalledWith(
       'POST',
       '/query',
-      { query: 'TRAIN QUANTIZER ON docs WITH (m=8, k=256, opq=true)' }
+      { query: 'TRAIN QUANTIZER ON docs WITH (m=8, k=256, type=opq)' }
     );
   });
 

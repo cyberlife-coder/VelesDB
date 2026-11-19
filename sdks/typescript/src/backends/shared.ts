@@ -116,6 +116,40 @@ export function returnNullOnNotFound(
 }
 
 /**
+ * For a request on one addressed resource whose absence is an answer, not an
+ * error (`dropIndex`, `removeEdge` and point `delete` answer `false`, point
+ * `get` answers `null`): `true` when `response` failed only because
+ * THAT resource is missing, `false` when it succeeded, and a throw for any
+ * other error.
+ *
+ * "That resource is missing" is the codeless 404 its handler emits (the
+ * transport fills in `'NOT_FOUND'`), or an instance of `typedAbsent` when the
+ * server types the miss. Unlike {@link returnNullOnNotFound}, a typed
+ * `VELES-002` is never absorbed: a missing *collection* means the caller
+ * addressed the wrong thing, not that the index or edge inside it was
+ * already gone. The codeless branch is sound only while the route's other
+ * 404s are typed — `get_vector_collection_or_404` and
+ * `get_graph_collection_or_404` both emit `VELES-002`.
+ */
+export function isAddressedResourceAbsent(
+  response: TransportResponse<unknown>,
+  typedAbsent?: abstract new (...args: never[]) => Error
+): boolean {
+  if (!response.error) {
+    return false;
+  }
+  const { code, message } = response.error;
+  if (code === 'NOT_FOUND') {
+    return true;
+  }
+  const err = parseVelesError(code, message);
+  if (typedAbsent !== undefined && err instanceof typedAbsent) {
+    return true;
+  }
+  throw err;
+}
+
+/**
  * Shared "is this a not-found error code?" predicate used by
  * `returnNullOnNotFound` and by individual endpoint wrappers that
  * need to convert a 404 into a boolean/null sentinel (e.g.

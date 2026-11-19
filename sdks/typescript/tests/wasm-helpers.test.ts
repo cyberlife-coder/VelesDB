@@ -3,7 +3,8 @@
  *
  * Covers the pure helpers in `src/backends/wasm-helpers.ts`:
  * normalizeIdString, canonicalPayloadKey, canonicalPayloadKeyFromResultId,
- * toNumericId, sparseVectorToArrays, buildWasmContext, buildCollectionInfo.
+ * toPointId, exactGraphId, sparseVectorToArrays, buildWasmContext,
+ * buildCollectionInfo.
  * These are all pure/synchronous — no fetch or WASM module instantiation
  * required.
  */
@@ -13,13 +14,14 @@ import {
   normalizeIdString,
   canonicalPayloadKey,
   canonicalPayloadKeyFromResultId,
-  toNumericId,
+  toPointId,
+  exactGraphId,
   sparseVectorToArrays,
   buildWasmContext,
   buildCollectionInfo,
   describeWasmThrow,
 } from '../src/backends/wasm-helpers';
-import { newSparseIds } from '../src/backends/wasm-sparse';
+import { VelesDBError } from '../src/types';
 import type {
   CollectionData,
   WasmModule,
@@ -59,7 +61,7 @@ describe('canonicalPayloadKey', () => {
     expect(canonicalPayloadKey('100')).toBe('100');
   });
 
-  it('falls back to toNumericId hash for non-integer strings', () => {
+  it('falls back to toPointId hash for non-integer strings', () => {
     const key = canonicalPayloadKey('abc');
     // hash is deterministic; we just assert it's a stringified numeric
     expect(key).toMatch(/^\d+$/);
@@ -86,32 +88,80 @@ describe('canonicalPayloadKeyFromResultId', () => {
   });
 });
 
-describe('toNumericId', () => {
-  it('passes number through unchanged', () => {
-    expect(toNumericId(42)).toBe(42);
-    expect(toNumericId(0)).toBe(0);
+describe('toPointId', () => {
+  it('takes a number as that integer', () => {
+    expect(toPointId(42)).toBe(42n);
+    expect(toPointId(0)).toBe(0n);
   });
 
-  it('parses safe integer string directly', () => {
-    expect(toNumericId('42')).toBe(42);
+  it('parses a decimal string, trimmed and without leading zeros', () => {
+    expect(toPointId('42')).toBe(42n);
+    expect(toPointId(' 0042 ')).toBe(42n);
   });
 
-  it('hashes non-integer strings to a positive integer', () => {
-    const h = toNumericId('hello');
-    expect(Number.isInteger(h)).toBe(true);
-    expect(h).toBeGreaterThanOrEqual(0);
+  it('hashes non-integer strings to a non-negative integer', () => {
+    const h = toPointId('hello');
+    expect(typeof h).toBe('bigint');
+    expect(h >= 0n).toBe(true);
+    expect(String(h)).toBe(canonicalPayloadKey('hello'));
   });
 
   it('returns same hash for same string (deterministic)', () => {
-    expect(toNumericId('hello')).toBe(toNumericId('hello'));
+    expect(toPointId('hello')).toBe(toPointId('hello'));
   });
 
-  it('hashes string beyond MAX_SAFE_INTEGER', () => {
-    // More than 2^53, Number parse would lose precision → falls into hash
-    const big = '9007199254740997';
-    const h = toNumericId(big);
-    expect(Number.isInteger(h)).toBe(true);
-    expect(h).toBeGreaterThanOrEqual(0);
+  it('keeps a decimal id past MAX_SAFE_INTEGER exactly, up to u64::MAX', () => {
+    // The binding returns every point id as its decimal string, so the id
+    // comes back as it went in: no hash, no rounding, no refusal.
+    expect(toPointId('9007199254740993')).toBe(9007199254740993n);
+    expect(toPointId('18446744073709551615')).toBe(18446744073709551615n);
+  });
+
+  it('refuses a decimal id past u64::MAX instead of hashing it into another point', () => {
+    expect(() => toPointId('18446744073709551616')).toThrow(VelesDBError);
+    expect(() => toPointId('18446744073709551616')).toThrow(/u64::MAX/);
+  });
+
+  it('refuses a number that is not a non-negative safe integer instead of wrapping it', () => {
+    // wasm-bindgen passes a u64 as raw i64 bits: -1 would address
+    // u64::MAX, 2^64 would address 0, and 1.5 throws a native RangeError.
+    for (const bad of [-1, 2 ** 64, 2 ** 53, 1.5, Number.NaN, Infinity, -Infinity]) {
+      const outcome = (() => {
+        try { return toPointId(bad); } catch (err) { return err; }
+      })();
+      expect(outcome, String(bad)).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+    }
+    expect(toPointId(Number.MAX_SAFE_INTEGER)).toBe(BigInt(Number.MAX_SAFE_INTEGER));
+  });
+});
+
+describe('exactGraphId', () => {
+  it('keeps a decimal id past 2^53 exactly', () => {
+    expect(exactGraphId('9007199254740993', 'Edge id')).toBe('9007199254740993');
+  });
+
+  it('writes a safe integer as its decimal string and trims a string id', () => {
+    expect(exactGraphId(42, 'Edge id')).toBe('42');
+    expect(exactGraphId(' 42 ', 'Edge id')).toBe('42');
+  });
+
+  it('refuses anything a u64 id cannot be, naming the field', () => {
+    for (const bad of ['doc-a', '', '-1', '1.5', -1, 1.5, 2 ** 53, Number.NaN]) {
+      expect(() => exactGraphId(bad, 'Edge source')).toThrow(/Edge source/);
+    }
+  });
+
+  it('refuses a missing id, or one that is neither a string nor a number, as BAD_REQUEST naming its type', () => {
+    // An untyped caller can leave `id` out (REST requires it) or pass any value.
+    for (const [bad, type] of [[undefined, 'undefined'], [null, 'null'], [{}, 'object'], [7n, 'bigint'], [true, 'boolean']] as const) {
+      const outcome = (() => {
+        try { return exactGraphId(bad as unknown as string, 'Edge id'); } catch (err) { return err; }
+      })();
+      expect(outcome, type).toBeInstanceOf(VelesDBError);
+      expect(outcome, type).toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining(type) });
+      expect((outcome as VelesDBError).message, type).toContain('Edge id');
+    }
   });
 });
 
@@ -131,6 +181,23 @@ describe('sparseVectorToArrays', () => {
     expect(out.indices).toEqual([42]);
     expect(out.values).toEqual([0.9]);
   });
+
+  it('keeps the u32 bounds and a zero-padded key, as core parses them', () => {
+    const out = sparseVectorToArrays({ 0: 1, 4294967295: 2, ['007' as unknown as number]: 3 });
+    expect(out.indices).toEqual([0, 4294967295, 7]);
+  });
+
+  it('refuses a key that is not a u32 term id with BAD_REQUEST, naming it', () => {
+    for (const key of ['foo', '-1', '4294967296', '1.5', '', '1e3', '0x10']) {
+      const sv = { [key]: 1 } as unknown as Record<number, number>;
+      const outcome = (() => {
+        try { return sparseVectorToArrays(sv); } catch (err) { return err; }
+      })();
+      expect(outcome, key).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+      expect((outcome as VelesDBError).message).toContain(`'${key}'`);
+    }
+  });
 });
 
 describe('buildWasmContext', () => {
@@ -141,7 +208,6 @@ describe('buildWasmContext', () => {
       config: { dimension: 128, metric: 'cosine' },
       store,
       payloads: new Map(),
-      sparseIds: newSparseIds(),
       createdAt: new Date(),
     };
     collections.set('docs', data);
@@ -154,7 +220,7 @@ describe('buildWasmContext', () => {
     expect(ctx.getCollection('missing')).toBeUndefined();
     expect(ctx.canonicalPayloadKey('00042')).toBe('42');
     expect(ctx.canonicalPayloadKeyFromResultId(42n)).toBe('42');
-    expect(ctx.toNumericId('7')).toBe(7);
+    expect(ctx.toPointId('7')).toBe(7n);
     expect(ctx.sparseVectorToArrays({ 1: 0.5 })).toEqual({
       indices: [1],
       values: [0.5],
@@ -170,7 +236,6 @@ describe('buildCollectionInfo', () => {
       // store only needs `len` for this helper
       store: { len: 42 } as unknown as WasmVectorStore,
       payloads: new Map(),
-      sparseIds: newSparseIds(),
       createdAt,
     };
 
@@ -189,7 +254,6 @@ describe('buildCollectionInfo', () => {
       config: {} as CollectionData['config'],
       store: { len: 0 } as unknown as WasmVectorStore,
       payloads: new Map(),
-      sparseIds: newSparseIds(),
       createdAt: new Date(),
     };
 

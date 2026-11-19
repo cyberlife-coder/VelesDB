@@ -24,31 +24,21 @@ use velesdb_memory::{
 use crate::graph_store::WasmGraphStore;
 use crate::{vector_ops, DistanceMetric};
 
-/// Reserved payload key for a fact's durable expiry (a millisecond Unix
-/// timestamp), mirroring `velesdb-core`'s `_veles_expires_at` naming so the
-/// concept is consistent for anyone who knows the native store — the raw
-/// units are a private implementation detail, since nothing outside this
-/// module ever reads it directly (`get_metadata`'s reserved-key filtering
-/// happens one layer up, in `velesdb-memory`'s `service.rs`).
+/// Reserved payload key for a fact's durable expiry, in epoch seconds — the
+/// key and the unit of `velesdb-core`'s `_veles_expires_at`, which is the
+/// contract of `velesdb-memory`'s store: `get_metadata` hands the raw payload
+/// back, and `MemoryService` compares this value with `now + ttl` in seconds
+/// to decide whether a re-stored fact's TTL extends.
 const EXPIRES_AT_KEY: &str = "_veles_expires_at";
 
-/// Current wall-clock time in milliseconds since the Unix epoch. Real time on
-/// both targets — `wasm32` via `js_sys::Date`, native via `SystemTime` — so
-/// TTL expiry is exercised by ordinary `cargo test`, not just in a browser.
-#[cfg(target_arch = "wasm32")]
-fn now_ms() -> u64 {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let ms = js_sys::Date::now() as u64;
-    ms
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+/// Current wall-clock time in seconds since the Unix epoch. Real time on
+/// both targets — `web-time` reads `Date.now()` on `wasm32`, `SystemTime`
+/// natively — so TTL expiry is exercised by ordinary `cargo test`, not just
+/// in a browser.
+fn now_secs() -> u64 {
+    web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// One stored fact: its embedding and its full JSON payload (`content` plus
@@ -63,7 +53,7 @@ impl Fact {
         self.payload
             .get(EXPIRES_AT_KEY)
             .and_then(Value::as_u64)
-            .is_some_and(|expires_at| now_ms() >= expires_at)
+            .is_some_and(|expires_at| expires_at <= now_secs())
     }
 }
 
@@ -80,7 +70,7 @@ fn build_payload(
     if let Some(ttl) = ttl_seconds {
         payload.insert(
             EXPIRES_AT_KEY.to_string(),
-            Value::from(now_ms().saturating_add(ttl.saturating_mul(1000))),
+            Value::from(now_secs().saturating_add(ttl)),
         );
     }
     payload

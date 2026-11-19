@@ -138,7 +138,6 @@ mod geo_distance_tests;
 pub mod gpu;
 #[cfg(test)]
 mod gpu_tests;
-#[cfg(feature = "persistence")]
 pub mod guardrails;
 #[cfg(all(test, feature = "persistence"))]
 mod guardrails_tests;
@@ -211,7 +210,7 @@ pub use update_check::{
 };
 
 #[cfg(feature = "persistence")]
-pub use index::{HnswIndex, HnswParams, VectorIndex};
+pub use index::{HnswIndex, HnswOverrides, HnswParams, VectorIndex};
 pub use search_quality::SearchQuality;
 
 #[cfg(feature = "persistence")]

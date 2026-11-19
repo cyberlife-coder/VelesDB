@@ -78,3 +78,35 @@ fn test_delete_preserves_other_rows_indices() {
     let borrowed = store.borrow();
     assert_eq!(borrowed.ids, vec![2]);
 }
+
+/// A VelesQL DELETE cascades to the deleted points' edges, as core does.
+#[test]
+fn a_delete_removes_the_edges_of_the_points_it_deletes() {
+    let mut db = DatabaseInner::new();
+    seed_metadata_docs(&mut db);
+    {
+        let graph = db.graph_store("docs");
+        let mut graph = graph.borrow_mut();
+        graph
+            .insert_edge(Some(10), 1, 2, "R".into(), None)
+            .expect("edge");
+        graph
+            .insert_edge(Some(11), 2, 3, "R".into(), None)
+            .expect("edge");
+        graph
+            .insert_edge(Some(12), 3, 1, "R".into(), None)
+            .expect("edge");
+    }
+    let stmt = parse_delete("DELETE FROM docs WHERE id = 2");
+    execute(&db, &stmt, &parse_params(None).expect("test: params")).expect("test: delete");
+
+    let left: Vec<u64> = db
+        .get_graph_store("docs")
+        .expect("graph")
+        .borrow()
+        .edges()
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(left, [12]);
+}

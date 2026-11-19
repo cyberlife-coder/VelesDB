@@ -120,6 +120,20 @@ impl From<serde_json::Error> for Error {
     }
 }
 
+/// A full buffer, an unconfigured or a dead pipeline is a configuration error
+/// naming the condition. A point an upsert would refuse is checked first by
+/// `stream_insert` and keeps core's code.
+impl From<velesdb_core::BackpressureError> for Error {
+    fn from(err: velesdb_core::BackpressureError) -> Self {
+        Self::InvalidConfig(format!("Stream insert backpressure: {err}"))
+    }
+}
+
+/// Each agent-memory failure keeps its class: an I/O failure is VELES-011,
+/// a snapshot that cannot be read or written a serialization error, a
+/// storage or initialization failure an engine error. Only a caller's
+/// mistake reads as one; all four used to answer VELES-009 "Invalid
+/// configuration".
 impl From<velesdb_core::agent::AgentMemoryError> for Error {
     fn from(err: velesdb_core::agent::AgentMemoryError) -> Self {
         use velesdb_core::agent::AgentMemoryError as A;
@@ -129,7 +143,9 @@ impl From<velesdb_core::agent::AgentMemoryError> for Error {
                 Self::DimensionMismatch { expected, actual }
             }
             A::DatabaseError(core_err) => Self::Database(core_err),
-            other => Self::InvalidConfig(other.to_string()),
+            A::IoError(msg) => Self::Io(std::io::Error::other(msg)),
+            A::SnapshotError(msg) => Self::Serialization(msg),
+            other => Self::Database(velesdb_core::Error::Internal(other.to_string())),
         }
     }
 }

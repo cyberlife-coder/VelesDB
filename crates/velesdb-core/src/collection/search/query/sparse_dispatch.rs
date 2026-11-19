@@ -5,7 +5,13 @@
 //! filtering, result finalization, and fusion strategy resolution.
 
 use super::{Collection, ExtractedComponents, Result, SearchResult, MAX_LIMIT};
-use tracing::warn;
+
+/// What bounds a sparse or hybrid fetch: the condition both branches filter
+/// by, and the GraphFirst anchor ids a sparse-only fetch is restricted to.
+struct SparseFetch<'a> {
+    filter: Option<&'a crate::velesql::Condition>,
+    anchors: Option<&'a std::collections::HashSet<u64>>,
+}
 
 impl Collection {
     /// Dispatches sparse-only or hybrid dense+sparse search.
@@ -27,9 +33,13 @@ impl Collection {
         // keeps the window: its fusion legs rank independently.
         let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
         let anchors = self.sparse_anchor_prefilter(stmt, params, extracted, &mut graph_cache)?;
+        let filter = self.sparse_branch_filter(stmt, params, extracted)?;
+        let fetch = SparseFetch {
+            filter: filter.as_ref(),
+            anchors: anchors.as_ref(),
+        };
 
-        let mut results =
-            self.fetch_sparse_results(stmt, params, extracted, svs, limit, anchors.as_ref())?;
+        let mut results = self.fetch_sparse_results(stmt, params, extracted, svs, limit, &fetch)?;
 
         if has_graph_predicates {
             results = self.filter_by_graph_predicates_with_cache(
@@ -46,6 +56,39 @@ impl Collection {
         Ok(results)
     }
 
+    /// The condition both branches of a sparse or hybrid search filter by:
+    /// the WHERE clause, whose metadata part each branch pushes down — or,
+    /// when the clause holds a `similarity()` threshold, the ids the whole
+    /// clause holds for, as the exact scan evaluates it (each threshold on
+    /// its own vector, three-valued under AND / OR / NOT, the vector and
+    /// sparse leaves read as true). A threshold is no metadata predicate, so
+    /// pushing the metadata part alone dropped it.
+    fn sparse_branch_filter(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        extracted: &ExtractedComponents,
+    ) -> Result<Option<crate::velesql::Condition>> {
+        let (Some(cond), false) = (
+            stmt.where_clause.as_ref(),
+            extracted.similarity_conditions.is_empty(),
+        ) else {
+            return Ok(extracted.filter_condition.clone());
+        };
+        let values = self
+            .execute_similarity_scan(cond, params, usize::MAX, None)?
+            .into_iter()
+            .map(|r| crate::velesql::Value::UnsignedInteger(r.point.id))
+            .collect();
+        Ok(Some(crate::velesql::Condition::In(
+            crate::velesql::InCondition {
+                column: "id".to_string(),
+                values,
+                negated: false,
+            },
+        )))
+    }
+
     /// Fetches sparse/hybrid results: anchored exact fetch when a GraphFirst
     /// anchor set is available, MAX_LIMIT window fetch otherwise.
     fn fetch_sparse_results(
@@ -55,24 +98,25 @@ impl Collection {
         extracted: &ExtractedComponents,
         svs: &crate::velesql::SparseVectorSearch,
         limit: usize,
-        anchors: Option<&std::collections::HashSet<u64>>,
+        fetch: &SparseFetch<'_>,
     ) -> Result<Vec<SearchResult>> {
-        let Some(anchor_ids) = anchors else {
+        let Some(anchor_ids) = fetch.anchors else {
             let execution_limit = if extracted.graph_match_predicates.is_empty() {
                 limit
             } else {
                 MAX_LIMIT
             };
-            return self.execute_sparse_or_hybrid(stmt, extracted, svs, params, execution_limit);
+            return self.execute_sparse_or_hybrid(
+                stmt,
+                extracted,
+                fetch.filter,
+                svs,
+                params,
+                execution_limit,
+            );
         };
-        self.execute_sparse_search_in_anchors(
-            svs,
-            params,
-            extracted.filter_condition.as_ref(),
-            limit,
-            Some(anchor_ids),
-        )
-        .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
+        self.execute_sparse_search_in_anchors(svs, params, fetch.filter, limit, Some(anchor_ids))
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
     }
 
     /// Computes the GraphFirst anchor set for a sparse-only fetch.
@@ -107,6 +151,7 @@ impl Collection {
         &self,
         stmt: &crate::velesql::SelectStatement,
         extracted: &ExtractedComponents,
+        filter: Option<&crate::velesql::Condition>,
         svs: &crate::velesql::SparseVectorSearch,
         params: &std::collections::HashMap<String, serde_json::Value>,
         execution_limit: usize,
@@ -117,19 +162,14 @@ impl Collection {
                 dense_vec,
                 svs,
                 params,
-                extracted.filter_condition.as_ref(),
+                filter,
                 execution_limit,
                 &fusion_strategy,
             )
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
         } else {
-            self.execute_sparse_search(
-                svs,
-                params,
-                extracted.filter_condition.as_ref(),
-                execution_limit,
-            )
-            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
+            self.execute_sparse_search(svs, params, filter, execution_limit)
+                .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
         }
     }
 
@@ -159,11 +199,30 @@ impl Collection {
 
     /// The SELECT post-processing of a path that ranks its own rows (the
     /// sparse/hybrid search, the `NEAR_FUSED` fusion, the exact
-    /// `similarity()` scan): the main pipeline's
-    /// ([`Self::apply_select_postprocessing`]: DISTINCT, window functions,
-    /// ORDER BY, OFFSET), at the statement's own `LIMIT`. LET bindings never
-    /// reach these paths (`validate_let_binding_support`).
+    /// `similarity()` scan): a vector `GROUP BY` groups the ranked rows, as
+    /// the main pipeline's `dispatch_and_finalize` does, then the main
+    /// pipeline's post-processing ([`Self::apply_select_postprocessing`]:
+    /// DISTINCT, window functions, ORDER BY, OFFSET) runs at the statement's
+    /// own `LIMIT`. LET bindings never reach these paths
+    /// (`validate_let_binding_support`).
     pub(super) fn finalize_ranked_results(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        results: Vec<SearchResult>,
+    ) -> Result<Vec<SearchResult>> {
+        if !stmt.is_vector_group_by() {
+            return self.postprocess_ranked_results(stmt, params, results);
+        }
+        let groups = self.apply_vector_group_by(stmt, &results, params)?;
+        let stmt = stmt
+            .order_by_aggregates_as_fields()
+            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        self.postprocess_ranked_results(&stmt, params, groups)
+    }
+
+    /// [`Self::apply_select_postprocessing`] at the statement's own `LIMIT`.
+    fn postprocess_ranked_results(
         &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
@@ -178,60 +237,14 @@ impl Collection {
         self.apply_select_postprocessing(stmt, results, params, final_limit, &[])
     }
 
-    /// Resolves the fusion strategy from the query's FUSION clause.
+    /// Resolves the fusion strategy from the query's FUSION clause: RRF when
+    /// there is none ([`crate::velesql::FusionClause::dense_sparse_strategy`]).
     pub(super) fn resolve_fusion_strategy(
         stmt: &crate::velesql::SelectStatement,
     ) -> crate::fusion::FusionStrategy {
-        stmt.fusion_clause
-            .as_ref()
-            .map_or_else(crate::fusion::FusionStrategy::rrf_default, |fc| {
-                use crate::velesql::FusionStrategyType;
-                match fc.strategy {
-                    FusionStrategyType::Rsf => {
-                        let dw = fc.dense_weight.unwrap_or(0.5);
-                        let sw = fc.sparse_weight.unwrap_or(0.5);
-                        crate::fusion::FusionStrategy::relative_score(dw, sw).unwrap_or_else(|e| {
-                            warn!(
-                                dense_weight = dw,
-                                sparse_weight = sw,
-                                error = %e,
-                                "RSF fusion strategy invalid; falling back to RRF"
-                            );
-                            crate::fusion::FusionStrategy::rrf_default()
-                        })
-                    }
-                    FusionStrategyType::Rrf => crate::fusion::FusionStrategy::RRF {
-                        k: fc.k.unwrap_or(60),
-                    },
-                    FusionStrategyType::Average => crate::fusion::FusionStrategy::Average,
-                    FusionStrategyType::Maximum => crate::fusion::FusionStrategy::Maximum,
-                    FusionStrategyType::Weighted | FusionStrategyType::WeightedRrf => {
-                        // 'weighted' and 'weighted_rrf' both build weighted
-                        // Reciprocal Rank Fusion over the two branches
-                        // (branch 0 = dense NEAR, branch 1 = sparse),
-                        // honoring the dense_w/sparse_w from the FUSION
-                        // clause. 'weighted_rrf' is simply the honest name of
-                        // the math 'weighted' has always run here. Falls back
-                        // to RRF on a validation error (e.g. a negative
-                        // weight).
-                        let dw = fc.dense_weight.unwrap_or(0.5);
-                        let sw = fc.sparse_weight.unwrap_or(0.5);
-                        #[allow(clippy::cast_precision_loss)]
-                        let k = fc.k.unwrap_or(60) as f32;
-                        crate::fusion::FusionStrategy::weighted_rrf(vec![dw, sw], k).unwrap_or_else(
-                            |e| {
-                                warn!(
-                                    dense_weight = dw,
-                                    sparse_weight = sw,
-                                    k,
-                                    error = %e,
-                                    "Weighted RRF fusion strategy invalid; falling back to RRF"
-                                );
-                                crate::fusion::FusionStrategy::rrf_default()
-                            },
-                        )
-                    }
-                }
-            })
+        stmt.fusion_clause.as_ref().map_or_else(
+            crate::fusion::FusionStrategy::rrf_default,
+            crate::velesql::FusionClause::dense_sparse_strategy,
+        )
     }
 }

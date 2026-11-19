@@ -62,3 +62,19 @@ fn only_js_value_rs_reaches_the_serde_wasm_bindgen_serializer() {
         offenders.join("\n")
     );
 }
+
+#[test]
+fn a_row_id_is_a_number_up_to_2_pow_53_minus_1_and_a_decimal_string_past_it() {
+    use super::row_id_json;
+    let max_safe = (1_u64 << 53) - 1;
+    assert_eq!(row_id_json(7), serde_json::json!(7));
+    assert_eq!(row_id_json(max_safe), serde_json::json!(max_safe));
+    assert_eq!(
+        row_id_json(max_safe + 2),
+        serde_json::json!("9007199254740993")
+    );
+    assert_eq!(
+        row_id_json(u64::MAX),
+        serde_json::json!("18446744073709551615")
+    );
+}

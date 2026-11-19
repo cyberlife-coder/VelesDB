@@ -69,11 +69,28 @@ VELESQL_CONTRACT_VERSION: str
 
 
 class SearchResultDict(TypedDict, total=False):
-    """Shape of a search result returned by VelesQL ``query`` and graph search."""
+    """Shape of a search result returned by VelesQL ``query`` and graph search.
+
+    ``component_scores`` is the per-component breakdown (``vector_score``,
+    ``bm25_score``, ...) core tagged the result with, absent when it tagged
+    none. A VelesQL ``query`` row adds the multi-model fields: ``node_id``
+    (the id), ``vector_score`` (the tagged component; ``None`` when a tagged
+    row has none, as a BM25-only row; the row's score when it carries no
+    breakdown), ``graph_score`` (the tagged component, ``None`` otherwise —
+    no search tags one today), ``fused_score`` (the final score),
+    ``bindings`` (the payload) and ``column_data`` (``None``).
+    """
 
     id: int
     score: float
     payload: Optional[Dict[str, Any]]
+    component_scores: Dict[str, float]
+    node_id: int
+    vector_score: Optional[float]
+    graph_score: Optional[float]
+    fused_score: float
+    bindings: Optional[Dict[str, Any]]
+    column_data: None
 
 
 class GraphEdgeDict(TypedDict, total=False):
@@ -299,7 +316,21 @@ class SearchOptions:
         include_vectors: Include raw vectors in results (default: False).
         fusion: Optional :class:`FusionStrategy` applied to hybrid dense+sparse
             search (both ``vector`` and ``sparse_vector`` set). Defaults to
-            RRF (k=60); has no effect on dense-only or sparse-only searches.
+            RRF (k=60); ``search_request`` refuses it with ``ValueError`` on a
+            dense-only or sparse-only search.
+        principal: Optional caller identity forwarded to the read gate.
+        tenant: Optional tenant hint forwarded to the read gate.
+        ef_search: Optional HNSW ef override in [16, 4096] for a dense-only
+            search; wins over ``quality``. ``search_request`` refuses it with
+            ``ValueError`` when ``sparse_vector`` is set: core's sparse and
+            hybrid searches take no ef. An int outside the range raises
+            ``ValueError`` (a non-int ``TypeError``) as soon as it is given —
+            here, to ``with_ef_search`` or by assignment — as
+            ``search_with_ef`` raises it.
+        quality: Optional search-quality profile for a dense-only search
+            (``"fast"``, ``"balanced"``, ``"accurate"``, ``"perfect"``,
+            ``"autotune"``, ``"custom:<ef>"``, ``"adaptive:<min>:<max>"``);
+            refused with ``sparse_vector`` like ``ef_search``.
 
     Example:
         >>> cond = {"type": "eq", "field": "lang", "value": "en"}
@@ -316,6 +347,8 @@ class SearchOptions:
     fusion: Optional["FusionStrategy"]
     principal: Optional[str]
     tenant: Optional[str]
+    ef_search: Optional[int]
+    quality: Optional[str]
 
     def __init__(
         self,
@@ -329,6 +362,8 @@ class SearchOptions:
         fusion: Optional["FusionStrategy"] = None,
         principal: Optional[str] = None,
         tenant: Optional[str] = None,
+        ef_search: Optional[int] = None,
+        quality: Optional[str] = None,
     ) -> None: ...
     def with_vector(
         self, vector: Optional[Union[List[float], "np.ndarray"]]
@@ -343,6 +378,8 @@ class SearchOptions:
     def with_fusion(self, fusion: Optional["FusionStrategy"]) -> "SearchOptions": ...
     def with_principal(self, principal: Optional[str]) -> "SearchOptions": ...
     def with_tenant(self, tenant: Optional[str]) -> "SearchOptions": ...
+    def with_ef_search(self, ef_search: Optional[int]) -> "SearchOptions": ...
+    def with_quality(self, quality: Optional[str]) -> "SearchOptions": ...
 
 
 class Collection:
@@ -413,18 +450,34 @@ class Collection:
         """
         ...
 
-    def upsert(self, points: List[Dict[str, Any]]) -> int:
+    @overload
+    def upsert(self, points_or_id: List[Dict[str, Any]]) -> int:
         """Insert or update vectors in the collection.
 
         Each point dict must have 'id' (int) and 'vector' (list[float]) keys.
         Optional keys: 'payload' (dict), 'sparse_vector' (dict[int, float]).
 
         Args:
-            points: List of point dicts
+            points_or_id: List of point dicts
 
         Returns:
             Number of upserted points
         """
+        ...
+
+    @overload
+    def upsert(
+        self,
+        points_or_id: int,
+        vector: Union[List[float], "np.ndarray"],
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Insert or update one point given as ``(id, vector, payload)``."""
+        ...
+
+    def create_index(self, field_name: str) -> None:
+        """Create a secondary index on a payload field for faster filtered
+        queries (e.g. ``collection.create_index("category")``)."""
         ...
 
     def upsert_metadata(self, points: List[Dict[str, Any]]) -> int:
@@ -463,8 +516,9 @@ class Collection:
         core engine without per-row Vec<f32> allocation. For 100K vectors
         at 768D this saves ~293 MB of intermediate copies.
 
-        The numpy array must be C-contiguous (row-major). If not,
-        a ValueError is raised.
+        A float32 array must be C-contiguous (row-major); if not, a
+        ValueError is raised. A float64 array is converted to float32
+        element by element, in any layout.
 
         Performance ranking, slowest first, by the copies each makes (no
         recorded run measures their rates)::
@@ -474,9 +528,11 @@ class Collection:
             upsert_bulk_numpy            <-- this method
 
         Best practices:
-            * Always pass float32 numpy arrays (float64 forces a conversion).
-            * Use C-contiguous arrays (the default; ``np.ascontiguousarray()``
-              to fix non-contiguous slices).
+            * Pass float32 numpy arrays: float64 is accepted but converted
+              first (a value past float32's range becomes infinite and is
+              refused like NaN).
+            * Use C-contiguous float32 arrays (the default;
+              ``np.ascontiguousarray()`` to fix non-contiguous slices).
             * Chunk batches into 5 000-row sub-batches when ``n > 50 000`` to
               keep peak RSS bounded by ``~5 000 * dim * 4 bytes``.
             * For payload-heavy data, prefer :py:meth:`upsert_bulk_numpy_json`
@@ -487,12 +543,18 @@ class Collection:
         profile.
 
         Args:
-            vectors: numpy.ndarray of shape (n, dimension), dtype float32, C-contiguous
+            vectors: numpy.ndarray of shape (n, dimension), dtype float32
+                (C-contiguous) or float64
             ids: list of int or numpy uint64 array (length n)
             payloads: Optional list of payload dicts (length n)
 
         Returns:
             Number of inserted points
+
+        Raises:
+            TypeError: If ``vectors`` is not a 2-D float32 or float64 array.
+            ValueError: If the lengths disagree, a float32 array is not
+                C-contiguous, or a value is NaN or infinite.
         """
         ...
 
@@ -523,6 +585,19 @@ class Collection:
             ValueError: If ids or json_payloads length != number of rows
                 in vectors, if vectors is not C-contiguous, or if a
                 JSON string is malformed.
+        """
+        ...
+
+    def enable_streaming(self, config: Optional["StreamingIngestConfig"] = None) -> None:
+        """Enable streaming ingestion on this collection.
+
+        Must be called before :meth:`stream_insert`; calling it again
+        replaces the existing ingester.
+
+        Args:
+            config: Optional :class:`StreamingIngestConfig`. Defaults to the
+                engine defaults (buffer_size=10000, batch_size=128,
+                flush_interval_ms=50).
         """
         ...
 
@@ -585,6 +660,12 @@ class Collection:
 
         Returns:
             List of dicts with ``id``, ``score``, and ``payload`` keys.
+
+        Raises:
+            ValueError: If a knob does not apply to the path the options
+                select: ``ef_search`` or ``quality`` with a ``sparse_vector``
+                (they tune a dense-only search), or ``fusion`` without both
+                ``vector`` and ``sparse_vector``.
 
         Example:
             >>> opts = SearchOptions(vector=my_embedding, k=20)
@@ -693,20 +774,49 @@ class Collection:
         *,
         principal: Optional[str] = None,
         tenant: Optional[str] = None,
+        rrf_k: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """Hybrid search combining vector similarity and text search."""
+        """Hybrid search combining vector similarity and text search.
+
+        Args:
+            vector: Query embedding.
+            query: Query text for the BM25 branch.
+            top_k: Number of results (default: 10).
+            vector_weight: Dense/text blend ``alpha`` (default: 0.5), clamped
+                to 0..1.
+            filter: Optional metadata filter dict.
+            principal: Optional caller identity forwarded to the read gate.
+            tenant: Optional tenant hint forwarded to the read gate.
+            rrf_k: RRF fusion constant (default: None = core's 60).
+
+        Raises:
+            ValueError: If ``vector_weight`` is NaN or infinite.
+        """
         ...
 
     def batch_search(
         self,
-        searches: List[Dict[str, Any]],
+        queries: Union[
+            List[Dict[str, Any]], List[Union[List[float], "np.ndarray"]], "np.ndarray"
+        ],
+        top_k: int = 10,
         *,
         principal: Optional[str] = None,
         tenant: Optional[str] = None,
     ) -> List[List[Dict[str, Any]]]:
         """Batch search for multiple query vectors in parallel.
 
-        Each search dict must have 'vector' and optionally 'top_k' and 'filter'.
+        Args:
+            queries: Search dicts — each with ``"vector"`` and optionally
+                ``"top_k"`` (or ``"topK"``) and ``"filter"`` — or bare query
+                vectors (a list of vectors or a 2-D numpy array).
+            top_k: Results per query for a bare vector, or for a dict that
+                sets neither ``"top_k"`` nor ``"topK"`` (default: 10).
+            principal: Optional caller identity forwarded to the read gate.
+            tenant: Optional tenant hint forwarded to the read gate.
+
+        Returns:
+            One result list per query, in input order.
         """
         ...
 
@@ -769,6 +879,58 @@ class Collection:
 
     def flush(self) -> None:
         """Flush pending changes to disk."""
+        ...
+
+    def compact_storage(self) -> int:
+        """Compact on-disk storage, reclaiming space left by deleted vectors.
+
+        Returns:
+            Number of bytes reclaimed.
+        """
+        ...
+
+    def rebuild_index(self) -> int:
+        """Rebuild (vacuum) the HNSW index, reclaiming space left by deleted
+        or updated vectors (the REST ``POST /collections/{name}/index/rebuild``).
+
+        Returns:
+            Number of entries reclaimed.
+        """
+        ...
+
+    def reorder_for_locality(self) -> None:
+        """Reorder the HNSW adjacency lists and vector storage for cache
+        locality. No-op below 1000 vectors; recall is preserved. Best called
+        after a bulk upsert, before serving queries."""
+        ...
+
+    def guard_rails(self) -> Dict[str, Any]:
+        """The current query guardrail limits for this collection.
+
+        Returns:
+            Dict with keys ``max_depth``, ``max_cardinality``,
+            ``memory_limit_bytes``, ``timeout_ms``, ``rate_limit_qps``,
+            ``circuit_failure_threshold``, ``circuit_recovery_seconds``.
+        """
+        ...
+
+    def detach_auto_reindex(self) -> bool:
+        """Detach the auto-reindex manager attached to this collection.
+
+        Returns:
+            True if a manager was detached, False if none was attached.
+        """
+        ...
+
+    def check_auto_reindex_divergence(self) -> Optional[Dict[str, Any]]:
+        """Whether the attached auto-reindex manager considers the index
+        diverged from its optimal parameters (read-only).
+
+        Returns:
+            Dict with keys ``should_reindex``, ``current_m``, ``optimal_m``,
+            ``ratio`` (and ``reason`` when a reindex is recommended), or
+            ``None`` when no auto-reindex manager is attached.
+        """
         ...
 
     def flush_full(self) -> None:
@@ -914,11 +1076,25 @@ class Collection:
     # VelesQL query methods
 
     def query(self, query_str: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Execute a VelesQL query."""
+        """Execute a read-only VelesQL query against this collection.
+
+        A SELECT's ``FROM`` is rewritten to this collection.
+
+        Raises:
+            ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): a collection's query methods run reads only, since
+                a write names its own target. Use ``Database.execute_query``.
+        """
         ...
 
     def query_ids(self, velesql: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """Execute a VelesQL query returning only IDs and scores."""
+        """Execute a read-only VelesQL query returning only IDs and scores.
+
+        Raises:
+            ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): a collection's query methods run reads only, since
+                a write names its own target. Use ``Database.execute_query``.
+        """
         ...
 
     def match_query(
@@ -926,12 +1102,24 @@ class Collection:
         query_str: str,
         params: Optional[Dict[str, Any]] = None,
         vector: Optional[Union[List[float], "np.ndarray"]] = None,
-        threshold: float = 0.0,
+        threshold: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """Execute a MATCH graph query.
 
         ``RETURN ... ORDER BY`` and a post-sort ``LIMIT`` are honored,
         ranking results identically to the SQL ``execute_query`` path.
+
+        Args:
+            query_str: VelesQL MATCH query (Cypher-like syntax)
+            params: Query parameters
+            vector: Optional query vector each row's node is scored against
+            threshold: Optional score bound for ``vector``: a row scoring
+                below it under a similarity metric (cosine, dot, jaccard), or
+                above it under a distance metric (euclidean, hamming), is
+                dropped. Omitted (the default), every scored row is kept.
+
+        Raises:
+            ValueError: If ``threshold`` is NaN or infinite.
         """
         ...
 
@@ -968,7 +1156,12 @@ class Collection:
                   flag to distinguish heuristic values from future measured ones.
 
         Raises:
-            RuntimeError: If the query is invalid or execution fails.
+            ValueError: If the query does not parse or is invalid for this
+                database, or if the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): EXPLAIN ANALYZE executes it, so it runs reads
+                only, like ``query``. Use ``Database.execute_query``.
+            PermissionError: If the database's observer refuses it.
+            VelesDBError: If execution fails in the engine.
         """
         ...
 
@@ -1016,6 +1209,21 @@ class Collection:
         Raises:
             ValueError: If batch_size is 0.
             ImportError: If as_dataframe=True and backend is not installed.
+        """
+        ...
+
+    def scroll_batch(
+        self,
+        cursor: Optional[int] = None,
+        batch_size: int = 100,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[int]]:
+        """Fetch one batch of points after ``cursor`` (stateless, O(1) seek).
+
+        Returns:
+            ``(points, next_cursor)``: the batch and the cursor for the next
+            call (the last point's ID). An empty batch (``next_cursor``
+            ``None``) ends the walk.
         """
         ...
 
@@ -1136,8 +1344,9 @@ class Database:
                 open time.
             observer: Optional callable invoked on engine events as
                 ``observer(event, **fields)``. Events: ``collection_created``,
-                ``collection_deleted``, ``upsert`` (also fired by direct SDK
-                writes), ``query``, the read-path veto ``query_request``
+                ``collection_deleted``, ``upsert`` / ``delete`` (fields
+                ``collection``, ``point_count``; fired after every completed
+                write or point delete, SDK or VelesQL), ``query``, the read-path veto ``query_request``
                 (``None``/``True`` allow, ``False``/str deny, ``{"filter": ...}``
                 allow-with-scope), and the VelesQL vetoes ``ddl_request`` /
                 ``dml_mutation_request`` (``None``/``True`` allow, ``False``/str
@@ -1177,7 +1386,9 @@ class Database:
             that materialises on the first upsert).
 
         Raises:
-            RuntimeError: If collection already exists or creation fails
+            CollectionExistsError: If the collection already exists.
+            ValueError: If the name or a parameter is invalid.
+            VelesDBError: If the engine fails to create it.
         """
         ...
 
@@ -1318,7 +1529,8 @@ class Database:
 
         Raises:
             ValueError: If the collection name fails to parse.
-            RuntimeError: If the collection does not exist or the change fails.
+            CollectionNotFoundError: If the collection does not exist.
+            VelesDBError: If the engine fails to apply the change.
         """
         ...
 
@@ -1376,7 +1588,7 @@ class Database:
             "needs_rebuild"), and index_health_detail keys
 
         Raises:
-            RuntimeError: If the collection does not exist
+            CollectionNotFoundError: If the collection does not exist.
         """
         ...
 
@@ -1428,7 +1640,8 @@ class Database:
                   (bool or None) — whether the histogram is stale.
 
         Raises:
-            RuntimeError: If the collection does not exist or analysis fails
+            CollectionNotFoundError: If the collection does not exist.
+            VelesDBError: If the analysis fails in the engine.
         """
         ...
 
@@ -1446,6 +1659,83 @@ class Database:
             ``histogram_buckets`` (int or None) and ``histogram_stale``
             (bool or None). Returns None if the collection has never been
             analyzed.
+        """
+        ...
+
+    @property
+    def data_dir(self) -> str:
+        """The database directory path on disk."""
+        ...
+
+    def schema_version(self) -> int:
+        """Schema version of the on-disk database format."""
+        ...
+
+    def flush_all(self) -> int:
+        """Flush every collection (vector, graph, metadata) to disk.
+
+        Returns:
+            Number of collections whose flush failed (0 = all durable).
+        """
+        ...
+
+    def guardrail_limits(self) -> Dict[str, Any]:
+        """The live query guardrail limits of the whole database (the last
+        value ``update_guardrails`` applied, or the defaults).
+
+        Returns:
+            Dict with keys ``max_depth``, ``max_cardinality``,
+            ``memory_limit_bytes``, ``timeout_ms``, ``rate_limit_qps``,
+            ``circuit_failure_threshold``, ``circuit_recovery_seconds``.
+        """
+        ...
+
+    def explain(self, sql: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Explain a VelesQL statement at database scope (plan only, no
+        execution), through the same gate and plan cache as ``execute_query``.
+
+        Unlike :meth:`Collection.explain`, JOIN targets and cross-collection
+        MATCH resolve from the database registry.
+
+        Returns:
+            Dict with keys ``tree``, ``estimated_cost_ms``,
+            ``filter_strategy``, ``index_used``, ``cache_hit``,
+            ``plan_reuse_count``.
+        """
+        ...
+
+    def explain_analyze(self, sql: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Explain a VelesQL statement at database scope WITH execution
+        (EXPLAIN ANALYZE): it runs the statement, through the read gate.
+
+        Returns:
+            Dict with keys ``plan``, ``actual_stats``, ``node_stats``,
+            ``cost_factors``, ``calibration_source``.
+        """
+        ...
+
+    def train_quantizer(
+        self,
+        collection_name: str,
+        quantizer: str = "pq",
+        m: int = 8,
+        k: int = 256,
+        force: bool = False,
+        sample_limit: Optional[int] = None,
+    ) -> str:
+        """Train a quantizer on a collection (typed counterpart of
+        ``TRAIN QUANTIZER ON <c> WITH (...)``).
+
+        Args:
+            collection_name: Name of the collection to train on.
+            quantizer: ``"pq"`` (default), ``"opq"``, ``"rabitq"`` or ``"sq8"``.
+            m: Number of subspaces for pq/opq (dimension must be divisible by m).
+            k: Number of centroids per subspace for pq/opq.
+            force: Retrain even if a quantizer is already installed.
+            sample_limit: Cap on the number of vectors used for training.
+
+        Returns:
+            Status message from the training operation.
         """
         ...
 
@@ -1494,7 +1784,12 @@ class VelesQLSyntaxError(Exception):
 
 
 class VelesQLParameterError(Exception):
-    """Raised when VelesQL query parameters are invalid."""
+    """Reserved: no call raises it in this release.
+
+    An unbound ``$name`` parameter, or one bound to a value its operand
+    cannot take, raises ``ValueError`` (``[VELES-010]``): core reports it as
+    a generic query error the binding cannot tell apart from the others.
+    """
     ...
 
 
@@ -1548,19 +1843,27 @@ class StreamingConfig:
 
     Args:
         max_depth: Maximum traversal depth (default: 3)
-        max_visited: Maximum number of results (default: 10000)
+        max_visited: Visited-set memory bound, and the result cap when
+            ``limit`` is unset (default: 10000)
         relationship_types: Optional filter by relationship types
+        limit: Result cap (default: None = ``max_visited``)
+        deadline_ms: Wall-clock budget in milliseconds; when it expires the
+            partial result accumulated so far is returned (default: None)
     """
 
     max_depth: int
     max_visited: int
     relationship_types: Optional[List[str]]
+    limit: Optional[int]
+    deadline_ms: Optional[int]
 
     def __init__(
         self,
         max_depth: int = 3,
         max_visited: int = 10000,
         relationship_types: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+        deadline_ms: Optional[int] = None,
     ) -> None: ...
 
 
@@ -1573,6 +1876,8 @@ class TraversalResult:
         target: Node the step reaches
         label: Edge label
         edge_id: Edge ID
+        path: Edge-ID path from the start node to this target (empty for the
+            start node itself)
     """
 
     depth: int
@@ -1580,6 +1885,7 @@ class TraversalResult:
     target: int
     label: str
     edge_id: int
+    path: List[int]
 
 
 class StreamingIngestConfig:
@@ -1616,6 +1922,7 @@ class GraphStore:
     def add_edge(
         self,
         edge_id: int,
+        /,
         *,
         source: int,
         target: int,
@@ -1629,6 +1936,7 @@ class GraphStore:
     def add_edge(
         self,
         source: int,
+        /,
         target: int,
         label: str = "RELATED_TO",
         weight: Any = None,
@@ -1643,6 +1951,7 @@ class GraphStore:
     def add_edge(
         self,
         source: int,
+        /,
         target: int,
         label: str = "RELATED_TO",
         weight: Any = None,
@@ -1661,6 +1970,18 @@ class GraphStore:
         self, start_node: int, config: StreamingConfig
     ) -> List[TraversalResult]: ...
 
+    def get_incoming_by_label(self, node_id: int, label: str) -> List[GraphEdgeDict]: ...
+    def get_edge(self, edge_id: int) -> Optional[GraphEdgeDict]:
+        """The edge with this ID, or ``None``."""
+        ...
+    def all_edges(self) -> List[GraphEdgeDict]: ...
+    def in_degree(self, node_id: int) -> int:
+        """Number of incoming edges to ``node_id``, in O(1)."""
+        ...
+    def out_degree(self, node_id: int) -> int:
+        """Number of outgoing edges from ``node_id``, in O(1)."""
+        ...
+
     def traverse_bfs(
         self,
         *,
@@ -1668,8 +1989,15 @@ class GraphStore:
         max_depth: int = 3,
         limit: int = 10000,
         relationship_types: Optional[List[str]] = None,
+        direction: str = "forward",
+        timeout_ms: Optional[int] = None,
     ) -> List[TraversalResult]:
-        """Run a BFS traversal from ``source`` (keyword-only arguments)."""
+        """Run a BFS traversal from ``source`` (keyword-only arguments).
+
+        ``direction`` is ``"forward"`` (outgoing edges, default),
+        ``"reverse"`` (incoming) or ``"both"``; ``timeout_ms`` is a
+        wall-clock budget after which the partial result is returned.
+        """
         ...
 
     def traverse_dfs(
@@ -1679,16 +2007,24 @@ class GraphStore:
         max_depth: int = 3,
         limit: int = 10000,
         relationship_types: Optional[List[str]] = None,
+        timeout_ms: Optional[int] = None,
     ) -> List[TraversalResult]:
         """Run core's DFS from ``source`` (keyword-only arguments).
 
         One result per node reached, in depth-first order, describing the
         edge that reached it; ``limit`` caps the results, as for
-        :meth:`traverse_bfs`.
+        :meth:`traverse_bfs`, and ``timeout_ms`` bounds the wall-clock time.
         """
         ...
 
     def remove_edge(self, edge_id: int) -> None: ...
+    def remove_node_edges(self, node_id: int) -> int:
+        """Remove every edge touching ``node_id`` (both directions).
+
+        Returns:
+            Number of edges removed.
+        """
+        ...
     def edge_count(self) -> int: ...
     def has_edge(self, edge_id: int) -> bool: ...
 
@@ -1722,11 +2058,56 @@ class PyGraphSchema:
         """True if the schema accepts any node/edge types."""
         ...
 
+    @property
+    def node_types(self) -> List[Dict[str, Any]]:
+        """The declared node types, as
+        ``{"name": str, "properties": {name: value_type}}`` dicts."""
+        ...
+
+    @property
+    def edge_types(self) -> List[Dict[str, Any]]:
+        """The declared edge types, as ``{"name": str, "from_type": str,
+        "to_type": str, "properties": {...}}`` dicts."""
+        ...
+
+    def with_node_type(
+        self, name: str, properties: Optional[Dict[str, str]] = None
+    ) -> "PyGraphSchema":
+        """Declare a node type on a strict schema (returns a new schema).
+
+        Args:
+            name: Node type name (used in the ``_labels`` payload field).
+            properties: Optional mapping of property name to value type
+                (``"string"``, ``"integer"``, ``"float"``, ``"boolean"``,
+                ``"vector"``).
+        """
+        ...
+
+    def with_edge_type(
+        self,
+        name: str,
+        from_type: str,
+        to_type: str,
+        properties: Optional[Dict[str, str]] = None,
+    ) -> "PyGraphSchema":
+        """Declare an edge type on a strict schema (returns a new schema).
+
+        Args:
+            name: Edge type (label) name, e.g. ``"KNOWS"``.
+            from_type: Node type of the source endpoint.
+            to_type: Node type of the target endpoint.
+            properties: Optional mapping of property name to value type.
+        """
+        ...
+
     def __repr__(self) -> str: ...
 
 
-class PyGraphCollection:
-    """Persistent graph collection with typed nodes, edges, and optional vector search."""
+class _GraphCollectionMembers:
+    """Stub-only base: the members :class:`PyGraphCollection` and the
+    :class:`GraphCollection` facade expose with the same signature. It does
+    not exist at runtime; a member whose signature differs between the two
+    is declared on each class instead."""
 
     @property
     def name(self) -> str:
@@ -1743,20 +2124,12 @@ class PyGraphCollection:
         """Whether this collection has node embeddings enabled."""
         ...
 
-    def add_edge(self, edge: Dict[str, Any]) -> None:
-        """Add an edge between two nodes.
-
-        Args:
-            edge: Dict with keys: id (int), source (int), target (int),
-                  label (str), properties (dict, optional)
-        """
-        ...
-
     def add_edges_batch(self, edges: List[Dict[str, Any]]) -> int:
         """Add multiple edges in batch (faster than add_edge in a loop).
 
         Args:
-            edges: List of edge dicts (same format as add_edge)
+            edges: List of edge dicts (same format as add_edge); every
+                endpoint must already be stored as a node
 
         Returns:
             Number of edges successfully added
@@ -1783,6 +2156,29 @@ class PyGraphCollection:
         """Compatibility alias for :meth:`get_incoming`."""
         ...
 
+    def get_edge(self, edge_id: int) -> Optional[GraphEdgeDict]:
+        """The edge with this ID (id, source, target, label, properties), or
+        ``None``."""
+        ...
+
+    def get_outgoing_bounded(self, node_id: int, cap: int) -> Dict[str, Any]:
+        """At most ``cap`` outgoing edges plus the true out-degree, in
+        O(cap) even for super-nodes.
+
+        Returns:
+            Dict with keys ``edges`` (list of edge dicts) and ``total`` (int).
+        """
+        ...
+
+    def get_incoming_bounded(self, node_id: int, cap: int) -> Dict[str, Any]:
+        """At most ``cap`` incoming edges plus the true in-degree, in
+        O(cap) even for super-nodes.
+
+        Returns:
+            Dict with keys ``edges`` (list of edge dicts) and ``total`` (int).
+        """
+        ...
+
     def edge_count(self) -> int:
         """Returns the total number of edges."""
         ...
@@ -1797,6 +2193,16 @@ class PyGraphCollection:
         Renamed from `store_node_payload` in v1.13 to match the Rust core
         API and the rest of the Python surface (which uses `upsert`
         everywhere).
+        """
+        ...
+
+    def upsert_node_payloads(self, entries: List[Dict[str, Any]]) -> None:
+        """Batch node-payload upsert under one WAL barrier; the whole batch
+        is validated before anything is written, so a rejected batch commits
+        nothing.
+
+        Args:
+            entries: List of dicts with keys ``id`` (int) and ``payload`` (dict).
         """
         ...
 
@@ -1824,8 +2230,15 @@ class PyGraphCollection:
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
+        min_depth: Optional[int] = None,
+        timeout_ms: Optional[int] = None,
     ) -> List[TraversalResultDict]:
-        """Perform BFS traversal from a source node."""
+        """Perform BFS traversal from a source node.
+
+        ``min_depth`` is the minimum hop count included (default: 1);
+        ``timeout_ms`` is a wall-clock budget after which the partial result
+        accumulated so far is returned (default: none).
+        """
         ...
 
     def traverse_dfs(
@@ -1835,8 +2248,11 @@ class PyGraphCollection:
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
+        min_depth: Optional[int] = None,
+        timeout_ms: Optional[int] = None,
     ) -> List[TraversalResultDict]:
-        """Perform DFS traversal from a source node."""
+        """Perform DFS traversal from a source node (``min_depth`` and
+        ``timeout_ms`` as for :meth:`traverse_bfs`)."""
         ...
 
     def traverse_bfs_parallel(
@@ -1846,6 +2262,8 @@ class PyGraphCollection:
         limit: Optional[int] = 100,
         rel_types: Optional[List[str]] = None,
         relationship_types: Optional[List[str]] = None,
+        min_depth: Optional[int] = None,
+        timeout_ms: Optional[int] = None,
     ) -> List[TraversalResultDict]:
         """Perform multi-source BFS traversal with deduplication.
 
@@ -1855,15 +2273,28 @@ class PyGraphCollection:
             limit: Maximum results to return (default: 100)
             rel_types: Optional relationship type filter
             relationship_types: Alias for rel_types
+            min_depth: Minimum hops included (default: 1)
+            timeout_ms: Wall-clock budget in milliseconds (default: none)
         """
         ...
 
     def search_by_embedding(
         self,
-        query: List[float],
+        query: Union[List[float], "np.ndarray"],
         k: Optional[int] = 10,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
     ) -> List[SearchResultDict]:
-        """Search for similar nodes by embedding vector."""
+        """Search for similar nodes by embedding vector.
+
+        ``principal`` / ``tenant`` are forwarded to the read gate.
+
+        Raises:
+            ValueError: If the collection has no embeddings (``VELES-014``)
+                or the query's dimension is not the collection's.
+            PermissionError: If the read gate denies the read.
+        """
         ...
 
     def query(
@@ -1873,12 +2304,23 @@ class PyGraphCollection:
     ) -> List[SearchResultDict]:
         """Execute a VelesQL query (SELECT or MATCH).
 
+        The statement always runs on this collection: its ``FROM`` is
+        rewritten to this collection's name, and a ``_collection`` key in
+        ``params`` (which picks a bare MATCH's target in
+        ``Database.execute_query``) does not retarget it. A MATCH node
+        annotated ``@collection`` reads its properties from that collection.
+
         Args:
             query_str: VelesQL query string
             params: Query parameters (vectors as lists/numpy arrays, scalars)
 
         Returns:
             List of result dicts
+
+        Raises:
+            ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): a collection's query methods run reads only, since
+                a write names its own target. Use ``Database.execute_query``.
         """
         ...
 
@@ -1887,7 +2329,7 @@ class PyGraphCollection:
         query_str: str,
         params: Optional[Dict[str, Any]] = None,
         vector: Optional[List[float]] = None,
-        threshold: float = 0.0,
+        threshold: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """Execute a MATCH graph traversal query.
 
@@ -1898,10 +2340,16 @@ class PyGraphCollection:
             query_str: VelesQL MATCH query (Cypher-like syntax)
             params: Query parameters
             vector: Optional query vector for similarity scoring
-            threshold: Similarity threshold (default: 0.0)
+            threshold: Optional score bound for ``vector``: a row scoring
+                below it under a similarity metric (cosine, dot, jaccard), or
+                above it under a distance metric (euclidean, hamming), is
+                dropped. Omitted (the default), every scored row is kept.
 
         Returns:
             List of dicts with keys: node_id, depth, path, bindings, score, projected
+
+        Raises:
+            ValueError: If ``threshold`` is NaN or infinite.
         """
         ...
 
@@ -1942,7 +2390,12 @@ class PyGraphCollection:
                   flag to distinguish heuristic values from future measured ones.
 
         Raises:
-            RuntimeError: If the query is invalid or execution fails.
+            ValueError: If the query does not parse or is invalid for this
+                database, or if the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): EXPLAIN ANALYZE executes it, so it runs reads
+                only, like ``query``. Use ``Database.execute_query``.
+            PermissionError: If the database's observer refuses it.
+            VelesDBError: If execution fails in the engine.
         """
         ...
 
@@ -1955,6 +2408,11 @@ class PyGraphCollection:
 
         Returns:
             List of dicts with 'id' and 'score' fields
+
+        Raises:
+            ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+                ``FLUSH``): a collection's query methods run reads only, since
+                a write names its own target. Use ``Database.execute_query``.
         """
         ...
 
@@ -1970,25 +2428,36 @@ class PyGraphCollection:
         ...
 
     def __len__(self) -> int:
-        """Return the number of points (nodes with payload) in the graph."""
+        """Return the number of nodes stored with an embedding vector.
+
+        That is core's ``GraphCollection::len``, the points in vector storage:
+        a node written by ``upsert_node(..., vector=...)``. A payload-only node
+        (``upsert_node_payload``, or any node of a graph without embeddings) is
+        not counted — ``all_node_ids()`` lists those.
+        """
         ...
 
     def count(self) -> int:
-        """Return the number of points (nodes with payload) in the graph."""
+        """Return the number of nodes stored with an embedding vector
+        (``len()``; payload-only nodes are not counted)."""
         ...
 
     def is_empty(self) -> bool:
-        """Check if the graph collection has no stored points."""
+        """Return True when no node is stored with an embedding vector
+        (``count() == 0``), even if payload-only nodes exist."""
         ...
 
     def get(self, ids: List[int]) -> List[Optional[Dict[str, Any]]]:
-        """Get points by their IDs.
+        """Get the nodes stored with an embedding vector, by id.
+
+        A payload-only node reads as ``None``, as a missing one does; read
+        its properties with ``get_node_payload``.
 
         Args:
             ids: List of point IDs to retrieve
 
         Returns:
-            List of point dicts (or None for missing IDs)
+            List of point dicts (or None for missing and payload-only IDs)
         """
         ...
 
@@ -2008,16 +2477,54 @@ class PyGraphCollection:
         """
         ...
 
+    def try_remove_edge(self, edge_id: int) -> bool:
+        """Remove an edge by ID, telling "absent" from "WAL refused".
+
+        Returns:
+            True if the edge existed and was removed, False if absent.
+
+        Raises:
+            VelesDBError: If the write-ahead log refused the removal
+                (VELES-006); the edge stays in place.
+        """
+        ...
+
+    def truncate(self) -> Tuple[int, int]:
+        """Remove every edge, then every node (the rule VelesQL ``TRUNCATE``
+        follows). Not atomic: removals before a failure stay applied.
+
+        Returns:
+            ``(edges_removed, nodes_removed)``.
+        """
+        ...
+
+    def scroll_batch(
+        self,
+        cursor: Optional[int] = None,
+        batch_size: int = 100,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[int]]:
+        """Scroll graph nodes in ascending-ID batches (stateless, same shape
+        as :meth:`Collection.scroll_batch`).
+
+        Returns:
+            ``(points, next_cursor)``; ``next_cursor`` is ``None`` once the
+            batch is empty.
+        """
+        ...
+
+    def metrics(self) -> Dict[str, int]:
+        """Operational graph metrics: ``edges_total``, ``edge_inserts_total``,
+        ``edge_deletes_total``, ``traversals_total``,
+        ``traversal_nodes_visited``."""
+        ...
+
     def has_edge(self, edge_id: int) -> bool:
         """Return True when an edge with the given ID exists."""
         ...
 
     def __contains__(self, node_id: int) -> bool:
         """Membership test: ``node_id in graph`` (true if node has a payload)."""
-        ...
-
-    def __enter__(self) -> "PyGraphCollection":
-        """Context manager entry — returns ``self``."""
         ...
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
@@ -2032,15 +2539,41 @@ class PyGraphCollection:
         ...
 
 
-class GraphCollection:
+class PyGraphCollection(_GraphCollectionMembers):
+    """Persistent graph collection with typed nodes, edges, and optional vector search."""
+
+    def add_edge(self, edge: Dict[str, Any]) -> None:
+        """Add an edge between two nodes.
+
+        Both endpoints must already be stored as nodes (``upsert_node`` or
+        ``upsert_node_payload``).
+
+        Args:
+            edge: Dict with keys: id (int), source (int), target (int),
+                  label (str), properties (dict, optional)
+
+        Raises:
+            KeyError: If the source or target node is not stored.
+            EdgeExistsError: If an edge with that id already exists.
+        """
+        ...
+
+    def __enter__(self) -> "PyGraphCollection":
+        """Context manager entry — returns ``self``."""
+        ...
+
+
+class GraphCollection(_GraphCollectionMembers):
     """Python compatibility wrapper returned by the graph-collection helpers.
 
     Returned by :meth:`Database.create_graph_collection` and
     :meth:`Database.get_graph_collection`. This is a delegating wrapper
     around :class:`PyGraphCollection` (composition, not inheritance —
     ``isinstance(g, PyGraphCollection)`` is False at runtime); unknown
-    attributes delegate to the underlying :class:`PyGraphCollection`, and the
-    members below are the facade-specific overrides and convenience aliases.
+    attributes delegate to the underlying :class:`PyGraphCollection`. The
+    members both expose alike are declared once, on the stub-only
+    ``_GraphCollectionMembers`` base; the members below are the
+    facade-specific overrides and convenience aliases.
     """
 
     @overload
@@ -2052,6 +2585,7 @@ class GraphCollection:
     def add_edge(
         self,
         edge_id: int,
+        /,
         *,
         source: int,
         target: int,
@@ -2065,6 +2599,7 @@ class GraphCollection:
     def add_edge(
         self,
         source: int,
+        /,
         target: int,
         label: str = "RELATED_TO",
         weight: Any = None,
@@ -2079,6 +2614,7 @@ class GraphCollection:
     def add_edge(
         self,
         source: int,
+        /,
         target: int,
         label: str = "RELATED_TO",
         weight: Any = None,
@@ -2563,7 +3099,7 @@ class MemoryService:
     def __init__(
         self,
         path: str,
-        embedder: str = "hash",
+        embedder: Optional[str] = None,
         ollama_url: Optional[str] = None,
         ollama_model: Optional[str] = None,
         search_quality: Optional[str] = None,
@@ -2572,8 +3108,12 @@ class MemoryService:
 
         Args:
             path: Store directory (created if missing; memory never leaves it).
-            embedder: ``"hash"`` (default, offline/deterministic) or
-                ``"ollama"`` (real semantic recall via a local model).
+            embedder: ``"hash"`` (offline/deterministic), ``"ollama"`` (real
+                semantic recall via a local model) or ``"openai"`` (an
+                OpenAI-compatible endpoint configured from the environment).
+                Omitted (``None``), ``VELESDB_MEMORY_EMBEDDER`` decides, and
+                ``"hash"`` applies when it is unset; an explicit value wins
+                over the environment.
             ollama_url: Ollama server URL (used when ``embedder="ollama"``).
             ollama_model: Ollama model name (used when ``embedder="ollama"``).
             search_quality: Recall quality: ``"fast"``, ``"balanced"``,
@@ -2587,10 +3127,11 @@ class MemoryService:
         Set ``VELESDB_MEMORY_QUIET=1`` to suppress it for deliberate offline use.
 
         Raises:
-            ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``, or
+            ValueError: If ``embedder`` is not ``"hash"``, ``"ollama"`` or
+                ``"openai"``, its configuration is invalid (a malformed URL, an
+                ``"openai"`` endpoint missing its URL or model), or
                 ``search_quality`` is not a quality.
-            RuntimeError: If the store cannot be opened or the Ollama embedder
-                cannot be initialised.
+            RuntimeError: If the store cannot be opened.
         """
         ...
 
@@ -2900,8 +3441,13 @@ class MemoryService:
                 ignored by ``"outline"``.
             url: Ollama server URL (default: ``http://localhost:11434``).
             metadata: Optional metadata applied to every extracted fact.
-            extractor: Which backend to use, ``"ollama"`` (default) or
-                ``"outline"``. ``"outline"`` is deterministic and
+            extractor: Which backend to use, ``"ollama"``, ``"openai"`` or
+                ``"outline"``; omitted, ``VELESDB_MEMORY_EXTRACTOR``, else
+                ``"ollama"``. The remote backends read ``url``/``model`` from
+                the arguments, else ``VELESDB_MEMORY_EXTRACTOR_URL`` /
+                ``_MODEL``, and a credential from
+                ``VELESDB_MEMORY_EXTRACTOR_API_TOKEN`` only. A ``text`` over
+                the fact cap raises ``ValueError``. ``"outline"`` is deterministic and
                 network-free — it reads the structure the passage STATES, one
                 directive per line (``edge:``, ``attr:``, ``fact:``) — and
                 stands to ``"ollama"`` exactly as the ``"hash"`` embedder
@@ -3156,6 +3702,31 @@ class MemoryService:
         """
         ...
 
+    def memory_status(self) -> Dict[str, Any]:
+        """The server's health, in the envelope the MCP ``memory_status``
+        tool returns: which embedder runs (``embedder["semantic"] is False``
+        means the offline ``hash`` default), what the store was filled by per
+        its on-disk provenance record, the extraction wiring, and the corpus
+        size (``memory["edges"] == 0`` means :meth:`why` has nothing to
+        walk)."""
+        ...
+
+    def list_memories(
+        self,
+        cursor: Optional[int] = None,
+        limit: int = 50,
+        filter: Optional[Dict[str, Any]] = None,
+        include_internal: bool = False,
+    ) -> Dict[str, Any]:
+        """One page of the store, ids ascending, TTL-expired facts skipped.
+
+        Returns ``{"memories": [{"id", "id_str", "content", "metadata"}],
+        "next_cursor": int | None}``. Pass ``next_cursor`` back as
+        ``cursor`` to read the next page; ``None`` ends the walk. A filtered
+        page may come back sparse — keep following the cursor.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Typed options dataclasses (Wave 3 Commit 10)
@@ -3165,9 +3736,10 @@ class MemoryService:
 class HnswOptions:
     """Typed HNSW parameters for :meth:`Database.create_collection`.
 
-    All fields are optional — unspecified fields fall back to the engine
-    defaults. Replaces the v1.12 flat `m=`, `ef_construction=`,
-    `expected_vectors=` kwargs.
+    All fields are optional — an unspecified one comes from the database's
+    ``[hnsw]`` section (:class:`HnswConfigOptions`), then from the
+    auto-tuning for the collection's dimension. Replaces the v1.12 flat
+    `m=`, `ef_construction=`, `expected_vectors=` kwargs.
 
     Example:
         >>> opts = HnswOptions(m=48, ef_construction=600)

@@ -121,6 +121,20 @@ pub enum MemoryError {
     )]
     ZeroTtl,
 
+    /// A binding was given a count — a result limit, a TTL, a hop budget, a
+    /// token reserve, an index — that is not a whole number in
+    /// `0..=u32::MAX`. Raised by [`crate::limits::whole_count`], the one
+    /// validator the JavaScript bindings call: a JS host's own integer
+    /// argument conversion wraps such a value (`Infinity` → 0, `-1` →
+    /// 4294967295) instead of refusing it.
+    #[error("{name} must be a whole number in 0..={max}, got {value}", max = u32::MAX)]
+    InvalidCount {
+        /// The argument's name as the caller spells it (`k`, `ttlSeconds`).
+        name: &'static str,
+        /// The refused value.
+        value: f64,
+    },
+
     /// [`crate::service::MemoryService::relate`] was asked to link a memory to
     /// itself. A self-loop states nothing and is traversed by `why` like any
     /// other edge, so it only adds noise to the evidence trail.
@@ -471,6 +485,7 @@ impl MemoryError {
             | Self::InvalidRelation(_)
             | Self::FactTooLarge { .. }
             | Self::ZeroTtl
+            | Self::InvalidCount { .. }
             | Self::SelfRelation(_)
             | Self::MetadataTooLarge { .. } => ErrorCategory::InvalidInput,
             Self::Unsupported(_) => ErrorCategory::Unsupported,

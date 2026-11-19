@@ -8,14 +8,28 @@ tables. For runnable snippets see the
 [recipes guide](./TAURI_PLUGIN_RECIPES.md).
 
 Every command is invoked as `plugin:velesdb|<command>` and takes a single
-`request` argument (except `delete_collection`, which takes `name`). All
-request and response fields are **camelCase** on the JavaScript side; the Rust
-DTOs use `#[serde(rename_all = "camelCase")]`.
+`request` argument, except:
+
+- `name` (a collection name): `delete_collection`, `get_collection`,
+  `is_empty`, `flush`, `compact_storage`, `get_guardrails`;
+- `limits` (the full `GuardrailLimits`): `update_guardrails`;
+- `data` (snapshot bytes as a number array): `semantic_deserialize`,
+  `episodic_deserialize`, `procedural_deserialize`;
+- no argument: `list_collections`, `semantic_dimension`, `semantic_serialize`,
+  `episodic_serialize`, `procedural_serialize`, `procedural_list_all`,
+  `memory_auto_expire`, `memory_snapshot`, `memory_load_latest_snapshot`,
+  `memory_list_snapshot_versions`.
+
+All request and response fields are **camelCase** on the JavaScript side; the
+Rust DTOs use `#[serde(rename_all = "camelCase")]`. The typed wrapper
+[`guest-js/index.ts`](../../crates/tauri-plugin-velesdb/guest-js/index.ts)
+exports one function per command (`compact_storage` → `compactStorage`).
 
 The authoritative list lives in `crates/tauri-plugin-velesdb/build.rs`
-(`COMMANDS`), and a test in `src/commands_tests.rs` fails the build if
-`build.rs`, the `invoke_handler` registration in `src/lib.rs`, and
-`permissions/default.toml` ever drift apart.
+(`COMMANDS`), and tests in `src/commands_tests.rs` fail the build if
+`build.rs`, the `invoke_handler` registration in `src/lib.rs`,
+`permissions/default.toml` and the `guest-js/index.ts` bindings ever drift
+apart.
 
 ---
 
@@ -39,6 +53,15 @@ The authoritative list lives in `crates/tauri-plugin-velesdb/build.rs`
 | `upsert_metadata` | Insert or update metadata-only points |
 | `get_points` | Retrieve points by IDs |
 | `delete_points` | Delete points by IDs |
+
+Point ids follow REST too. Every point id a command returns — a search hit's
+`id`, `IdScoreOutput.id`, `PointOutput.id`, `HybridResult.nodeId`,
+`scroll_collection`'s `nextCursor`, and the `id` of every agent-memory result
+— is a decimal string, exact past 2^53 where a JavaScript number rounds. Every
+point id a command takes (`upsert` / `upsert_metadata` / `sparse_upsert`
+points, `get_points` / `delete_points` `ids`, the `scroll_collection`
+`cursor`, the agent-memory `id` / `eventId` / `procedureId`) is a decimal
+string or a number.
 
 ## Search
 
@@ -67,6 +90,13 @@ The authoritative list lives in `crates/tauri-plugin-velesdb/build.rs`
 | `traverse_graph` | BFS or DFS traversal from one node |
 | `traverse_graph_parallel` | Multi-source parallel BFS with deduplication |
 | `get_node_degree` | In-degree and out-degree of a node |
+
+Graph ids follow REST's graph endpoints. Every node or edge id a command
+returns (`EdgeOutput.id` / `source` / `target`, `TraversalOutput.targetId` and
+`path`, `NodeDegreeOutput.nodeId`) is a decimal string, because a derived edge id is
+routinely above 2^53 and a JavaScript number would round it. Every id a
+command takes is a decimal string or a number, so an id read back from a result
+can be passed in as is.
 
 ## Secondary indexes
 
@@ -112,13 +142,15 @@ VelesQL DDL routed through `query`.
 |-------|---------|------------|
 | `velesdb://collection-created` | `{ collection, operation: "created" }` | any collection creation, via the observer |
 | `velesdb://collection-deleted` | `{ collection, operation: "deleted" }` | any collection deletion, via the observer |
-| `velesdb://collection-updated` | `{ collection, operation, count }` | `upsert`, `upsert_metadata`, `sparse_upsert`, `delete_points`, `stream_insert`, `enable_streaming` |
+| `velesdb://collection-updated` | `{ collection, operation, count }` | every write and delete, via the observer (commands, `VelesQL` DML through `query`, the streaming drain, agent memory); `enable_streaming` |
 | `velesdb://operation-progress` | `{ operationId, progress, total, processed, message? }` | **nothing yet** — see below |
 | `velesdb://operation-complete` | `{ operationId, success, error?, durationMs? }` | **nothing yet** — see below |
 
-`operation` on `collection-updated` is the name of the command that produced
-the change (`"upsert"`, `"upsert_metadata"`, `"sparse_upsert"`,
-`"delete_points"`, `"stream_insert"`, `"enable_streaming"`).
+`operation` on `collection-updated` is `"upsert"` for any completed write and
+`"delete"` for any completed delete — core reports both, whatever surface made
+them, so `count` is the number of points the write or delete carried —, or
+`"enable_streaming"` (count 0) when streaming is switched on. A streamed point
+is reported when the drain stores it, not when `stream_insert` queues it.
 
 > The progress and complete payload types and their emit helpers exist in
 > `src/events.rs`, but no command calls `emit_progress` / `emit_complete`
@@ -147,7 +179,9 @@ test keeps free of any command that writes:
 
 - `velesdb:read-only` — listing, point reads, every search, graph reads, and
   VelesQL through `read_query` (`readQuery` in guest-js). It does **not**
-  grant `query`, which runs DDL and DML.
+  grant `query`, which runs DDL and DML. Its memory reads (`semantic_query`,
+  `episodic_recent`, `procedural_recall`) create nothing: on a database that
+  holds no agent memory yet they return an empty list.
 - `velesdb:search-only` — dense, ids, text and hybrid search.
 
 ```json
@@ -212,8 +246,8 @@ Passed as `metric` on `create_collection`.
 `balanced`, `accurate`, `perfect`, `auto`, `custom:<ef>` or
 `adaptive:<min_ef>:<max_ef>`, each ef in 16–4096 (#2275); any other value is
 refused, as the server refuses it. It is honoured
-only on the persistence path, and it is **ignored when a `filter` is also
-supplied** (known limitation #457). See the
+only on the persistence path, where it applies together with a `filter` too
+(core's `search_dense` runs a filtered search at the requested quality). See the
 [search modes guide](./SEARCH_MODES.md).
 
 `semantic_query` takes the same optional `quality` string, parsed by the same
@@ -263,9 +297,10 @@ string matching.
 | `VELES-003` | Agent-memory entry not found |
 | `VELES-004` | Embedding or vector dimension differs from the stored dimension |
 | `VELES-009` | Wrong collection kind, bad quality mode, bad metric or fusion, config load failure |
-| `VELES-010` | VelesQL parse error |
+| `VELES-010` | VelesQL parse error; a `MATCH` with no `collection` |
 | `VELES-011` | I/O error |
 | `VELES-012` | Payload could not be (de)serialized |
+| `VELES-018` | A graph command aimed at a vector or metadata collection |
 | `TASK_JOIN` | The plugin's blocking task panicked or was cancelled (`recoverable: false`); the one code core has no equivalent for |
 
 Every other `VELES-###` code is forwarded verbatim from velesdb-core.

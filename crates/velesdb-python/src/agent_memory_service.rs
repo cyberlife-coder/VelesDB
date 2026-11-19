@@ -50,7 +50,7 @@ macro_rules! serde_to_python {
         let json = serde_json::to_value($value).map_err(|err| {
             PyRuntimeError::new_err(format!(concat!("failed to serialize ", $what, ": {}"), err))
         })?;
-        json_to_python($py, &json)
+        json_to_python($py, &json)?
     }};
 }
 
@@ -178,7 +178,7 @@ impl PyMemoryService {
                 .remember_detailed(fact, &links, metadata.as_ref(), ttl_seconds)
                 .map_err(to_py_err)
         })?;
-        Ok(json_to_python(
+        json_to_python(
             py,
             &serde_json::json!({
                 "id": outcome.fact_id,
@@ -187,7 +187,7 @@ impl PyMemoryService {
                     "score": hit.score,
                 })).collect::<Vec<_>>(),
             }),
-        ))
+        )
     }
 
     /// Recall up to `k` memories similar to `query`, optionally narrowed by an
@@ -395,7 +395,7 @@ impl PyMemoryService {
     ///     never finds Camille.
     fn entity(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         let profile = py.detach(|| self.svc.entity_profile(name).map_err(to_py_err))?;
-        Ok(json_to_python(py, &entity_profile_to_value(name, profile)))
+        json_to_python(py, &entity_profile_to_value(name, profile))
     }
 
     /// Extract atomic facts from raw `text` and store them, auto-building the
@@ -407,8 +407,14 @@ impl PyMemoryService {
     ///         backend and ignored by `"outline"`.
     ///     url: the Ollama base URL (`"ollama"` only).
     ///     metadata: merged onto every stored fact.
-    ///     extractor: which backend to use, `"ollama"` (default) or
-    ///         `"outline"`. `"outline"` is deterministic and network-free —
+    ///     extractor: which backend to use, `"ollama"`, `"openai"` or
+    ///         `"outline"`; omitted, `VELESDB_MEMORY_EXTRACTOR`, else
+    ///         `"ollama"` — the Node binding's precedence. The remote backends
+    ///         read `url`/`model` from the arguments, else
+    ///         `VELESDB_MEMORY_EXTRACTOR_URL` / `_MODEL`, and a credential from
+    ///         `VELESDB_MEMORY_EXTRACTOR_API_TOKEN` only. A `text` over the
+    ///         fact cap raises `ValueError` before any backend runs.
+    ///         `"outline"` is deterministic and network-free —
     ///         it reads the structure the passage STATES, one directive per
     ///         line (`edge:`, `attr:`, `fact:`) — and stands to `"ollama"`
     ///         exactly as the `"hash"` embedder does, so the whole contract
@@ -434,13 +440,13 @@ impl PyMemoryService {
     ) -> PyResult<Py<PyAny>> {
         let metadata = to_metadata(py, metadata)?;
         let outcome = extract_with(py, &self.svc, text, model, url, extractor, metadata)?;
-        Ok(json_to_python(
+        json_to_python(
             py,
             &serde_json::json!({
                 "ids": outcome.ids,
                 "skipped_over_cap": outcome.skipped_over_cap,
             }),
-        ))
+        )
     }
 
     /// Compile context fragments into a token-budgeted, provenance-audited
@@ -680,13 +686,15 @@ impl PyMemoryService {
             },
             "memory": { "facts": facts, "edges": edges },
         });
-        Ok(json_to_python(py, &status))
+        json_to_python(py, &status)
     }
 
     /// Audit the store page by page — the SAME walk and envelope as the MCP
     /// `list_memories` tool: ids ascending, TTL-expired facts skipped,
     /// metadata under recall's visibility rule unless `include_internal`.
-    /// `cursor` is the previous page's `next_cursor`; `None` ends the walk.
+    /// `cursor` is the previous page's `next_cursor`, passed back as is (a
+    /// native Python int, like every id of this binding); `None` ends the
+    /// walk.
     /// A filtered page may come back sparse — keep following the cursor,
     /// the walk stays exhaustive.
     #[pyo3(signature = (cursor = None, limit = 50, filter = None, include_internal = false))]
@@ -717,9 +725,9 @@ impl PyMemoryService {
             .collect();
         let page = serde_json::json!({
             "memories": entries,
-            "next_cursor": next.map(|id| id.to_string()),
+            "next_cursor": next,
         });
-        Ok(json_to_python(py, &page))
+        json_to_python(py, &page)
     }
 
     fn load_working_context(

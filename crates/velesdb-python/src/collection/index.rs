@@ -61,19 +61,18 @@ impl Collection {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "list_indexes")?;
         let indexes = self.inner.list_indexes();
-        let py_indexes: Vec<Py<PyAny>> = indexes
+        indexes
             .into_iter()
             .map(|idx| {
                 let dict = PyDict::new(py);
-                let _ = dict.set_item(PyString::intern(py, "label"), idx.label);
-                let _ = dict.set_item(PyString::intern(py, "property"), idx.property);
-                let _ = dict.set_item(PyString::intern(py, "index_type"), idx.index_type);
-                let _ = dict.set_item(PyString::intern(py, "cardinality"), idx.cardinality);
-                let _ = dict.set_item(PyString::intern(py, "memory_bytes"), idx.memory_bytes);
-                dict.into_any().unbind()
+                dict.set_item(PyString::intern(py, "label"), idx.label)?;
+                dict.set_item(PyString::intern(py, "property"), idx.property)?;
+                dict.set_item(PyString::intern(py, "index_type"), idx.index_type)?;
+                dict.set_item(PyString::intern(py, "cardinality"), idx.cardinality)?;
+                dict.set_item(PyString::intern(py, "memory_bytes"), idx.memory_bytes)?;
+                Ok(dict.into_any().unbind())
             })
-            .collect();
-        Ok(py_indexes)
+            .collect()
     }
 
     /// Drop an index (either property or range).

@@ -184,15 +184,37 @@ function toStreamError(error: unknown): Error {
   );
 }
 
+/**
+ * Await one body chunk, aborting the request when none arrives within
+ * `timeoutMs`. Only the wait on the network is timed: the time the consumer
+ * spends on the events already yielded is not.
+ */
+async function readWithin(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  controller: AbortController,
+  timeoutMs: number
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await reader.read();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /** Read the response body as SSE frames (events separated by a blank line) and yield them. */
-async function* readStreamEvents(response: Response): AsyncIterable<TraverseStreamEvent> {
+async function* readStreamEvents(
+  response: Response,
+  controller: AbortController,
+  timeoutMs: number
+): AsyncIterable<TraverseStreamEvent> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   const parser = new SseEventParser();
   let buffer = '';
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithin(reader, controller, timeoutMs);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let sep: number;
@@ -217,6 +239,10 @@ async function* readStreamEvents(response: Response): AsyncIterable<TraverseStre
  * The HTTP status is checked first: a 4xx/5xx throws the typed error. An
  * `error` SSE event (the server sends it alone when the traversal worker
  * fails) is yielded as data, not thrown.
+ *
+ * `transport.timeout` bounds the wait for the response headers, then each
+ * wait for the next body chunk — never the whole stream, which lasts as long
+ * as the traversal and the consumer take.
  */
 export async function* streamTraverse(
   transport: SseTransport,
@@ -224,17 +250,21 @@ export async function* streamTraverse(
   request: StreamTraverseRequest
 ): AsyncIterable<TraverseStreamEvent> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), transport.timeout);
+  const connectTimeoutId = setTimeout(() => controller.abort(), transport.timeout);
   try {
-    const response = await fetchStream(
-      buildStreamUrl(transport, collection, request),
-      streamHeaders(transport),
-      controller.signal
-    );
-    await throwUnlessStreamOk(response);
-    yield* readStreamEvents(response);
+    let response: Response;
+    try {
+      response = await fetchStream(
+        buildStreamUrl(transport, collection, request),
+        streamHeaders(transport),
+        controller.signal
+      );
+      await throwUnlessStreamOk(response);
+    } finally {
+      clearTimeout(connectTimeoutId);
+    }
+    yield* readStreamEvents(response, controller, transport.timeout);
   } finally {
-    clearTimeout(timeoutId);
     // Cancel the in-flight body when the consumer stops early (a `break` out
     // of `for await` runs this finally): without it the reader and the HTTP
     // connection stay open. Aborting an already-completed stream is a no-op.

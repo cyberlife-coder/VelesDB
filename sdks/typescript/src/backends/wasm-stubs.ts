@@ -28,6 +28,7 @@ import type {
   EpisodicRecord,
   ProceduralPattern,
   SearchResult,
+  SearchIdResult,
   VectorDocument,
   SearchOptions,
   MultiQuerySearchOptions,
@@ -203,7 +204,7 @@ export async function wasmSearchIds(
   _collection: string,
   _query: number[] | Float32Array,
   _options?: SearchOptions
-): Promise<Array<{ id: number; score: number }>> {
+): Promise<SearchIdResult[]> {
   wasmNotSupported('searchIds');
 }
 
@@ -211,7 +212,7 @@ export async function wasmMultiQuerySearchIds(
   _collection: string,
   _vectors: Array<number[] | Float32Array>,
   _options?: MultiQuerySearchOptions
-): Promise<Array<{ id: number; score: number }>> {
+): Promise<SearchIdResult[]> {
   wasmNotSupported('multiQuerySearchIds');
 }
 

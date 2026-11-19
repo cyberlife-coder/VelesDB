@@ -35,6 +35,8 @@ impl Database {
     /// `@collection` the clause names (each unscoped), the annotated nodes
     /// read their collection's properties during the walk, and the rows are
     /// ordered and limited as on `/query`, `search.max_results` included.
+    /// A completed run is reported to the observer's `on_query` once, as a
+    /// `VelesQL` statement is.
     ///
     /// # Errors
     ///
@@ -49,20 +51,22 @@ impl Database {
         scoring: Option<MatchScoring<'_>>,
     ) -> Result<Vec<MatchResult>> {
         self.authorize_match_clause(Some(collection), Some(clause), &GateDecisions::default())?;
-        let target = self.resolve_collection(collection)?;
-        let sources = self.match_sources(Some(clause))?;
-        let mut rows = match scoring {
-            Some(scoring) => target.execute_match_with_similarity_reading(
-                clause,
-                scoring.vector,
-                scoring.threshold,
-                params,
-                &sources,
-            ),
-            None => target.match_query_ordered_reading(clause, params, &sources),
-        }?;
-        // `search.max_results` bounds what a caller receives (#2591).
-        rows.truncate(self.config.search.max_results);
-        Ok(rows)
+        self.report_read(collection, || {
+            let target = self.resolve_collection(collection)?;
+            let sources = self.match_sources(Some(clause))?;
+            let mut rows = match scoring {
+                Some(scoring) => target.execute_match_with_similarity_reading(
+                    clause,
+                    scoring.vector,
+                    scoring.threshold,
+                    params,
+                    &sources,
+                ),
+                None => target.match_query_ordered_reading(clause, params, &sources),
+            }?;
+            // `search.max_results` bounds what a caller receives (#2591).
+            rows.truncate(self.config.search.max_results);
+            Ok(rows)
+        })
     }
 }

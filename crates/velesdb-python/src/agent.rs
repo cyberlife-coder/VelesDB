@@ -29,11 +29,11 @@ fn procedures_to_pylist(
     let list = pyo3::types::PyList::empty(py);
     for m in results {
         let dict = PyDict::new(py);
-        let _ = dict.set_item(PyString::intern(py, "id"), m.id);
-        let _ = dict.set_item(PyString::intern(py, "name"), &m.name);
-        let _ = dict.set_item(PyString::intern(py, "steps"), &m.steps);
-        let _ = dict.set_item(PyString::intern(py, "confidence"), m.confidence);
-        let _ = dict.set_item(PyString::intern(py, "score"), m.score);
+        dict.set_item(PyString::intern(py, "id"), m.id)?;
+        dict.set_item(PyString::intern(py, "name"), &m.name)?;
+        dict.set_item(PyString::intern(py, "steps"), &m.steps)?;
+        dict.set_item(PyString::intern(py, "confidence"), m.confidence)?;
+        dict.set_item(PyString::intern(py, "score"), m.score)?;
         list.append(dict)?;
     }
     Ok(list.into())
@@ -44,9 +44,9 @@ fn events_to_pylist(py: Python<'_>, events: Vec<(u64, String, i64)>) -> PyResult
     let list = pyo3::types::PyList::empty(py);
     for (id, description, timestamp) in events {
         let dict = PyDict::new(py);
-        let _ = dict.set_item(PyString::intern(py, "id"), id);
-        let _ = dict.set_item(PyString::intern(py, "description"), description);
-        let _ = dict.set_item(PyString::intern(py, "timestamp"), timestamp);
+        dict.set_item(PyString::intern(py, "id"), id)?;
+        dict.set_item(PyString::intern(py, "description"), description)?;
+        dict.set_item(PyString::intern(py, "timestamp"), timestamp)?;
         list.append(dict)?;
     }
     Ok(list.into())
@@ -125,10 +125,10 @@ impl AgentMemory {
     ) -> PyResult<Self> {
         let dim = dimension.unwrap_or(DEFAULT_DIMENSION);
 
-        // PyO3 classes cannot hold lifetime parameters, so we open an
-        // independent Database handle from the same path. Each handle has its
-        // own in-memory registries but reads/writes the same on-disk data.
-        let owned_db = db.open_shared().map_err(PyRuntimeError::new_err)?;
+        // PyO3 classes cannot hold lifetime parameters, so the memory owns an
+        // `Arc` of the caller's database: the same registries, observer and
+        // file lock, not a second handle on the same path.
+        let owned_db = db.shared();
 
         // Initialize memory subsystems — this creates the underlying collections
         // if they do not already exist. The returned handle owns the shared TTL
@@ -308,7 +308,7 @@ impl AgentMemory {
     ///     to drain them).
     fn auto_expire(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let result = py.detach(|| self.core.auto_expire().map_err(to_py_err))?;
-        Ok(expire_result_to_dict(py, &result))
+        expire_result_to_dict(py, &result)
     }
 
     /// Evicts procedures whose confidence is below the threshold.
@@ -449,32 +449,35 @@ impl AgentMemory {
         let rust_params = convert_params(py, params)?;
         let core = Arc::clone(&self.core);
         let results = py.detach(|| execute(&core, query_str, &rust_params).map_err(to_py_err))?;
-        Ok(search_results_to_multimodel_dicts(py, results))
+        search_results_to_multimodel_dicts(py, results)
     }
 }
 
 /// Builds a Python dict from an `ExpireResult`.
-fn expire_result_to_dict(py: Python<'_>, r: &velesdb_core::agent::ExpireResult) -> Py<PyAny> {
+fn expire_result_to_dict(
+    py: Python<'_>,
+    r: &velesdb_core::agent::ExpireResult,
+) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
-    let _ = dict.set_item(PyString::intern(py, "semantic_expired"), r.semantic_expired);
-    let _ = dict.set_item(PyString::intern(py, "episodic_expired"), r.episodic_expired);
-    let _ = dict.set_item(
+    dict.set_item(PyString::intern(py, "semantic_expired"), r.semantic_expired)?;
+    dict.set_item(PyString::intern(py, "episodic_expired"), r.episodic_expired)?;
+    dict.set_item(
         PyString::intern(py, "procedural_expired"),
         r.procedural_expired,
-    );
-    let _ = dict.set_item(
+    )?;
+    dict.set_item(
         PyString::intern(py, "episodic_consolidated"),
         r.episodic_consolidated,
-    );
-    let _ = dict.set_item(
+    )?;
+    dict.set_item(
         PyString::intern(py, "procedural_evicted"),
         r.procedural_evicted,
-    );
-    let _ = dict.set_item(
+    )?;
+    dict.set_item(
         PyString::intern(py, "consolidation_truncated"),
         r.consolidation_truncated,
-    );
-    dict.into()
+    )?;
+    Ok(dict.into())
 }
 
 /// Python wrapper for SemanticMemory.
@@ -590,13 +593,12 @@ impl PySemanticMemory {
         })?;
 
         // Phase 3: Build Python objects (GIL held)
-        // set_item is infallible on fresh dicts with interned keys and basic Python types.
         let list = pyo3::types::PyList::empty(py);
         for (id, score, content) in results {
             let dict = PyDict::new(py);
-            let _ = dict.set_item(PyString::intern(py, "id"), id);
-            let _ = dict.set_item(PyString::intern(py, "score"), score);
-            let _ = dict.set_item(PyString::intern(py, "content"), content);
+            dict.set_item(PyString::intern(py, "id"), id)?;
+            dict.set_item(PyString::intern(py, "score"), score)?;
+            dict.set_item(PyString::intern(py, "content"), content)?;
             list.append(dict)?;
         }
         Ok(list.into())
@@ -770,10 +772,10 @@ impl PyEpisodicMemory {
         let list = pyo3::types::PyList::empty(py);
         for (id, description, timestamp, score) in results {
             let dict = PyDict::new(py);
-            let _ = dict.set_item(PyString::intern(py, "id"), id);
-            let _ = dict.set_item(PyString::intern(py, "description"), description);
-            let _ = dict.set_item(PyString::intern(py, "timestamp"), timestamp);
-            let _ = dict.set_item(PyString::intern(py, "score"), score);
+            dict.set_item(PyString::intern(py, "id"), id)?;
+            dict.set_item(PyString::intern(py, "description"), description)?;
+            dict.set_item(PyString::intern(py, "timestamp"), timestamp)?;
+            dict.set_item(PyString::intern(py, "score"), score)?;
             list.append(dict)?;
         }
         Ok(list.into())

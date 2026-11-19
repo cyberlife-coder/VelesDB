@@ -83,6 +83,7 @@ pub mod observer;
 pub mod state;
 pub mod types;
 pub mod types_graph;
+pub mod types_memory;
 
 pub use error::{CommandError, Error, Result};
 pub use state::VelesDbState;
@@ -170,6 +171,7 @@ pub fn init_with_path<R: Runtime, P: AsRef<Path>>(path: P) -> TauriPlugin<R> {
 pub struct Builder {
     path: PathBuf,
     config: Option<VelesConfig>,
+    memory_dimension: usize,
 }
 
 impl Builder {
@@ -179,7 +181,28 @@ impl Builder {
         Self {
             path: path.as_ref().to_path_buf(),
             config: None,
+            memory_dimension: velesdb_core::agent::DEFAULT_DIMENSION,
         }
+    }
+
+    /// Sets the embedding dimension of the agent memory (the `semantic_*`,
+    /// `episodic_*`, `procedural_*` and `memory_*` commands): the size of the
+    /// embeddings your model produces. Defaults to
+    /// [`velesdb_core::agent::DEFAULT_DIMENSION`] (384).
+    ///
+    /// The memory collections are created with this dimension on first use;
+    /// when they already exist with another one, the first memory command
+    /// fails with a dimension mismatch.
+    #[must_use]
+    pub fn with_memory_dimension(mut self, dimension: usize) -> Self {
+        self.memory_dimension = dimension;
+        self
+    }
+
+    /// Returns the agent-memory embedding dimension recorded so far.
+    #[must_use]
+    pub fn memory_dimension(&self) -> usize {
+        self.memory_dimension
     }
 
     /// Supplies an explicit engine [`VelesConfig`] value.
@@ -251,6 +274,7 @@ impl Builder {
         let Self {
             path: db_path,
             config,
+            memory_dimension,
         } = self;
 
         let builder = TauriPluginBuilder::new("velesdb").invoke_handler(velesdb_invoke_handler!(
@@ -345,7 +369,8 @@ impl Builder {
                         config,
                     ),
                     None => VelesDbState::new_with_observer(db_path.clone(), observer),
-                };
+                }
+                .with_memory_dimension(memory_dimension);
                 app.manage(state);
                 tracing::info!("VelesDB plugin initialized with path: {:?}", db_path);
                 Ok(())

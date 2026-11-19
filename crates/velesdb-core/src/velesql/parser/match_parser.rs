@@ -284,7 +284,7 @@ impl Parser {
             match detail_pair.as_rule() {
                 Rule::rel_alias => rel.alias = Some(detail_pair.as_str().to_string()),
                 Rule::rel_types => Self::collect_rel_types(detail_pair, &mut rel.types),
-                Rule::rel_range => rel.range = Self::parse_rel_range(detail_pair),
+                Rule::rel_range => rel.range = Self::parse_rel_range(detail_pair)?,
                 Rule::node_properties => {
                     rel.properties = Self::parse_node_properties(detail_pair)?;
                 }
@@ -304,26 +304,53 @@ impl Parser {
     }
 
     /// Parse relationship range (EPIC-045 US-001).
-    #[allow(clippy::unnecessary_wraps)] // Option is for consistency with caller expectations
-    fn parse_rel_range(pair: pest::iterators::Pair<Rule>) -> Option<(u32, u32)> {
+    ///
+    /// # Errors
+    ///
+    /// A bound that is not a `u32` is refused rather than read as the default
+    /// it would replace: `*5000000000..3` used to run as `*1..3`.
+    fn parse_rel_range(
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Option<(u32, u32)>, ParseError> {
         for inner_pair in pair.into_inner() {
-            if inner_pair.as_rule() == Rule::range_spec {
-                let text = inner_pair.as_str();
-                if let Some(dot_pos) = text.find("..") {
-                    let start: u32 = text[..dot_pos].parse().unwrap_or(1);
-                    let end: u32 = text[dot_pos + 2..].parse().unwrap_or(u32::MAX);
-                    return Some((start, end));
-                } else if let Ok(exact) = text.parse::<u32>() {
-                    return Some((exact, exact));
-                }
-            } else if inner_pair.as_rule() == Rule::integer {
-                if let Ok(exact) = inner_pair.as_str().parse::<u32>() {
-                    return Some((exact, exact));
-                }
+            if matches!(inner_pair.as_rule(), Rule::range_spec | Rule::integer) {
+                return Self::parse_range_spec(&inner_pair).map(Some);
             }
         }
         // Default: unbounded
-        Some((1, u32::MAX))
+        Ok(Some((1, u32::MAX)))
+    }
+
+    /// Parses `n`, `n..`, `..m` or `n..m`: an omitted lower bound is 1 hop, an
+    /// omitted upper bound `u32::MAX`.
+    fn parse_range_spec(pair: &pest::iterators::Pair<Rule>) -> Result<(u32, u32), ParseError> {
+        let text = pair.as_str();
+        let position = pair.as_span().start();
+        if let Some((start, end)) = text.split_once("..") {
+            return Ok((
+                Self::parse_hop_bound(start, 1, position)?,
+                Self::parse_hop_bound(end, u32::MAX, position)?,
+            ));
+        }
+        let exact = Self::parse_hop_bound(text, 1, position)?;
+        Ok((exact, exact))
+    }
+
+    /// One bound of a hop range; `default` stands in for an omitted bound only.
+    fn parse_hop_bound(text: &str, default: u32, position: usize) -> Result<u32, ParseError> {
+        if text.is_empty() {
+            return Ok(default);
+        }
+        text.parse().map_err(|_| {
+            ParseError::syntax(
+                position,
+                text,
+                format!(
+                    "invalid hop count '{text}': expected an integer from 0 to {}",
+                    u32::MAX
+                ),
+            )
+        })
     }
 
     /// Parse RETURN clause (EPIC-045 US-001).

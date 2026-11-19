@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use velesdb_core::QueryOperationKind;
 
 use crate::collection_helpers::{core_err, id_score_pairs_to_dicts};
-use crate::utils::{extract_vector, json_to_python, python_to_json, to_pyobject};
+use crate::utils::{extract_vector, json_to_python, python_to_json};
 
 use super::{deny_if_scoped, Collection};
 
@@ -22,30 +22,21 @@ use super::{deny_if_scoped, Collection};
 pub(crate) fn match_result_to_dict(
     py: Python<'_>,
     r: velesdb_core::collection::search::query::match_exec::MatchResult,
-) -> Py<PyAny> {
+) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
-    let _ = dict.set_item(PyString::intern(py, "node_id"), r.node_id);
-    let _ = dict.set_item(PyString::intern(py, "depth"), r.depth);
-    let _ = dict.set_item(PyString::intern(py, "path"), to_pyobject(py, r.path));
-    let _ = dict.set_item(
-        PyString::intern(py, "bindings"),
-        to_pyobject(py, r.bindings),
-    );
-    let _ = dict.set_item(
-        PyString::intern(py, "edge_bindings"),
-        to_pyobject(py, r.edge_bindings),
-    );
-    let _ = dict.set_item(
-        PyString::intern(py, "edge_paths"),
-        to_pyobject(py, r.edge_paths),
-    );
-    let _ = dict.set_item(PyString::intern(py, "score"), r.score);
+    dict.set_item(PyString::intern(py, "node_id"), r.node_id)?;
+    dict.set_item(PyString::intern(py, "depth"), r.depth)?;
+    dict.set_item(PyString::intern(py, "path"), r.path)?;
+    dict.set_item(PyString::intern(py, "bindings"), r.bindings)?;
+    dict.set_item(PyString::intern(py, "edge_bindings"), r.edge_bindings)?;
+    dict.set_item(PyString::intern(py, "edge_paths"), r.edge_paths)?;
+    dict.set_item(PyString::intern(py, "score"), r.score)?;
     let projected = PyDict::new(py);
     for (k, v) in r.projected {
-        let _ = projected.set_item(k, json_to_python(py, &v));
+        projected.set_item(k, json_to_python(py, &v)?)?;
     }
-    let _ = dict.set_item(PyString::intern(py, "projected"), projected);
-    dict.into_any().unbind()
+    dict.set_item(PyString::intern(py, "projected"), projected)?;
+    Ok(dict.into_any().unbind())
 }
 
 /// Returns `query` retargeted so its FROM (top-level select and every UNION /
@@ -101,6 +92,28 @@ pub(crate) fn validate_query(parsed: &velesdb_core::velesql::Query) -> PyResult<
         .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Writes the four plan keys every EXPLAIN dict carries — `tree`,
+/// `estimated_cost_ms`, `filter_strategy`, `index_used` — into `dict`.
+fn set_plan_items(
+    py: Python<'_>,
+    dict: &Bound<'_, PyDict>,
+    plan: &velesdb_core::velesql::QueryPlan,
+) -> PyResult<()> {
+    dict.set_item(PyString::intern(py, "tree"), plan.to_tree())?;
+    dict.set_item(
+        PyString::intern(py, "estimated_cost_ms"),
+        plan.estimated_cost_ms,
+    )?;
+    dict.set_item(
+        PyString::intern(py, "filter_strategy"),
+        plan.filter_strategy.as_str(),
+    )?;
+    dict.set_item(
+        PyString::intern(py, "index_used"),
+        plan.index_used.map(|i| i.as_str().to_string()),
+    )
+}
+
 /// Builds an EXPLAIN dict from a parsed VelesQL query, threading the live
 /// indexed-field set and calibrated collection statistics so the plan emits
 /// `IndexLookup` nodes and a calibrated cost for SELECT, and a real traversal
@@ -110,7 +123,7 @@ pub(crate) fn build_explain_dict(
     parsed: &velesdb_core::velesql::Query,
     indexed_fields: &std::collections::HashSet<String>,
     stats: Option<&velesdb_core::collection::stats::CollectionStats>,
-) -> Py<PyAny> {
+) -> PyResult<Py<PyAny>> {
     let plan = velesdb_core::velesql::QueryPlan::from_query_with_all_stats(
         parsed,
         indexed_fields,
@@ -119,53 +132,26 @@ pub(crate) fn build_explain_dict(
     );
 
     let dict = PyDict::new(py);
-    let _ = dict.set_item(
-        PyString::intern(py, "tree"),
-        to_pyobject(py, plan.to_tree()),
-    );
-    let _ = dict.set_item(
-        PyString::intern(py, "estimated_cost_ms"),
-        plan.estimated_cost_ms,
-    );
-    let _ = dict.set_item(
-        PyString::intern(py, "filter_strategy"),
-        plan.filter_strategy.as_str(),
-    );
-    let _ = dict.set_item(
-        PyString::intern(py, "index_used"),
-        plan.index_used.map(|i| i.as_str().to_string()),
-    );
-    dict.into_any().unbind()
+    set_plan_items(py, &dict, &plan)?;
+    Ok(dict.into_any().unbind())
 }
 
 /// Convert a core `QueryPlan` (as returned by the database-level
 /// `explain_query_with_params`) to a Python dict, including the compiled-plan
 /// cache fields `cache_hit` / `plan_reuse_count` that the collection-level
 /// leaf path cannot see.
-pub(crate) fn plan_to_dict(py: Python<'_>, plan: &velesdb_core::velesql::QueryPlan) -> Py<PyAny> {
+pub(crate) fn plan_to_dict(
+    py: Python<'_>,
+    plan: &velesdb_core::velesql::QueryPlan,
+) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
-    let _ = dict.set_item(
-        PyString::intern(py, "tree"),
-        to_pyobject(py, plan.to_tree()),
-    );
-    let _ = dict.set_item(
-        PyString::intern(py, "estimated_cost_ms"),
-        plan.estimated_cost_ms,
-    );
-    let _ = dict.set_item(
-        PyString::intern(py, "filter_strategy"),
-        plan.filter_strategy.as_str(),
-    );
-    let _ = dict.set_item(
-        PyString::intern(py, "index_used"),
-        plan.index_used.map(|i| i.as_str().to_string()),
-    );
-    let _ = dict.set_item(PyString::intern(py, "cache_hit"), plan.cache_hit);
-    let _ = dict.set_item(
+    set_plan_items(py, &dict, plan)?;
+    dict.set_item(PyString::intern(py, "cache_hit"), plan.cache_hit)?;
+    dict.set_item(
         PyString::intern(py, "plan_reuse_count"),
         plan.plan_reuse_count,
-    );
-    dict.into_any().unbind()
+    )?;
+    Ok(dict.into_any().unbind())
 }
 
 /// Builds an EXPLAIN ANALYZE dict from an `ExplainOutput`.
@@ -178,110 +164,114 @@ pub(crate) fn plan_to_dict(py: Python<'_>, plan: &velesdb_core::velesql::QueryPl
 pub(crate) fn build_explain_analyze_dict(
     py: Python<'_>,
     output: &velesdb_core::velesql::ExplainOutput,
-) -> Py<PyAny> {
+) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
 
     // Plan sub-dict (same keys as build_explain_dict)
-    let plan = &output.plan;
     let plan_dict = PyDict::new(py);
-    let _ = plan_dict.set_item(
-        PyString::intern(py, "tree"),
-        to_pyobject(py, plan.to_tree()),
-    );
-    let _ = plan_dict.set_item(
-        PyString::intern(py, "estimated_cost_ms"),
-        plan.estimated_cost_ms,
-    );
-    let _ = plan_dict.set_item(
-        PyString::intern(py, "filter_strategy"),
-        plan.filter_strategy.as_str(),
-    );
-    let _ = plan_dict.set_item(
-        PyString::intern(py, "index_used"),
-        plan.index_used.map(|i| i.as_str().to_string()),
-    );
-    let _ = dict.set_item(PyString::intern(py, "plan"), plan_dict);
+    set_plan_items(py, &plan_dict, &output.plan)?;
+    dict.set_item(PyString::intern(py, "plan"), plan_dict)?;
 
-    // actual_stats sub-dict (or None)
-    if let Some(stats) = &output.actual_stats {
-        let stats_dict = PyDict::new(py);
-        let _ = stats_dict.set_item(PyString::intern(py, "actual_rows"), stats.actual_rows);
-        let _ = stats_dict.set_item(PyString::intern(py, "actual_time_ms"), stats.actual_time_ms);
-        let _ = stats_dict.set_item(PyString::intern(py, "loops"), stats.loops);
-        let _ = stats_dict.set_item(PyString::intern(py, "nodes_visited"), stats.nodes_visited);
-        let _ = stats_dict.set_item(
-            PyString::intern(py, "edges_traversed"),
-            stats.edges_traversed,
-        );
-        let _ = dict.set_item(PyString::intern(py, "actual_stats"), stats_dict);
-    } else {
-        let _ = dict.set_item(PyString::intern(py, "actual_stats"), py.None());
-    }
-
-    // node_stats list
-    let node_dicts: Vec<Py<PyAny>> = output
+    dict.set_item(
+        PyString::intern(py, "actual_stats"),
+        output
+            .actual_stats
+            .as_ref()
+            .map(|stats| actual_stats_dict(py, stats))
+            .transpose()?,
+    )?;
+    let node_dicts = output
         .node_stats
         .iter()
-        .map(|ns| {
-            let d = PyDict::new(py);
-            let _ = d.set_item(PyString::intern(py, "node_label"), &ns.node_label);
-            let _ = d.set_item(PyString::intern(py, "actual_time_ms"), ns.actual_time_ms);
-            let _ = d.set_item(PyString::intern(py, "actual_rows_in"), ns.actual_rows_in);
-            let _ = d.set_item(PyString::intern(py, "actual_rows_out"), ns.actual_rows_out);
-            let _ = d.set_item(PyString::intern(py, "loops"), ns.loops);
-            let _ = d.set_item(PyString::intern(py, "estimated"), ns.estimated);
-            d.into_any().unbind()
-        })
-        .collect();
-    let _ = dict.set_item(
+        .map(|ns| node_stats_dict(py, ns))
+        .collect::<PyResult<Vec<_>>>()?;
+    dict.set_item(
         PyString::intern(py, "node_stats"),
-        PyList::new(py, &node_dicts).unwrap_or_else(|_| PyList::empty(py)),
-    );
-
-    // cost_factors (dict or None)
-    if let Some(ref factors) = output.cost_factors {
-        let cf = PyDict::new(py);
-        let _ = cf.set_item(PyString::intern(py, "seq_page_cost"), factors.seq_page_cost);
-        let _ = cf.set_item(
-            PyString::intern(py, "random_page_cost"),
-            factors.random_page_cost,
-        );
-        let _ = cf.set_item(
-            PyString::intern(py, "cpu_tuple_cost"),
-            factors.cpu_tuple_cost,
-        );
-        let _ = cf.set_item(
-            PyString::intern(py, "cpu_index_cost"),
-            factors.cpu_index_cost,
-        );
-        let _ = cf.set_item(
-            PyString::intern(py, "cpu_distance_cost"),
-            factors.cpu_distance_cost,
-        );
-        let _ = cf.set_item(PyString::intern(py, "cpu_edge_cost"), factors.cpu_edge_cost);
-        let _ = dict.set_item(PyString::intern(py, "cost_factors"), cf);
-    } else {
-        let _ = dict.set_item(PyString::intern(py, "cost_factors"), py.None());
-    }
-
-    // calibration_source (str or None)
-    let _ = dict.set_item(
+        PyList::new(py, &node_dicts)?,
+    )?;
+    dict.set_item(
+        PyString::intern(py, "cost_factors"),
+        output
+            .cost_factors
+            .as_ref()
+            .map(|factors| cost_factors_dict(py, factors))
+            .transpose()?,
+    )?;
+    dict.set_item(
         PyString::intern(py, "calibration_source"),
         output
             .calibration_source
             .as_deref()
-            .map(|s| PyString::intern(py, s).into_any().unbind())
-            .unwrap_or_else(|| py.None()),
-    );
+            .map(|s| PyString::intern(py, s)),
+    )?;
 
-    dict.into_any().unbind()
+    Ok(dict.into_any().unbind())
+}
+
+/// The measured execution metrics of an EXPLAIN ANALYZE.
+fn actual_stats_dict<'py>(
+    py: Python<'py>,
+    stats: &velesdb_core::velesql::ActualStats,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(PyString::intern(py, "actual_rows"), stats.actual_rows)?;
+    d.set_item(PyString::intern(py, "actual_time_ms"), stats.actual_time_ms)?;
+    d.set_item(PyString::intern(py, "loops"), stats.loops)?;
+    d.set_item(PyString::intern(py, "nodes_visited"), stats.nodes_visited)?;
+    d.set_item(
+        PyString::intern(py, "edges_traversed"),
+        stats.edges_traversed,
+    )?;
+    Ok(d)
+}
+
+/// One plan node's (estimated) statistics.
+fn node_stats_dict<'py>(
+    py: Python<'py>,
+    ns: &velesdb_core::velesql::NodeStats,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(PyString::intern(py, "node_label"), &ns.node_label)?;
+    d.set_item(PyString::intern(py, "actual_time_ms"), ns.actual_time_ms)?;
+    d.set_item(PyString::intern(py, "actual_rows_in"), ns.actual_rows_in)?;
+    d.set_item(PyString::intern(py, "actual_rows_out"), ns.actual_rows_out)?;
+    d.set_item(PyString::intern(py, "loops"), ns.loops)?;
+    d.set_item(PyString::intern(py, "estimated"), ns.estimated)?;
+    Ok(d)
+}
+
+/// The cost-model factors the plan was costed with.
+fn cost_factors_dict<'py>(
+    py: Python<'py>,
+    factors: &velesdb_core::collection::query_cost::OperationCostFactors,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(PyString::intern(py, "seq_page_cost"), factors.seq_page_cost)?;
+    d.set_item(
+        PyString::intern(py, "random_page_cost"),
+        factors.random_page_cost,
+    )?;
+    d.set_item(
+        PyString::intern(py, "cpu_tuple_cost"),
+        factors.cpu_tuple_cost,
+    )?;
+    d.set_item(
+        PyString::intern(py, "cpu_index_cost"),
+        factors.cpu_index_cost,
+    )?;
+    d.set_item(
+        PyString::intern(py, "cpu_distance_cost"),
+        factors.cpu_distance_cost,
+    )?;
+    d.set_item(PyString::intern(py, "cpu_edge_cost"), factors.cpu_edge_cost)?;
+    Ok(d)
 }
 
 /// Converts `Vec<SearchResult>` to id/score dicts.
 pub(crate) fn search_results_to_id_score(
     py: Python<'_>,
     results: Vec<velesdb_core::SearchResult>,
-) -> Vec<Py<PyAny>> {
+) -> PyResult<Vec<Py<PyAny>>> {
     let tuples: Vec<(u64, f32)> = results.into_iter().map(|r| (r.point.id, r.score)).collect();
     id_score_pairs_to_dicts(py, tuples)
 }
@@ -302,44 +292,82 @@ pub(crate) fn convert_params(
 // Shared VelesQL execution helpers (used by Collection + PyGraphCollection)
 // ---------------------------------------------------------------------------
 
-/// Execute a VelesQL SELECT query and convert results to multimodel dicts.
-pub(crate) fn run_velesql_select<F>(
-    py: Python<'_>,
-    query_str: &str,
-    params: Option<HashMap<String, Py<PyAny>>>,
-    execute: F,
-) -> PyResult<Vec<Py<PyAny>>>
-where
-    F: FnOnce(
-            &velesdb_core::velesql::Query,
-            &HashMap<String, serde_json::Value>,
-        ) -> velesdb_core::error::Result<Vec<velesdb_core::SearchResult>>
-        + Send,
+/// The executor a collection-scoped VelesQL read hands its parsed,
+/// read-only statement to.
+pub(crate) trait VelesqlReadExecutor:
+    FnOnce(
+        &velesdb_core::velesql::Query,
+        &HashMap<String, serde_json::Value>,
+    ) -> velesdb_core::error::Result<Vec<velesdb_core::SearchResult>>
+    + Send
 {
-    let parsed = parse_velesql(query_str)?;
-    let rust_params = convert_params(py, params)?;
-    let results = py.detach(move || execute(&parsed, &rust_params).map_err(core_err))?;
-    Ok(crate::collection_helpers::search_results_to_multimodel_dicts(py, results))
 }
 
-/// Execute a VelesQL SELECT query and return only IDs and scores.
-pub(crate) fn run_velesql_select_ids<F>(
-    py: Python<'_>,
-    query_str: &str,
-    params: Option<HashMap<String, Py<PyAny>>>,
-    execute: F,
-) -> PyResult<Vec<Py<PyAny>>>
-where
+impl<F> VelesqlReadExecutor for F where
     F: FnOnce(
             &velesdb_core::velesql::Query,
             &HashMap<String, serde_json::Value>,
         ) -> velesdb_core::error::Result<Vec<velesdb_core::SearchResult>>
-        + Send,
+        + Send
 {
+}
+
+/// Parses `query_str` and refuses any statement that writes.
+///
+/// The collection-scoped methods that execute a statement (`query`,
+/// `query_ids` and `explain_analyze` on `Collection` and `GraphCollection`)
+/// retarget a SELECT's `FROM` to their
+/// own collection, but a DDL or DML statement names its own target: run as
+/// is, `docs.query("DROP COLLECTION other")` would drop `other`. Those belong
+/// to `Database.execute_query`, so only what core's
+/// [`Query::is_read_only`](velesdb_core::velesql::Query::is_read_only) admits
+/// passes here.
+pub(crate) fn parse_read_only_velesql(query_str: &str) -> PyResult<velesdb_core::velesql::Query> {
     let parsed = parse_velesql(query_str)?;
+    if parsed.is_read_only() {
+        Ok(parsed)
+    } else {
+        Err(PyValueError::new_err(
+            "a collection's query methods run read-only VelesQL only (SELECT, \
+             MATCH, SELECT EDGES, SHOW, DESCRIBE, EXPLAIN); run DDL and DML \
+             through Database.execute_query",
+        ))
+    }
+}
+
+/// Parses a read-only statement (see [`parse_read_only_velesql`]), converts
+/// `params` and runs `execute` off the GIL.
+fn run_velesql_read(
+    py: Python<'_>,
+    query_str: &str,
+    params: Option<HashMap<String, Py<PyAny>>>,
+    execute: impl VelesqlReadExecutor,
+) -> PyResult<Vec<velesdb_core::SearchResult>> {
+    let parsed = parse_read_only_velesql(query_str)?;
     let rust_params = convert_params(py, params)?;
-    let results = py.detach(move || execute(&parsed, &rust_params).map_err(core_err))?;
-    Ok(search_results_to_id_score(py, results))
+    py.detach(move || execute(&parsed, &rust_params).map_err(core_err))
+}
+
+/// Execute a read-only VelesQL query and convert results to multimodel dicts.
+pub(crate) fn run_velesql_select(
+    py: Python<'_>,
+    query_str: &str,
+    params: Option<HashMap<String, Py<PyAny>>>,
+    execute: impl VelesqlReadExecutor,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let results = run_velesql_read(py, query_str, params, execute)?;
+    crate::collection_helpers::search_results_to_multimodel_dicts(py, results)
+}
+
+/// Execute a read-only VelesQL query and return only IDs and scores.
+pub(crate) fn run_velesql_select_ids(
+    py: Python<'_>,
+    query_str: &str,
+    params: Option<HashMap<String, Py<PyAny>>>,
+    execute: impl VelesqlReadExecutor,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let results = run_velesql_read(py, query_str, params, execute)?;
+    search_results_to_id_score(py, results)
 }
 
 /// Execute a VelesQL MATCH query and convert results to dicts.
@@ -369,10 +397,61 @@ where
     let query_vector = vector.map(|v| extract_vector(py, &v)).transpose()?;
     let results =
         py.detach(move || execute(match_clause, rust_params, query_vector).map_err(core_err))?;
-    Ok(results
+    results
         .into_iter()
         .map(|r| match_result_to_dict(py, r))
-        .collect())
+        .collect()
+}
+
+/// Refuses a `match_query` threshold that is not finite: NaN passes no
+/// comparison, so it used to drop every row without a word.
+pub(crate) fn validate_match_threshold(threshold: Option<f32>) -> PyResult<Option<f32>> {
+    match threshold {
+        Some(t) if !t.is_finite() => Err(PyValueError::new_err(format!(
+            "threshold must be a finite number, got {t}"
+        ))),
+        other => Ok(other),
+    }
+}
+
+/// Runs the bare MATCH `clause` on `collection` through `db`, as REST
+/// `/match` does — the read gate on the target and every `@collection`, the
+/// annotated nodes' properties, `search.max_results` and the observer's
+/// `on_query` — scoring the rows against `query_vector` when one is given.
+///
+/// Core keeps a scored row whose score is at least the threshold under a
+/// similarity metric and at most it under a distance metric
+/// ([`velesdb_core::MatchScoring`]). An omitted `threshold` is therefore the
+/// bound every score passes in the collection metric's direction, not `0.0`,
+/// which under a distance kept only exact duplicates of the query.
+pub(crate) fn run_match_on(
+    db: &velesdb_core::Database,
+    collection: &str,
+    clause: &velesdb_core::velesql::MatchClause,
+    params: &HashMap<String, serde_json::Value>,
+    query_vector: Option<&[f32]>,
+    threshold: Option<f32>,
+) -> velesdb_core::error::Result<
+    Vec<velesdb_core::collection::search::query::match_exec::MatchResult>,
+> {
+    let scoring = query_vector.map(|vector| velesdb_core::MatchScoring {
+        vector,
+        threshold: threshold.unwrap_or_else(|| no_threshold(db, collection)),
+    });
+    db.match_query(collection, clause, params, scoring)
+}
+
+/// The threshold every score passes under `collection`'s metric. A missing
+/// collection takes either: `match_query` refuses it before scoring.
+fn no_threshold(db: &velesdb_core::Database, collection: &str) -> f32 {
+    let higher_is_better = db
+        .get_any_collection(collection)
+        .is_none_or(|c| c.config().metric.higher_is_better());
+    if higher_is_better {
+        f32::NEG_INFINITY
+    } else {
+        f32::INFINITY
+    }
 }
 
 #[pymethods]
@@ -386,6 +465,12 @@ impl Collection {
     /// Returns:
     ///     List of query results with node_id, vector_score, graph_score,
     ///     fused_score, bindings (payload), and column_data
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     ///
     /// Example:
     ///     >>> results = collection.query(
@@ -418,37 +503,32 @@ impl Collection {
     ///     query_str: VelesQL MATCH query string
     ///     params: Query parameters (default: empty dict)
     ///     vector: Optional query vector for similarity scoring
-    ///     threshold: Similarity threshold (default: 0.0)
+    ///     threshold: Optional score bound for ``vector``: a row scoring below
+    ///         it under a similarity metric (cosine, dot, jaccard), or above
+    ///         it under a distance metric (euclidean, hamming), is dropped.
+    ///         Omitted (the default), every scored row is kept.
     ///
     /// Returns:
     ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
-    #[pyo3(signature = (query_str, params = None, vector = None, threshold = 0.0))]
+    ///
+    /// Raises:
+    ///     ValueError: If ``threshold`` is NaN or infinite.
+    #[pyo3(signature = (query_str, params = None, vector = None, threshold = None))]
     fn match_query(
         &self,
         py: Python<'_>,
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
         vector: Option<Py<PyAny>>,
-        threshold: f32,
+        threshold: Option<f32>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        // No gated `Database` twin returns `MatchResult` (the facade's MATCH
-        // path folds results into `SearchResult`), so the read gate is
-        // consulted here instead: deny fails closed, and a scope filter also
-        // fails closed because the MATCH leaf takes no metadata filter and
-        // `MatchResult` carries no payload to post-filter (#1405, #1392).
-        let scope = self.authorize(QueryOperationKind::GraphTraversal, None, None)?;
-        deny_if_scoped(scope, "match_query")?;
-
-        let inner = &self.inner;
+        // Through the owning database (`run_match_on`); a read-gate scope is
+        // refused, since a MATCH row carries no payload to narrow.
+        let threshold = validate_match_threshold(threshold)?;
+        let db = &self.db;
+        let name = &self.name;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {
-            if let Some(ref qv) = qv {
-                inner.execute_match_with_similarity(&mc, qv, threshold, &p)
-            } else {
-                // Route through the cost-based planner so RETURN ORDER BY,
-                // deterministic tie-break, and post-sort LIMIT match the SQL
-                // /query path exactly (backlog #1).
-                inner.match_query_ordered(&mc, &p)
-            }
+            run_match_on(db, name, &mc, &p, qv.as_deref(), threshold)
         })
     }
 
@@ -485,7 +565,7 @@ impl Collection {
         // which crosses the 1-second mark on large collections. Release the GIL
         // so other Python threads keep running while the plan is calibrated.
         let stats = py.detach(|| self.inner.analyze().ok());
-        Ok(build_explain_dict(py, &parsed, &indexed, stats.as_ref()))
+        build_explain_dict(py, &parsed, &indexed, stats.as_ref())
     }
 
     /// Execute a query with instrumentation and return plan + actual stats (EXPLAIN ANALYZE).
@@ -499,6 +579,12 @@ impl Collection {
     ///
     /// Returns:
     ///     Dict with keys: plan, actual_stats, node_stats
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     #[pyo3(signature = (query_str, params=None))]
     fn explain_analyze(
         &self,
@@ -506,7 +592,7 @@ impl Collection {
         query_str: &str,
         params: Option<HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Py<PyAny>> {
-        let parsed = parse_velesql(query_str)?;
+        let parsed = parse_read_only_velesql(query_str)?;
         let rust_params = convert_params(py, params)?;
         // EXPLAIN ANALYZE *executes* the query, so it must pass the same
         // control-plane read gate as `query()`. The `Database` facade twin is
@@ -519,7 +605,7 @@ impl Collection {
                 .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)
                 .map_err(core_err)
         })?;
-        Ok(build_explain_analyze_dict(py, &output))
+        build_explain_analyze_dict(py, &output)
     }
 
     /// Execute a VelesQL query returning only IDs and scores (no payload).
@@ -532,6 +618,12 @@ impl Collection {
     ///
     /// Returns:
     ///     List of dicts with 'id' and 'score' fields
+    ///
+    /// Raises:
+    ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
+    ///         ``FLUSH``). A collection's query methods run reads only: a
+    ///         write names its own target, so it goes through
+    ///         ``Database.execute_query``.
     ///
     /// Example:
     ///     >>> ids = collection.query_ids("SELECT * FROM docs WHERE price > 100 LIMIT 5")

@@ -94,14 +94,29 @@ impl Collection {
     ///
     /// Returns an error if storage operations fail.
     pub fn delete(&self, ids: &[u64]) -> Result<()> {
+        self.delete_counted(ids).map(|_| ())
+    }
+
+    /// Deletes points by their IDs and returns how many of them held a point.
+    ///
+    /// An id counts when the collection stored anything under it — a vector
+    /// or a payload, the set [`all_ids`](Self::all_ids) lists — so a missing
+    /// id counts zero and an id repeated in `ids` counts once. The count is
+    /// taken under the same write locks as the delete, so two concurrent
+    /// deletes of one id never both count it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage operations fail.
+    pub fn delete_counted(&self, ids: &[u64]) -> Result<usize> {
         // Collect old payloads for incremental histogram maintenance.
         let old_payloads = self.collect_payloads_for_histogram(ids);
 
-        if self.storage.config.read().metadata_only {
-            self.delete_metadata_only(ids)?;
+        let removed = if self.storage.config.read().metadata_only {
+            self.delete_metadata_only(ids)?
         } else {
-            self.delete_vector_points(ids)?;
-        }
+            self.delete_vector_points(ids)?
+        };
 
         // Decrement histogram buckets BEFORE cache invalidation.
         self.update_histograms_on_delete(&old_payloads);
@@ -114,7 +129,8 @@ impl Collection {
         self.cascade_delete_node_edges(ids)?;
 
         self.bump_generation_with_mirror_deletes(ids);
-        Ok(())
+        self.report_delete(ids.len());
+        Ok(removed)
     }
 
     /// Removes every edge connected to each deleted node id (issue #900).
@@ -185,7 +201,7 @@ impl Collection {
     /// the vector store: one WAL barrier for the payload tombstones, one for
     /// the BM25 removes — O(1) fsyncs per batch under the write locks, not
     /// O(N) (finding C3).
-    fn delete_metadata_only(&self, ids: &[u64]) -> Result<()> {
+    fn delete_metadata_only(&self, ids: &[u64]) -> Result<usize> {
         // LOCK ORDER: payload_storage(3) → label_index(7), released →
         // graph_range_indexes(7).
         let mut payload_storage = self.storage.payload_storage.write();
@@ -197,6 +213,7 @@ impl Collection {
             .iter()
             .map(|&id| payload_storage.retrieve(id).ok().flatten())
             .collect();
+        let removed = count_held(ids, &old_payloads, |_| false);
 
         payload_storage.delete_batch(ids)?;
         // Issue #389: WAL-before-apply for BM25 removes so crash recovery
@@ -217,15 +234,16 @@ impl Collection {
         self.remove_deleted_from_range_indexes(ids, &old_payloads);
         drop(payload_storage);
         self.storage.config.write().point_count = point_count;
-        Ok(())
+        Ok(removed)
     }
 
-    /// Deletes vector points from all stores (vector, payload, index, caches, sparse, delta).
-    fn delete_vector_points(&self, ids: &[u64]) -> Result<()> {
-        self.delete_vector_core_stores(ids)?;
+    /// Deletes vector points from all stores (vector, payload, index, caches,
+    /// sparse, delta) and returns how many ids held a point.
+    fn delete_vector_points(&self, ids: &[u64]) -> Result<usize> {
+        let removed = self.delete_vector_core_stores(ids)?;
         self.delete_from_sparse_indexes(ids)?;
         self.delete_from_deferred_stores(ids);
-        Ok(())
+        Ok(removed)
     }
 
     /// Removes points from vector/payload storage, HNSW index, caches, and the
@@ -271,7 +289,7 @@ impl Collection {
     ///   `collection/core/recovery.rs`, and the leftover payload/BM25
     ///   entries are exactly what a re-issued delete of the same ids cleans
     ///   up.
-    fn delete_vector_core_stores(&self, ids: &[u64]) -> Result<()> {
+    fn delete_vector_core_stores(&self, ids: &[u64]) -> Result<usize> {
         // LOCK ORDER: vector_storage(2) → payload_storage(3) → caches(4) → label_index(7),
         // released → graph_range_indexes(7).
         let mut vector_storage = self.storage.vector_storage.write();
@@ -285,6 +303,7 @@ impl Collection {
             .iter()
             .map(|&id| payload_storage.retrieve(id).ok().flatten())
             .collect();
+        let removed = count_held(ids, &old_payloads, |id| vector_storage.contains(id));
 
         // ONE durability barrier per store for the whole batch (see rustdoc).
         vector_storage.delete_batch(ids)?;
@@ -312,7 +331,7 @@ impl Collection {
         drop(payload_storage);
         drop(pq_cache);
         self.storage.config.write().point_count = point_count;
-        Ok(())
+        Ok(removed)
     }
 
     /// Removes deleted nodes from the graph range indexes, the way the label
@@ -440,4 +459,19 @@ impl Collection {
         }
         ids.into_iter().collect()
     }
+}
+
+/// Number of distinct ids in `ids` that held a point: a payload (`old_payloads`
+/// is index-aligned with `ids`) or, per `has_vector`, a vector.
+fn count_held(
+    ids: &[u64],
+    old_payloads: &[Option<serde_json::Value>],
+    has_vector: impl Fn(u64) -> bool,
+) -> usize {
+    ids.iter()
+        .zip(old_payloads)
+        .filter(|(&id, payload)| payload.is_some() || has_vector(id))
+        .map(|(&id, _)| id)
+        .collect::<rustc_hash::FxHashSet<u64>>()
+        .len()
 }

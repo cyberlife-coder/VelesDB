@@ -20,6 +20,8 @@
 
 use velesdb_core::point::{Point, SearchResult};
 use velesdb_core::velesql::json_path::{column_value, payload_path};
+
+use crate::js_value::row_id_json;
 use velesdb_core::velesql::{
     Column, SelectColumns, SelectStatement, SimilarityScoreExpr, WindowFunction,
 };
@@ -157,7 +159,7 @@ fn project_mixed(
 /// Inserts `id` + every payload field, skipping any key shadowed by a
 /// window-function alias.
 fn insert_wildcard_fields(map: &mut JsonMap, result: &SearchResult, skip: &[&str]) {
-    map.insert("id".to_string(), serde_json::Value::from(result.point.id));
+    map.insert("id".to_string(), row_id_json(result.point.id));
     if let Some(serde_json::Value::Object(payload)) = result.point.payload.as_ref() {
         for (k, v) in payload {
             if k != "id" && !skip.contains(&k.as_str()) {
@@ -171,7 +173,12 @@ fn insert_wildcard_fields(map: &mut JsonMap, result: &SearchResult, skip: &[&str
 fn insert_named_columns(map: &mut JsonMap, result: &SearchResult, columns: &[Column]) {
     for col in columns {
         let key = col.alias.as_deref().unwrap_or(&col.name);
-        map.insert(key.to_string(), column_value(result, &col.name));
+        let value = if col.name == "id" {
+            row_id_json(result.point.id)
+        } else {
+            column_value(result, &col.name)
+        };
+        map.insert(key.to_string(), value);
     }
 }
 

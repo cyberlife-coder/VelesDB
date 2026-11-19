@@ -132,7 +132,7 @@ crate is not on docs.rs, so the narrative documentation lives here:
 
 | Guide | Contents |
 |---|---|
-| [JavaScript API](../../docs/guides/WASM_API.md) | `VectorStore` (construction, metrics, insert paths, the search family, payload filters, storage modes), `GraphStore`, `MemoryService`, `SparseIndex`, `WasmDatabase`, and the BigInt/number marshalling rules. |
+| [JavaScript API](../../docs/guides/WASM_API.md) | `VectorStore` (construction, metrics, insert paths, the search family, payload filters, storage modes), `GraphStore`, `MemoryService`, `SparseIndex`, `WasmDatabase`, and the id marshalling rules (BigInt in, decimal string out). |
 | [Persistence and binary format](../../docs/guides/WASM_PERSISTENCE.md) | IndexedDB `save`/`load`/`delete_database`, byte-level export/import, the `VELS` v3 format (and the v2/v1 formats it still reads), graph persistence, performance figures and how to reproduce them. |
 | [VelesQL in the browser](../../docs/guides/WASM_VELESQL.md) | Parsing, `executeQuery`, `EXPLAIN`, the full WASM-vs-REST feature matrix, every rejected shape with its exact error message, and how to migrate a query to the REST server. |
 | [Bundle size optimization](../../docs/wasm/bundle-optimization.md) | Keeping the `.wasm` payload small. |
@@ -146,12 +146,15 @@ Signatures and the fusion parameters are in
 [JavaScript API](../../docs/guides/WASM_API.md).
 
 One rule to internalize before writing any code: **ids go in as `BigInt`
-(`1n`) and come back from `search()` as plain numbers**. The input side is a
-`wasm-bindgen` `u64` parameter; the output side goes through
-`serde-wasm-bindgen`, whose JSON-compatible serializer emits `u64` as a JS
-number. Keep ids below `Number.MAX_SAFE_INTEGER`. Records come back as plain
-objects (`hit.id`, `hit.payload.title`), with `null` for an absent value;
-before 8.0.0, records carrying a payload were ES2015 `Map`s (#2332).
+(`1n`) and come back from `search()`, `get()` and every other read as their
+exact decimal string** (`"1"`), as the REST server sends them. The input side
+is a `wasm-bindgen` `u64` parameter; on the output side a JS number cannot
+hold a `u64` past `Number.MAX_SAFE_INTEGER` (serializing one threw), and a
+string can. `BigInt(id)` turns one back into the input form. Records come
+back as plain objects (`hit.id`, `hit.payload.title`), with `null` for an
+absent value; before 8.0.0, records carrying a payload were ES2015 `Map`s
+(#2332). VelesQL rows (`executeQuery`) keep numeric point ids, as REST
+`/query` does.
 
 ## Known limits
 

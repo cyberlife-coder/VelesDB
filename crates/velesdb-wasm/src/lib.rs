@@ -42,10 +42,10 @@
 //! const store = new VectorStore(768, "cosine");
 //! store.insert(1n, new Float32Array([0.1, 0.2, ...]));
 //!
-//! // Ids go in as BigInt and come back as plain numbers:
-//! // search() returns Array<[number, number]>
+//! // Ids go in as BigInt and come back as their exact decimal strings:
+//! // search() returns Array<[string, number]>
 //! const results = store.search(new Float32Array([0.1, ...]), 10);
-//! // results = [[1, 0.95], [42, 0.87], ...]
+//! // results = [["1", 0.95], ["42", 0.87], ...]
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -113,6 +113,7 @@ mod velesql_scan;
 mod velesql_select;
 mod velesql_setops;
 mod velesql_similarity;
+mod velesql_sparse;
 mod velesql_update;
 mod velesql_value;
 mod velesql_vector_group;
@@ -122,6 +123,7 @@ mod wasm_error;
 pub use agent::SemanticMemory;
 pub use database::{WasmCollectionHandle, WasmDatabase};
 pub use graph::{GraphEdge, GraphNode, GraphStore};
+pub use graph_persistence::GraphPersistence;
 pub use memory_service::WasmMemoryService;
 pub use observer::{
     WasmAccessDecision, WasmObserver, WasmQueryAccessContext, WasmQueryOperationKind,
@@ -134,7 +136,12 @@ pub use velesdb_core::DistanceMetric;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryResult {
-    /// Node/point ID
+    /// Node/point ID: a decimal string in JSON (`nodeId`), read back from a
+    /// string or a number.
+    #[serde(
+        serialize_with = "velesdb_core::api_types::serde_id::serialize_id_as_string",
+        deserialize_with = "velesdb_core::api_types::serde_id::deserialize_id_from_string_or_number"
+    )]
     pub node_id: u64,
     /// Vector similarity score (if applicable)
     pub vector_score: Option<f32>,
@@ -237,6 +244,10 @@ mod search_fidelity_conformance_tests;
 #[cfg(test)]
 #[path = "coverage_v3_tests.rs"]
 mod coverage_v3_tests;
+
+#[cfg(test)]
+#[path = "point_id_wire_tests.rs"]
+mod point_id_wire_tests;
 
 // Host-only: compares against a `velesdb-core` collection, which needs core's
 // `persistence` feature — enabled by a dev-dependency that does not exist on

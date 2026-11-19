@@ -36,7 +36,7 @@ await init({
 });
 ```
 
-## Type marshalling: BigInt in, plain number out
+## Type marshalling: BigInt in, decimal string out
 
 This asymmetry is the single most common source of confusion, and it is a
 consequence of two different boundaries:
@@ -44,20 +44,24 @@ consequence of two different boundaries:
 | Direction | Representation | Why |
 |---|---|---|
 | Ids **passed in** (`insert`, `get`, `remove`, `GraphNode`, …) | `BigInt` (`1n`) | `wasm-bindgen` maps a Rust `u64` parameter to a JS `BigInt`. |
-| Ids **returned by search** (`search`, `batch_search`, …) | plain `number` | Those results go through `serde-wasm-bindgen`'s `Serializer::json_compatible()`, which emits `u64` as a JS number (it leaves `serialize_large_number_types_as_bigints` at `false`, see `serde-wasm-bindgen` 0.6 `src/ser.rs`). |
+| **Point** ids **returned** by a search or a read: `search`, `search_with_quality`, `similarity_search`, `multi_query_search`, `batch_search` (`[[id, score], …]`), `search_with_filter`, `hybrid_search`, `text_search` and `get` (`id`), `search_sparse`, `sparse_search`, `SparseIndex.search` and `hybrid_search_fuse` (`doc_id`), `query` (`nodeId`), `SemanticMemory.query` (`id`), `GraphStore.bfs_traverse` / `dfs_traverse` (`[[nodeId, depth], …]`), `WasmDatabase.executeMatch` `bindings` | decimal **string** | As REST sends them (`SearchResultResponse.id`, `/match` `bindings`). Those results go through `serde-wasm-bindgen`'s `Serializer::json_compatible()`, which emits a bare `u64` as a JS number and throws on one above `Number.MAX_SAFE_INTEGER`; a JSON number past it is rounded by `JSON.parse`. Scores, depths and counts stay numbers. `hybrid_search_fuse` takes the ids back as strings, safe-integer numbers or `BigInt`s. |
+| Point ids in **VelesQL rows** (`executeQuery` `rowsJson` / `dataJson`, a MATCH alias object, `executeMatch` `projected` `alias.id`, `SELECT EDGES` `source` / `target`) | plain `number` | Core's VelesQL row contract, shared with REST `/query` and the conformance fixture. |
 | Ids returned by a **direct getter** (`ParsedQuery.limit`, `GraphStore.get_neighbors`, `GraphNode.id`) | `BigInt` / `BigUint64Array` | Direct `wasm-bindgen` return, no serde in between. |
 | Memory-wedge ids (`MemoryService`) | decimal **string** | Chosen so ids survive `JSON.stringify` without precision loss. |
-
-This historical reference was verified against `@wiscale/velesdb-wasm@4.0.0`:
+| **Edge** ids in JSON (`WasmDatabase.getEdges` — `id`, `source` and `target`, as REST's `EdgeResponse` —, `addEdge`'s return, `removeEdge`'s argument, `SELECT EDGES` `edge_id`, MATCH `r.id` / `_edge_bindings` / `_edge_paths`) | decimal **string** | A derived edge id is hashed and routinely above 2^53, which a JSON number would round. `addEdge` still takes `id`, `source` and `target` as numbers too. |
+| Every id in `GraphNode.to_json` / `GraphEdge.to_json` and in `GraphPersistence` rows (`id`, `source`, `target`) | decimal **string** | The JSON form of those classes' `BigInt` ids; a JSON number made `to_json` and `save` throw above 2^53. Rows saved with numeric ids still load. |
 
 ```javascript
 store.insert(1n, new Float32Array([1, 0, 0]));   // BigInt in
-store.search(new Float32Array([1, 0, 0]), 2);    // => [[1, 1], [3, 0.9938837289810181]]
-                                                 //     ^ typeof "number"
+store.search(new Float32Array([1, 0, 0]), 2);    // => [["1", 1], ["3", 0.9938837289810181]]
+                                                 //      ^ typeof "string"
+store.insert(9007199254740993n, new Float32Array([0, 1, 0]));
+store.get(9007199254740993n).id;                 // => "9007199254740993", exactly
 ```
 
-Ids above `Number.MAX_SAFE_INTEGER` (2^53 − 1) cannot be represented and make
-serialization fail with an explicit error — keep ids under that bound.
+`BigInt(id)` turns a returned id back into the form the inputs take. Before
+this release a search returned point ids as plain numbers and threw on one
+above `Number.MAX_SAFE_INTEGER` (2^53 − 1).
 
 Every record returned as data (search results, `get`, `query`,
 `GraphNode.to_json`, …) is a **plain object**, the shape `JSON.parse` would
@@ -139,7 +143,7 @@ Inserting an id that already exists replaces the previous entry — `insert` and
 | `search_with_quality(query, k, quality)` | `[[id, score], …]` | Accepts the Python/Server quality strings (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`). **All modes return identical results in WASM** — there is no HNSW graph; the parameter exists for API parity, and is checked as the server checks it: each ef in 16–4096, or it throws (#2275). |
 | `search_with_filter(query, k, filter)` | `[{id, score, payload}, …]` | Metadata-filtered search. |
 | `text_search(query, k, field?)` | `[{id, score: null, payload}, …]` | Case-insensitive substring match over payload fields, in insertion order. It selects without ranking, so `score` is always `null`. |
-| `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion: `vectorWeight × vector score + (1 − vectorWeight) × text match` (0 or 1), best first. Under a distance metric (`euclidean`, `hamming`) the vector score is the negated distance, so the blend stays higher-is-better and every row is kept; under a similarity metric a row whose blend is not above 0 is dropped. |
+| `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion: `vectorWeight × vector score + (1 − vectorWeight) × text match` (0 or 1), best first. `vectorWeight` defaults to 0.5 and is clamped to `0..1`; a `NaN` or infinite one throws `VELES-009`, as core's hybrid search does. Under a distance metric (`euclidean`, `hamming`) the vector score is the negated distance, so the blend stays higher-is-better and every row is kept; under a similarity metric a row whose blend is not above 0 is dropped. |
 | `multi_query_search(vectors, numVectors, k, strategy, rrfK?, weights?)` | `[[id, score], …]` | Multi-query fusion (MQG). |
 | `batch_search(vectors, numVectors, k)` | `[[[id, score], …], …]` | One result list per query vector. |
 | `similarity_search(query, threshold, operator, k)` | `[[id, score], …]` | Threshold-based selection. |
@@ -243,8 +247,9 @@ console.log(graph.node_count(), graph.edge_count()); // 2 1
 ```
 
 Traversal and inspection: `get_outgoing`, `get_incoming`,
-`get_outgoing_by_label`, `bfs_traverse(sourceId, maxDepth, limit)`,
-`dfs_traverse(sourceId, maxDepth, limit)`, `get_nodes_by_label`,
+`get_outgoing_by_label`, `bfs_traverse(sourceId, maxDepth, limit)` and
+`dfs_traverse(sourceId, maxDepth, limit)` (each `[[nodeId, depth], …]`, the
+node id a decimal string, the depth a number), `get_nodes_by_label`,
 `get_edges_by_label`, `get_all_node_ids`, `get_all_edge_ids`, `has_node`,
 `has_edge`, `out_degree`, `in_degree`, `remove_node`, `remove_edge`, `clear`.
 
@@ -332,7 +337,14 @@ Contract details:
 - Every method is **synchronous** — no `Promise` to await.
 - Failures throw a JS `Error` carrying a `.code` field: `INVALID_INPUT`,
   `NOT_FOUND`, or `INTERNAL`.
-- `ttlSeconds` makes a fact expire; omit it or pass `0` for a permanent memory.
+- `ttlSeconds` makes a fact expire; omit it for a permanent memory. `0` is
+  refused (`INVALID_INPUT`): it reads as "expire now", not "never".
+- Every count — `k`, `maxHops`, `ttlSeconds`, `fragmentIndex`,
+  `reserveTokens`, and `recallFused`'s `hops` / `pool` — is a whole JS number
+  in `0..=4294967295`, checked by the same validator as the Node binding; a
+  fraction, a negative, `NaN` or `Infinity` throws `INVALID_INPUT` instead of
+  being wrapped. `ttlSeconds` and `reserveTokens` also accept a `BigInt`, the
+  type their earlier `u64` signature required.
 - `metadata` marshals as a **plain JS object**, not an ES2015 `Map` — this is
   pinned by a regression test (`tests/memory_wedge_web.rs`).
 - A fact larger than `velesdb_memory::limits::MAX_FACT_BYTES` is rejected with
@@ -347,13 +359,14 @@ with Promise-returning methods and the SDK's typed error hierarchy.
 `SemanticMemory` predates `MemoryService` and stores `(id, content, embedding)`
 triples: `store`, `query`, `len`, `dimension`, `delete`, `remove` and `clear`.
 `query(embedding, topK)` returns the `topK` nearest facts, best first, as
-plain objects `{ id, score, content }` under cosine similarity.
+plain objects `{ id, score, content }` under cosine similarity, `id` a
+decimal string.
 
 ```javascript
 const sm = new SemanticMemory(4);
 sm.store(1n, 'Paris is the capital of France', new Float32Array([1, 0, 0, 0]));
 sm.query(new Float32Array([1, 0, 0, 0]), 2);
-// [{ id: 1, score: 1, content: 'Paris is the capital of France' }]
+// [{ id: '1', score: 1, content: 'Paris is the capital of France' }]
 ```
 
 Releases from 4.0.0 until this fix threw `Invalid search results` on every
@@ -373,14 +386,15 @@ index.insert(1n, new Uint32Array([10, 20, 30]), new Float32Array([1.0, 0.5, 0.3]
 index.insert(2n, new Uint32Array([10, 40]),     new Float32Array([0.8, 1.2]));
 
 index.search(new Uint32Array([10, 20]), new Float32Array([1.0, 1.0]), 5);
-// => [ { doc_id: 1, score: 1.5 }, { doc_id: 2, score: 0.800000011920929 } ]
+// => [ { doc_id: '1', score: 1.5 }, { doc_id: '2', score: 0.800000011920929 } ]
 
 index.remove(1n);
 // => true — doc 1's postings are deleted and it stops matching;
 // re-inserting a doc_id replaces its vector rather than accumulating.
 
-hybrid_search_fuse([[1, 0.9], [2, 0.5]], [[2, 0.8], [3, 0.4]], 60, 3);
-// => [ { doc_id: 2, score: 0.0325… }, { doc_id: 1, score: 0.0163… }, { doc_id: 3, score: 0.0161… } ]
+// Ids in: decimal strings (what every search returns), safe numbers or BigInts.
+hybrid_search_fuse([['1', 0.9], ['2', 0.5]], [['2', 0.8], ['3', 0.4]], 60, 3);
+// => [ { doc_id: '2', score: 0.0325… }, { doc_id: '1', score: 0.0163… }, { doc_id: '3', score: 0.0161… } ]
 ```
 
 `hybrid_search_fuse(denseResults, sparseResults, rrfK, k)` delegates to

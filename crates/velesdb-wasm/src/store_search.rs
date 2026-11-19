@@ -2,36 +2,55 @@
 //!
 //! Provides search functionality extracted from the main store.
 
-use crate::js_value::to_js_value;
+use crate::js_value::{to_js_value, PointId};
 use crate::wasm_error::WasmError;
 use crate::{fusion, text_search, vector_ops, DistanceMetric};
 use serde::Serialize;
+use velesdb_core::api_types::serde_id::id_to_json;
 use wasm_bindgen::JsValue;
 
 /// Serializes a search result through [`to_js_value`], rendering a failure
-/// (an id above `Number.MAX_SAFE_INTEGER`) as a JS string error.
+/// as a JS string error.
 #[inline]
 pub(crate) fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     to_js_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
-/// Converts scored triples `(id, score, payload)` to a JSON array of objects.
+/// Dense hits as JavaScript receives them: `[[id, score], …]`, each id its
+/// exact decimal string ([`PointId`]), each score a number.
+///
+/// The one shape of `search`, `search_with_quality`, `similarity_search`,
+/// `multi_query_search` and `batch_search`.
+pub(crate) fn scored_points(hits: Vec<(u64, f32)>) -> Vec<(PointId, f32)> {
+    hits.into_iter()
+        .map(|(id, score)| (PointId(id), score))
+        .collect()
+}
+
+/// Scored triples `(id, score, payload)` as `{id, score, payload}` records,
+/// the id its exact decimal string, as REST's `SearchResultResponse`.
 ///
 /// Shared by `hybrid_search_impl` and `search_with_filter_impl`.
-pub(crate) fn scored_triples_to_js(
+pub(crate) fn scored_triples_json(
     results: Vec<(u64, f32, Option<&serde_json::Value>)>,
-) -> Result<JsValue, JsValue> {
-    let output: Vec<serde_json::Value> = results
+) -> Vec<serde_json::Value> {
+    results
         .into_iter()
         .map(|(id, score, payload)| {
             serde_json::json!({
-                "id": id,
+                "id": id_to_json(id),
                 "score": score,
                 "payload": payload
             })
         })
-        .collect();
-    to_js(&output)
+        .collect()
+}
+
+/// [`scored_triples_json`], rendered for JavaScript.
+pub(crate) fn scored_triples_to_js(
+    results: Vec<(u64, f32, Option<&serde_json::Value>)>,
+) -> Result<JsValue, JsValue> {
+    to_js(&scored_triples_json(results))
 }
 
 /// Sorts `(id, score, payload)` triples by score according to metric ordering.
@@ -145,10 +164,20 @@ pub fn text_search_impl(
     field: Option<&str>,
     k: usize,
 ) -> Result<JsValue, JsValue> {
+    to_js(&text_search_matches(query, ids, payloads, field, k))
+}
+
+/// The records behind [`text_search_impl`], each id its exact decimal string.
+pub(crate) fn text_search_matches(
+    query: &str,
+    ids: &[u64],
+    payloads: &[Option<serde_json::Value>],
+    field: Option<&str>,
+    k: usize,
+) -> Vec<serde_json::Value> {
     let query_lower = query.to_lowercase();
 
-    let results: Vec<serde_json::Value> = ids
-        .iter()
+    ids.iter()
         .zip(payloads.iter())
         .filter_map(|(&id, payload)| {
             payload.as_ref().and_then(|p| {
@@ -159,7 +188,7 @@ pub fn text_search_impl(
 
                 if matches {
                     Some(serde_json::json!({
-                        "id": id,
+                        "id": id_to_json(id),
                         "score": serde_json::Value::Null,
                         "payload": p
                     }))
@@ -169,15 +198,21 @@ pub fn text_search_impl(
             })
         })
         .take(k)
-        .collect();
-
-    to_js(&results)
+        .collect()
 }
+
+/// One `(id, score, payload)` hit of a payload-carrying search.
+pub type ScoredTriple<'a> = (u64, f32, Option<&'a serde_json::Value>);
 
 /// Scored `(id, combined_score, payload)` triples behind
 /// [`hybrid_search_impl`] — native-typed so host tests can pin the exact
 /// browser-store contract without a `JsValue` (which needs the wasm32
 /// runtime).
+///
+/// # Errors
+///
+/// A non-finite `vector_weight`, refused by core's
+/// [`velesdb_core::validation::resolve_hybrid_vector_weight`] (`VELES-009`).
 #[allow(clippy::too_many_arguments)]
 pub fn hybrid_search_scored<'a>(
     query_vector: &[f32],
@@ -189,8 +224,10 @@ pub fn hybrid_search_scored<'a>(
     metric: DistanceMetric,
     k: usize,
     vector_weight: Option<f32>,
-) -> Vec<(u64, f32, Option<&'a serde_json::Value>)> {
-    let v_weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
+) -> Result<Vec<ScoredTriple<'a>>, WasmError> {
+    // Core's blend validator, not a local clamp: `NaN.clamp(0.0, 1.0)` is NaN.
+    let v_weight = velesdb_core::validation::resolve_hybrid_vector_weight(vector_weight)
+        .map_err(WasmError::from)?;
     let t_weight = 1.0 - v_weight;
     let text_query_lower = text_query.to_lowercase();
     let higher_is_better = metric.higher_is_better();
@@ -231,7 +268,7 @@ pub fn hybrid_search_scored<'a>(
 
     sort_scored_triples(&mut results, true);
     results.truncate(k);
-    results
+    Ok(results)
 }
 
 /// Hybrid vector + text search.
@@ -247,7 +284,7 @@ pub fn hybrid_search_impl(
     k: usize,
     vector_weight: Option<f32>,
 ) -> Result<JsValue, JsValue> {
-    scored_triples_to_js(hybrid_search_scored(
+    let scored = hybrid_search_scored(
         query_vector,
         text_query,
         ids,
@@ -257,7 +294,9 @@ pub fn hybrid_search_impl(
         metric,
         k,
         vector_weight,
-    ))
+    )
+    .map_err(WasmError::into_js_value)?;
+    scored_triples_to_js(scored)
 }
 
 /// Converts an optional flat `[avg_weight, max_weight, hit_weight]` slice
@@ -277,6 +316,31 @@ fn weighted_weights_from_slice(
             other.len()
         ))),
     }
+}
+
+/// One ranked branch per query vector of `vectors` (`num_vectors` of
+/// `dimension` components each): its `branch_depth(k)` best points, best
+/// first — the depth core's `Collection::multi_query_search` and the
+/// `NEAR_FUSED` executor (`velesql_fused.rs`) read from
+/// [`velesdb_core::fusion::branch_depth`].
+pub(crate) fn query_branches(
+    vectors: &[f32],
+    num_vectors: usize,
+    ids: &[u64],
+    data: &[f32],
+    dimension: usize,
+    metric: DistanceMetric,
+    k: usize,
+) -> Result<Vec<Vec<(u64, f32)>>, velesdb_core::Error> {
+    // `branch_depth` saturates rather than wraps; the retained
+    // `num_vectors × depth` fan-out is caller-controlled — bounded up front
+    // by the browser guardrails (#2679).
+    let depth = velesdb_core::fusion::branch_depth(k);
+    crate::guardrails::check_fanout_memory(num_vectors, depth.min(ids.len()))?;
+    Ok(vectors
+        .chunks_exact(dimension)
+        .map(|query| top_k(query, ids, data, dimension, metric, depth))
+        .collect())
 }
 
 /// Multi-query search with fusion.
@@ -321,19 +385,8 @@ pub fn multi_query_search_impl(
         (weighted_weights_from_slice(weights)?, None)
     };
 
-    // `k * 2` wraps silently in release / panics in debug, and the retained
-    // `num_vectors × k` fan-out is caller-controlled — both bounded up front
-    // by the browser guardrails (#2679).
-    let fanout_k =
-        crate::guardrails::checked_fanout_k(k).map_err(|e| WasmError::from(e).into_js_value())?;
-    crate::guardrails::check_fanout_memory(num_vectors, fanout_k.min(ids.len()))
+    let all_results = query_branches(vectors, num_vectors, ids, data, dimension, metric, k)
         .map_err(|e| WasmError::from(e).into_js_value())?;
-
-    let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
-
-    for query in vectors.chunks_exact(dimension) {
-        all_results.push(top_k(query, ids, data, dimension, metric, fanout_k));
-    }
 
     let fused = fusion::fuse_results(
         &all_results,
@@ -346,7 +399,7 @@ pub fn multi_query_search_impl(
     .map_err(|e| JsValue::from_str(&e))?;
     let fused: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
 
-    to_js(&fused)
+    to_js(&scored_points(fused))
 }
 
 /// Search with metadata filter.
@@ -415,7 +468,7 @@ pub fn similarity_search_impl(
     vector_ops::sort_results(&mut results, higher_is_better);
     results.truncate(k);
 
-    to_js(&results)
+    to_js(&scored_points(results))
 }
 
 /// Batch search for multiple vectors.
@@ -432,9 +485,9 @@ pub fn batch_search_impl(
     // front by the browser guardrails (#2679).
     crate::guardrails::check_fanout_memory(num_vectors, k.min(ids.len()))
         .map_err(|e| WasmError::from(e).into_js_value())?;
-    let all_results: Vec<Vec<(u64, f32)>> = vectors
+    let all_results: Vec<Vec<(PointId, f32)>> = vectors
         .chunks_exact(dimension)
-        .map(|query| top_k(query, ids, data, dimension, metric, k))
+        .map(|query| scored_points(top_k(query, ids, data, dimension, metric, k)))
         .collect();
     to_js(&all_results)
 }
@@ -442,3 +495,9 @@ pub fn batch_search_impl(
 #[cfg(test)]
 #[path = "store_guards_tests.rs"]
 mod guards_tests;
+
+// Host-only: compares against a `velesdb-core` collection, which needs core's
+// `persistence` feature (see `Cargo.toml`).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "store_search_tests.rs"]
+mod tests;

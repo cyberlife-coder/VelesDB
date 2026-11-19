@@ -72,10 +72,16 @@ pub trait DatabaseObserver: Send + Sync {
     /// last one wins in storage. A failed or empty write is not reported.
     fn on_upsert(&self, _collection: &str, _point_count: usize) {}
 
+    /// Called once after each completed delete from a collection the
+    /// database registered, whatever surface made it (`VelesQL` `DELETE`
+    /// included), with the number of ids the delete carried — an id that
+    /// held no point counts too. A failed or empty delete is not reported.
+    fn on_delete(&self, _collection: &str, _point_count: usize) {}
+
     /// Called once after each completed search or `VelesQL` read, with the
     /// collection the read gate decided on and the read's duration in
-    /// microseconds: `execute_query`, `execute_aggregate`, `gated_search` and
-    /// `run_gated_read`. A `VelesQL` statement is one read, reported once with
+    /// microseconds: `execute_query`, `execute_aggregate`, `match_query`,
+    /// `gated_search` and `run_gated_read`. A `VelesQL` statement is one read, reported once with
     /// its scalar subqueries folded in, and `explain_analyze_query` reports
     /// the read it executes. A refused or failed read is not reported, and
     /// neither are the reads gated without a search (point lookups, scrolls,
