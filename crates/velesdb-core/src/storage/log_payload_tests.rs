@@ -1268,3 +1268,62 @@ fn test_store_after_a_failed_flush_reads_back_its_own_payload() {
 fn test_deferred_batch_after_a_failed_flush_reads_back_its_own_payload() {
     assert_recovers_after_failed_flush(|s| s.store_batch_deferred(&[(2, &json!({"b": "kept"}))]));
 }
+
+/// A write that fails partway through a record leaves no fragment in the WAL
+/// (#2850). The fragment used to stay in the file, so the next record landed
+/// behind it: reads went wrong at once, and the next open stopped replay at
+/// the fragment and truncated every acknowledged record after it.
+fn assert_recovers_after_torn_append(
+    durability: DurabilityMode,
+    tear: impl FnOnce(&mut LogPayloadStorage) -> std::io::Result<()>,
+) {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let mut storage =
+        LogPayloadStorage::new_with_durability(temp_dir.path(), durability).expect("open");
+    storage.store(1, &json!({"a": 1})).expect("store 1");
+    {
+        let _fault = super::log_payload_io::tear_next_wal_append();
+        assert!(tear(&mut storage).is_err(), "precondition: the append tore");
+    }
+    storage.store(3, &json!({"c": 3})).expect("store 3");
+
+    assert_eq!(storage.retrieve(1).expect("read 1"), Some(json!({"a": 1})));
+    assert_eq!(storage.retrieve(3).expect("read 3"), Some(json!({"c": 3})));
+    assert_eq!(storage.retrieve(2).expect("read 2"), None);
+    drop(storage);
+
+    let reopened = LogPayloadStorage::new(temp_dir.path()).expect("reopen");
+    assert_eq!(reopened.retrieve(1).expect("read 1"), Some(json!({"a": 1})));
+    assert_eq!(reopened.retrieve(3).expect("read 3"), Some(json!({"c": 3})));
+    assert_eq!(reopened.retrieve(2).expect("read 2"), None);
+}
+
+#[test]
+fn test_torn_store_leaves_no_fragment_in_the_wal() {
+    assert_recovers_after_torn_append(DurabilityMode::Fsync, |s| s.store(2, &json!({"b": "torn"})));
+}
+
+#[test]
+fn test_torn_store_batch_leaves_no_fragment_in_the_wal() {
+    assert_recovers_after_torn_append(DurabilityMode::Fsync, |s| {
+        s.store_batch(&[(2, &json!({"b": "torn"}))])
+    });
+}
+
+/// Under `DurabilityMode::None` record 1 is still buffered when record 2
+/// tears: the tear flushes it first, and the truncation must keep it.
+#[test]
+fn test_torn_store_keeps_the_buffered_record_before_it() {
+    assert_recovers_after_torn_append(DurabilityMode::None, |s| s.store(2, &json!({"b": "torn"})));
+}
+
+/// A torn tombstone is not applied: the point stays live, now and on reopen.
+#[test]
+fn test_torn_delete_leaves_no_fragment_in_the_wal() {
+    assert_recovers_after_torn_append(DurabilityMode::Fsync, |s| s.delete(1));
+}
+
+#[test]
+fn test_torn_delete_batch_leaves_no_fragment_in_the_wal() {
+    assert_recovers_after_torn_append(DurabilityMode::Fsync, |s| s.delete_batch(&[1]));
+}

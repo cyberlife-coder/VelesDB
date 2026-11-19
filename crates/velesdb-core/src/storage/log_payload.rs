@@ -23,7 +23,7 @@
 //! Snapshot format and I/O are handled by the [`super::snapshot`] module.
 
 use super::log_payload_io::{
-    compute_delete_crc, flush_wal, wal_end, write_store_record, CRC_DELETE_MARKER,
+    append_record, compute_delete_crc, flush_wal, wal_end, write_store_record, CRC_DELETE_MARKER,
 };
 use super::snapshot;
 use super::traits::PayloadStorage;
@@ -429,7 +429,7 @@ impl LogPayloadStorage {
     /// per id: calling it in a loop cost one fsync PER POINT on this store
     /// (finding C3). Here every CRC-protected tombstone (`Marker(0xC4) |
     /// ID(8) | CRC32(4)`) is built into one buffer, written with a single
-    /// `write_all`, and synced once via `sync_wal_or_resync` — the bytes are
+    /// `append_record`, and synced once via `sync_wal_or_resync` — the bytes are
     /// identical to N sequential `delete` calls, so WAL replay is unchanged.
     /// Ids absent from the index are skipped (no tombstone), mirroring the
     /// single-delete guard.
@@ -484,7 +484,7 @@ impl LogPayloadStorage {
                 records.extend_from_slice(&id.to_le_bytes());
                 records.extend_from_slice(&compute_delete_crc(id).to_le_bytes());
             }
-            wal.write_all(&records)?;
+            append_record(&mut wal, &records, &mut offset)?;
 
             // ONE sync for the whole batch (resync offset on failure).
             Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
@@ -594,7 +594,7 @@ impl PayloadStorage for LogPayloadStorage {
             record[0] = CRC_DELETE_MARKER;
             record[1..9].copy_from_slice(&id.to_le_bytes());
             record[9..13].copy_from_slice(&crc.to_le_bytes());
-            wal.write_all(&record)?;
+            append_record(&mut wal, &record, &mut offset)?;
 
             // Sync WAL according to durability mode (resync offset on failure).
             Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;

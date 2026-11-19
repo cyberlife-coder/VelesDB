@@ -518,6 +518,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Payload WAL: a write that fails partway through a record no longer
+  costs the records written after it** (core, 2026-11-19, #2850). A record
+  at least as large as the `BufWriter`'s buffer goes straight to the file, so
+  a `write_all` that failed midway (ENOSPC) left a fragment of it there. The
+  next record landed behind the fragment: it read back wrong until a restart,
+  and on the next open replay stopped at the fragment and truncated every
+  record after it, acknowledged ones included. Every store and tombstone
+  write now goes through one append that, on failure, truncates the file to
+  the tracked WAL offset minus the bytes still buffered, so the WAL is left
+  as if the failed record never started. If that truncation fails too, the
+  double fault is logged as an error and the tracked offset moves past the
+  fragment, so later records still read back until the next open.
+
 - **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
   SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
   the binding's VelesQL executor and returned `VectorStore.query`'s own
