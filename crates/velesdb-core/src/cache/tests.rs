@@ -188,3 +188,27 @@ fn test_lru_cache_clear() {
     assert_eq!(cache.get(&1), None);
     assert_eq!(cache.get(&2), None);
 }
+
+#[test]
+fn test_lru_cache_remove_preserves_recency_order() {
+    // Given entries inserted 1, 2, 3 (1 = LRU)
+    let cache: LruCache<u64, String> = LruCache::new(3);
+    for i in 1..=3 {
+        cache.insert(i, format!("v{i}"));
+    }
+
+    // When the LRU entry is removed and the cache refills past capacity
+    cache.remove(&1);
+    cache.insert(4, "v4".to_string());
+    cache.insert(5, "v5".to_string());
+
+    // Then the eviction victim is the oldest survivor (2), not a reordered entry
+    assert!(
+        cache.peek(&2).is_none(),
+        "2 was the LRU and must be evicted"
+    );
+    assert!(
+        cache.peek(&3).is_some(),
+        "3 must survive: removal reordered it"
+    );
+}

@@ -518,6 +518,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`LruCache::get` is O(1); `remove` keeps the recency order** (core,
+  2026-11-19). Recency lived in an `IndexMap`, whose `shift_remove` shifts
+  every entry behind the one moved, so `get` on any key but the most recent
+  was O(n), and `remove` used `swap_remove`, which moved the newest entry into
+  the freed slot and made it the next eviction victim. The order now lives in
+  `LruList`, an index-linked list over a dense `Vec` plus a `HashMap`: get,
+  insert, eviction and remove each touch a constant number of nodes. The test
+  that claimed O(1) re-read the already-most-recent key and compared one
+  wall-clock ratio, so it passed on the O(n) code and failed under a loaded
+  parallel run; it is replaced by a node-touch count and a comparison of
+  interleaved timing minima on the LRU key, both of which fail on the old
+  implementation. `test_peek_faster_than_get` compares node touches instead of
+  time. `velesdb-core` no longer depends on `indexmap`.
+
 - **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
   SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
   the binding's VelesQL executor and returned `VectorStore.query`'s own
