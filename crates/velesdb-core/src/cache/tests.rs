@@ -212,3 +212,18 @@ fn test_lru_cache_remove_preserves_recency_order() {
         "3 must survive: removal reordered it"
     );
 }
+
+#[test]
+fn test_lru_cache_zero_capacity_holds_nothing() {
+    let cache: LruCache<u64, String> = LruCache::new(0);
+
+    cache.insert(1, "v1".to_string());
+
+    assert!(cache.is_empty(), "capacity 0 must not keep an entry");
+    assert_eq!(cache.get(&1), None);
+    assert_eq!(
+        cache.stats().evictions,
+        0,
+        "nothing was stored, nothing evicted"
+    );
+}

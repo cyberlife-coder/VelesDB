@@ -1,10 +1,11 @@
-//! Recency-ordered map with O(1) promote, evict and remove.
+//! Bounded recency-ordered map with O(1) promote, evict and remove.
 //!
 //! Nodes live densely in a `Vec` and are chained by index into a doubly-linked
 //! list (head = LRU, tail = MRU); a `HashMap` maps each key to its node index.
-//! Removal swaps the last node into the freed slot and re-points its two
-//! neighbours and its map entry, so every operation touches a constant number
-//! of nodes and the `Vec` never holds dead entries.
+//! A new key arriving at capacity takes over the LRU node in place, so the
+//! `Vec` is allocated once and never grows past capacity. Removal swaps the
+//! last node into the freed slot and re-points its two neighbours and its map
+//! entry. Every operation touches a constant number of nodes.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -19,8 +20,9 @@ struct Node<K, V> {
     next: usize,
 }
 
-/// Single-threaded LRU ordering; `LruCache` adds locking, capacity and stats.
+/// Single-threaded bounded LRU map; `LruCache` adds locking and stats.
 pub(super) struct LruList<K, V> {
+    capacity: usize,
     index: HashMap<K, usize>,
     nodes: Vec<Node<K, V>>,
     head: usize,
@@ -31,8 +33,9 @@ pub(super) struct LruList<K, V> {
 }
 
 impl<K: Hash + Eq + Clone, V> LruList<K, V> {
-    pub(super) fn with_capacity(capacity: usize) -> Self {
+    pub(super) fn new(capacity: usize) -> Self {
         Self {
+            capacity,
             index: HashMap::with_capacity(capacity),
             nodes: Vec::with_capacity(capacity),
             head: NIL,
@@ -46,8 +49,8 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
         self.nodes.len()
     }
 
-    pub(super) fn contains(&self, key: &K) -> bool {
-        self.index.contains_key(key)
+    pub(super) fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Value for `key` without changing its recency.
@@ -63,27 +66,19 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
         Some(&self.node(idx).value)
     }
 
-    /// Inserts or overwrites `key` as most recently used.
-    pub(super) fn insert(&mut self, key: K, value: V) {
+    /// Inserts or overwrites `key` as most recently used; returns whether
+    /// the least recently used entry was evicted to make room.
+    pub(super) fn insert(&mut self, key: K, value: V) -> bool {
         if let Some(&idx) = self.index.get(&key) {
             self.node_mut(idx).value = value;
             self.move_to_back(idx);
-            return;
+            false
+        } else if self.nodes.len() < self.capacity {
+            self.push_back(key, value);
+            false
+        } else {
+            self.recycle_lru(key, value)
         }
-        let idx = self.nodes.len();
-        self.index.insert(key.clone(), idx);
-        self.nodes.push(Node {
-            key,
-            value,
-            prev: NIL,
-            next: NIL,
-        });
-        self.link_back(idx);
-    }
-
-    /// Removes and returns the least recently used entry.
-    pub(super) fn pop_lru(&mut self) -> Option<V> {
-        (self.head != NIL).then(|| self.remove_at(self.head))
     }
 
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
@@ -96,6 +91,36 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
         self.nodes.clear();
         self.head = NIL;
         self.tail = NIL;
+    }
+
+    fn push_back(&mut self, key: K, value: V) {
+        let idx = self.nodes.len();
+        self.index.insert(key.clone(), idx);
+        self.nodes.push(Node {
+            key,
+            value,
+            prev: NIL,
+            next: NIL,
+        });
+        self.link_back(idx);
+    }
+
+    /// Hands the LRU node to a new entry: no allocation, no relocation.
+    /// Returns `false` only at capacity 0, where there is no node to take.
+    fn recycle_lru(&mut self, key: K, value: V) -> bool {
+        let idx = self.head;
+        if idx == NIL {
+            return false;
+        }
+        let node = self.node_mut(idx);
+        let evicted = std::mem::replace(&mut node.key, key.clone());
+        node.value = value;
+        // Remove before insert: the index never exceeds the capacity it was
+        // allocated for, so a full cache never rehashes.
+        self.index.remove(&evicted);
+        self.index.insert(key, idx);
+        self.move_to_back(idx);
+        true
     }
 
     fn move_to_back(&mut self, idx: usize) {

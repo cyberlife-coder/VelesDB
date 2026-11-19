@@ -7,10 +7,10 @@
 //!
 //! | Operation | Complexity | Notes |
 //! |-----------|------------|-------|
-//! | insert | O(1) | Amortized (`Vec`/`HashMap` growth) |
+//! | insert | O(1) | Storage allocated once, at construction |
 //! | get | O(1) | With recency update (list relink) |
 //! | remove | O(1) | Recency order of the others preserved |
-//! | eviction | O(1) | List head |
+//! | eviction | O(1) | LRU node reused in place by the incoming entry |
 //!
 //! Guarded by `lru_optimization_tests` (node-touch count and timing minima).
 
@@ -54,8 +54,6 @@ where
     K: Hash + Eq + Clone,
     V: Clone,
 {
-    /// Maximum capacity.
-    capacity: usize,
     /// Internal data protected by `RwLock`.
     inner: RwLock<LruList<K, V>>,
     /// Statistics (atomic for lock-free reads).
@@ -73,8 +71,7 @@ where
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
-            capacity,
-            inner: RwLock::new(LruList::with_capacity(capacity)),
+            inner: RwLock::new(LruList::new(capacity)),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
@@ -84,7 +81,7 @@ where
     /// Get the capacity of the cache.
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.inner.read().capacity()
     }
 
     /// Get the current number of entries.
@@ -101,13 +98,12 @@ where
 
     /// Insert a key-value pair, evicting LRU entry if at capacity.
     ///
-    /// O(1) amortized complexity.
+    /// O(1): storage is allocated up front and the evicted node is reused.
     pub fn insert(&self, key: K, value: V) {
-        let mut inner = self.inner.write();
-        if !inner.contains(&key) && inner.len() >= self.capacity && inner.pop_lru().is_some() {
+        let evicted = self.inner.write().insert(key, value);
+        if evicted {
             self.evictions.fetch_add(1, Ordering::Relaxed);
         }
-        inner.insert(key, value);
     }
 
     /// Get a value by key, updating recency.
