@@ -91,6 +91,44 @@ fn test_lru_cache_access_updates_recency() {
     assert_eq!(cache.get(&4), Some("four".to_string()));
 }
 
+#[test]
+fn test_lru_cache_with_zero_capacity_holds_nothing() {
+    let cache: LruCache<u64, String> = LruCache::new(0);
+
+    cache.insert(1, "one".to_string());
+
+    assert!(cache.is_empty(), "a zero-capacity cache must stay empty");
+    assert_eq!(cache.peek(&1), None);
+    assert_eq!(
+        cache.stats().evictions,
+        0,
+        "nothing was stored, so nothing was evicted"
+    );
+}
+
+#[test]
+fn test_lru_cache_remove_preserves_recency_order() {
+    let cache: LruCache<u64, String> = LruCache::new(3);
+
+    cache.insert(1, "one".to_string());
+    cache.insert(2, "two".to_string());
+    cache.insert(3, "three".to_string());
+
+    // Removing the LRU entry must not reorder the survivors: 2 stays LRU, 3 MRU.
+    cache.remove(&1);
+    cache.insert(4, "four".to_string());
+
+    // Full again: inserting 5 must evict 2, the oldest surviving entry.
+    cache.insert(5, "five".to_string());
+
+    // `peek` asserts without touching recency.
+    assert_eq!(cache.peek(&2), None, "the oldest entry must be evicted");
+    assert_eq!(cache.peek(&3), Some("three".to_string()));
+    assert_eq!(cache.peek(&4), Some("four".to_string()));
+    assert_eq!(cache.peek(&5), Some("five".to_string()));
+    assert_eq!(cache.stats().evictions, 1);
+}
+
 // ========== Cache Stats Tests ==========
 
 #[test]
@@ -187,43 +225,4 @@ fn test_lru_cache_clear() {
     assert!(cache.is_empty());
     assert_eq!(cache.get(&1), None);
     assert_eq!(cache.get(&2), None);
-}
-
-#[test]
-fn test_lru_cache_remove_preserves_recency_order() {
-    // Given entries inserted 1, 2, 3 (1 = LRU)
-    let cache: LruCache<u64, String> = LruCache::new(3);
-    for i in 1..=3 {
-        cache.insert(i, format!("v{i}"));
-    }
-
-    // When the LRU entry is removed and the cache refills past capacity
-    cache.remove(&1);
-    cache.insert(4, "v4".to_string());
-    cache.insert(5, "v5".to_string());
-
-    // Then the eviction victim is the oldest survivor (2), not a reordered entry
-    assert!(
-        cache.peek(&2).is_none(),
-        "2 was the LRU and must be evicted"
-    );
-    assert!(
-        cache.peek(&3).is_some(),
-        "3 must survive: removal reordered it"
-    );
-}
-
-#[test]
-fn test_lru_cache_zero_capacity_holds_nothing() {
-    let cache: LruCache<u64, String> = LruCache::new(0);
-
-    cache.insert(1, "v1".to_string());
-
-    assert!(cache.is_empty(), "capacity 0 must not keep an entry");
-    assert_eq!(cache.get(&1), None);
-    assert_eq!(
-        cache.stats().evictions,
-        0,
-        "nothing was stored, nothing evicted"
-    );
 }

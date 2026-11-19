@@ -518,24 +518,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`LruCache` is O(1) throughout; `remove` keeps the recency order; capacity
-  0 holds nothing** (core, 2026-11-19). Recency lived in an `IndexMap`, whose
-  `shift_remove` shifts every entry behind the one moved, so `get` on any key
-  but the most recent and every eviction were O(n), and `remove` used
-  `swap_remove`, which moved the newest entry into the freed slot and made it
-  the next eviction victim. The order now lives in `LruList`, an index-linked
-  list over a dense `Vec` plus a `HashMap`: get, insert, eviction and remove
-  each touch a constant number of nodes, and a new key arriving at capacity
-  takes over the evicted node in place, so node storage is allocated once (the
-  hash index stays amortized O(1)). Release `get` hit at 10 000 entries went
-  from 22.7 µs to 33 ns. `LruCache::new(0)` kept one entry; it now keeps none.
-  The test that claimed O(1) re-read the already-most-recent key and compared
-  one wall-clock ratio, so it passed on the O(n) code and failed under a
-  loaded parallel run; node-touch counts and comparisons of interleaved timing
-  minima for `get` on the LRU key and for eviction replace it, and all fail on
-  the old implementation. `test_peek_faster_than_get` compares node touches
-  instead of time, and the three `#[ignore]`d scaling timers they supersede
-  are removed. `velesdb-core` no longer depends on `indexmap`.
+- **Core: `LruCache` is O(1) for every operation** (core, 2026-11-19). Recency
+  lived in an `IndexMap`, whose order is kept by shifting every entry behind
+  the one moved: `get` on any key but the most recent, insert of an existing
+  key, eviction and the order-preserving `remove` were all O(n), as the module
+  docs had come to say. The order now lives in `LruList`, an index-linked list
+  over a dense `Vec` plus a `HashMap`: each of those operations touches a
+  constant number of nodes, keeping the recency order and the zero-capacity
+  behaviour of the entries below, and a new key arriving at capacity takes
+  over the evicted node in place, so node storage is allocated once (the hash
+  index stays amortized O(1)). Release `get` hit at 10 000 entries went from
+  22.7 µs to 33 ns; `LockFreeLruCache` demotes into its L2 under a shard lock
+  and gets the same constant cost there. The test that claimed O(1) re-read
+  the already-most-recent key and compared one wall-clock ratio, so it passed
+  on the O(n) code and failed under a loaded parallel run; node-touch counts
+  and comparisons of interleaved timing minima for `get` on the LRU key and
+  for eviction replace it, and all fail on the old implementation.
+  `test_peek_faster_than_get` compares node touches instead of time, and the
+  three `#[ignore]`d scaling timers they supersede are removed. `velesdb-core`
+  no longer depends on `indexmap`.
 
 - **Core: the unreachable-snapshot test holds when run as root** (core,
   tests, 2026-11-19). `an_unreachable_snapshot_is_an_error_not_a_missing_one`
@@ -557,6 +558,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returned about 2 000 to 9 000 results in roughly one build out of five,
   filtered or not. The stagnation limit, like the distance bound beside
   it, now applies only once the result set is full.
+
+- **Core: `LruCache::remove` keeps the recency order** (core, 2026-11-19).
+  `remove` used `IndexMap::swap_remove`, which moves the most recently used
+  entry into the removed key's slot, so after a removal the MRU entry could
+  sit at the front and be the next one evicted. It now uses `shift_remove`
+  (order-preserving, O(n) instead of O(1)), so eviction always picks the
+  least recently used entry. `LockFreeLruCache::remove` delegates to it for
+  its L2 tier and inherits the fix; the query plan cache only ever clears,
+  so no shipped path hit the defect. The module docs now state the real cost
+  of every operation instead of claiming O(1) throughout.
+
+- **Core: `LockFreeLruCache` evicts its least recently used L1 entry**
+  (core, 2026-11-19). Over capacity, L1 (a `DashMap`) removed whichever
+  entries its iteration reached first, so it could drop the hottest key, or
+  the key just promoted from L2. Each L1 entry now carries a logical
+  last-access stamp, and eviction removes the oldest one, guarded on that
+  stamp so an entry hit during the scan survives. Inserts and promotions
+  advance the clock; hits only read it and write their entry only when it
+  is stale, so the hit path adds no contended write: the order is exact
+  except among entries whose last access was a hit between the same two
+  writes. A per-hit clock, which would make it exact, measured at about
+  half the concurrent hit throughput. Choosing a victim scans L1, O(L1
+  capacity) per evicted entry. The compiled query plan cache sits on this
+  cache.
+
+- **Core: `LockFreeLruCache` demotes its L1 victims to L2** (core,
+  2026-11-19). An L1 hit does not touch L2, so a key served from L1 alone
+  aged in L2 and could be evicted there while hot; once L1 dropped it in
+  turn, it was gone from both tiers although it had been used more
+  recently than what L2 kept. L1 now demotes each eviction victim to L2's
+  most recently used position, re-inserting it if L2 had dropped it, so
+  L2 orders the keys outside L1 by last access. The L1 hit path is
+  unchanged. Promotion, demotion and `remove` of one key now hold that
+  key's L1 shard lock across their L2 access, so they are serialised per
+  key. Before, an L2 hit read L2 and promoted outside any lock: racing a
+  `remove`, it put the deleted key back into L1, and racing an `insert`,
+  it replaced the newer value with the older one it had read.
+
+- **Core: a zero-capacity `LruCache` stores nothing** (core, 2026-11-19).
+  `LruCache::new(0)` kept one entry, since eviction only runs on a
+  non-empty map; `LockFreeLruCache::new(n, 0)` inherited it in its L2.
 
 - **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
   SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
