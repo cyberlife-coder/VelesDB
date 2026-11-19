@@ -4,8 +4,9 @@
 //! linked list ordered from least (`head`) to most (`tail`) recently used:
 //! the classic LRU construction. Every operation is one hash lookup plus a
 //! constant number of link updates, where an insertion-ordered map has to
-//! shift every later entry to move or remove one. Slots freed by removal
-//! or eviction are reused, so the slab never outgrows the capacity.
+//! shift every later entry to move or remove one. The slab stays dense: a
+//! removal moves the last node into the freed slot and repoints its two
+//! neighbours and its index entry, so it never outgrows the capacity.
 //!
 //! [`LruCache`](super::LruCache) wraps it in a lock and adds statistics.
 
@@ -26,9 +27,8 @@ struct Node<K, V> {
 pub(super) struct LruList<K, V> {
     capacity: usize,
     index: HashMap<K, usize>,
-    /// `None` marks a free slot, listed in `free`.
-    slots: Vec<Option<Node<K, V>>>,
-    free: Vec<usize>,
+    /// Dense: every slot holds a linked node.
+    slots: Vec<Node<K, V>>,
     /// Least recently used node, or `NIL` when empty.
     head: usize,
     /// Most recently used node, or `NIL` when empty.
@@ -41,7 +41,6 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
             capacity,
             index: HashMap::with_capacity(capacity),
             slots: Vec::with_capacity(capacity),
-            free: Vec::new(),
             head: NIL,
             tail: NIL,
         }
@@ -59,12 +58,12 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
     pub(super) fn get(&mut self, key: &K) -> Option<&V> {
         let slot = *self.index.get(key)?;
         self.move_to_tail(slot);
-        Some(&self.node(slot).value)
+        Some(&self.slots[slot].value)
     }
 
     /// The value for `key`, leaving the recency order unchanged.
     pub(super) fn peek(&self, key: &K) -> Option<&V> {
-        self.index.get(key).map(|&slot| &self.node(slot).value)
+        self.index.get(key).map(|&slot| &self.slots[slot].value)
     }
 
     /// Inserts or replaces `key` as the most recently used entry.
@@ -77,14 +76,15 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
             return Some((key, value));
         }
         if let Some(&slot) = self.index.get(&key) {
-            self.node_mut(slot).value = value;
+            self.slots[slot].value = value;
             self.move_to_tail(slot);
             return None;
         }
         let evicted = (self.len() >= self.capacity)
             .then(|| self.remove_slot(self.head))
             .map(|node| (node.key, node.value));
-        let slot = self.allocate(Node {
+        let slot = self.slots.len();
+        self.slots.push(Node {
             key: key.clone(),
             value,
             prev: NIL,
@@ -104,7 +104,6 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
     pub(super) fn clear(&mut self) {
         self.index.clear();
         self.slots.clear();
-        self.free.clear();
         self.head = NIL;
         self.tail = NIL;
     }
@@ -115,38 +114,44 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
         let mut keys = Vec::with_capacity(self.len());
         let mut slot = self.head;
         while slot != NIL {
-            let node = self.node(slot);
+            let node = &self.slots[slot];
             keys.push(node.key.clone());
             slot = node.next;
         }
         keys
     }
 
-    fn node(&self, slot: usize) -> &Node<K, V> {
-        self.slots[slot].as_ref().expect("linked slot holds a node")
-    }
-
-    fn node_mut(&mut self, slot: usize) -> &mut Node<K, V> {
-        self.slots[slot].as_mut().expect("linked slot holds a node")
-    }
-
-    fn allocate(&mut self, node: Node<K, V>) -> usize {
-        if let Some(slot) = self.free.pop() {
-            self.slots[slot] = Some(node);
-            slot
-        } else {
-            self.slots.push(Some(node));
-            self.slots.len() - 1
-        }
-    }
-
-    /// Unlinks the node in `slot`, frees the slot and drops its index entry.
+    /// Unlinks and removes the node in `slot`, and drops its index entry.
+    ///
+    /// `swap_remove` keeps the slab dense by moving the last node into
+    /// `slot`; that node's neighbours and index entry are repointed to it.
     fn remove_slot(&mut self, slot: usize) -> Node<K, V> {
         self.unlink(slot);
-        let node = self.slots[slot].take().expect("linked slot holds a node");
-        self.free.push(slot);
+        let node = self.slots.swap_remove(slot);
         self.index.remove(&node.key);
+        if slot < self.slots.len() {
+            self.repoint_moved_node(slot);
+        }
         node
+    }
+
+    /// Repoints the links and the index entry of the node `swap_remove` just
+    /// moved into `slot` from the end of the slab.
+    fn repoint_moved_node(&mut self, slot: usize) {
+        let Node { prev, next, .. } = self.slots[slot];
+        if prev == NIL {
+            self.head = slot;
+        } else {
+            self.slots[prev].next = slot;
+        }
+        if next == NIL {
+            self.tail = slot;
+        } else {
+            self.slots[next].prev = slot;
+        }
+        if let Some(entry) = self.index.get_mut(&self.slots[slot].key) {
+            *entry = slot;
+        }
     }
 
     fn move_to_tail(&mut self, slot: usize) {
@@ -157,30 +162,28 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
     }
 
     fn unlink(&mut self, slot: usize) {
-        let Node { prev, next, .. } = *self.node(slot);
+        let Node { prev, next, .. } = self.slots[slot];
         if prev == NIL {
             self.head = next;
         } else {
-            self.node_mut(prev).next = next;
+            self.slots[prev].next = next;
         }
         if next == NIL {
             self.tail = prev;
         } else {
-            self.node_mut(next).prev = prev;
+            self.slots[next].prev = prev;
         }
     }
 
     fn link_at_tail(&mut self, slot: usize) {
         let old_tail = self.tail;
-        {
-            let node = self.node_mut(slot);
-            node.prev = old_tail;
-            node.next = NIL;
-        }
+        let node = &mut self.slots[slot];
+        node.prev = old_tail;
+        node.next = NIL;
         if old_tail == NIL {
             self.head = slot;
         } else {
-            self.node_mut(old_tail).next = slot;
+            self.slots[old_tail].next = slot;
         }
         self.tail = slot;
     }
