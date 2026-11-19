@@ -8,11 +8,15 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::doc_markdown)]
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::measurement::WallTime;
+use criterion::{
+    black_box, criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion, Throughput,
+};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use velesdb_core::cache::{BloomFilter, LruCache};
+use velesdb_core::cache::{BloomFilter, LockFreeLruCache, LruCache};
 
 // ========== Single-Thread Baseline Benchmarks ==========
 
@@ -388,11 +392,101 @@ fn bench_contention(c: &mut Criterion) {
     group.finish();
 }
 
+/// The compiled plan cache's sizes (`Database::open`): L1 1,000, L2 10,000.
+const PLAN_CACHE_L1: usize = 1_000;
+const PLAN_CACHE_L2: usize = 10_000;
+/// Keys the readers cycle through: half of L1, so an LRU L1 keeps them all
+/// resident while fresh inserts take the other half.
+const HOT_KEYS: u64 = PLAN_CACHE_L1 as u64 / 2;
+const OPS_PER_THREAD: u64 = 10_000;
+
+/// `LockFreeLruCache` at 1 to 8 threads, at the plan cache's sizes.
+///
+/// Each case builds and fills its cache once, outside the measured loop, so
+/// an iteration times only the threads' operations (and their spawn,
+/// amortised over `OPS_PER_THREAD`). Compare a thread count's throughput
+/// with the 1-thread line to read the scaling.
+fn bench_lockfree_lru_cache_concurrent(c: &mut Criterion) {
+    let mut group = c.benchmark_group("LockFreeLruCache-Concurrent");
+    for num_threads in [1_u64, 2, 4, 8] {
+        group.throughput(Throughput::Elements(num_threads * OPS_PER_THREAD));
+        bench_l1_hit_read(&mut group, num_threads);
+        bench_read_mostly_with_eviction(&mut group, num_threads);
+    }
+    group.finish();
+}
+
+/// Every read hits L1: the lock-free path the plan cache serves from.
+fn bench_l1_hit_read(group: &mut BenchmarkGroup<'_, WallTime>, num_threads: u64) {
+    let cache = filled_lockfree_cache();
+    group.bench_function(BenchmarkId::new("l1_hit_read", num_threads), |b| {
+        b.iter(|| {
+            on_threads(num_threads, |thread, op| {
+                black_box(cache.get(&hot_key(thread, op)));
+            });
+        });
+    });
+}
+
+/// 90% reads of the hot keys, 10% inserts of fresh keys. Every insert takes
+/// L1 over capacity, so this times the eviction path beside the reads. An
+/// LRU L1 evicts the fresh keys and keeps the reads L1 hits; an eviction
+/// that ignores recency turns some of them into L2 hits, measured here too.
+fn bench_read_mostly_with_eviction(group: &mut BenchmarkGroup<'_, WallTime>, num_threads: u64) {
+    let cache = filled_lockfree_cache();
+    let next_fresh_key = AtomicU64::new(PLAN_CACHE_L2 as u64);
+    group.bench_function(
+        BenchmarkId::new("read_mostly_with_eviction", num_threads),
+        |b| {
+            b.iter(|| {
+                on_threads(num_threads, |thread, op| {
+                    if op % 10 == 0 {
+                        let key = next_fresh_key.fetch_add(1, Ordering::Relaxed);
+                        cache.insert(key, key);
+                    } else {
+                        black_box(cache.get(&hot_key(thread, op)));
+                    }
+                });
+            });
+        },
+    );
+}
+
+/// Runs `op(thread, op_index)` `OPS_PER_THREAD` times on each of
+/// `num_threads` scoped threads.
+fn on_threads(num_threads: u64, op: impl Fn(u64, u64) + Sync) {
+    thread::scope(|scope| {
+        for thread in 0..num_threads {
+            let op = &op;
+            scope.spawn(move || (0..OPS_PER_THREAD).for_each(|i| op(thread, i)));
+        }
+    });
+}
+
+/// The hot key a thread reads at its `op`-th operation. Threads start
+/// `THREAD_STRIDE` keys apart; the stride is prime to `HOT_KEYS`, so up to
+/// 8 threads all start on distinct keys and never read in lockstep.
+fn hot_key(thread: u64, op: u64) -> u64 {
+    const THREAD_STRIDE: u64 = 97;
+    (op + thread * THREAD_STRIDE) % HOT_KEYS
+}
+
+/// A `LockFreeLruCache` at the plan cache's sizes with L1 full of keys
+/// `0..PLAN_CACHE_L1`.
+fn filled_lockfree_cache() -> LockFreeLruCache<u64, u64> {
+    let cache = LockFreeLruCache::new(PLAN_CACHE_L1, PLAN_CACHE_L2);
+    for key in 0..PLAN_CACHE_L1 as u64 {
+        cache.insert(key, key);
+    }
+    cache
+}
+
 criterion_group!(
     benches,
     bench_lru_cache_baseline,
     bench_bloom_filter_baseline,
     bench_lru_cache_concurrent,
+    bench_lockfree_lru_cache_concurrent,
     bench_bloom_filter_concurrent,
     bench_contention,
 );

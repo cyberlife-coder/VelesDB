@@ -12,9 +12,10 @@
 //!
 //! # Implementation Notes
 //!
-//! `IndexMap` provides O(1) lookup but O(n) for `shift_remove` (preserves order).
-//! This is still faster than `VecDeque::retain` which was O(n) with higher constant.
-//! For true O(1) LRU, a custom doubly-linked list + `HashMap` would be needed.
+//! `LruCache` sits on `LruList`, a hash map over a doubly linked slab, so
+//! insert, get, remove and eviction are all O(1). The bounds below predate
+//! it (they allowed the O(n) shifts of the `IndexMap` it replaced) and stay
+//! as loose sanity checks.
 
 #![allow(clippy::similar_names)]
 #![allow(clippy::doc_markdown)]
@@ -24,7 +25,6 @@ use std::time::Instant;
 use super::LruCache;
 
 /// Test that insert performance scales reasonably.
-/// IndexMap shift_remove is O(n) but with low constant.
 #[test]
 #[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_insert_performance_scaling() {
@@ -58,9 +58,8 @@ fn test_insert_performance_scaling() {
     }
     println!("  Ratio 10K/100: {ratio:.1}x");
 
-    // IndexMap is O(n) for shift_remove but should be < 300x (linear)
-    // This is acceptable for cache sizes < 100K
-    // Note: CI machines may have higher variance
+    // Loose bound: O(1) operations should not scale with the size at all;
+    // CI machines have high variance.
     assert!(ratio < 300.0, "Insert scaling too poor: ratio={ratio:.1}x");
 
     // Absolute performance: < 500µs per insert for 10K cache (CI machines are slower)
@@ -72,7 +71,7 @@ fn test_insert_performance_scaling() {
 }
 
 /// Test get performance scaling.
-/// Get includes move_to_back which is O(n) with IndexMap.
+/// Get includes the move to MRU.
 #[test]
 #[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_get_performance_scaling() {
@@ -115,28 +114,7 @@ fn test_get_performance_scaling() {
     );
 }
 
-/// `peek` is the read-only lookup: unlike `get` it must not touch recency.
-/// (Its speed relative to `get` is a benchmark question, not a test one.)
-#[test]
-fn test_peek_does_not_update_recency() {
-    let cache: LruCache<u64, String> = LruCache::new(3);
-    for i in 1..=3 {
-        cache.insert(i, format!("value_{i}"));
-    }
-
-    assert_eq!(cache.peek(&1), Some("value_1".to_string()));
-    cache.insert(4, "value_4".to_string());
-
-    assert_eq!(
-        cache.peek(&1),
-        None,
-        "peeked key stayed LRU and was evicted"
-    );
-    assert_eq!(cache.peek(&2), Some("value_2".to_string()));
-}
-
 /// Test eviction performance scaling.
-/// Eviction uses shift_remove_index(0) which is O(n) with IndexMap.
 #[test]
 #[ignore = "Performance test - run manually with --ignored, CI runners are too slow"]
 fn test_eviction_performance_scaling() {
@@ -185,8 +163,10 @@ fn test_eviction_performance_scaling() {
 ///
 /// This replaces a wall-clock ratio that claimed O(1) for move-to-back. It
 /// timed `get(&0)` repeatedly, which after the first call hits the key already
-/// at the back — the one position where `shift_remove` is O(1) — and in
-/// general `get` is O(n), as the `lru` module documents.
+/// at the MRU end, so it never exercised a move at all, and a ratio of two
+/// sub-microsecond timings measures the runner. That `get` is O(1) holds by
+/// construction (`LruList`'s hash map over a linked slab); its cost per size
+/// is the benchmark's question.
 #[test]
 fn test_get_moves_key_to_mru_at_every_size() {
     for size in [100usize, 1_000, 10_000] {

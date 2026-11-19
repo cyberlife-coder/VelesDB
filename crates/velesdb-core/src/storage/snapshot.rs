@@ -130,10 +130,11 @@ fn validate_snapshot_header(data: &[u8]) -> io::Result<(u64, usize)> {
 ///
 /// # Errors
 ///
-/// Returns `NotFound` if [`Path::exists`] reports no snapshot file, which it
-/// also does for a path it cannot reach; the read's error if the file cannot
-/// be read; and `InvalidData` (see [`parse_snapshot`]) if it is corrupt or has
-/// an invalid format.
+/// Returns `NotFound` if there is no snapshot file; the lookup's error if
+/// the path cannot be reached (a permission error, a parent that is not a
+/// directory, a symlink loop); the read's error if the file cannot be read;
+/// and `InvalidData` (see [`parse_snapshot`]) if it is corrupt or has an
+/// invalid format.
 pub(crate) fn load_snapshot(snapshot_path: &Path) -> io::Result<(FxHashMap<u64, u64>, u64)> {
     // `try_exists`, not `exists`: the latter answers `false` when the metadata
     // cannot be read at all -- "e.g. because of a permission error or broken

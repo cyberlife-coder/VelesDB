@@ -12,7 +12,8 @@
 //! **Lock Hierarchy (acquire in this order to prevent deadlocks):**
 //! 1. `BloomFilter.bits` (`RwLock`)
 //! 2. `BloomFilter.count` (`RwLock`)
-//! 3. `LruCache.inner` (`RwLock`)
+//! 3. `LockFreeLruCache` L1 shard (`DashMap`), held while demoting into L2
+//! 4. `LruCache.inner` (`RwLock`)
 
 mod bloom;
 #[cfg(test)]
@@ -21,6 +22,9 @@ mod lockfree;
 #[cfg(test)]
 mod lockfree_tests;
 mod lru;
+mod lru_list;
+#[cfg(test)]
+mod lru_list_tests;
 #[cfg(feature = "persistence")]
 pub mod plan_cache;
 #[cfg(all(test, feature = "persistence"))]

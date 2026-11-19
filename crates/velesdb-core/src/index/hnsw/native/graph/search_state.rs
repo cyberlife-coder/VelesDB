@@ -75,19 +75,26 @@ impl SearchState {
 
     /// Returns `true` if the search should terminate.
     ///
-    /// Termination conditions:
-    /// 1. The current candidate distance exceeds `cached_furthest` and
-    ///    the result set has reached `ef` capacity.
+    /// Only a result set that has reached `ef` capacity can terminate, on
+    /// either condition:
+    /// 1. The current candidate distance exceeds `cached_furthest`.
     /// 2. Stagnation limit is enabled and the counter has reached it.
+    ///
+    /// A set below `ef` admits every node the walk still discovers, so a
+    /// run of pops that discover nothing — their neighbours were already
+    /// reached through other nodes — is no evidence it stopped improving.
+    /// Ending it there returned fewer than `ef`, and fewer than `k`, results
+    /// from a graph whose every node was reachable (collinear points).
     ///
     /// Uses `cached_furthest` instead of `results.peek()` to avoid a
     /// heap pointer chase on every candidate evaluation (Issue #422).
     #[inline]
     pub(super) fn should_terminate(&self, c_dist: f32, ef: usize, stagnation_limit: usize) -> bool {
-        if c_dist > self.cached_furthest && self.results.len() >= ef {
-            return true;
+        if self.results.len() < ef {
+            return false;
         }
-        stagnation_limit > 0 && self.stagnation_count >= stagnation_limit
+        c_dist > self.cached_furthest
+            || (stagnation_limit > 0 && self.stagnation_count >= stagnation_limit)
     }
 
     /// Updates the stagnation counter: resets on improvement, increments otherwise.
