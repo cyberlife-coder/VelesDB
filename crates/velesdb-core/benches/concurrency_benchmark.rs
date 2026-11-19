@@ -9,10 +9,11 @@
 #![allow(clippy::doc_markdown)]
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use velesdb_core::cache::{BloomFilter, LruCache};
+use velesdb_core::cache::{BloomFilter, LockFreeLruCache, LruCache};
 
 // ========== Single-Thread Baseline Benchmarks ==========
 
@@ -388,11 +389,94 @@ fn bench_contention(c: &mut Criterion) {
     group.finish();
 }
 
+/// The compiled plan cache's sizes (`Database::open`): L1 1,000, L2 10,000.
+const PLAN_CACHE_L1: usize = 1_000;
+const PLAN_CACHE_L2: usize = 10_000;
+
+/// `LockFreeLruCache` at 1 to 8 threads, at the plan cache's sizes.
+///
+/// The cache is built and filled once per benchmark, outside the measured
+/// loop, so an iteration times only the threads' operations (and their
+/// spawn, amortised over `OPS_PER_THREAD`). Compare a thread count's
+/// throughput with the 1-thread line to read the scaling.
+fn bench_lockfree_lru_cache_concurrent(c: &mut Criterion) {
+    const OPS_PER_THREAD: u64 = 10_000;
+    let mut group = c.benchmark_group("LockFreeLruCache-Concurrent");
+
+    for num_threads in [1_u64, 2, 4, 8] {
+        group.throughput(Throughput::Elements(num_threads * OPS_PER_THREAD));
+
+        // Every read hits L1: the lock-free path the plan cache serves from.
+        let cache = filled_lockfree_cache();
+        group.bench_with_input(
+            BenchmarkId::new("l1_hit_read", num_threads),
+            &num_threads,
+            |b, &n_threads| {
+                b.iter(|| {
+                    thread::scope(|scope| {
+                        for t in 0..n_threads {
+                            let cache = &cache;
+                            scope.spawn(move || {
+                                for i in 0..OPS_PER_THREAD {
+                                    let key = (i + t * 100) % PLAN_CACHE_L1 as u64;
+                                    black_box(cache.get(&key));
+                                }
+                            });
+                        }
+                    });
+                });
+            },
+        );
+
+        // 90% L1 hits, 10% inserts of fresh keys: every insert evicts the
+        // L1 LRU entry, so this times the eviction path beside the reads.
+        let cache = filled_lockfree_cache();
+        let next_key = AtomicU64::new(PLAN_CACHE_L2 as u64);
+        group.bench_with_input(
+            BenchmarkId::new("read_mostly_with_eviction", num_threads),
+            &num_threads,
+            |b, &n_threads| {
+                b.iter(|| {
+                    thread::scope(|scope| {
+                        for t in 0..n_threads {
+                            let (cache, next_key) = (&cache, &next_key);
+                            scope.spawn(move || {
+                                for i in 0..OPS_PER_THREAD {
+                                    if i % 10 == 0 {
+                                        let key = next_key.fetch_add(1, Ordering::Relaxed);
+                                        cache.insert(key, key);
+                                    } else {
+                                        let key = (i + t * 100) % PLAN_CACHE_L1 as u64;
+                                        black_box(cache.get(&key));
+                                    }
+                                }
+                            });
+                        }
+                    });
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// A `LockFreeLruCache` at the plan cache's sizes with L1 full of keys
+/// `0..PLAN_CACHE_L1`.
+fn filled_lockfree_cache() -> LockFreeLruCache<u64, u64> {
+    let cache = LockFreeLruCache::new(PLAN_CACHE_L1, PLAN_CACHE_L2);
+    for key in 0..PLAN_CACHE_L1 as u64 {
+        cache.insert(key, key);
+    }
+    cache
+}
+
 criterion_group!(
     benches,
     bench_lru_cache_baseline,
     bench_bloom_filter_baseline,
     bench_lru_cache_concurrent,
+    bench_lockfree_lru_cache_concurrent,
     bench_bloom_filter_concurrent,
     bench_contention,
 );
