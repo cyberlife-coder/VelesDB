@@ -30,18 +30,18 @@
 //! advance it, by two: a write stamps its entry with the odd time in
 //! between, strictly after every access before it and strictly before
 //! every hit after it. An L1 hit only *reads* the clock, and stores into its
-//! entry only when the entry's stamp is older: steady-state hits write no
-//! shared memory beyond the hit counter.
+//! entry only when the entry's stamp is older: steady-state hits write
+//! nothing shared but their own thread's stripe of the hit counter (see
+//! `StripedCounter`).
 //!
 //! Over capacity, L1 evicts the entry with the oldest stamp. That is the
 //! exact LRU entry, except among entries whose last access was a hit in the
 //! same window between two writes, whose stamps tie: there, the victim is
 //! any one of them. A per-hit clock would make the order exact, at the cost
-//! of a contended write on every hit (measured at about half the concurrent
-//! hit throughput). The removal is guarded on the victim's stamp, so an entry
-//! hit in a later window while the victim was being chosen is not evicted:
-//! the next pass picks the new oldest one instead. `peek_l1` does not
-//! refresh the stamp.
+//! of a contended write on every hit (measurements in #2856). The removal
+//! is guarded on the victim's stamp, so an entry hit in a later window while
+//! the victim was being chosen is not evicted: the next pass picks the new
+//! oldest one instead. `peek_l1` does not refresh the stamp.
 //!
 //! # Performance
 //!
@@ -70,6 +70,7 @@ use dashmap::{mapref::entry::Entry, DashMap};
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use super::striped_counter::StripedCounter;
 use super::LruCache;
 
 /// Upper bound on L1 eviction passes per insert or promotion, so contention
@@ -121,8 +122,9 @@ where
     /// Maximum L1 entries. Beyond it L1 demotes its least recently used
     /// entry to L2.
     l1_capacity: usize,
-    /// L1 hit counter.
-    l1_hits: AtomicU64,
+    /// L1 hit counter: the only counter on the lock-free hit path, so it is
+    /// striped across cache lines rather than one contended atomic.
+    l1_hits: StripedCounter,
     /// L2 hit counter (L1 miss, L2 hit).
     l2_hits: AtomicU64,
     /// Total miss counter.
@@ -191,7 +193,7 @@ where
             clock: AtomicU64::new(0),
             l2: LruCache::new(l2_capacity),
             l1_capacity,
-            l1_hits: AtomicU64::new(0),
+            l1_hits: StripedCounter::new(),
             l2_hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             l1_overflow: AtomicU64::new(0),
@@ -206,7 +208,7 @@ where
         // Fast path: L1 lookup (lock-free)
         if let Some(entry) = self.l1.get(key) {
             entry.touch(self.now());
-            self.l1_hits.fetch_add(1, Ordering::Relaxed);
+            self.l1_hits.increment();
             return Some(entry.value.clone());
         }
         self.get_from_l2(key)
@@ -225,7 +227,7 @@ where
             // Inserted or promoted since the L1 lookup above: an L1 hit.
             Entry::Occupied(slot) => {
                 slot.get().touch(self.now());
-                self.l1_hits.fetch_add(1, Ordering::Relaxed);
+                self.l1_hits.increment();
                 return Some(slot.get().value.clone());
             }
             Entry::Vacant(slot) => {
@@ -299,7 +301,7 @@ where
     #[must_use]
     pub fn stats(&self) -> LockFreeCacheStats {
         LockFreeCacheStats {
-            l1_hits: self.l1_hits.load(Ordering::Relaxed),
+            l1_hits: self.l1_hits.get(),
             l2_hits: self.l2_hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
             l1_size: self.l1.len(),

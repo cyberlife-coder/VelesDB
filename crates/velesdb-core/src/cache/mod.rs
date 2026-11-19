@@ -29,6 +29,9 @@ mod lru_list_tests;
 pub mod plan_cache;
 #[cfg(all(test, feature = "persistence"))]
 mod plan_cache_tests;
+mod striped_counter;
+#[cfg(test)]
+mod striped_counter_tests;
 
 pub use bloom::BloomFilter;
 pub use lockfree::{LockFreeCacheStats, LockFreeLruCache};
