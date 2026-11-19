@@ -200,6 +200,79 @@ fn test_lockfree_cache_l1_never_evicts_the_entry_just_inserted() {
     }
 }
 
+/// A key served only from L1 never moves in L2, so L2 may evict it while it
+/// is hot. When L1 evicts it in turn, it must be demoted to L2's MRU
+/// position rather than lost: L2 then holds the most recently used keys.
+#[test]
+fn test_lockfree_cache_l1_victim_is_demoted_to_l2_mru() {
+    let cache: LockFreeLruCache<u64, String> = LockFreeLruCache::new(2, 3);
+    cache.insert(1, "value_1".to_string());
+    cache.insert(2, "value_2".to_string());
+    for newcomer in 3..=5 {
+        // 1 stays hot in L1 only, while write-through traffic ages it in L2.
+        assert!(cache.get(&1).is_some());
+        cache.insert(newcomer, format!("value_{newcomer}"));
+    }
+    assert!(cache.peek_l2(&1).is_none(), "setup: L2 evicted the hot key");
+
+    // 1 is now L1's LRU entry: inserting 6 evicts it from L1.
+    cache.insert(6, "value_6".to_string());
+
+    assert!(cache.peek_l1(&1).is_none());
+    // Accesses, most recent first: 6, 5, 1, 4, 3, 2. L2 keeps the top three.
+    for key in [1, 5, 6] {
+        assert!(cache.peek_l2(&key).is_some(), "L2 must hold key {key}");
+    }
+    assert!(cache.peek_l2(&4).is_none());
+}
+
+/// Demotion must not resurrect a key that a concurrent `remove` deleted:
+/// once `remove` returns and no writer re-inserts that key, it is in
+/// neither tier.
+#[test]
+fn test_lockfree_cache_remove_racing_l1_demotion_does_not_resurrect() {
+    const VICTIMS: u64 = 8;
+    for round in 0..200_u64 {
+        let cache = Arc::new(LockFreeLruCache::<u64, u64>::new(8, 10_000));
+        for key in 0..VICTIMS {
+            cache.insert(key, key);
+        }
+
+        let writers: Vec<_> = (0..4_u64)
+            .map(|w| {
+                let cache = Arc::clone(&cache);
+                thread::spawn(move || {
+                    // Fresh keys only: every insert evicts, and so demotes,
+                    // an older L1 entry, possibly a victim being removed.
+                    for i in 0..16 {
+                        let key = 1_000 + (w * 100) + i;
+                        cache.insert(key, key);
+                    }
+                })
+            })
+            .collect();
+        let remover = {
+            let cache = Arc::clone(&cache);
+            thread::spawn(move || {
+                for key in 0..VICTIMS {
+                    cache.remove(&key);
+                }
+            })
+        };
+        for handle in writers {
+            handle.join().expect("writer panicked");
+        }
+        remover.join().expect("remover panicked");
+
+        for key in 0..VICTIMS {
+            assert!(
+                cache.peek_l1(&key).is_none() && cache.peek_l2(&key).is_none(),
+                "round {round}: removed key {key} came back"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_lockfree_cache_l2_promotion_refreshes_l1_recency() {
     let cache: LockFreeLruCache<u64, String> = LockFreeLruCache::new(2, 100);

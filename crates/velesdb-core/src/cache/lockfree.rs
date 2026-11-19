@@ -5,6 +5,17 @@
 //!   LRU eviction (see "L1 recency")
 //! - **L2**: `LruCache` (with LRU eviction) for capacity management
 //!
+//! # Tier relationship
+//!
+//! Inserts write through to both tiers, and an L2 hit promotes the entry to
+//! L1. An L1 hit stays lock-free and does not touch L2, so a key served from
+//! L1 alone ages in L2 and may be evicted there while it is hot. When L1
+//! evicts an entry, it demotes it to L2's MRU position (re-inserting it if
+//! L2 had dropped it). Every access goes through L1, so keys leave L1 in
+//! last-access order (up to the ties described under "L1 recency"), and
+//! L2's order among the keys outside L1 is their last-access order: L2 acts
+//! as L1's victim cache.
+//!
 //! # L1 recency
 //!
 //! `DashMap` keeps no order, so every L1 entry carries a last-access stamp
@@ -37,7 +48,8 @@
 //! | `remove()` | L1 + L2 | L1 + L2 (`LruCache::remove`, order-preserving) |
 //!
 //! When an insert or a promotion takes L1 over capacity, choosing the victim
-//! scans L1: O(L1 capacity) per evicted entry.
+//! scans L1, O(L1 capacity), and demoting it is one L2 insert (O(L2
+//! capacity) under the L2 write lock), per evicted entry.
 
 // Reason: Numeric casts in cache metrics are intentional:
 // - All casts are for hit rate calculations and statistics
@@ -46,7 +58,7 @@
 // - Precision loss acceptable for cache metrics
 #![allow(clippy::cast_precision_loss)]
 
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -98,8 +110,8 @@ where
     clock: AtomicU64,
     /// L2: LRU cache with eviction for capacity management.
     pub(crate) l2: LruCache<K, V>,
-    /// Maximum L1 entries. Beyond it L1 drops its least recently used entry;
-    /// inserts write through to L2, which serves it while it still holds it.
+    /// Maximum L1 entries. Beyond it L1 demotes its least recently used
+    /// entry to L2.
     l1_capacity: usize,
     /// L1 hit counter.
     l1_hits: AtomicU64,
@@ -233,12 +245,17 @@ where
     }
 
     /// Remove a key from both L1 and L2.
+    ///
+    /// L1 first: a demotion of this key holds its L1 shard lock until its
+    /// L2 copy is written, so the L2 removal that follows deletes that copy.
     pub fn remove(&self, key: &K) {
         self.l1.remove(key);
         self.l2.remove(key);
     }
 
     /// Clear both L1 and L2.
+    ///
+    /// L1 first, for the same reason as [`remove`](Self::remove).
     pub fn clear(&self) {
         self.l1.clear();
         self.l2.clear();
@@ -288,7 +305,7 @@ where
         self.maybe_evict_l1();
     }
 
-    /// Evict least recently used L1 entries while L1 is over capacity.
+    /// Demote least recently used L1 entries to L2 while L1 is over capacity.
     ///
     /// Bounded to [`MAX_L1_EVICTION_PASSES`] so contention cannot make the
     /// caller spin.
@@ -300,15 +317,30 @@ where
             let Some((victim, stamp)) = self.least_recently_used_l1() else {
                 break;
             };
-            // Guarded on the stamp: a hit that refreshed it since the scan
-            // keeps the entry, and the next pass picks the new oldest one.
-            self.l1
-                .remove_if(&victim, |_, entry| entry.last_access() == stamp);
+            self.demote_to_l2(victim, stamp);
         }
 
         // P2 Audit 2026-01-29: Track overflow when L1 still exceeds capacity after max attempts
         if self.l1.len() > self.l1_capacity {
             self.l1_overflow.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Moves `victim` from L1 to L2's MRU position, unless an access
+    /// refreshed its stamp since it was chosen: the entry then stays, and the
+    /// next pass picks the new oldest one.
+    ///
+    /// Both steps run under the victim's L1 shard write lock, which
+    /// `remove` and `clear` take before touching L2: they either find the
+    /// victim still in L1, or run after the demotion and delete its L2 copy.
+    /// A removed key is never re-inserted into L2. Lock order: L1 shard,
+    /// then `LruCache.inner`.
+    fn demote_to_l2(&self, victim: K, stamp: u64) {
+        if let Entry::Occupied(slot) = self.l1.entry(victim) {
+            if slot.get().last_access() == stamp {
+                self.l2.insert(slot.key().clone(), slot.get().value.clone());
+                slot.remove();
+            }
         }
     }
 

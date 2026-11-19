@@ -554,6 +554,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capacity) per evicted entry. The compiled query plan cache sits on this
   cache.
 
+- **Core: `LockFreeLruCache` demotes its L1 victims to L2** (core,
+  2026-11-19). An L1 hit does not touch L2, so a key served from L1 alone
+  aged in L2 and could be evicted there while hot; once L1 dropped it in
+  turn, it was gone from both tiers although it had been used more
+  recently than what L2 kept. L1 now demotes each eviction victim to L2's
+  most recently used position, re-inserting it if L2 had dropped it, so
+  L2 orders the keys outside L1 by last access. The L1 hit path is
+  unchanged and stays lock-free. The demotion writes L2 under the
+  victim's L1 shard lock, which `remove` and `clear` take first, so it
+  never re-inserts a key a concurrent `remove` deleted.
+
 - **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
   SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
   the binding's VelesQL executor and returned `VectorStore.query`'s own
