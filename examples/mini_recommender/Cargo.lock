@@ -1088,7 +1088,6 @@ dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.3",
  "half",
- "indexmap",
  "libc",
  "memmap2",
  "parking_lot",
