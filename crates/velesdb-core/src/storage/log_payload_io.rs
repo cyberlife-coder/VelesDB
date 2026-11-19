@@ -143,7 +143,7 @@ pub(super) fn append_record(
     offset: &mut u64,
 ) -> io::Result<()> {
     write_record(wal, record).inspect_err(|_| {
-        if let Err(error) = discard_torn_record(wal, *offset) {
+        if let Err(error) = discard_torn_record(wal.get_ref(), wal.buffer().len(), *offset) {
             tracing::error!(
                 %error,
                 "payload WAL torn append could not be truncated; replay will stop at it on the next open"
@@ -167,13 +167,16 @@ fn write_record(wal: &mut io::BufWriter<std::fs::File>, record: &[u8]) -> io::Re
     wal.write_all(record)
 }
 
-/// Truncates the file to `offset` minus the bytes still buffered, dropping
-/// any fragment a failed append wrote. A failure that left only buffered
-/// bytes (a partial flush of earlier, complete records) finds the file
-/// already at that length and changes nothing.
-fn discard_torn_record(wal: &io::BufWriter<std::fs::File>, offset: u64) -> io::Result<()> {
-    let file_end = offset.saturating_sub(wal.buffer().len() as u64);
-    let file = wal.get_ref();
+/// Truncates `file` to `offset` minus the `buffered` bytes the writer still
+/// holds, dropping any fragment a failed append wrote. A failure that left
+/// only buffered bytes (a partial flush of earlier, complete records) finds
+/// the file already at that length and changes nothing.
+pub(super) fn discard_torn_record(
+    file: &std::fs::File,
+    buffered: usize,
+    offset: u64,
+) -> io::Result<()> {
+    let file_end = offset.saturating_sub(buffered as u64);
     let file_len = file.metadata()?.len();
     if file_len > file_end {
         file.set_len(file_end)?;
