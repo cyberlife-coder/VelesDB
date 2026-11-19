@@ -21,6 +21,9 @@ mod lockfree;
 #[cfg(test)]
 mod lockfree_tests;
 mod lru;
+mod lru_list;
+#[cfg(test)]
+mod lru_list_tests;
 #[cfg(feature = "persistence")]
 pub mod plan_cache;
 #[cfg(all(test, feature = "persistence"))]

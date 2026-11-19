@@ -1,20 +1,22 @@
 //! LRU Cache implementation for `VelesDB`.
 //!
-//! Thread-safe LRU cache with O(1) operations using `IndexMap`.
+//! Thread-safe LRU cache with O(1) operations over [`LruList`].
 //! Based on arXiv:2310.11703v2 recommendations.
 //!
 //! # Performance (US-CORE-003-14)
 //!
 //! | Operation | Complexity | Notes |
 //! |-----------|------------|-------|
-//! | insert | O(1) | Amortized |
-//! | get | O(n) | With recency update (shift_remove) |
-//! | remove | O(1) | swap_remove |
-//! | eviction | O(1) | shift_remove from front |
+//! | insert | O(1) | Amortized (`Vec`/`HashMap` growth) |
+//! | get | O(1) | With recency update (list relink) |
+//! | remove | O(1) | Recency order of the others preserved |
+//! | eviction | O(1) | List head |
+//!
+//! Guarded by `lru_optimization_tests` (node-touch count and timing minima).
 
 #![allow(clippy::cast_precision_loss)] // Precision loss acceptable for hit rate calculation
 
-use indexmap::IndexMap;
+use super::lru_list::LruList;
 use parking_lot::RwLock;
 use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,8 +47,8 @@ impl CacheStats {
 
 /// Thread-safe LRU cache with O(1) operations.
 ///
-/// Uses `IndexMap` internally which preserves insertion order
-/// and provides O(1) access, making move-to-back operations efficient.
+/// Recency is kept by an index-linked list plus a key index ([`LruList`]),
+/// so promote, evict and remove never shift other entries.
 pub struct LruCache<K, V>
 where
     K: Hash + Eq + Clone,
@@ -55,8 +57,7 @@ where
     /// Maximum capacity.
     capacity: usize,
     /// Internal data protected by `RwLock`.
-    /// `IndexMap` preserves insertion order (front = LRU, back = MRU).
-    inner: RwLock<IndexMap<K, V>>,
+    inner: RwLock<LruList<K, V>>,
     /// Statistics (atomic for lock-free reads).
     hits: AtomicU64,
     misses: AtomicU64,
@@ -73,7 +74,7 @@ where
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            inner: RwLock::new(IndexMap::with_capacity(capacity)),
+            inner: RwLock::new(LruList::with_capacity(capacity)),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
@@ -95,7 +96,7 @@ where
     /// Check if the cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.read().is_empty()
+        self.inner.read().len() == 0
     }
 
     /// Insert a key-value pair, evicting LRU entry if at capacity.
@@ -103,23 +104,9 @@ where
     /// O(1) amortized complexity.
     pub fn insert(&self, key: K, value: V) {
         let mut inner = self.inner.write();
-
-        // Check if key already exists - if so, remove and re-insert to move to back
-        if inner.shift_remove(&key).is_some() {
-            // Key existed, just re-insert at back
-            inner.insert(key, value);
-            return;
+        if !inner.contains(&key) && inner.len() >= self.capacity && inner.pop_lru().is_some() {
+            self.evictions.fetch_add(1, Ordering::Relaxed);
         }
-
-        // Evict LRU (front) if at capacity
-        if inner.len() >= self.capacity {
-            // shift_remove(0) removes the first element (LRU)
-            if inner.shift_remove_index(0).is_some() {
-                self.evictions.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-
-        // Insert new entry at back (MRU)
         inner.insert(key, value);
     }
 
@@ -131,10 +118,8 @@ where
     #[must_use]
     pub fn get(&self, key: &K) -> Option<V> {
         let mut inner = self.inner.write();
-        if let Some((_idx, owned_key, value)) = inner.shift_remove_full(key) {
+        if let Some(value) = inner.get(key) {
             let cloned = value.clone();
-            // Re-insert at back (MRU position)
-            inner.insert(owned_key, value);
             drop(inner);
             self.hits.fetch_add(1, Ordering::Relaxed);
             Some(cloned)
@@ -151,15 +136,15 @@ where
     #[must_use]
     pub fn peek(&self, key: &K) -> Option<V> {
         let inner = self.inner.read();
-        inner.get(key).cloned()
+        inner.peek(key).cloned()
     }
 
     /// Remove a key from the cache.
     ///
-    /// O(1) complexity using `swap_remove` (doesn't preserve order of other elements).
+    /// O(1) complexity; the recency order of the other entries is preserved.
     pub fn remove(&self, key: &K) {
         let mut inner = self.inner.write();
-        inner.swap_remove(key);
+        inner.remove(key);
     }
 
     /// Clear all entries.
@@ -176,6 +161,14 @@ where
             misses: self.misses.load(Ordering::Relaxed),
             evictions: self.evictions.load(Ordering::Relaxed),
         }
+    }
+
+    /// List nodes touched while `op` runs: the structural complexity probe.
+    #[cfg(test)]
+    pub(super) fn nodes_touched_by(&self, op: impl FnOnce(&Self)) -> u64 {
+        let before = self.inner.read().touched();
+        op(self);
+        self.inner.read().touched() - before
     }
 }
 
