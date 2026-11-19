@@ -1,20 +1,20 @@
-//! Bounded recency-ordered map with O(1) promote, evict and remove.
+//! Single-threaded LRU recency list with O(1) operations.
 //!
-//! Nodes live densely in a `Vec` and are chained by index into a doubly-linked
-//! list (head = LRU, tail = MRU); a `HashMap` maps each key to its node index.
-//! A new key arriving at capacity takes over the LRU node in place, so the
-//! node `Vec` is allocated once and never grows past capacity. Removal swaps
-//! the last node into the freed slot and re-points its two neighbours and its
-//! map entry. Every operation touches a constant number of nodes.
+//! A hash map from key to slot, over a slab of nodes linked into a doubly
+//! linked list ordered from least (`head`) to most (`tail`) recently used:
+//! the classic LRU construction. Every operation is one hash lookup plus a
+//! constant number of link updates, where an insertion-ordered map has to
+//! shift every later entry to move or remove one. The slab stays dense: a
+//! removal moves the last node into the freed slot and repoints its two
+//! neighbours and its index entry, so it never outgrows the capacity.
 //!
-//! The `HashMap` is the one amortized part: eviction churn leaves tombstones
-//! that it clears by rehashing, growing its table once to about twice the
-//! initial size and rehashing in place from then on.
+//! [`LruCache`](super::LruCache) wraps it in a lock and adds statistics.
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::ops::{Index, IndexMut};
 
-/// Index sentinel for "no node" (list ends).
+/// The "no node" link.
 const NIL: usize = usize::MAX;
 
 struct Node<K, V> {
@@ -24,16 +24,79 @@ struct Node<K, V> {
     next: usize,
 }
 
-/// Single-threaded bounded LRU map; `LruCache` adds locking and stats.
+/// The node slab: a `Vec` whose element accesses test builds count, the
+/// structural probe of the O(1) guards in `lru_optimization_tests`. Every
+/// node read or write goes through `Index`/`IndexMut`, so a walk over the
+/// list would show up in the count as surely as in the running time.
+struct Slab<T> {
+    nodes: Vec<T>,
+    #[cfg(test)]
+    accesses: std::sync::atomic::AtomicU64,
+}
+
+impl<T> Slab<T> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            nodes: Vec::with_capacity(capacity),
+            #[cfg(test)]
+            accesses: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    fn push(&mut self, node: T) {
+        self.touch();
+        self.nodes.push(node);
+    }
+
+    fn swap_remove(&mut self, slot: usize) -> T {
+        self.touch();
+        self.nodes.swap_remove(slot)
+    }
+
+    fn clear(&mut self) {
+        self.nodes.clear();
+    }
+
+    /// Counts one node access in test builds; compiles to nothing otherwise.
+    #[inline]
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn touch(&self) {
+        #[cfg(test)]
+        self.accesses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl<T> Index<usize> for Slab<T> {
+    type Output = T;
+
+    fn index(&self, slot: usize) -> &T {
+        self.touch();
+        &self.nodes[slot]
+    }
+}
+
+impl<T> IndexMut<usize> for Slab<T> {
+    fn index_mut(&mut self, slot: usize) -> &mut T {
+        self.touch();
+        &mut self.nodes[slot]
+    }
+}
+
+/// Fixed-capacity map that keeps its entries in recency order.
 pub(super) struct LruList<K, V> {
     capacity: usize,
     index: HashMap<K, usize>,
-    nodes: Vec<Node<K, V>>,
+    /// Dense: every slot holds a linked node.
+    slots: Slab<Node<K, V>>,
+    /// Least recently used node, or `NIL` when empty.
     head: usize,
+    /// Most recently used node, or `NIL` when empty.
     tail: usize,
-    /// Node accesses, the structural complexity probe of the O(1) tests.
-    #[cfg(test)]
-    touched: std::sync::atomic::AtomicU64,
 }
 
 impl<K: Hash + Eq + Clone, V> LruList<K, V> {
@@ -41,202 +104,159 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
         Self {
             capacity,
             index: HashMap::with_capacity(capacity),
-            nodes: Vec::with_capacity(capacity),
+            slots: Slab::with_capacity(capacity),
             head: NIL,
             tail: NIL,
-            #[cfg(test)]
-            touched: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
     pub(super) fn len(&self) -> usize {
-        self.nodes.len()
+        self.index.len()
     }
 
-    pub(super) fn capacity(&self) -> usize {
-        self.capacity
+    pub(super) fn is_empty(&self) -> bool {
+        self.index.is_empty()
     }
 
-    /// Value for `key` without changing its recency.
-    pub(super) fn peek(&self, key: &K) -> Option<&V> {
-        let idx = *self.index.get(key)?;
-        Some(&self.node(idx).value)
-    }
-
-    /// Value for `key`, promoted to most recently used.
+    /// The value for `key`, which becomes the most recently used entry.
     pub(super) fn get(&mut self, key: &K) -> Option<&V> {
-        let idx = *self.index.get(key)?;
-        self.move_to_back(idx);
-        Some(&self.node(idx).value)
+        let slot = *self.index.get(key)?;
+        self.move_to_tail(slot);
+        Some(&self.slots[slot].value)
     }
 
-    /// Inserts or overwrites `key` as most recently used; returns whether
-    /// the least recently used entry was evicted to make room.
-    pub(super) fn insert(&mut self, key: K, value: V) -> bool {
-        if let Some(&idx) = self.index.get(&key) {
-            self.node_mut(idx).value = value;
-            self.move_to_back(idx);
-            false
-        } else if self.nodes.len() < self.capacity {
-            self.push_back(key, value);
-            false
-        } else {
-            self.recycle_lru(key, value)
+    /// The value for `key`, leaving the recency order unchanged.
+    pub(super) fn peek(&self, key: &K) -> Option<&V> {
+        self.index.get(key).map(|&slot| &self.slots[slot].value)
+    }
+
+    /// Inserts or replaces `key` as the most recently used entry.
+    ///
+    /// Returns the entry this displaced: the least recently used one when a
+    /// new key meets a full list, or the entry itself at capacity 0, which
+    /// stores nothing. Replacing an existing key's value displaces nothing.
+    pub(super) fn insert(&mut self, key: K, value: V) -> Option<(K, V)> {
+        if self.capacity == 0 {
+            return Some((key, value));
         }
-    }
-
-    pub(super) fn remove(&mut self, key: &K) -> Option<V> {
-        let idx = *self.index.get(key)?;
-        Some(self.remove_at(idx))
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.index.clear();
-        self.nodes.clear();
-        self.head = NIL;
-        self.tail = NIL;
-    }
-
-    fn push_back(&mut self, key: K, value: V) {
-        let idx = self.nodes.len();
-        self.index.insert(key.clone(), idx);
-        self.nodes.push(Node {
-            key,
+        if let Some(&slot) = self.index.get(&key) {
+            self.slots[slot].value = value;
+            self.move_to_tail(slot);
+            return None;
+        }
+        let evicted = (self.len() >= self.capacity)
+            .then(|| self.remove_slot(self.head))
+            .map(|node| (node.key, node.value));
+        let slot = self.slots.len();
+        self.slots.push(Node {
+            key: key.clone(),
             value,
             prev: NIL,
             next: NIL,
         });
-        self.link_back(idx);
+        self.index.insert(key, slot);
+        self.link_at_tail(slot);
+        evicted
     }
 
-    /// Hands the LRU node to a new entry: no node allocation, no relocation.
-    /// Returns `false` only at capacity 0, where there is no node to take.
-    fn recycle_lru(&mut self, key: K, value: V) -> bool {
-        let idx = self.head;
-        if idx == NIL {
-            return false;
+    /// Removes `key`, keeping the order of the remaining entries.
+    pub(super) fn remove(&mut self, key: &K) -> Option<V> {
+        let slot = *self.index.get(key)?;
+        Some(self.remove_slot(slot).value)
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.index.clear();
+        self.slots.clear();
+        self.head = NIL;
+        self.tail = NIL;
+    }
+
+    /// Node accesses so far: the structural complexity probe.
+    #[cfg(test)]
+    pub(super) fn nodes_touched(&self) -> u64 {
+        self.slots
+            .accesses
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Keys from least to most recently used.
+    #[cfg(test)]
+    pub(super) fn keys_lru_to_mru(&self) -> Vec<K> {
+        let mut keys = Vec::with_capacity(self.len());
+        let mut slot = self.head;
+        while slot != NIL {
+            let node = &self.slots[slot];
+            keys.push(node.key.clone());
+            slot = node.next;
         }
-        let node = self.node_mut(idx);
-        let evicted = std::mem::replace(&mut node.key, key.clone());
-        node.value = value;
-        // Remove before insert: the index never holds more than `capacity` keys.
-        self.index.remove(&evicted);
-        self.index.insert(key, idx);
-        self.move_to_back(idx);
-        true
+        keys
     }
 
-    fn move_to_back(&mut self, idx: usize) {
-        if idx != self.tail {
-            self.unlink(idx);
-            self.link_back(idx);
+    /// Unlinks and removes the node in `slot`, and drops its index entry.
+    ///
+    /// `swap_remove` keeps the slab dense by moving the last node into
+    /// `slot`; that node's neighbours and index entry are repointed to it.
+    fn remove_slot(&mut self, slot: usize) -> Node<K, V> {
+        self.unlink(slot);
+        let node = self.slots.swap_remove(slot);
+        self.index.remove(&node.key);
+        if slot < self.slots.len() {
+            self.repoint_moved_node(slot);
+        }
+        node
+    }
+
+    /// Repoints the links and the index entry of the node `swap_remove` just
+    /// moved into `slot` from the end of the slab.
+    fn repoint_moved_node(&mut self, slot: usize) {
+        let Node { prev, next, .. } = self.slots[slot];
+        if prev == NIL {
+            self.head = slot;
+        } else {
+            self.slots[prev].next = slot;
+        }
+        if next == NIL {
+            self.tail = slot;
+        } else {
+            self.slots[next].prev = slot;
+        }
+        if let Some(entry) = self.index.get_mut(&self.slots[slot].key) {
+            *entry = slot;
         }
     }
 
-    fn remove_at(&mut self, idx: usize) -> V {
-        self.unlink(idx);
-        let removed = self.nodes.swap_remove(idx);
-        self.index.remove(&removed.key);
-        if idx < self.nodes.len() {
-            self.relocated_to(idx);
-        }
-        removed.value
-    }
-
-    /// Re-points the neighbours and the index entry of the node `swap_remove`
-    /// just moved from the end of `nodes` into slot `idx`.
-    fn relocated_to(&mut self, idx: usize) {
-        let (prev, next) = self.links(idx);
-        self.set_next(prev, idx);
-        self.set_prev(next, idx);
-        let key = &self.nodes[idx].key;
-        if let Some(slot) = self.index.get_mut(key) {
-            *slot = idx;
+    fn move_to_tail(&mut self, slot: usize) {
+        if slot != self.tail {
+            self.unlink(slot);
+            self.link_at_tail(slot);
         }
     }
 
-    fn unlink(&mut self, idx: usize) {
-        let (prev, next) = self.links(idx);
-        self.set_next(prev, next);
-        self.set_prev(next, prev);
-    }
-
-    fn link_back(&mut self, idx: usize) {
-        let old_tail = self.tail;
-        let node = self.node_mut(idx);
-        node.prev = old_tail;
-        node.next = NIL;
-        self.set_next(old_tail, idx);
-        self.tail = idx;
-    }
-
-    fn links(&self, idx: usize) -> (usize, usize) {
-        let node = self.node(idx);
-        (node.prev, node.next)
-    }
-
-    /// `prev.next = next`, or the head when `prev` is the list start.
-    fn set_next(&mut self, prev: usize, next: usize) {
+    fn unlink(&mut self, slot: usize) {
+        let Node { prev, next, .. } = self.slots[slot];
         if prev == NIL {
             self.head = next;
         } else {
-            self.node_mut(prev).next = next;
+            self.slots[prev].next = next;
         }
-    }
-
-    /// `next.prev = prev`, or the tail when `next` is the list end.
-    fn set_prev(&mut self, next: usize, prev: usize) {
         if next == NIL {
             self.tail = prev;
         } else {
-            self.node_mut(next).prev = prev;
+            self.slots[next].prev = prev;
         }
     }
 
-    fn node(&self, idx: usize) -> &Node<K, V> {
-        self.touch();
-        &self.nodes[idx]
-    }
-
-    fn node_mut(&mut self, idx: usize) -> &mut Node<K, V> {
-        self.touch();
-        &mut self.nodes[idx]
-    }
-
-    /// Counts a node access in test builds; compiles to nothing otherwise.
-    #[inline]
-    #[cfg_attr(not(test), allow(clippy::unused_self))]
-    fn touch(&self) {
-        #[cfg(test)]
-        self.touched
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[cfg(test)]
-    pub(super) fn touched(&self) -> u64 {
-        self.touched.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Keys from LRU to MRU, after checking every structural invariant:
-    /// back links mirror forward links and the index points at each node.
-    #[cfg(test)]
-    pub(super) fn checked_order(&self) -> Vec<K> {
-        let mut order = Vec::with_capacity(self.nodes.len());
-        let (mut prev, mut idx) = (NIL, self.head);
-        while idx != NIL {
-            let node = &self.nodes[idx];
-            assert_eq!(node.prev, prev, "back link broken at slot {idx}");
-            assert_eq!(
-                self.index.get(&node.key),
-                Some(&idx),
-                "index stale at slot {idx}"
-            );
-            order.push(node.key.clone());
-            (prev, idx) = (idx, node.next);
+    fn link_at_tail(&mut self, slot: usize) {
+        let old_tail = self.tail;
+        let node = &mut self.slots[slot];
+        node.prev = old_tail;
+        node.next = NIL;
+        if old_tail == NIL {
+            self.head = slot;
+        } else {
+            self.slots[old_tail].next = slot;
         }
-        assert_eq!(self.tail, prev, "tail is not the last node");
-        assert_eq!(order.len(), self.nodes.len(), "unreachable nodes");
-        assert_eq!(self.index.len(), self.nodes.len(), "index size mismatch");
-        order
+        self.tail = slot;
     }
 }

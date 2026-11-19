@@ -56,9 +56,8 @@
 //!
 //! When an insert or a promotion takes L1 over capacity, choosing the victim
 //! scans L1, O(L1 capacity), and demoting it is one L2 insert, per evicted
-//! entry. That insert is amortized O(1) (`LruCache` relinks one list node)
-//! and runs under the victim's shard write lock: L1 hits on that shard wait
-//! for it.
+//! entry. That insert is O(1) and runs under the victim's shard write lock:
+//! L1 hits on that shard wait for it.
 
 // Reason: Numeric casts in cache metrics are intentional:
 // - All casts are for hit rate calculations and statistics

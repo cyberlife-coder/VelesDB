@@ -1,18 +1,20 @@
 //! LRU Cache implementation for `VelesDB`.
 //!
-//! Thread-safe LRU cache with O(1) operations over `LruList`.
-//! Based on arXiv:2310.11703v2 recommendations.
+//! Thread-safe LRU cache: an [`LruList`] (hash map over a doubly linked
+//! slab, front = LRU, back = MRU) behind a `RwLock`, plus hit, miss and
+//! eviction counters. Based on arXiv:2310.11703v2 recommendations.
 //!
 //! # Performance (US-CORE-003-14)
 //!
-//! | Operation | Complexity | Notes |
-//! |-----------|------------|-------|
-//! | insert | O(1) | Amortized: nodes allocated once, hash index rehashes tombstones |
-//! | get | O(1) | With recency update (list relink) |
-//! | remove | O(1) | Recency order of the others preserved |
-//! | eviction | O(1) | LRU node reused in place by the incoming entry |
+//! Every operation is O(1): one hash lookup and a constant number of link
+//! updates.
 //!
-//! Guarded by `lru_optimization_tests` (node-touch count and timing minima).
+//! | Operation | Lock | Notes |
+//! |-----------|------|-------|
+//! | insert | write | Moves an existing key to MRU; evicts the LRU entry when full |
+//! | get | write | Moves the entry to MRU |
+//! | peek | read | No recency update |
+//! | remove | write | Keeps the order of the remaining entries |
 
 #![allow(clippy::cast_precision_loss)] // Precision loss acceptable for hit rate calculation
 
@@ -28,7 +30,7 @@ pub struct CacheStats {
     pub hits: u64,
     /// Number of cache misses.
     pub misses: u64,
-    /// Number of evictions.
+    /// Number of entries evicted to make room for a new key.
     pub evictions: u64,
 }
 
@@ -45,16 +47,17 @@ impl CacheStats {
     }
 }
 
-/// Thread-safe LRU cache with O(1) operations.
+/// Thread-safe LRU cache.
 ///
-/// Recency is kept by an index-linked list plus a key index (`LruList`),
-/// so promote, evict and remove never shift other entries.
+/// See the module docs for the structure and per-operation costs.
 pub struct LruCache<K, V>
 where
     K: Hash + Eq + Clone,
     V: Clone,
 {
-    /// Internal data protected by `RwLock`.
+    /// Maximum capacity.
+    capacity: usize,
+    /// Entries in recency order (front = LRU, back = MRU).
     inner: RwLock<LruList<K, V>>,
     /// Statistics (atomic for lock-free reads).
     hits: AtomicU64,
@@ -71,6 +74,7 @@ where
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
+            capacity,
             inner: RwLock::new(LruList::new(capacity)),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
@@ -81,7 +85,7 @@ where
     /// Get the capacity of the cache.
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.inner.read().capacity()
+        self.capacity
     }
 
     /// Get the current number of entries.
@@ -93,55 +97,47 @@ where
     /// Check if the cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.read().len() == 0
+        self.inner.read().is_empty()
     }
 
-    /// Insert a key-value pair, evicting LRU entry if at capacity.
+    /// Insert a key-value pair as the most recently used entry, evicting the
+    /// least recently used one if a new key meets a full cache.
     ///
-    /// O(1) amortized: nodes are allocated up front and the evicted node is
-    /// reused; only the hash index occasionally rehashes (see `LruList`).
+    /// A zero-capacity cache stores nothing, and returns without locking.
     pub fn insert(&self, key: K, value: V) {
+        if self.capacity == 0 {
+            return;
+        }
         let evicted = self.inner.write().insert(key, value);
-        if evicted {
+        if evicted.is_some() {
             self.evictions.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Get a value by key, updating recency.
+    /// Get a value by key; the entry becomes the most recently used.
     ///
-    /// F-18: Uses a single write lock for lookup + move-to-back in one operation,
-    /// eliminating the previous read-lock → clone → write-lock → re-clone pattern
-    /// (2 locks + 2 clones → 1 lock + 1 clone).
+    /// One write lock covers the lookup and the move to MRU (F-18).
     #[must_use]
     pub fn get(&self, key: &K) -> Option<V> {
-        let mut inner = self.inner.write();
-        if let Some(value) = inner.get(key) {
-            let cloned = value.clone();
-            drop(inner);
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            Some(cloned)
+        let value = self.inner.write().get(key).cloned();
+        let counter = if value.is_some() {
+            &self.hits
         } else {
-            drop(inner);
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            None
-        }
+            &self.misses
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        value
     }
 
-    /// Get a value without updating recency (peek).
-    ///
-    /// O(1) complexity with only read lock.
+    /// Get a value without updating recency, under a read lock.
     #[must_use]
     pub fn peek(&self, key: &K) -> Option<V> {
-        let inner = self.inner.read();
-        inner.peek(key).cloned()
+        self.inner.read().peek(key).cloned()
     }
 
-    /// Remove a key from the cache.
-    ///
-    /// O(1) complexity; the recency order of the other entries is preserved.
+    /// Remove a key, keeping the order of the remaining entries.
     pub fn remove(&self, key: &K) {
-        let mut inner = self.inner.write();
-        inner.remove(key);
+        self.inner.write().remove(key);
     }
 
     /// Clear all entries.
@@ -163,9 +159,9 @@ where
     /// List nodes touched while `op` runs: the structural complexity probe.
     #[cfg(test)]
     pub(super) fn nodes_touched_by(&self, op: impl FnOnce(&Self)) -> u64 {
-        let before = self.inner.read().touched();
+        let before = self.inner.read().nodes_touched();
         op(self);
-        self.inner.read().touched() - before
+        self.inner.read().nodes_touched() - before
     }
 }
 

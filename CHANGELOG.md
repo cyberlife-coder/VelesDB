@@ -518,25 +518,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Core: `LruCache` is O(1) for every operation** (core, 2026-11-19). Recency
-  lived in an `IndexMap`, whose order is kept by shifting every entry behind
-  the one moved: `get` on any key but the most recent, insert of an existing
-  key, eviction and the order-preserving `remove` were all O(n), as the module
-  docs had come to say. The order now lives in `LruList`, an index-linked list
-  over a dense `Vec` plus a `HashMap`: each of those operations touches a
-  constant number of nodes, keeping the recency order and the zero-capacity
-  behaviour of the entries below, and a new key arriving at capacity takes
-  over the evicted node in place, so node storage is allocated once (the hash
-  index stays amortized O(1)). Release `get` hit at 10 000 entries went from
-  22.7 µs to 33 ns; `LockFreeLruCache` demotes into its L2 under a shard lock
-  and gets the same constant cost there. The test that claimed O(1) re-read
-  the already-most-recent key and compared one wall-clock ratio, so it passed
-  on the O(n) code and failed under a loaded parallel run; node-touch counts
-  and comparisons of interleaved timing minima for `get` on the LRU key and
-  for eviction replace it, and all fail on the old implementation.
-  `test_peek_faster_than_get` compares node touches instead of time, and the
-  three `#[ignore]`d scaling timers they supersede are removed. `velesdb-core`
-  no longer depends on `indexmap`.
+- **Core: the `LruCache` O(1) guard measures what it claims and holds under
+  load** (core, tests, 2026-11-19). `test_move_to_back_o1_complexity` re-read
+  key 0, which is the most recently used entry after its first read, so it
+  timed a move-to-back that does nothing, and it compared one wall-clock ratio
+  over 500 nanosecond-scale reads, so a loaded parallel suite failed it with
+  no related change. It is replaced by three guards: a node-touch count per
+  `get`, evicting insert, overwrite and `remove` at 100 and at 10 000 entries,
+  which must be equal (deterministic: the `LruList` slab counts its own node
+  accesses in test builds), and two comparisons of interleaved timing minima,
+  `get` on the least recently used key and eviction, which load can slow but
+  not distort. All three fail on an O(n) move-to-back; the old test passed on
+  the O(n) `IndexMap` it was meant to catch.
 
 - **Core: the unreachable-snapshot test holds when run as root** (core,
   tests, 2026-11-19). `an_unreachable_snapshot_is_an_error_not_a_missing_one`
@@ -1790,6 +1783,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of an `.app` that opened no terminal; `validate_package.py`
   reads the signature from PyInstaller's compressed archive, so it no
   longer reports every official build as NOT VERIFIED.
+
+### Performance
+
+- **Core: `LruCache` is O(1)** (core, 2026-11-19). It kept recency order in
+  an `IndexMap`, so `get`, `remove` and eviction shifted every later entry:
+  O(n), about 60 µs per eviction at 10,000 entries. `LockFreeLruCache`, and
+  through it the compiled plan cache, paid that on every L2 hit and every
+  L1 demotion, the latter under an L1 shard write lock that L1 hits on the
+  shard wait for. `LruCache` now sits on a hash map over a doubly linked
+  slab, the classic LRU construction: every operation is one hash lookup
+  and a constant number of link updates. API, statistics and recency
+  semantics are unchanged. On the `LockFreeLruCache-Concurrent` benchmark
+  at the plan cache's sizes (4-core VM), the read-mostly workload with
+  evicting inserts goes from 193K, 70K, 53K and 52K ops/s at 1, 2, 4 and 8
+  threads to 675K, 649K, 673K and 697K, and no longer degrades with the
+  thread count; L1 hits are unchanged. `velesdb-core` no longer depends on
+  `indexmap`.
 
 ## [8.2.0] - 2026-11-09
 
