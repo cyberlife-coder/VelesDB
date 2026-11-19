@@ -1145,8 +1145,7 @@ fn test_search_layer_walks_past_a_run_of_already_discovered_candidates() {
     for i in 0..n {
         hnsw.insert(&[i as f32, 0.0]).expect("test: insert");
     }
-    {
-        let layers = hnsw.layers.read();
+    hnsw.with_layers_read(|layers| {
         let base = &layers[0];
         base.set_neighbors(0, (1..=HUB_FANOUT).collect());
         for child in 1..HUB_FANOUT {
@@ -1159,7 +1158,7 @@ fn test_search_layer_walks_past_a_run_of_already_discovered_candidates() {
         for tail in HUB_FANOUT + 1..n {
             base.set_neighbors(tail, vec![HUB_FANOUT]);
         }
-    }
+    });
     // The phenomenon: the children popped before `HUB_FANOUT` form a run of
     // pops that discover nothing, longer than the stagnation limit.
     assert!(HUB_FANOUT - 1 > STAGNATION_LIMIT);
