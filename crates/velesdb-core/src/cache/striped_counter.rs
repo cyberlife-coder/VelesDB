@@ -1,8 +1,8 @@
 //! A `u64` event counter that concurrent writers do not contend on.
 //!
 //! A single `AtomicU64` incremented by every thread keeps its cache line
-//! moving between cores: on the L1 hit path of `LockFreeLruCache` it cost
-//! about two thirds of the throughput at 4 to 8 threads. This counter splits
+//! moving between cores, which made L1 hits of `LockFreeLruCache` scale
+//! negatively with threads (measurements in #2861). This counter splits
 //! the count over stripes, each alone on its cache line. A thread always
 //! increments the same stripe, picked once per thread round-robin, and a
 //! read sums the stripes, so the total stays exact.

@@ -38,11 +38,10 @@
 //! exact LRU entry, except among entries whose last access was a hit in the
 //! same window between two writes, whose stamps tie: there, the victim is
 //! any one of them. A per-hit clock would make the order exact, at the cost
-//! of a contended write on every hit (measured at about half the concurrent
-//! hit throughput). The removal is guarded on the victim's stamp, so an entry
-//! hit in a later window while the victim was being chosen is not evicted:
-//! the next pass picks the new oldest one instead. `peek_l1` does not
-//! refresh the stamp.
+//! of a contended write on every hit (measurements in #2856). The removal
+//! is guarded on the victim's stamp, so an entry hit in a later window while
+//! the victim was being chosen is not evicted: the next pass picks the new
+//! oldest one instead. `peek_l1` does not refresh the stamp.
 //!
 //! # Performance
 //!
