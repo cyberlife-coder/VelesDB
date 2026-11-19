@@ -12,8 +12,8 @@ use super::LruCache;
 /// Peek skips the recency update, so it does strictly less work than get.
 ///
 /// Measured in list nodes touched rather than wall-clock: since get became
-/// O(1) the two differ by ~1.3x in time, a margin no clock comparison keeps
-/// under load.
+/// O(1) the two differ in time by too thin a margin for a clock comparison to
+/// hold under load.
 #[test]
 fn test_peek_does_less_work_than_get() {
     let cache: LruCache<u64, String> = LruCache::new(1000);
@@ -29,8 +29,8 @@ fn test_peek_does_less_work_than_get() {
 
 const SMALL: u64 = 100;
 const LARGE: u64 = 10_000;
-/// An O(n) operation costs ~100x more at `LARGE` than at `SMALL`; an O(1) one
-/// stays within cache-locality noise (~1-2x).
+/// An O(n) operation scales with the `LARGE / SMALL` size gap, well past this
+/// bound; an O(1) one stays within cache-locality noise, well below it.
 const MAX_RATIO: f64 = 10.0;
 
 /// A full cache holding keys `0..size`, oldest first.
