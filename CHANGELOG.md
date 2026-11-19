@@ -518,6 +518,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Core: `LruCache`'s O(1) claim has a deterministic guard** (core, tests,
+  2026-11-19). #2860 made every operation O(1) and #2854 moved per-size cost
+  to the `LruCache-Baseline` benchmark, which CI does not gate, so an O(n)
+  regression could merge unseen. `LruList`'s slab now counts its node accesses
+  in test builds (a plain `Vec` otherwise, no logic change), and
+  `test_recency_operations_touch_constant_nodes` requires the count for `get`,
+  evicting insert, overwrite and `remove` to be the same at 100 and at 10 000
+  entries: no clock, so load cannot move it, and a move-to-back that walks the
+  list fails it.
+
 - **Core: the unreachable-snapshot test holds when run as root** (core,
   tests, 2026-11-19). `an_unreachable_snapshot_is_an_error_not_a_missing_one`
   (#2325) built its unreachable path with a `chmod 000` directory, which

@@ -155,6 +155,14 @@ where
             evictions: self.evictions.load(Ordering::Relaxed),
         }
     }
+
+    /// List nodes touched while `op` runs: the structural complexity probe.
+    #[cfg(test)]
+    pub(super) fn nodes_touched_by(&self, op: impl FnOnce(&Self)) -> u64 {
+        let before = self.inner.read().nodes_touched();
+        op(self);
+        self.inner.read().nodes_touched() - before
+    }
 }
 
 impl<K, V> Default for LruCache<K, V>
