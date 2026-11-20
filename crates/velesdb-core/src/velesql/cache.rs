@@ -82,6 +82,11 @@ pub struct QueryCache {
     hash_fn: fn(&str) -> u64,
     /// Cache statistics.
     stats: AtomicCacheStats,
+    /// Collision fallbacks of this cache alone. The guardrail metric is shared
+    /// by every cache in the process, so a test cannot read exact deltas from
+    /// it while other tests run in parallel.
+    #[cfg(test)]
+    collision_fallbacks: AtomicU64,
 }
 
 /// Storage + CLOCK ring, guarded together by `QueryCache::inner`.
@@ -155,6 +160,8 @@ impl QueryCache {
             max_size,
             hash_fn,
             stats: AtomicCacheStats::default(),
+            #[cfg(test)]
+            collision_fallbacks: AtomicU64::new(0),
         }
     }
 
@@ -258,7 +265,7 @@ impl QueryCache {
             .iter()
             .any(|entry| entry.canonical_query != new_entry.canonical_query)
         {
-            crate::metrics::global_guardrails_metrics().record_cache_collision_fallback();
+            self.record_collision_fallback();
         }
         bucket.push(new_entry);
 
@@ -268,6 +275,21 @@ impl QueryCache {
         }
         debug_assert_eq!(self.size.load(Ordering::Relaxed), inner.order.len());
         drop(inner);
+    }
+
+    /// Counts one collision fallback in the process-wide guardrail metric
+    /// and, in test builds, in this cache's own counter.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn record_collision_fallback(&self) {
+        crate::metrics::global_guardrails_metrics().record_cache_collision_fallback();
+        #[cfg(test)]
+        self.collision_fallbacks.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Collision fallbacks recorded by this cache alone.
+    #[cfg(test)]
+    pub(crate) fn collision_fallbacks(&self) -> u64 {
+        self.collision_fallbacks.load(Ordering::Relaxed)
     }
 
     /// CLOCK / second-chance eviction: sweep the insertion-order ring until the
