@@ -603,3 +603,83 @@ async fn test_extract_batch_fails_when_not_connected() {
         "expected 'Not connected' in error, got: {err}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Reconnect after a dropped connection
+// ---------------------------------------------------------------------------
+
+/// Reads one RESP command (an array of bulk strings) and returns its first
+/// word, upper-cased; `None` once the client closed the socket.
+async fn read_resp_command(
+    reader: &mut tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>,
+) -> Option<String> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+    let mut line = String::new();
+    reader.read_line(&mut line).await.ok().filter(|n| *n > 0)?;
+    let count: usize = line.trim_end().strip_prefix('*')?.parse().ok()?;
+    let mut first = None;
+    for _ in 0..count {
+        line.clear();
+        reader.read_line(&mut line).await.ok()?;
+        let len: usize = line.trim_end().strip_prefix('$')?.parse().ok()?;
+        let mut arg = vec![0_u8; len + 2];
+        reader.read_exact(&mut arg).await.ok()?;
+        first.get_or_insert_with(|| String::from_utf8_lossy(&arg[..len]).to_uppercase());
+    }
+    first
+}
+
+/// A fake Redis that answers handshake commands with `+OK` and `FT.SEARCH`
+/// with an empty result — except on its first connection, which it drops at
+/// the first `FT.SEARCH`, as a restarted or failed-over server would.
+async fn serve_dropping_first_connection(listener: tokio::net::TcpListener) {
+    use tokio::io::AsyncWriteExt;
+    let mut connection = 0_u32;
+    while let Ok((socket, _)) = listener.accept().await {
+        connection += 1;
+        let drop_on_search = connection == 1;
+        tokio::spawn(async move {
+            let (read, mut write) = socket.into_split();
+            let mut reader = tokio::io::BufReader::new(read);
+            while let Some(command) = read_resp_command(&mut reader).await {
+                let reply: &[u8] = if command != "FT.SEARCH" {
+                    b"+OK\r\n"
+                } else if drop_on_search {
+                    return;
+                } else {
+                    b"*1\r\n:0\r\n"
+                };
+                if write.write_all(reply).await.is_err() {
+                    return;
+                }
+            }
+        });
+    }
+}
+
+/// A dropped connection is retryable only if the retry can succeed: the
+/// connector must not hand the dead connection to the next attempt.
+#[tokio::test]
+async fn test_a_retry_after_a_dropped_connection_uses_a_fresh_one() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(serve_dropping_first_connection(listener));
+
+    let mut config = test_config();
+    config.url = format!("redis://127.0.0.1:{port}");
+    let mut connector = RedisConnector::new(config);
+    let first = connector.open_connection().await.unwrap();
+    connector.connection = Some(Arc::new(Mutex::new(first)));
+
+    let dropped = connector.extract_batch(None, 10).await;
+    assert!(
+        matches!(&dropped, Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::ConnectionReset),
+        "a dropped connection is a retryable I/O error: {dropped:?}"
+    );
+
+    let retried = connector.extract_batch(None, 10).await;
+    assert!(
+        retried.is_ok(),
+        "the retry must run on a fresh connection: {retried:?}"
+    );
+}

@@ -240,12 +240,7 @@ impl ElasticsearchConnector {
             serde_json::json!({ "query": { "match_all": {} } })
         };
 
-        let response = self
-            .build_request(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Error::SourceConnection(format!("Elasticsearch request failed: {}", e)))?;
+        let response = self.build_request(&url).json(&body).send().await?;
 
         let checked = check_response(response, "Elasticsearch", "count").await?;
 
@@ -306,12 +301,7 @@ impl SourceConnector for ElasticsearchConnector {
             search_after: None,
         };
 
-        let response = self
-            .build_request(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Error::SourceConnection(format!("Elasticsearch request failed: {}", e)))?;
+        let response = self.build_request(&url).json(&body).send().await?;
 
         let checked = check_response(response, "Elasticsearch", "connect").await?;
 
@@ -379,12 +369,7 @@ impl SourceConnector for ElasticsearchConnector {
             search_after,
         };
 
-        let response = self
-            .build_request(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Error::SourceConnection(format!("Elasticsearch request failed: {}", e)))?;
+        let response = self.build_request(&url).json(&body).send().await?;
 
         let checked = check_response(response, "Elasticsearch", "search").await?;
 

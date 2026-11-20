@@ -97,86 +97,120 @@ fn test_delay_capped_at_max() {
 
 // ==================== is_retryable_error Tests ====================
 
-#[test]
-fn test_retryable_rate_limit_429() {
-    // Arrange
-    let error = Error::SourceConnection("HTTP 429 Too Many Requests".to_string());
-
-    // Act & Assert
-    assert!(is_retryable_error(&error));
+/// The error `connectors::common::check_response` returns for `status`.
+fn source_status(status: u16, body: &str) -> Error {
+    crate::connectors::common::handle_http_error(status, body, "Test")
 }
 
 #[test]
-fn test_retryable_rate_limit_text() {
-    // Arrange
-    let error = Error::SourceConnection("Rate limit exceeded, retry after 60s".to_string());
-
-    // Act & Assert
-    assert!(is_retryable_error(&error));
+fn test_retryable_rate_limit() {
+    assert!(is_retryable_error(&Error::RateLimit(60)));
+    assert!(is_retryable_error(&source_status(429, "Too Many Requests")));
 }
 
 #[test]
-fn test_retryable_timeout() {
-    // Arrange
-    let error = Error::SourceConnection("Connection timeout after 30s".to_string());
-
-    // Act & Assert
-    assert!(is_retryable_error(&error));
+fn test_retryable_transient_statuses() {
+    for status in [408, 500, 502, 503, 504] {
+        assert!(
+            is_retryable_error(&source_status(status, "scroll failed")),
+            "HTTP {status} must be retried"
+        );
+    }
 }
 
 #[test]
-fn test_retryable_server_error_500() {
-    // Arrange
-    let error = Error::SourceConnection("HTTP 500 Internal Server Error".to_string());
-
-    // Act & Assert
-    assert!(is_retryable_error(&error));
+fn test_not_retryable_permanent_statuses() {
+    for status in [400, 404, 409, 422, 501] {
+        assert!(
+            !is_retryable_error(&source_status(status, "scroll failed")),
+            "HTTP {status} must not be retried"
+        );
+    }
 }
 
+/// Regression: the status used to be read back out of the message, so a
+/// client error whose body quoted a server-error code was retried.
 #[test]
-fn test_retryable_server_error_503() {
-    // Arrange
-    let error = Error::SourceConnection("HTTP 503 Service Unavailable".to_string());
-
-    // Act & Assert
-    assert!(is_retryable_error(&error));
+fn test_not_retryable_client_error_quoting_server_code() {
+    let error = source_status(400, "scroll failed: limit must be <= 500, timeout too long");
+    assert!(error.to_string().contains("500"));
+    assert!(!is_retryable_error(&error));
 }
 
+/// Regression: any message containing `500`, `timeout` or `temporary` used
+/// to be retried, whatever the error was.
 #[test]
-fn test_retryable_connection_refused() {
-    // Arrange
-    let error = Error::SourceConnection("Connection refused".to_string());
-
-    // Act & Assert
-    assert!(is_retryable_error(&error));
+fn test_not_retryable_by_message_text() {
+    let errors = [
+        Error::Extraction("vector dimension 1500 does not match 1536".to_string()),
+        Error::SourceConnection("Connection timeout after 30s".to_string()),
+        Error::SchemaMismatch("temporary collection has 500 points".to_string()),
+    ];
+    for error in &errors {
+        assert!(!is_retryable_error(error), "{error} must not be retried");
+    }
 }
 
 #[test]
 fn test_retryable_io_error() {
-    // Arrange
-    let io_err = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
-    let error = Error::Io(io_err);
+    use std::io::ErrorKind;
+    for kind in [
+        ErrorKind::ConnectionReset,
+        ErrorKind::ConnectionRefused,
+        ErrorKind::TimedOut,
+        ErrorKind::BrokenPipe,
+    ] {
+        let error = Error::Io(std::io::Error::new(kind, "transient"));
+        assert!(is_retryable_error(&error), "{kind:?} must be retried");
+    }
+}
 
-    // Act & Assert
-    assert!(is_retryable_error(&error));
+#[test]
+fn test_not_retryable_permanent_io_error() {
+    use std::io::ErrorKind;
+    for kind in [
+        ErrorKind::NotFound,
+        ErrorKind::PermissionDenied,
+        ErrorKind::InvalidData,
+    ] {
+        let error = Error::Io(std::io::Error::new(kind, "permanent"));
+        assert!(!is_retryable_error(&error), "{kind:?} must not be retried");
+    }
+}
+
+/// Regression: a reqwest timeout displays as "error sending request for url
+/// (...)", which the old text match did not recognise. The server is a
+/// wiremock that answers later than the client waits, so the timeout is
+/// deterministic and no port is ever released to another process.
+#[tokio::test]
+async fn test_retryable_http_timeout_error() {
+    use wiremock::{matchers::any, Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(5)))
+        .mount(&server)
+        .await;
+
+    let error = reqwest::Client::builder()
+        .timeout(Duration::from_millis(50))
+        .build()
+        .expect("client")
+        .get(server.uri())
+        .send()
+        .await
+        .expect_err("the response arrives after the client timeout");
+
+    assert!(error.is_timeout(), "precondition: a timeout, got {error}");
+    assert!(is_retryable_error(&Error::Http(error)));
 }
 
 #[test]
 fn test_not_retryable_auth_error() {
-    // Arrange
-    let error = Error::Authentication("HTTP 401 Unauthorized".to_string());
-
-    // Act & Assert
-    assert!(!is_retryable_error(&error));
-}
-
-#[test]
-fn test_not_retryable_not_found() {
-    // Arrange
-    let error = Error::SourceConnection("HTTP 404 Not Found".to_string());
-
-    // Act & Assert
-    assert!(!is_retryable_error(&error));
+    assert!(!is_retryable_error(&source_status(401, "Unauthorized")));
+    assert!(!is_retryable_error(&Error::Authentication(
+        "HTTP 401 Unauthorized".to_string()
+    )));
 }
 
 #[test]
@@ -232,9 +266,7 @@ async fn test_with_retry_success_after_retries() {
             let current = count.fetch_add(1, Ordering::SeqCst);
             if current < 2 {
                 // Fail first 2 times with retryable error
-                Err(Error::SourceConnection(
-                    "HTTP 503 Service Unavailable".to_string(),
-                ))
+                Err(source_status(503, "Service Unavailable"))
             } else {
                 Ok::<_, Error>(42)
             }
@@ -265,9 +297,7 @@ async fn test_with_retry_all_attempts_fail() {
         let count = call_count_clone.clone();
         async move {
             count.fetch_add(1, Ordering::SeqCst);
-            Err(Error::SourceConnection(
-                "HTTP 500 Internal Server Error".to_string(),
-            ))
+            Err(source_status(500, "Internal Server Error"))
         }
     })
     .await;
