@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (core, REST server, CLI, Tauri, Python, WASM): a compound one
+  of whose operands is an aggregation is refused** (core, 2026-11-20).
+  `SELECT COUNT(*) FROM a UNION ALL SELECT COUNT(*) FROM b` — or a `UNION`
+  of two `GROUP BY`s, an `EXCEPT` of two counts — routed to the aggregate
+  engine (REST `/query` and `/aggregate`, the CLI, Tauri, Python's `query`
+  and `execute_query`) ran its first operand alone and returned
+  `[{"count": 2}]`, dropping the others without a word; `execute_query` ran
+  an aggregate operand as a plain scan. After: validation refuses a
+  compound holding an aggregation (scalar aggregates or `GROUP BY`, a
+  vector `GROUP BY` excepted) with `V019` (`CompoundAggregation`, a
+  `VELES-010`) on every engine and entry point — `Database::execute_query`,
+  `Database::execute_aggregate`, `Collection::execute_query`,
+  `Collection::execute_aggregate` and the WASM executor (conformance
+  `R032`). Migration: run each aggregate as its own statement and combine
+  the rows in the caller.
+
+- **BREAKING (core, WASM, every binding): a column the FROM side's name
+  qualifies is the base row's own** (core, 2026-11-20). `SELECT * FROM docs d
+  JOIN tags t ON d.id = t.doc_id WHERE d.cat = 'y'` returned `[]`: the
+  predicate stayed on the base query, alias-qualified, and read a `d.cat`
+  path no base row holds; so did `… WHERE d.content MATCH 'apple' AND
+  d.cat = 'y'` (and its `COUNT(*)`, `0`), and without a JOIN `SELECT * FROM
+  docs d WHERE d.cat = 'y'`. An unaliased FROM beside an aliased JOIN was
+  named after that JOIN (the parser lists every alias in `from_alias`), so
+  `FROM docs JOIN tags t … WHERE docs.cat = 'y'` scoped the base rows under
+  `t`, which the join overwrote, and read nothing either. After: the FROM
+  side goes by its alias, or its table's name when it has none
+  (`velesql::base_side`), and every WHERE column that name qualifies is the
+  base row's column (`velesql::resolve_base_qualifiers`), in a SELECT and an
+  aggregate, with or without a JOIN, in core and the WASM executor — the one
+  resolver the JOIN text-`MATCH` qualifier rule uses. A qualifier naming no
+  side is still the payload path it spells (`meta.lang`), and still refused
+  in a JOIN's text `MATCH`. Migration: a payload field nested under a key
+  equal to the FROM side's name reads as `name.key.field`.
+
+- **BREAKING (LangChain, LlamaIndex): `VelesDBVectorStore.query` keeps an
+  aggregate's values, and `velesql` refuses an aggregate** (integrations,
+  2026-11-20). With the binding routing an aggregate to the aggregate
+  engine (`Collection.query` returning `[{"count": 3}]`), LangChain's
+  `query("SELECT COUNT(*) …")` returned `[Document(page_content='',
+  metadata={})]` and LlamaIndex's `velesql(…)` a node with an empty id: the
+  point conversion dropped the values. After: LangChain returns one
+  `Document` per aggregate row, its `metadata` the row and its
+  `page_content` the row as `column: value` lines; LlamaIndex's `velesql()`,
+  which returns nodes with similarities, raises `ValueError` for an
+  aggregate and names `store.client.execute_query`, which returns the rows
+  (`velesdb_common.aggregates.is_aggregate_row` tells the rows apart). With
+  a wheel that returns points for an aggregate (velesdb 8.2.0 and older),
+  both return those points as before. Migration: read LangChain's
+  aggregate values from `doc.metadata`; run a LlamaIndex aggregate through
+  `store.client.execute_query(query, params)`.
+
 - **BREAKING (core, REST server, every binding): a text `MATCH` means one
   thing wherever a WHERE is evaluated — the row is a BM25 hit for its
   query — and a `MATCH` that ranks nothing is executed, not refused**
@@ -1253,6 +1305,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file. Anything else is now a usage error (exit 2).
 
 ### Fixed
+
+- **Payload WAL: a write that fails partway through a record no longer
+  costs the records written after it** (core, 2026-11-20, #2850). A record
+  at least as large as the `BufWriter`'s buffer goes straight to the file, so
+  a `write_all` that failed midway (ENOSPC) left a fragment of it there. The
+  next record landed behind the fragment: it read back wrong until a restart,
+  and on the next open replay stopped at the fragment and truncated every
+  record after it, acknowledged ones included. Every store and tombstone
+  write — `store`, `store_batch` (and its deferred form), `delete`,
+  `delete_batch` — now goes through one append that, on failure, truncates
+  the file to the tracked WAL offset minus the bytes still buffered, so the
+  WAL is left as if the failed record never started; the store's change log
+  and index record only the records that were appended (a batch torn at its
+  second record keeps and records its first). If the truncation fails too,
+  the double fault is logged as an error and the tracked offset moves past
+  the fragment, so later records still read back until the next open.
+
+- **Core: BM25 drops a document whose new text has no indexable token, and
+  recycles a removed document's internal id once** (core, 2026-11-20).
+  `Bm25Index::add_document` returned before removing the previous version
+  when the text tokenized to nothing (`"N/A"`, `"-"`, `"7"`), so the old
+  terms kept matching a payload that no longer contained them; it now
+  removes the document, as `remove_document` does. Two concurrent removals
+  of one point each pushed the internal id they had read to the free list,
+  which then gave it to two later points and left one unsearchable; an add
+  and a removal now allocate, release and post a point's id under one hold
+  of the postings' write guard, so only the removal that takes the mapping
+  out releases it.
+
+- **Core: a failed half-open probe reopens the circuit breaker** (core,
+  2026-11-20). A request admitted before the trip that succeeded after it
+  reset the failure count while the breaker was open; the probe's failure
+  then counted as the first of a new window, and with a threshold above 1
+  the breaker stayed half-open, where every request is admitted. A failure
+  in `HalfOpen` now reopens it whatever the count.
+
+- **Core: a filtered sparse search offers its filter only the documents
+  that can take a place** (core, 2026-11-20). `sparse_search_filtered`,
+  exact under a selective filter on this branch, ran the filter on every
+  document the query scored; it now offers them best first and stops at the
+  `k`-th accepted one — no filter call below the last result.
+
+- **Core: a vector read whose index answer is short and crowded by expired
+  rows no longer returns nothing** (core, 2026-11-20). A read took an
+  answer shorter than what it asked the index for as the index running out,
+  so once an HNSW graph had seen overwrites — its walk answers short past
+  their tombstones — expired rows crowding the query made `search`,
+  `search_ids` and `SELECT * … WHERE vector NEAR $v LIMIT 10` return `[]`
+  while durable rows stood behind them (`search_with_quality` accurate
+  and the `similarity()` scan were right). After: a short answer settles the
+  read only when no dead candidate (a row without a vector, or expired) is
+  in it, or when it holds every stored vector; otherwise the read asks
+  again for twice as many and, past its bound, scans exactly
+  (`collection/search/live.rs`).
+
+- **Core: a text score reads one state of the BM25 index** (core,
+  2026-11-20). `Bm25Index::score_all` read the document count, the total
+  length and the postings under separate locks while a write changed the
+  postings before the count, so a score racing an upsert or a delete could
+  see a term in more documents than the corpus held: every idf turned
+  negative, every score fell to zero or below, and `text_search`, `MATCH`, a
+  hybrid's BM25 branch and its `LIKE` candidates returned `[]` for a stable
+  set of documents. After: a document enters or leaves the postings, the
+  documents and the corpus statistics under one hold of the postings'
+  write guard, a score reads them all under its read guard, and the
+  document frequency is held to the corpus size besides.
+
+- **Core: a filtered ranked walk answers the state its finishing hold
+  reads, a write before its first hold included** (core, 2026-11-20). The
+  walk read which ids changed only from its first hold on, and the
+  secondary indexes were updated once a write had released its guards: a
+  write landing between the prefilter bitmap and the first hold, or one
+  whose payload the walk already saw while its secondary-index update was
+  still pending, left a candidate set aside it now matched —
+  `text_search_with_filter` returned `[]` or a worse row while a fresh
+  search returned the moved one. After: the walk reads the stores' revision
+  before it builds the bitmap and offers again every set-aside candidate
+  written since; every write — `upsert`, `upsert_metadata`, both bulk
+  paths, the node-payload write, `delete`, a failed write included —
+  updates the secondary indexes under its payload write guard, beside the
+  label and range indexes, so the bitmap describes every write the revision
+  counts. A `CREATE INDEX` (and the restore of an index at open) fills the
+  new index before any reader can see it, holding writes off meanwhile: a
+  walk that built its bitmap from the index still empty set every
+  candidate aside and returned nothing.
+
+- **Core: a ranked walk always ends** (core, 2026-11-20). A walk whose
+  writer kept moving the rows it kept in and out of its filter between
+  holds released and took its guards again for as long as the writer ran:
+  a row dropped under the hold that would finish the walk always cost a
+  release, and only floods that overflowed the change logs counted toward
+  the bound on restarts. After: a dropped row is replaced under the same
+  hold, a hold whose finish a drop made fail counts toward the bound as a
+  restart does, and the candidates a write puts back cost a hold none of
+  its batch, so every hold that does not end the walk offers a batch of
+  candidates no hold offered before or sets it back.
+
+- **Core: a store's change log never keeps the size of its largest write**
+  (core, 2026-11-20). `ChangeLog::record` pushed every id of a write before
+  dropping all but the last `ChangeLog::CAPACITY`, so a write of many more
+  ids left a buffer that large in each store for the store's life. After:
+  the log forgets what the write overflows before it records it and keeps
+  only the write's last ids, in a buffer no larger than a full log needs;
+  what `changed_since` answers is unchanged.
 
 - **Core: a filtered text, sparse or hybrid search returns the best rows the
   filter matches, however far below the best they rank** (core, 2026-11-19).

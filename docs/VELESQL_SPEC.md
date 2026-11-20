@@ -361,6 +361,18 @@ RIGHT or FULL row for a joined point no base row matched is that point's own
 row: its id, score `0`, its fields flat and under its alias, and every
 earlier side's alias with a `null` id, so `WHERE o.id IS NULL` finds it.
 
+The FROM side is named by its alias, or by its table when it has none; an
+aliased table's own name names no side, as in SQL. A column that name
+qualifies is the base row's own column wherever it is read: `d.cat` in
+`FROM docs d JOIN tags t ON d.id = t.doc_id WHERE d.cat = 'y'` filters the
+base rows before the join as `cat` would, and `FROM docs JOIN tags t ON
+docs.id = t.doc_id WHERE docs.cat = 'y'` reads the joined row's `docs.cat`.
+Without a JOIN the same holds: `SELECT * FROM docs d WHERE d.cat = 'y'` and
+`SELECT COUNT(*) FROM docs d WHERE d.cat = 'y'` read the rows' `cat`
+(`velesql::resolve_base_qualifiers`, core and WASM). A qualifier naming no
+side is the payload path it spells — `meta.lang` reads a nested field —
+except in a JOIN's text `MATCH`, where it is refused (`VELES-010`).
+
 As in SQL, WHERE filters the joined rows, then DISTINCT, ORDER BY, OFFSET and
 LIMIT (10 by default) apply to them, and an aggregate groups them. Only a
 predicate on the base collection alone filters the base rows before the
@@ -2071,6 +2083,13 @@ WASM):
   closest first under a distance), ties in the order they were met. A NaN
   score ranks last, and a duplicate's number always beats its twin's NaN.
 - The combined rows are projected by the first operand's column list.
+- **Operands are rows of points.** An aggregation — scalar aggregates
+  (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`) or `GROUP BY`, a vector
+  `GROUP BY` (`NEAR` + `GROUP BY`) excepted — is no operand: a compound
+  holding one is refused at validation with `V019`
+  (`CompoundAggregation`, a `VELES-010`) on every engine and entry point,
+  `execute_query` and `execute_aggregate` alike. Run each aggregate as its
+  own statement.
 
 ```sql
 -- The 3 latest documents of either category, by year:

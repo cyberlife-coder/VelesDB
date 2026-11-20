@@ -490,6 +490,7 @@ VelesDB handles corruption gracefully:
 | Corruption Type | Behavior |
 |-----------------|----------|
 | Truncated WAL (torn tail) | Replay up to last valid entry, then stop cleanly |
+| Payload WAL append that fails midway (e.g. `ENOSPC`) | The fragment is truncated before the error returns (`log_payload_io::append_record`), so no later record lands behind it; if that truncation fails too, the error is logged and replay stops at the fragment on the next open |
 | Mid-stream WAL CRC failure | Skip the bad record, emit a metric, continue replaying later valid entries |
 | Invalid snapshot CRC | Fall back to full WAL replay |
 | Missing files | Return explicit error |
