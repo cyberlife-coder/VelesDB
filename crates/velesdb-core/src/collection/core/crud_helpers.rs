@@ -109,7 +109,8 @@ impl Collection {
         }
     }
 
-    /// Updates all secondary indexes after an upsert (removes old values, inserts new ones).
+    /// Updates all secondary indexes for one payload write: the old payload's
+    /// values removed, the new one's inserted (`None` for a delete).
     pub(crate) fn update_secondary_indexes_on_upsert(
         &self,
         id: u64,
@@ -129,23 +130,6 @@ impl Collection {
                 .and_then(JsonValue::from_json)
             {
                 self.insert_into_secondary_index(index, new_value, id);
-            }
-        }
-    }
-
-    /// Removes entries from all secondary indexes for a deleted point.
-    pub(crate) fn update_secondary_indexes_on_delete(
-        &self,
-        id: u64,
-        old_payload: Option<&serde_json::Value>,
-    ) {
-        let Some(payload) = old_payload else {
-            return;
-        };
-        let indexes = self.query.secondary_indexes.read();
-        for (field, index) in indexes.iter() {
-            if let Some(old_value) = payload.get(field).and_then(JsonValue::from_json) {
-                self.remove_from_secondary_index(index, &old_value, id);
             }
         }
     }

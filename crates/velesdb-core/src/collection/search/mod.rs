@@ -25,6 +25,10 @@ pub mod query;
 mod query_validation_tests;
 mod query_vector_check;
 pub(crate) mod ranked;
+#[cfg(test)]
+mod ranked_hooks;
+#[cfg(test)]
+mod ranked_race_tests;
 pub(crate) mod resolve;
 #[cfg(test)]
 mod similarity_exec_tests;

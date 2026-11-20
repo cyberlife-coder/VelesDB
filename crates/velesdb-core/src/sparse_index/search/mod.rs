@@ -80,13 +80,14 @@ pub(crate) fn sparse_scores(
 /// Searches the sparse inverted index for the top-k documents `filter`
 /// admits.
 ///
-/// If `filter` is `None`, delegates to [`sparse_search`]. Otherwise every
-/// document the query scores is offered to `filter`, and the best `k` it
-/// admits are returned, best first, ordered as [`sparse_search`] orders
-/// them: exact, however far below the best a matching document ranks. (An
-/// oversampled window of the best, four then eight times `k`, used to be
-/// filtered alone, and returned fewer than `k` when the matches ranked
-/// below it.)
+/// If `filter` is `None`, delegates to [`sparse_search`]. Otherwise the
+/// documents the query scores are offered to `filter` best first, ordered as
+/// [`sparse_search`] orders them, until it has admitted `k`: the best `k` it
+/// admits, exact however far below the best a matching document ranks, and
+/// no document below the last of them is offered. (An oversampled window of
+/// the best, four then eight times `k`, used to be filtered alone, and
+/// returned fewer than `k` when the matches ranked below it.) The scores are
+/// arranged into a heap in linear time; each document offered costs one pop.
 #[must_use]
 pub fn sparse_search_filtered(
     index: &SparseInvertedIndex,
@@ -100,14 +101,21 @@ pub fn sparse_search_filtered(
     if k == 0 || query.is_empty() || index.doc_count() == 0 {
         return Vec::new();
     }
-    let mut admitted = Vec::new();
+    let mut scored = Vec::new();
     strategy::linear_scan_scores(index, query, |doc_id, score| {
-        if filter(doc_id) {
-            admitted.push(ScoredDoc { score, doc_id });
-        }
+        scored.push(ScoredDoc { score, doc_id });
     });
-    admitted.sort_unstable_by(|a, b| b.cmp(a));
-    admitted.truncate(k);
+    // `ScoredDoc`'s order ranks: the best is the greatest, popped first.
+    let mut ranked = std::collections::BinaryHeap::from(scored);
+    let mut admitted = Vec::with_capacity(k.min(ranked.len()));
+    while admitted.len() < k {
+        let Some(doc) = ranked.pop() else {
+            break;
+        };
+        if filter(doc.doc_id) {
+            admitted.push(doc);
+        }
+    }
     admitted
 }
 

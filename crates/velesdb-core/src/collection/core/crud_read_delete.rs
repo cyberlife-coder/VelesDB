@@ -225,13 +225,10 @@ impl Collection {
     /// O(N) (finding C3).
     ///
     /// LOCK ORDER: text_wal(1a, shared, held by the caller) →
-    /// payload_storage(3) → label_index(7), released →
-    /// graph_range_indexes(7).
+    /// payload_storage(3) → as [`Self::index_payload_writes`].
     fn delete_metadata_only(&self, ids: &[u64], text_wal: &TextWalShared<'_>) -> Result<usize> {
         let rows = RowUniverse::Payloads;
         self.write_payload_store(rows, ids, StoreEffect::StoresOrRemoves, |payload_storage| {
-            let mut label_idx = self.graph.label_index.write();
-
             // Old payloads must be read before the tombstones land — they feed
             // the secondary-index, label-index and range-index removals below.
             let old_payloads: Vec<Option<serde_json::Value>> = ids
@@ -244,16 +241,7 @@ impl Collection {
             // Issue #389: WAL-before-apply for BM25 removes so crash recovery
             // replays the remove — batched, one barrier for the whole batch.
             self.change_text_index_ordered(text_wal, &[], ids)?;
-
-            for (&id, old_payload) in ids.iter().zip(&old_payloads) {
-                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
-                if let Some(ref old) = old_payload {
-                    label_idx.remove_from_payload(id, old);
-                }
-            }
-            // label_index(7) released before graph_range_indexes(7), its rank-mate.
-            drop(label_idx);
-            self.remove_deleted_from_range_indexes(ids, &old_payloads);
+            self.unindex_deleted(ids, &old_payloads);
             Ok(removed)
         })
     }
@@ -303,9 +291,9 @@ impl Collection {
     ///   up.
     ///
     /// LOCK ORDER: text_wal(1a, shared, held by the caller) →
-    /// node_locks(1c) → vector_storage(2) → payload_storage(3) → caches(4)
-    /// → label_index(7), released → graph_range_indexes(7). The size moves
-    /// by what the batch removed ([`Self::write_both_stores`]).
+    /// node_locks(1c) → vector_storage(2) → payload_storage(3) → caches(4),
+    /// released → as [`Self::index_payload_writes`]. The size moves by what
+    /// the batch removed ([`Self::write_both_stores`]).
     fn delete_vector_core_stores(
         &self,
         ids: &[u64],
@@ -314,7 +302,6 @@ impl Collection {
     ) -> Result<usize> {
         self.write_both_stores(rows, ids, |vector_storage, payload_storage| {
             let mut pq_cache = self.storage.pq_cache.write();
-            let mut label_idx = self.graph.label_index.write();
 
             // Old payloads must be read before the tombstones land — they feed
             // the secondary-index, label-index and range-index removals below.
@@ -331,39 +318,25 @@ impl Collection {
             // replays the remove — batched, one barrier for the whole batch.
             self.change_text_index_ordered(text_wal, &[], ids)?;
 
-            for (&id, old_payload) in ids.iter().zip(&old_payloads) {
+            for &id in ids {
                 self.storage.index.remove(id);
                 pq_cache.remove(&id);
-                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
-                if let Some(ref old) = old_payload {
-                    label_idx.remove_from_payload(id, old);
-                }
             }
-
-            // label_index(7) released before graph_range_indexes(7), its rank-mate.
-            drop(label_idx);
-            self.remove_deleted_from_range_indexes(ids, &old_payloads);
             drop(pq_cache);
+            self.unindex_deleted(ids, &old_payloads);
             Ok(removed)
         })
     }
 
-    /// Removes deleted nodes from the graph range indexes, the way the label
-    /// index removal above them does: from the payload each node carried.
+    /// Removes deleted rows from the secondary, label and range indexes:
+    /// the entries of the payload each one carried, `old_payloads` read per
+    /// id before the delete ([`Self::index_payload_writes`], a delete being
+    /// a write that stores no payload).
     ///
     /// Called with `payload_storage` still write-held, so no write to these
-    /// ids can index a newer payload in between, and after `label_index` is
-    /// released (both sit at rank 7, with no order between them).
-    fn remove_deleted_from_range_indexes(
-        &self,
-        ids: &[u64],
-        old_payloads: &[Option<serde_json::Value>],
-    ) {
-        self.apply_range_index_changes(
-            ids.iter()
-                .zip(old_payloads)
-                .map(|(&id, old)| (id, old.as_ref(), None)),
-        );
+    /// ids can index a newer payload in between.
+    fn unindex_deleted(&self, ids: &[u64], old_payloads: &[Option<serde_json::Value>]) {
+        self.index_payload_writes(ids.iter().map(|&id| (id, None)), old_payloads);
     }
 
     /// Removes IDs from the deferred indexer (persistence feature).

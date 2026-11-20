@@ -223,3 +223,99 @@ fn a_row_deleted_after_the_index_answered_takes_no_place() {
 
     assert_eq!(ids(&hits), [LIVE + 1, LIVE + 2]);
 }
+
+/// An index answering fewer candidates than it was asked for has not run
+/// out: an HNSW graph that has seen overwrites answers short past its
+/// tombstones. A read whose short answer holds only expired rows asks again
+/// and, past the bound, scans exactly — it returned nothing before, the
+/// short answer taken for every stored vector.
+#[test]
+fn a_short_answer_of_expired_rows_is_not_the_index_running_out() {
+    use crate::scored_result::ScoredResult;
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let collection = crowded(dir.path(), EXPIRED, 100);
+    let want = Nearest::rows(&QUERY, DistanceMetric::Cosine, 3);
+    let scans = exact_scans();
+
+    let hits = collection
+        .nearest_live_ids(&want, |_| {
+            Ok((1..=5).map(|id| ScoredResult::new(id, 1.0)).collect())
+        })
+        .expect("test: read");
+
+    let hits: Vec<u64> = hits.into_iter().map(|r| r.id).collect();
+    assert_eq!(hits, nearest_live(3));
+    assert_eq!(exact_scans(), scans + 1, "the read did not scan exactly");
+}
+
+/// An answer that holds every stored vector is the index running out: the
+/// read returns the live rows among them, short of `k`, without asking
+/// again.
+#[test]
+fn an_answer_holding_every_stored_vector_settles_the_read() {
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let collection = crowded(dir.path(), 3, 2);
+    let scans = exact_scans();
+
+    let hits = collection.search(&QUERY, 10).expect("test: search");
+
+    let live: HashSet<u64> = nearest_live(2).into_iter().collect();
+    assert_eq!(ids(&hits).into_iter().collect::<HashSet<_>>(), live);
+    assert_eq!(exact_scans(), scans, "the read scanned exactly");
+}
+
+/// The read a reviewer ran: 100 durable rows, 6 000 expired rows nearer the
+/// query, overwritten in rounds so the graph holds their tombstones. The
+/// index's short answers hold only expired rows; the read still returns the
+/// 10 nearest durable rows, on every surface.
+#[test]
+fn expired_rows_overwritten_in_the_graph_never_empty_a_read() {
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let collection =
+        Collection::create(dir.path().join("o"), 4, DistanceMetric::Cosine).expect("test: c");
+    #[allow(clippy::cast_precision_loss)]
+    let durable = (1..=100_u64).map(|i| {
+        Point::new(
+            i,
+            vec![1.0 - i as f32 / 200.0, 1.0, 0.0, 0.0],
+            Some(json!({"k": 1})),
+        )
+    });
+    collection.upsert(durable).expect("test: durable rows");
+    let mut seed = 0x2545_f491_u64;
+    let mut near = |id: u64| {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        #[allow(clippy::cast_precision_loss)]
+        let jitter = (seed >> 40) as f32 / (1_u64 << 24) as f32;
+        let payload = json!({"k": 1, "_veles_expires_at": 1});
+        Point::new(id, vec![1.0, 0.01 * jitter, 0.0, 0.0], Some(payload))
+    };
+    let expired: Vec<Point> = (1_000..7_000).map(&mut near).collect();
+    collection.upsert(expired).expect("test: expired rows");
+    for round in 0..30_u64 {
+        let from = 1_000 + (round * 500) % 6_000;
+        let rewritten: Vec<Point> = (from..from + 500).map(&mut near).collect();
+        collection.upsert(rewritten).expect("test: overwrite");
+    }
+    let query = [1.0, 0.0, 0.0, 0.0];
+    let expected: Vec<u64> = (1..=10).collect();
+
+    assert_eq!(
+        ids(&collection.search(&query, 10).expect("test: search")),
+        expected
+    );
+    let only_ids: Vec<u64> = collection
+        .search_ids(&query, 10)
+        .expect("test: search_ids")
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(only_ids, expected);
+    let select = crate::velesql::Parser::parse("SELECT * FROM o WHERE vector NEAR $v LIMIT 10")
+        .expect("test: parse");
+    let params = std::collections::HashMap::from([("v".to_string(), json!(query))]);
+    let rows = collection
+        .execute_query(&select, &params)
+        .expect("test: query");
+    assert_eq!(ids(&rows), expected);
+}

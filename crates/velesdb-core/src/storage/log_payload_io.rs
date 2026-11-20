@@ -72,24 +72,58 @@ pub(super) fn flush_wal(wal: &mut io::BufWriter<std::fs::File>) -> io::Result<()
 #[cfg(test)]
 thread_local! {
     static FAIL_NEXT_WAL_FLUSH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How many appends go through before the one that tears, if armed.
+    static TEAR_WAL_APPEND: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
 /// Makes the next [`flush_wal`] on this thread fail; the guard clears the
 /// fault on drop if no flush consumed it.
 #[cfg(test)]
-pub(crate) fn fail_next_wal_flush() -> WalFlushFault {
+pub(crate) fn fail_next_wal_flush() -> WalFault {
     FAIL_NEXT_WAL_FLUSH.with(|fail| fail.set(true));
-    WalFlushFault
+    WalFault(|| FAIL_NEXT_WAL_FLUSH.with(|fail| fail.set(false)))
 }
 
-/// Clears an unconsumed [`fail_next_wal_flush`] fault on drop.
+/// Makes the next [`append_record`] on this thread fail after writing half
+/// the record to the file — the state a `write_all` that hits `ENOSPC`
+/// midway leaves (#2850); the guard clears the fault on drop if no append
+/// consumed it.
 #[cfg(test)]
-pub(crate) struct WalFlushFault;
+pub(crate) fn tear_next_wal_append() -> WalFault {
+    tear_wal_append_after(0)
+}
+
+/// [`tear_next_wal_append`] for the append after the next `appends`.
+#[cfg(test)]
+pub(crate) fn tear_wal_append_after(appends: u32) -> WalFault {
+    TEAR_WAL_APPEND.with(|tear| tear.set(Some(appends)));
+    WalFault(|| TEAR_WAL_APPEND.with(|tear| tear.set(None)))
+}
+
+/// Whether this append is the one an armed tear fails, counting it down.
+#[cfg(test)]
+fn tears_now() -> bool {
+    TEAR_WAL_APPEND.with(|tear| match tear.get() {
+        Some(0) => {
+            tear.set(None);
+            true
+        }
+        Some(left) => {
+            tear.set(Some(left - 1));
+            false
+        }
+        None => false,
+    })
+}
+
+/// An armed one-shot WAL fault, cleared on drop if nothing consumed it.
+#[cfg(test)]
+pub(crate) struct WalFault(fn());
 
 #[cfg(test)]
-impl Drop for WalFlushFault {
+impl Drop for WalFault {
     fn drop(&mut self) {
-        FAIL_NEXT_WAL_FLUSH.with(|fail| fail.set(false));
+        (self.0)();
     }
 }
 
@@ -102,6 +136,76 @@ impl Drop for WalFlushFault {
 /// that many bytes too early.
 pub(super) fn wal_end<W: Write>(wal: &io::BufWriter<W>, file_len: u64) -> u64 {
     file_len.saturating_add(wal.buffer().len() as u64)
+}
+
+/// Appends one complete WAL record, or leaves the WAL as if it never started.
+///
+/// `offset` is the tracked WAL offset (`write_offset`) before this record:
+/// the file length plus the bytes the writer still buffers, which every
+/// write path keeps true. A failed `write_all` can leave a fragment of the
+/// record in the file — a record at least as large as the buffer goes
+/// straight to the file, which may take part of it before failing. Left
+/// there, the fragment is a torn record in the middle of the WAL once a
+/// later record lands after it: it reads back wrong at once, and the next
+/// open stops replay at it and discards every record behind it,
+/// acknowledged ones included (#2850). So the fragment is cut off before
+/// the error is returned, and the caller, which records nothing in its
+/// index or change log for a failed append, leaves the store as it was.
+///
+/// If the truncation itself fails, the fragment stays and the double fault
+/// is logged as an error; `offset` is then resynced past the fragment
+/// ([`wal_end`]), so later records still read back until the store is
+/// reopened, whose replay stops at the fragment.
+pub(super) fn append_record(
+    wal: &mut io::BufWriter<std::fs::File>,
+    record: &[u8],
+    offset: &mut u64,
+) -> io::Result<()> {
+    write_record(wal, record).inspect_err(|_| {
+        if let Err(error) = discard_torn_record(wal.get_ref(), wal.buffer().len(), *offset) {
+            tracing::error!(
+                %error,
+                "payload WAL torn append could not be truncated; replay will stop at it on the next open"
+            );
+            if let Ok(meta) = wal.get_ref().metadata() {
+                *offset = wal_end(wal, meta.len());
+            }
+        }
+    })
+}
+
+/// Truncates `file` to `offset` minus the `buffered` bytes the writer still
+/// holds, dropping any fragment a failed append wrote. A failure that left
+/// only buffered bytes (a partial flush of earlier, complete records) finds
+/// the file already at that length and changes nothing.
+pub(super) fn discard_torn_record(
+    file: &std::fs::File,
+    buffered: usize,
+    offset: u64,
+) -> io::Result<()> {
+    let file_end = offset.saturating_sub(buffered as u64);
+    let file_len = file.metadata()?.len();
+    if file_len > file_end {
+        file.set_len(file_end)?;
+        tracing::warn!(
+            discarded_bytes = file_len - file_end,
+            "payload WAL torn append truncated"
+        );
+    }
+    Ok(())
+}
+
+/// Writes `record` through the WAL writer: where a test tears an append.
+fn write_record(wal: &mut io::BufWriter<std::fs::File>, record: &[u8]) -> io::Result<()> {
+    #[cfg(test)]
+    if tears_now() {
+        // What `BufWriter::write_all` does with a record it cannot buffer:
+        // flush, then write straight to the file — here, only half of it.
+        wal.flush()?;
+        wal.get_mut().write_all(&record[..record.len() / 2])?;
+        return Err(io::Error::other("injected torn WAL append"));
+    }
+    wal.write_all(record)
 }
 
 /// Serializes a payload and writes a CRC-protected WAL store record.
@@ -142,7 +246,7 @@ pub(super) fn write_store_record(
     let crc = crc32_hash(record_buf);
     record_buf.extend_from_slice(&crc.to_le_bytes());
 
-    wal.write_all(record_buf)?;
+    append_record(wal, record_buf, offset)?;
 
     let bytes_written = 1 + 8 + 4 + u64::from(len_u32) + 4;
     *offset += bytes_written;

@@ -16,6 +16,12 @@
 //!   once its payloads are stored and before its vectors are: the window a
 //!   delete of one of its ids must not fall into on a vector collection
 //!   (`Collection::write_rows`).
+//! - [`pause_after_row_write`]: a row write — an upsert, bulk or not — once
+//!   it released its storage guards and before the work that follows them:
+//!   the window a reader must find every index derived from the payloads
+//!   already in line with what the guards held.
+//! - [`pause_after_index_visible`]: a secondary index a `CREATE INDEX` builds,
+//!   once readers can see it — what they read there must be every row's.
 
 use std::cell::RefCell;
 
@@ -26,6 +32,8 @@ thread_local! {
     static AFTER_TEXT_WAL: Pause = const { RefCell::new(None) };
     static AFTER_NODE_MEMBERSHIP: Pause = const { RefCell::new(None) };
     static BETWEEN_ROW_STORES: Pause = const { RefCell::new(None) };
+    static AFTER_ROW_WRITE: Pause = const { RefCell::new(None) };
+    static AFTER_INDEX_VISIBLE: Pause = const { RefCell::new(None) };
 }
 
 fn arm(hook: &'static std::thread::LocalKey<Pause>, pause: impl FnOnce() + 'static) {
@@ -83,4 +91,26 @@ pub(crate) fn pause_between_row_stores(pause: impl FnOnce() + 'static) {
 /// Runs the closure [`pause_between_row_stores`] set on this thread, once.
 pub(crate) fn between_row_stores() {
     fire(&BETWEEN_ROW_STORES);
+}
+
+/// Runs `pause` in the next row write on this thread, once it released its
+/// storage guards.
+pub(crate) fn pause_after_row_write(pause: impl FnOnce() + 'static) {
+    arm(&AFTER_ROW_WRITE, pause);
+}
+
+/// Runs the closure [`pause_after_row_write`] set on this thread, once.
+pub(crate) fn after_row_write() {
+    fire(&AFTER_ROW_WRITE);
+}
+
+/// Runs `pause` in the next secondary index this thread builds, once readers
+/// can see it.
+pub(crate) fn pause_after_index_visible(pause: impl FnOnce() + 'static) {
+    arm(&AFTER_INDEX_VISIBLE, pause);
+}
+
+/// Runs the closure [`pause_after_index_visible`] set on this thread, once.
+pub(crate) fn after_index_visible() {
+    fire(&AFTER_INDEX_VISIBLE);
 }

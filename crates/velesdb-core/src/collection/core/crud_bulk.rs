@@ -253,14 +253,16 @@ impl Collection {
     /// as the two halves of a global-pool `rayon::join` once, the shape
     /// `upsert` reverted for deadlocking.
     /// Stored payloads are readable whatever happened to the vectors, so the
-    /// secondary indexes, the histograms and BM25 follow them before a vector
-    /// error is returned; returning it first left stored payloads unindexed.
+    /// histograms and BM25 follow them before a vector error is returned;
+    /// returning it first left stored payloads unindexed. The secondary,
+    /// label and range indexes follow them under the payload write guard
+    /// ([`Self::store_entries_in`]).
     ///
     /// LOCK ORDER: as [`Self::write_rows`] — on a vector collection
-    /// text_wal(1a) → node_locks(1c) → payload_storage(3) → label_index(7),
-    /// released → graph_range_indexes(7), all but the first two released;
+    /// text_wal(1a) → node_locks(1c) → payload_storage(3) → as
+    /// [`Self::index_payload_writes`], all but the first two released;
     /// vector_storage(2), released; the BM25 index — then, with every one of
-    /// them released, secondary_indexes(6), stats_io_mutex(12).
+    /// them released, stats_io_mutex(12).
     pub(super) fn store_vectors_and_payloads(
         &self,
         vector_refs: &[(u64, &[f32])],
@@ -280,10 +282,9 @@ impl Collection {
                 });
                 Ok(((stored, old_payloads), vectors_stored, text_changed))
             })?;
+        #[cfg(test)]
+        super::write_hooks::after_row_write();
         let (stored, old_payloads) = stored;
-        // The raw bulk path always maintained the secondary indexes; this one
-        // never did, so an equality lookup missed every bulk-upserted point.
-        self.update_secondary_indexes_for_entries(&stored, &old_payloads);
         self.apply_payload_histograms(&stored_writes(&stored), &old_payloads);
         text_changed?;
         vectors_stored.map(|()| stored.len())
@@ -375,8 +376,8 @@ impl Collection {
     }
 
     /// Stores `entries` in `storage`, under the caller's write guard, and
-    /// updates the label and range indexes; returns each entry's pre-batch
-    /// payload ([`Self::store_payload_entries`]).
+    /// updates the secondary, label and range indexes; returns each entry's
+    /// pre-batch payload ([`Self::store_payload_entries`]).
     fn store_entries_in(
         &self,
         storage: &mut crate::storage::LogPayloadStorage,

@@ -135,37 +135,6 @@ impl Collection {
         }
         Ok(())
     }
-
-    /// Batch-updates secondary indexes from bulk payload entries.
-    ///
-    /// For each entry, **removes the prior indexed value and inserts the new
-    /// one** (via [`update_secondary_indexes_on_upsert`]) so an overwrite of an
-    /// already-indexed point does not leave a stale entry in the old key's
-    /// bucket. Without the removal the same id would sit in both its old and
-    /// new key buckets, inflating `Σ buckets` above `point_count` so the
-    /// ordered-index coverage check declines the fast path — and a restart that
-    /// rebuilds from the final stored payload (backfill) would then diverge from
-    /// the live tree (EPIC-081 phase 3d restore equivalence). A repeated id
-    /// replaces its previous entry's value, not the pre-batch one, through
-    /// [`Self::payload_changes`].
-    ///
-    /// Skips entirely when no secondary indexes exist (fast path for bulk
-    /// loading before `create_index`).
-    ///
-    /// [`update_secondary_indexes_on_upsert`]: Self::update_secondary_indexes_on_upsert
-    pub(super) fn update_secondary_indexes_for_entries(
-        &self,
-        entries: &[(u64, &serde_json::Value)],
-        old_payloads: &[Option<serde_json::Value>],
-    ) {
-        if self.query.secondary_indexes.read().is_empty() {
-            return;
-        }
-        let writes = entries.iter().map(|&(id, payload)| (id, Some(payload)));
-        for (id, old, new) in Self::payload_changes(writes, old_payloads) {
-            self.update_secondary_indexes_on_upsert(id, old, new);
-        }
-    }
 }
 
 /// Refuses flat inputs whose lengths disagree: `vectors` must hold

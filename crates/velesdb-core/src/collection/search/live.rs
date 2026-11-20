@@ -15,8 +15,13 @@
 //! The index is asked for `budget` candidates (`k` unfiltered, the
 //! filter's oversampling filtered) and judged under the storage read guards.
 //! While dead candidates leave fewer than `k` accepted and fewer than
-//! `budget` live, and the index returned all it was asked for, it is asked
-//! again for twice as many. That doubling is bounded
+//! `budget` live, and the answer did not hold every stored vector, it is
+//! asked again for twice as many — however short the answer was, when a
+//! dead candidate is in it: an HNSW walk returns fewer candidates than asked
+//! past the tombstones overwrites leave in its graph, which is no sign the
+//! index ran out. A short answer without a dead candidate is the index's
+//! own at its quality, which no expired row shrank, and settles the read.
+//! That doubling is bounded
 //! ([`Nearest::next_ask`]): once it would pass [`MAX_ASK`] or reach the
 //! number of stored vectors — where an index walk visits most of the graph
 //! anyway — the read scores every stored vector exactly instead
@@ -82,23 +87,39 @@ impl<'q> Nearest<'q> {
 }
 
 /// What judging one answer of the index found, under one hold of the
-/// storage read guards.
+/// storage read guards: the candidates accepted, how many were live, how
+/// many were dead, and how many store a vector, live or expired.
 struct Judged {
     accepted: Vec<(u64, f32)>,
     live: usize,
+    dead: usize,
+    stored: usize,
 }
 
 impl Judged {
     /// Whether the answer settles the read: `k` accepted, `budget` live rows
-    /// judged, or an index that had no more to give.
-    fn settles(&self, want: &Nearest<'_>, exhausted: bool) -> bool {
-        self.accepted.len() >= want.k || self.live >= want.budget || exhausted
+    /// judged, an answer holding every one of the `stored` vectors — the
+    /// index has no more to give — or an answer `short` of what was asked
+    /// with no dead candidate in it: the index's own answer at its quality,
+    /// which no dead row took a place in, as it would answer once every
+    /// expired row is swept.
+    ///
+    /// A short answer holding a dead candidate settles nothing: an HNSW walk
+    /// returns fewer candidates than asked past the tombstones overwrites
+    /// leave in its graph, and the dead rows it found instead may be all it
+    /// found — it was taken for every stored vector once, and the read
+    /// returned nothing while live rows matched.
+    fn settles(&self, want: &Nearest<'_>, short: bool, stored: usize) -> bool {
+        self.accepted.len() >= want.k
+            || self.live >= want.budget
+            || self.stored >= stored
+            || (short && self.dead == 0)
     }
 }
 
 /// Judges `candidates`, best first, under the caller's storage guards: a
-/// candidate without a vector or with an expired payload is dead and skipped
-/// uncounted; a live one counts, and is kept when `accept` takes it — until
+/// candidate without a vector or with an expired payload is dead, counted
+/// apart and skipped; a live one counts, and is kept when `accept` takes it — until
 /// `k` are kept. Every candidate the index returned is judged, however many
 /// live ones that makes: a search merging pending points unfiltered returns
 /// more than it asked for, and the filter may refuse those nearest.
@@ -113,16 +134,21 @@ fn judge(
     let mut judged = Judged {
         accepted: Vec::new(),
         live: 0,
+        dead: 0,
+        stored: 0,
     };
     for candidate in candidates {
         if judged.accepted.len() >= want.k {
             break;
         }
         if !vector_storage.contains(candidate.id) {
+            judged.dead += 1;
             continue;
         }
+        judged.stored += 1;
         let payload = payload_storage.retrieve(candidate.id).ok().flatten();
         if crate::collection::expiry::is_payload_expired(payload.as_ref(), now_secs) {
+            judged.dead += 1;
             continue;
         }
         judged.live += 1;
@@ -217,7 +243,7 @@ impl Collection {
         loop {
             let mut candidates = nearest(asked)?;
             index_answered();
-            let exhausted = candidates.len() < asked;
+            let short = candidates.len() < asked;
             super::resolve::sort_scored_by_metric(&mut candidates, want.metric.higher_is_better());
             let vector_storage = self.storage.vector_storage.read();
             let payload_storage = self.storage.payload_storage.read();
@@ -230,7 +256,7 @@ impl Collection {
                 &payload_storage,
                 now,
             );
-            if judged.settles(want, exhausted) {
+            if judged.settles(want, short, vector_storage.len()) {
                 return Ok(finish(judged.accepted, &vector_storage, &payload_storage));
             }
             drop(payload_storage);

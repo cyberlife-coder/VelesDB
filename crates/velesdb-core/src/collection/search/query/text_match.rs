@@ -8,7 +8,6 @@
 //! guard.
 
 use std::borrow::Cow;
-use std::sync::Arc;
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -17,21 +16,21 @@ use crate::velesql::{Condition, InCondition, MatchClause, MatchCondition, Value}
 
 /// One collection's hits for each text query a binding has read, so each
 /// is read from the text index once, however many leaves ask for it
-/// ([`Collection::text_match_membership`]). Shared, so a leaf's `IN` list
-/// copies them once.
+/// ([`Collection::text_match_membership`]). Every leaf's `IN` list owns its
+/// values: the first leaf of a query takes the hits read and the cache keeps
+/// one copy of them, each later leaf copies that one.
 #[derive(Debug, Default)]
-pub(crate) struct TextHits(Vec<(String, Arc<[Value]>)>);
+pub(crate) struct TextHits(Vec<(String, Vec<Value>)>);
 
 impl TextHits {
     /// The hits of `query`, read through `ids` the first time it is asked.
     fn of(&mut self, query: &str, ids: impl FnOnce() -> Vec<u64>) -> Vec<Value> {
         if let Some((_, hits)) = self.0.iter().find(|(read, _)| read == query) {
-            return hits.to_vec();
+            return hits.clone();
         }
-        let hits: Arc<[Value]> = ids().into_iter().map(Value::from).collect();
-        let values = hits.to_vec();
-        self.0.push((query.to_string(), hits));
-        values
+        let hits: Vec<Value> = ids().into_iter().map(Value::from).collect();
+        self.0.push((query.to_string(), hits.clone()));
+        hits
     }
 }
 

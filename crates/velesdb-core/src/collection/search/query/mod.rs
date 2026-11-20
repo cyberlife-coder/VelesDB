@@ -160,6 +160,9 @@ impl Collection {
         if query.compound.is_none() {
             return self.execute_query_with_client(query, params, "default");
         }
+        // The compound's own rules (an aggregation is no operand, `V019`)
+        // before its operands run, each validated as the SELECT it is.
+        crate::velesql::QueryValidator::validate(query)?;
         // Compound semantics are velesql's (`velesql::execute_compound`),
         // shared with the `Database` executor and WASM; each operand runs here.
         let higher_is_better = self.storage.config.read().metric.higher_is_better();

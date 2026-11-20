@@ -105,7 +105,11 @@ impl Database {
         let resolved = crate::velesql::text_match::map_text_matches(condition, &mut |leaf| {
             let mut leaf = leaf.clone();
             if sides.side_of(&leaf)? == JoinSides::BASE {
-                leaf.column = unqualified(&leaf.column).to_string();
+                if let Some(column) =
+                    crate::velesql::base_column(&leaf.column, sides.name(JoinSides::BASE))
+                {
+                    leaf.column = column.to_string();
+                }
             }
             Ok::<_, crate::Error>(crate::velesql::Condition::Match(leaf))
         })?;
@@ -152,8 +156,7 @@ impl<'s> JoinSides<'s> {
         select: &'s crate::velesql::SelectStatement,
         joins: &'s [crate::velesql::JoinClause],
     ) -> Self {
-        let base =
-            crate::velesql::side_alias(select.from_alias.first().map(String::as_str), &select.from);
+        let base = crate::velesql::base_side(select);
         let joined = joins
             .iter()
             .map(|join| crate::velesql::side_alias(join.alias.as_deref(), &join.table));
@@ -189,9 +192,4 @@ impl<'s> JoinSides<'s> {
                 ))
             })
     }
-}
-
-/// `column` without its qualifier.
-fn unqualified(column: &str) -> &str {
-    column.split_once('.').map_or(column, |(_, column)| column)
 }

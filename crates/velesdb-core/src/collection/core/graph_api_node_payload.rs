@@ -110,9 +110,9 @@ impl Collection {
     /// Writes a batch holding each id once under one barrier — with an empty
     /// payload for each id of `create_if_absent` that stores no node
     /// ([`Self::write_node_payloads`]) — and brings every payload-derived
-    /// index in line with what storage then holds: the label and range
-    /// indexes under the storage guard, then the secondary indexes, as the
-    /// vector upsert maintains them. The size moves by the nodes it created
+    /// index in line with what storage then holds: the secondary, label and
+    /// range indexes under the storage guard, as every write maintains them
+    /// ([`Self::index_payload_writes`]). The size moves by the nodes it created
     /// ([`Self::write_payloads_beside_vectors`], which hands over the vector
     /// store a graph asks "is this id a node" of). Returns the ids of
     /// `create_if_absent` it created.
@@ -136,8 +136,7 @@ impl Collection {
             .collect();
         // LOCK ORDER: as `write_payloads_beside_vectors` (on a graph that
         // may change its nodes, node_locks(1c) first), then
-        // payload_storage(3) → label_index(7), released →
-        // graph_range_indexes(7).
+        // payload_storage(3) → as `index_payload_writes`.
         let written = self.write_payloads_beside_vectors(
             self.row_universe(),
             &touched,
@@ -163,13 +162,6 @@ impl Collection {
             Some(read_back) => read_back.iter().map(Option::as_ref).collect(),
         };
 
-        // The secondary indexes follow the stored payloads too, after the
-        // guard is released as on every other write path. A node written
-        // after `CREATE INDEX` used to be missing from the index, so an
-        // indexed SELECT skipped it while a scan found it.
-        for ((&node_id, &new), old) in ids.iter().zip(&held).zip(&old_payloads) {
-            self.update_secondary_indexes_on_upsert(node_id, old.as_ref(), new);
-        }
         let effects = match stored {
             Ok(()) => {
                 let writes: Vec<(u64, Option<&Value>)> = ids.iter().copied().zip(held).collect();
@@ -182,8 +174,8 @@ impl Collection {
     }
 
     /// Stores `batch` — each id once — under the one barrier, and brings the
-    /// label and range indexes in line with what storage then holds, under
-    /// the guard the caller holds.
+    /// secondary, label and range indexes in line with what storage then
+    /// holds, under the guard the caller holds ([`Self::index_payload_writes`]).
     ///
     /// `payload_storage` is held across the whole batch, which the single
     /// write did not do between its store and its property indexing. The

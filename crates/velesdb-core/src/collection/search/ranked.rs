@@ -22,9 +22,9 @@
 //! admitting each until it has `k` or the candidates run out — the filtered
 //! top `k` is exact, however far below the best a matching row ranks.
 //!
-//! The walk offers at most [`WALK_BATCH`] candidates under one hold of the
-//! guards, then releases them and takes them again: a writer waits for one
-//! batch, never for the whole walk, however few candidates the admission
+//! The walk offers at most [`WALK_BATCH`] fresh candidates under one hold of
+//! the guards, then releases them and takes them again: a writer waits for
+//! one batch, never for the whole walk, however few candidates the admission
 //! takes. What it returns is the exact top `k` of the candidates the index
 //! scored, admitted by one state of the stores — the one the hold that
 //! finishes the walk reads. Every store and delete records the ids it wrote
@@ -34,13 +34,21 @@
 //! by the prefilter bitmap, which described the stores before them, is
 //! offered again in rank order — every other refusal still holds — and the
 //! candidates an earlier hold kept are judged again under the hold that
-//! finishes, so a row a write or time changed since is dropped. A hold's work is its batch plus the ids written since
-//! the last one, whatever the writes. Only when more ids were written
-//! between two holds than the logs keep can the walk not tell what changed:
-//! it starts over from the best candidate, and after a bounded number of
-//! such restarts ([`RESTARTS`]) the next pass offers every candidate it
-//! needs under one hold, so even floods of writes let the walk finish — at
-//! the price, then, of a writer waiting for that pass. The candidates
+//! finishes, so a row a write or time changed since is dropped — and
+//! replaced under that same hold. The first hold reads the writes since the
+//! revision read before the prefilter bitmap was built, which describes the
+//! stores at that revision or later (every write updates the secondary
+//! indexes under its payload write guard), so a write landing between the
+//! bitmap and the first hold is offered again too. A hold's work is its
+//! batch plus the candidates written since the last one and those they
+//! displace, whatever the writes. Only when more ids were written between
+//! two holds than the logs keep can the walk not tell what changed: it
+//! starts over from the best candidate. A restart, and a hold whose finish
+//! a drop made fail, set the walk back; after a bounded number of setbacks
+//! ([`RESTARTS`]) the next pass offers every candidate it needs under one
+//! hold, so neither floods of writes nor a writer that keeps changing the
+//! rows the walk kept stop it from finishing — at the price, then, of a
+//! writer waiting for that pass. The candidates
 //! themselves — the index's scores — are read before the walk, from an
 //! index that follows the stores (BM25 is changed once a write's guards are
 //! released).
@@ -127,12 +135,14 @@ fn comparisons() -> u64 {
 /// (module doc). A walk hands back the candidates it refused
 /// ([`Ranked::refuse`]), and those a prefilter set aside stay here, so a
 /// write that changes one of them puts it back in the walk
-/// ([`Ranked::reconsider`]).
+/// ([`Ranked::reconsider`]) — a write since the revision of the stores the
+/// prefilter described (`judged_at`), the walk's first hold included.
 #[derive(Debug, Default)]
 pub(crate) struct Ranked {
     heap: BinaryHeap<Candidate>,
     refused: FxHashMap<u64, Candidate>,
     set_aside: FxHashMap<u64, Candidate>,
+    judged_at: Option<Revision>,
 }
 
 impl Ranked {
@@ -186,7 +196,15 @@ impl Ranked {
             heap: BinaryHeap::from(walked),
             refused: FxHashMap::default(),
             set_aside,
+            judged_at: None,
         }
+    }
+
+    /// These candidates, those set aside judged by a prefilter that
+    /// described the stores at `revision` or later.
+    fn judged_at(mut self, revision: Revision) -> Self {
+        self.judged_at = Some(revision);
+        self
     }
 
     /// The best candidate left, without handing it out.
@@ -212,14 +230,14 @@ impl Ranked {
     }
 
     /// A write changed `id`: a candidate refused or set aside for it is
-    /// handed out again, in rank order.
-    fn reconsider(&mut self, id: u64) {
-        if let Some(candidate) = self.refused.remove(&id) {
-            self.heap.push(candidate);
-        }
-        if let Some(candidate) = self.set_aside.remove(&id) {
-            self.heap.push(candidate);
-        }
+    /// handed out again, in rank order; whether one was.
+    fn reconsider(&mut self, id: u64) -> bool {
+        let back = self
+            .refused
+            .remove(&id)
+            .or_else(|| self.set_aside.remove(&id));
+        back.inspect(|&candidate| self.heap.push(candidate))
+            .is_some()
     }
 
     /// Puts back every candidate refused and every one set aside, so the
@@ -249,10 +267,12 @@ impl Iterator for Ranked {
 /// a writer waits for one batch, never for the whole walk (module doc).
 pub(crate) const WALK_BATCH: usize = 1024;
 
-/// How many times a walk starts over — more writes landed between two of its
-/// holds than the stores' change logs keep — before it offers every
-/// candidate it needs under one hold (module doc).
-const RESTARTS: u32 = 3;
+/// How many times a walk is set back — it starts over, more writes having
+/// landed between two of its holds than the stores' change logs keep, or a
+/// hold that would have finished it did not, a write since having changed a
+/// row it kept — before it offers every candidate it needs under one hold
+/// (module doc).
+pub(crate) const RESTARTS: u32 = 3;
 
 /// What the stores held under one hold of their read guards: two holds that
 /// read the same revisions read the same vectors and payloads
@@ -280,15 +300,26 @@ enum Since {
     Lost,
 }
 
-/// Where a walk stands: the revision its last hold read, and how many times
-/// it started over.
+/// Where a walk stands: the revision its last hold read — before the first
+/// hold, the one its prefilter described, if any — and how many times it
+/// was set back: it started over, or a hold that would have finished it did
+/// not ([`Step::SetBack`]).
 #[derive(Debug, Default)]
 struct Pass {
     read: Option<Revision>,
-    restarts: u32,
+    setbacks: u32,
 }
 
 impl Pass {
+    /// A walk whose candidates were judged at `revision`, if any: its first
+    /// hold reads what changed since.
+    fn since(revision: Option<Revision>) -> Self {
+        Self {
+            read: revision,
+            setbacks: 0,
+        }
+    }
+
     /// What changed in the stores since the last hold, which this hold, its
     /// guards held, now reads.
     fn observe(
@@ -314,14 +345,19 @@ impl Pass {
     /// The walk starts over: the next hold is its first again.
     fn restart(&mut self) {
         self.read = None;
-        self.restarts += 1;
+        self.setbacks += 1;
     }
 
-    /// How many candidates a hold offers at most: one [`WALK_BATCH`], or
-    /// every candidate it needs once the walk has started over [`RESTARTS`]
+    /// A hold that would have finished the walk did not ([`Step::SetBack`]).
+    fn set_back(&mut self) {
+        self.setbacks += 1;
+    }
+
+    /// How many fresh candidates a hold offers at most: one [`WALK_BATCH`],
+    /// or every candidate it needs once the walk was set back [`RESTARTS`]
     /// times.
     fn batch(&self) -> usize {
-        if self.restarts >= RESTARTS {
+        if self.setbacks >= RESTARTS {
             usize::MAX
         } else {
             WALK_BATCH
@@ -363,30 +399,25 @@ where
 }
 
 #[cfg(test)]
-thread_local! {
-    /// Run each time a walk on this thread releases the storage guards
-    /// between two batches ([`on_guard_release`]).
-    static ON_RELEASE: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Runs `hook` each time a ranked walk on this thread releases the storage
-/// guards between two batches, with no guard held, until the thread ends.
-#[cfg(test)]
-pub(crate) fn on_guard_release(hook: impl FnMut() + 'static) {
-    ON_RELEASE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-}
+pub(crate) use super::ranked_hooks::on_guard_release;
 
 /// The walk released the storage guards: a test's hook runs here.
 fn guards_released() {
     #[cfg(test)]
-    {
-        let hook = ON_RELEASE.with(|slot| slot.borrow_mut().take());
-        if let Some(mut hook) = hook {
-            hook();
-            ON_RELEASE.with(|slot| *slot.borrow_mut() = Some(hook));
-        }
-    }
+    super::ranked_hooks::guards_released();
+}
+
+/// What one hold did for a walk ([`Walk::advance`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// The walk holds its `k`, every one judged under this hold: it ends.
+    Finished,
+    /// The hold offered its budget before the walk settled.
+    Unsettled,
+    /// The walk settled, a row an earlier hold kept was dropped, and what
+    /// was left of the budget did not settle it again: a finish that failed,
+    /// counted toward [`RESTARTS`].
+    SetBack,
 }
 
 /// A candidate a walk keeps, and the hold that admitted it.
@@ -432,20 +463,46 @@ impl Walk {
 
     /// Offers the next `batch` candidates at most, best first, while they
     /// could take a place, keeping those `admits` takes and handing back the
-    /// rest.
-    fn offer(&mut self, batch: usize, admits: impl Fn(u64) -> bool) {
-        for _ in 0..batch {
+    /// rest; how many it offered.
+    fn offer(&mut self, batch: usize, admits: impl Fn(u64) -> bool) -> usize {
+        for offered in 0..batch {
             if self.settled() {
-                return;
+                return offered;
             }
             let Some(candidate) = self.ranked.pop() else {
-                return;
+                return offered;
             };
             if admits(candidate.id) {
                 self.keep(candidate);
             } else {
                 self.ranked.refuse(candidate);
             }
+        }
+        batch
+    }
+
+    /// One hold's work: offers `budget` candidates at most until the walk is
+    /// settled, then judges again what earlier holds kept
+    /// ([`Self::keeps_earlier`]). A row dropped there frees its place under
+    /// this same hold, which goes on offering what is left of its budget: a
+    /// drop never by itself costs the walk a release of the guards.
+    fn advance(&mut self, budget: usize, admits: impl Fn(u64) -> bool) -> Step {
+        let mut left = budget;
+        let mut dropped = false;
+        loop {
+            left -= self.offer(left, &admits);
+            if !self.settled() {
+                return if dropped {
+                    Step::SetBack
+                } else {
+                    Step::Unsettled
+                };
+            }
+            // A second pass finds every row kept judged under this hold.
+            if self.keeps_earlier(&admits) {
+                return Step::Finished;
+            }
+            dropped = true;
         }
     }
 
@@ -478,20 +535,24 @@ impl Walk {
 
     /// The writes since the last hold changed `ids`: a candidate refused or
     /// set aside for one goes back among those left, to be judged again when
-    /// it is offered. A kept one is judged again with every row an earlier
-    /// hold kept, under the hold that finishes ([`Self::keeps_earlier`]).
-    fn reconsider(&mut self, ids: &[u64]) {
-        for &id in ids {
-            self.ranked.reconsider(id);
-        }
+    /// it is offered; how many went back. A kept one is judged again with
+    /// every row an earlier hold kept, under the hold that finishes
+    /// ([`Self::keeps_earlier`]).
+    fn reconsider(&mut self, ids: &[u64]) -> usize {
+        ids.iter().filter(|&&id| self.ranked.reconsider(id)).count()
     }
 
     /// Judges again the candidates an earlier hold kept, under the hold that
     /// finishes: a write since, or time — a row that expired — may have
-    /// changed them. Whether every one stays.
+    /// changed them. Whether every one stays; those that do are judged under
+    /// this hold from now on.
     fn keeps_earlier(&mut self, admits: impl Fn(u64) -> bool) -> bool {
         let hold = self.hold;
-        self.drop_kept(|kept| kept.hold < hold && !admits(kept.candidate.id))
+        let stays = self.drop_kept(|kept| kept.hold < hold && !admits(kept.candidate.id));
+        for kept in &mut self.kept {
+            kept.hold = hold;
+        }
+        stays
     }
 
     /// Starts over: every candidate kept, refused or set aside back among
@@ -518,19 +579,26 @@ impl Collection {
     /// the exact top `k` of the candidates `ranked` holds, admitted by the
     /// state of the stores the hold that finishes reads.
     ///
-    /// The walk offers at most [`WALK_BATCH`] candidates under one hold of
-    /// the storage read guards, then releases and takes them again, so a
-    /// writer never waits for more than one batch. Each hold first reads
-    /// which ids the writes since the last one changed (the stores' change
-    /// logs): a candidate refused or set aside for one is offered again in
-    /// rank order — every other refusal still holds. Once the walk has `k`
-    /// and no candidate left could take a place, the candidates an earlier
-    /// hold kept are judged again (a row a write or time changed since is
-    /// dropped, and the walk goes on). When more
-    /// writes landed between two holds than the logs keep, the walk cannot
-    /// tell what changed: it releases the guards and starts over
-    /// ([`Walk::restart`]); after [`RESTARTS`] such restarts it offers every
-    /// candidate it needs under one hold, which a writer then waits for.
+    /// The walk offers at most [`WALK_BATCH`] fresh candidates under one
+    /// hold of the storage read guards, then releases and takes them again,
+    /// so a writer never waits for more than one batch. Each hold first
+    /// reads which ids the writes since the last one changed (the stores'
+    /// change logs; the first hold, since the revision a prefilter
+    /// described): a candidate refused or set aside for one is offered again
+    /// in rank order, on top of the batch — every other refusal still holds.
+    /// Once the walk has `k` and no candidate left could take a place, the
+    /// candidates an earlier hold kept are judged again; a row a write or
+    /// time changed since is dropped, and the same hold goes on offering
+    /// ([`Walk::advance`]). When more writes landed between two holds than
+    /// the logs keep, the walk cannot tell what changed: it releases the
+    /// guards and starts over ([`Walk::restart`]). A restart, and a hold
+    /// whose finish a drop made fail ([`Step::SetBack`]), set the walk back;
+    /// after [`RESTARTS`] setbacks it offers every candidate it needs under
+    /// one hold, which a writer then waits for. So the walk always ends: past
+    /// the candidates writes put back and the rows they displace, which a
+    /// hold's budget pays for on top of its batch, every hold that does not
+    /// end it offers candidates no hold offered before — finitely many — or
+    /// sets it back, a bounded number of times.
     ///
     /// LOCK ORDER: vector_storage(2) → payload_storage(3), both read, per
     /// batch.
@@ -544,8 +612,8 @@ impl Collection {
         >,
         finish: impl FnOnce(Vec<(u64, f32)>, &MmapStorage, &LogPayloadStorage, u64) -> T,
     ) -> T {
+        let mut pass = Pass::since(ranked.judged_at);
         let mut walk = Walk::new(ranked, k);
-        let mut pass = Pass::default();
         loop {
             let vector_storage = self.storage.vector_storage.read();
             let payload_storage = self.storage.payload_storage.read();
@@ -560,12 +628,18 @@ impl Collection {
             let now = now_unix_secs();
             let admits = |id| admission.admits(id, &vector_storage, &payload_storage, now);
             walk.hold += 1;
-            walk.reconsider(&changed);
-            walk.offer(pass.batch(), admits);
+            // A candidate a write put back, and the kept one it may
+            // displace, cost the hold no fresh candidate of its batch.
+            let back = walk.reconsider(&changed);
+            let budget = pass.batch().saturating_add(back.saturating_mul(2));
             // Judged again even when the candidates ran out: what `finish`
             // gets passed under the guards it holds.
-            if walk.settled() && walk.keeps_earlier(admits) {
-                return finish(walk.into_rows(), &vector_storage, &payload_storage, now);
+            match walk.advance(budget, admits) {
+                Step::Finished => {
+                    return finish(walk.into_rows(), &vector_storage, &payload_storage, now);
+                }
+                Step::SetBack => pass.set_back(),
+                Step::Unsettled => {}
             }
             drop(payload_storage);
             drop(vector_storage);
@@ -627,23 +701,47 @@ impl Collection {
     /// ([`Collection::build_prefilter_bitmap`]): a superset of the rows the
     /// filter matches when it is built, among the ids a bitmap can hold (an
     /// id past `u32::MAX` stays a candidate). The filter itself still judges
-    /// every candidate the walk offers, and a walk that starts over because
-    /// a write changed the stores offers the set-aside ones too: the bitmap
-    /// described the stores before that write.
+    /// every candidate the walk offers.
     ///
-    /// LOCK ORDER: secondary_indexes(6), alone, released before the walk
-    /// takes any storage guard.
+    /// The bitmap describes the stores at the revision read just before it
+    /// is built, or later: every write updates the secondary indexes under
+    /// the payload write guard (`Collection::index_payload_writes`), so a
+    /// write the revision counts is in them. The walk's first hold offers
+    /// again every set-aside candidate a write since that revision changed
+    /// ([`Ranked::judged_at`]) — a write landing between the bitmap and the
+    /// first hold included — and starts over when it cannot tell.
+    ///
+    /// LOCK ORDER: vector_storage(2) → payload_storage(3), both read, for
+    /// the revision, released; then secondary_indexes(6), alone, released
+    /// before the walk takes any storage guard.
     pub(crate) fn ranked_within_prefilter(
         &self,
         scored: Vec<(u64, f32)>,
         filter: Option<&crate::filter::Filter>,
     ) -> Ranked {
-        match filter.and_then(|filter| self.build_prefilter_bitmap(filter)) {
+        let Some(filter) = filter else {
+            return Ranked::new(scored);
+        };
+        let revision = self.storage_revision();
+        let bitmap = self.build_prefilter_bitmap(filter);
+        #[cfg(test)]
+        super::ranked_hooks::prefilter_built();
+        match bitmap {
             Some(bitmap) => Ranked::keeping(scored, |id| {
                 u32::try_from(id).map_or(true, |id| bitmap.contains(id))
-            }),
+            })
+            .judged_at(revision),
             None => Ranked::new(scored),
         }
+    }
+
+    /// The revision of the stores now.
+    ///
+    /// LOCK ORDER: vector_storage(2) → payload_storage(3), both read.
+    fn storage_revision(&self) -> Revision {
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        Revision::of(&vector_storage, &payload_storage)
     }
 }
 

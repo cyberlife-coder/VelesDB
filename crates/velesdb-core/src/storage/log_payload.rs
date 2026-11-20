@@ -23,7 +23,7 @@
 //! Snapshot format and I/O are handled by the [`super::snapshot`] module.
 
 use super::log_payload_io::{
-    compute_delete_crc, flush_wal, wal_end, write_store_record, CRC_DELETE_MARKER,
+    append_record, compute_delete_crc, flush_wal, wal_end, write_store_record, CRC_DELETE_MARKER,
 };
 use super::snapshot;
 use super::traits::PayloadStorage;
@@ -465,7 +465,6 @@ impl LogPayloadStorage {
         if entries.is_empty() {
             return Ok(());
         }
-        self.changes.record(entries.iter().map(|&(id, _)| id));
 
         {
             let mut wal = self.wal.write();
@@ -473,7 +472,8 @@ impl LogPayloadStorage {
             let mut offset = self.write_offset.write();
             let mut record_buf = Vec::with_capacity(256);
 
-            for &(id, payload) in entries {
+            let mut appended = 0;
+            let written = entries.iter().try_for_each(|&(id, payload)| {
                 write_store_record(
                     &mut wal,
                     id,
@@ -482,7 +482,14 @@ impl LogPayloadStorage {
                     &mut index,
                     &mut record_buf,
                 )?;
-            }
+                appended += 1;
+                Ok::<_, io::Error>(())
+            });
+            // The records appended changed the store, whether or not a later
+            // one failed: a failed append left the WAL as it was.
+            self.changes
+                .record(entries[..appended].iter().map(|&(id, _)| id));
+            written?;
 
             if fsync {
                 Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
@@ -545,7 +552,6 @@ impl LogPayloadStorage {
         if live.is_empty() {
             return Ok(());
         }
-        self.changes.record(live.iter().copied());
 
         // Scoped block: all lock guards are released before the auto-snapshot
         // check, which itself acquires locks (see `create_snapshot`).
@@ -560,7 +566,10 @@ impl LogPayloadStorage {
                 records.extend_from_slice(&id.to_le_bytes());
                 records.extend_from_slice(&compute_delete_crc(id).to_le_bytes());
             }
-            wal.write_all(&records)?;
+            append_record(&mut wal, &records, &mut offset)?;
+            // Appended, the tombstones may change the store, whatever the sync
+            // does; a failed append left the WAL as it was.
+            self.changes.record(live.iter().copied());
 
             // ONE sync for the whole batch (resync offset on failure).
             Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
@@ -578,7 +587,6 @@ impl LogPayloadStorage {
 
 impl PayloadStorage for LogPayloadStorage {
     fn store(&mut self, id: u64, payload: &serde_json::Value) -> io::Result<()> {
-        self.changes.record([id]);
         // Scoped block: lock guards released before auto-snapshot (which acquires locks).
         {
             let mut wal = self.wal.write();
@@ -594,6 +602,9 @@ impl PayloadStorage for LogPayloadStorage {
                 &mut index,
                 &mut record_buf,
             )?;
+            // Appended, the record changed the store, whatever the sync does;
+            // a failed append left the WAL as it was.
+            self.changes.record([id]);
 
             Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;
         }
@@ -655,7 +666,6 @@ impl PayloadStorage for LogPayloadStorage {
         if !self.index.read().contains_key(&id) {
             return Ok(());
         }
-        self.changes.record([id]);
 
         let crc = compute_delete_crc(id);
 
@@ -672,7 +682,8 @@ impl PayloadStorage for LogPayloadStorage {
             record[0] = CRC_DELETE_MARKER;
             record[1..9].copy_from_slice(&id.to_le_bytes());
             record[9..13].copy_from_slice(&crc.to_le_bytes());
-            wal.write_all(&record)?;
+            append_record(&mut wal, &record, &mut offset)?;
+            self.changes.record([id]);
 
             // Sync WAL according to durability mode (resync offset on failure).
             Self::sync_wal_or_resync(&mut wal, self.durability, &mut offset)?;

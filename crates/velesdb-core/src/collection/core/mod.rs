@@ -79,7 +79,7 @@ mod ttl_read_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod vector_rows_tests;
 #[cfg(test)]
-mod write_hooks;
+pub(crate) mod write_hooks;
 
 pub use crate::validation::{MAX_DIMENSION, MIN_DIMENSION};
 pub use index_management::IndexInfo;

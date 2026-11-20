@@ -57,6 +57,8 @@ mod idx_persistence_tests;
 #[cfg(test)]
 mod log_payload_tests;
 #[cfg(test)]
+mod log_payload_torn_tests;
+#[cfg(test)]
 mod loom_tests;
 #[cfg(test)]
 mod metrics_tests;

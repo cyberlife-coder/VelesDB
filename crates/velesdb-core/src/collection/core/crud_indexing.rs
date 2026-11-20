@@ -1,4 +1,4 @@
-//! Label, sparse-vector, and deferred-indexing helpers for CRUD operations.
+//! Payload-index, sparse-vector, and deferred-indexing helpers for CRUD operations.
 //!
 //! Extracted from `crud.rs` to reduce NLOC.
 
@@ -36,7 +36,8 @@ impl Collection {
         }
     }
 
-    /// Applies a batch of payload writes to the label and range indexes.
+    /// Applies a batch of payload writes to the indexes derived from the
+    /// payloads: the secondary indexes, then the label and range indexes.
     ///
     /// `writes` is each write's `(id, payload stored)` in batch order, `None`
     /// for a write that deleted the payload; `old_payloads` is positional, the
@@ -44,9 +45,16 @@ impl Collection {
     /// repeat (what `collect_old_payloads` returns). A repeated id resolves to
     /// its previous occurrence, so the batch indexes what storage ends with.
     ///
-    /// Callers hold `payload_storage` (3) across the write and this call, so
-    /// no other writer can store a newer payload for these ids in between and
-    /// leave the indexes describing one storage no longer has.
+    /// Callers hold `payload_storage` (3) for writing across the write and
+    /// this call, so no other writer can store a newer payload for these ids
+    /// in between and leave the indexes describing one storage no longer
+    /// has — and a reader that read the payload store's revision under its
+    /// read guard finds every write that revision counts in the indexes: what
+    /// a filtered ranked walk's prefilter bitmap relies on
+    /// (`Collection::ranked_within_prefilter`).
+    ///
+    /// LOCK ORDER: under payload_storage(3): secondary_indexes(6), released;
+    /// label_index(7), released; graph_range_indexes(7).
     pub(super) fn index_payload_writes<'a, I>(&self, writes: I, old_payloads: &'a [Option<Value>])
     where
         I: Iterator<Item = (u64, Option<&'a Value>)> + Clone,
@@ -54,19 +62,28 @@ impl Collection {
         let labelled =
             |payload: Option<&Value>| payload.is_some_and(|v| v.get("_labels").is_some());
         // An update that drops every label still has entries to remove, so the
-        // old payloads decide this too. Unlabelled batches (every plain vector
-        // upsert) allocate nothing and take no index lock.
-        if !writes.clone().any(|(_, new)| labelled(new))
-            && !old_payloads.iter().any(|old| labelled(old.as_ref()))
-        {
+        // old payloads decide this too. Unlabelled batches without a secondary
+        // index (every plain vector upsert) allocate nothing and take no index
+        // lock but the secondary map's read.
+        let graph = writes.clone().any(|(_, new)| labelled(new))
+            || old_payloads.iter().any(|old| labelled(old.as_ref()));
+        let secondary = !self.query.secondary_indexes.read().is_empty();
+        if !graph && !secondary {
             return;
         }
         let changes = Self::payload_changes(writes, old_payloads);
-        self.apply_payload_index_changes(changes.iter().copied());
+        if secondary {
+            for &(id, old, new) in &changes {
+                self.update_secondary_indexes_on_upsert(id, old, new);
+            }
+        }
+        if graph {
+            self.apply_payload_index_changes(changes.iter().copied());
+        }
     }
 
-    /// Brings the label and range indexes in line with what `storage` holds
-    /// for `ids` after a batch write that returned an error.
+    /// Brings the secondary, label and range indexes in line with what
+    /// `storage` holds for `ids` after a batch write that returned an error.
     ///
     /// A failed batch write is not all-or-nothing: `LogPayloadStorage` makes
     /// each record readable as it writes it, so a failure mid-batch leaves the
@@ -150,9 +167,9 @@ impl Collection {
     /// storage guard: the persisted column histograms, then BM25 — the one
     /// routine every write path runs (the vector upsert, the metadata upsert,
     /// both bulk paths and the node-payload write), so a payload written by
-    /// any of them is counted and searchable alike. The label, range and
-    /// secondary indexes stay with each path, which maintains them where its
-    /// locks require.
+    /// any of them is counted and searchable alike. The secondary, label and
+    /// range indexes are not: each path maintains them under its payload
+    /// write guard ([`Self::index_payload_writes`]).
     ///
     /// `writes` is each write's `(id, payload stored)` in batch order, `None`
     /// for a write that deleted the payload; `old_payloads` is positional, the

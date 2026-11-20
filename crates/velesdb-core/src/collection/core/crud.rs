@@ -227,8 +227,9 @@ impl Collection {
     ///    each), then the BM25 change — on a vector collection all three
     ///    under the node locks of the batch's ids, so a delete of one of them
     ///    lands wholly before or after
-    /// 2. The histograms ([`Self::apply_payload_histograms`]), then per-point
-    ///    updates: secondary indexes, quantization
+    /// 2. The histograms ([`Self::apply_payload_histograms`]), then the
+    ///    per-point quantization (the secondary, label and range indexes
+    ///    follow the payloads under their write guard, in phase 1)
     /// 3. Batch HNSW insert via `bulk_index_or_defer()`
     ///
     /// # Crash Recovery
@@ -254,12 +255,14 @@ impl Collection {
                 });
                 Ok((old_payloads, text_changed))
             })?;
+        #[cfg(test)]
+        super::write_hooks::after_row_write();
 
         // Phase 2 (no lock held): the histograms describe the stored
         // payloads, whatever BM25 did.
         self.apply_payload_histograms(&writes, &old_payloads);
         text_changed?;
-        self.per_point_updates(points, &old_payloads, storage_mode);
+        self.per_point_updates(points, storage_mode);
 
         // Phase 3: Batch HNSW insert
         let vector_refs: Vec<(u64, &[f32])> =
@@ -345,8 +348,9 @@ impl Collection {
         Ok(old_payloads)
     }
 
-    /// Writes deduped payloads, flushes the storage, and brings the label and
-    /// range indexes in line with what it stored; returns the old payloads.
+    /// Writes deduped payloads, flushes the storage, and brings the secondary,
+    /// label and range indexes in line with what it stored; returns the old
+    /// payloads.
     ///
     /// Called sequentially from [`Self::batch_store_all`] (previously via
     /// `rayon::join`, reverted — see that method's doc comment). One
@@ -365,7 +369,7 @@ impl Collection {
     /// ([`RowStores::payloads`]).
     ///
     /// LOCK ORDER: as [`Self::write_payload_store`]: payload_storage(3)
-    /// → label_index(7), released → graph_range_indexes(7).
+    /// → as [`Self::index_payload_writes`].
     fn write_and_flush_payloads(
         &self,
         stores: &RowStores<'_>,
@@ -496,78 +500,21 @@ impl Collection {
         })
     }
 
-    /// Returns `true` when the per-point loop can be skipped entirely.
-    ///
-    /// Issue #425: For the common case (`StorageMode::Full`, no secondary
-    /// indexes), the loop does zero useful work. Skipping avoids PQ cache
-    /// guard acquisition, `seen_payloads` HashMap allocation, and the
-    /// per-point loop.
-    fn can_skip_phase2(&self, storage_mode: StorageMode) -> bool {
-        // PQ is the only mode with per-upsert quantization caching; every
-        // other mode (Full, RaBitQ, SQ8, Binary) does none here. Secondary
-        // indexes require per-point old/new payload diffing.
-        !matches!(storage_mode, StorageMode::ProductQuantization)
-            && self.query.secondary_indexes.read().is_empty()
-    }
-
-    /// Phase 2: Per-point updates that don't need storage write locks.
-    ///
-    /// Tracks the effective "old payload" per ID to handle within-batch
-    /// duplicates correctly: when id=5 appears twice, the second occurrence
-    /// sees the first occurrence's payload as its "old" (not the pre-batch
-    /// original), ensuring secondary indexes stay consistent.
-    ///
-    /// Issue #425: Fast-path skips the entire loop when no secondary
-    /// processing is needed (see `can_skip_phase2`).
-    ///
-    /// Issue #486: For SQ8/Binary modes with rayon, quantization runs in
-    /// parallel before the main loop, avoiding the per-point lock overhead.
-    fn per_point_updates(
-        &self,
-        points: &[Point],
-        old_payloads: &[Option<serde_json::Value>],
-        storage_mode: StorageMode,
-    ) {
-        // Issue #425: Fast-path — skip the loop entirely when no secondary
-        // processing is needed. Avoids lock acquisition, HashMap allocation,
-        // and the per-point loop for the common StorageMode::Full case.
-        if self.can_skip_phase2(storage_mode) {
+    /// Phase 2: the per-point work that needs no storage write lock — the PQ
+    /// code of each point, in product-quantization mode only, the one mode
+    /// with per-upsert quantization work. Its quantizer carries shared
+    /// lazy-training state, so points run sequentially under one cache
+    /// guard. The secondary, label and range indexes are not phase-2 work:
+    /// `write_and_flush_payloads` updates them under the payload lock; nor
+    /// are BM25 and the histograms, which [`Self::apply_payload_effects`]
+    /// updates for the batch.
+    fn per_point_updates(&self, points: &[Point], storage_mode: StorageMode) {
+        if !matches!(storage_mode, StorageMode::ProductQuantization) {
             return;
         }
-
-        // PQ is the only mode with per-upsert quantization work; its quantizer
-        // carries shared lazy-training state, so points run sequentially under
-        // one cache guard.
         let mut pq_guard = super::crud_helpers::pq_cache_guard(self, storage_mode);
-
-        self.per_point_sequential_updates(points, old_payloads, &mut pq_guard);
-    }
-
-    /// Runs the sequential per-point loop for secondary indexes and (when
-    /// not pre-computed) quantization. The label and range indexes are not
-    /// phase-2 work: `write_and_flush_payloads` updates them under the
-    /// payload lock; nor are BM25 and the histograms, which
-    /// [`Self::apply_payload_effects`] updates for the batch.
-    ///
-    /// Extracted from `per_point_updates` to keep each function under 50 NLOC.
-    fn per_point_sequential_updates(
-        &self,
-        points: &[Point],
-        old_payloads: &[Option<serde_json::Value>],
-        pq_guard: &mut Option<super::crud_helpers::PqCacheGuard<'_>>,
-    ) {
-        let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> =
-            HashMap::with_capacity(points.len());
-        for (point, pre_batch_old) in points.iter().zip(old_payloads) {
-            let effective_old =
-                Self::resolve_effective_old(&seen_payloads, point.id, pre_batch_old.as_ref());
-            Self::maybe_quantize(self, point, pq_guard);
-            self.update_secondary_indexes_on_upsert(
-                point.id,
-                effective_old,
-                point.payload.as_ref(),
-            );
-            seen_payloads.insert(point.id, point.payload.as_ref());
+        for point in points {
+            Self::maybe_quantize(self, point, &mut pq_guard);
         }
     }
 
@@ -652,14 +599,16 @@ impl Collection {
     }
 
     /// Stores the payloads of a batch of the rows of the vector collection
-    /// `name` and brings the label and range indexes in line with them;
-    /// returns each point's pre-batch payload (`collect_old_payloads`), for
-    /// the histograms. A point without a payload deletes the stored one. The
-    /// whole batch is refused, before anything is written, when one id
-    /// stores no vector ([`Self::write_payloads_of_vector_rows`]).
+    /// `name` and brings the secondary, label and range indexes in line with
+    /// them; returns each point's pre-batch payload (`collect_old_payloads`),
+    /// for the histograms. A point without a payload deletes the stored one.
+    /// The whole batch is refused, before anything is written, when one id
+    /// stores no vector ([`Self::write_payloads_of_vector_rows`]). A failed
+    /// write leaves the indexes describing what storage then holds
+    /// ([`Self::index_payloads_after_failed_write`]).
     ///
-    /// LOCK ORDER: node_locks(1c) → payload_storage(3) → label_index(7),
-    /// released → graph_range_indexes(7); the payload flush runs under
+    /// LOCK ORDER: node_locks(1c) → payload_storage(3) → as
+    /// [`Self::index_payload_writes`]; the payload flush runs under
     /// `payload_storage`.
     fn store_metadata_rows(
         &self,
@@ -668,83 +617,25 @@ impl Collection {
     ) -> Result<Vec<Option<serde_json::Value>>> {
         let ids: Vec<u64> = points.iter().map(|p| p.id).collect();
         self.write_payloads_of_vector_rows(name, &ids, |payload_storage| {
-            let mut label_idx = self.graph.label_index.write();
-            // Collect old payloads for histogram decrements before they are
-            // overwritten. Bug #46: use collect_old_payloads to deduplicate by
-            // ID — only the first occurrence retrieves the pre-batch value;
-            // duplicates get None so the old value is decremented exactly once.
-            let old_payloads_for_hist = Self::collect_old_payloads(points, payload_storage);
-            let effective_olds =
-                self.apply_metadata_point_writes(points, payload_storage, &mut label_idx)?;
-            // label_index(7) released before graph_range_indexes(7), its rank-mate.
-            drop(label_idx);
-            self.apply_range_index_changes(
-                points
-                    .iter()
-                    .zip(&effective_olds)
-                    .map(|(point, old)| (point.id, old.as_ref(), point.payload.as_ref())),
+            // Bug #46: only the first occurrence of an id reads its pre-batch
+            // payload; a repeat gets `None`, so the histograms decrement it
+            // once and the indexes resolve it to the batch's own previous
+            // occurrence (`payload_changes`).
+            let old_payloads = Self::collect_old_payloads(points, payload_storage);
+            // Last-writer-wins deduped, under the single `flush()` barrier.
+            let dedup_map = Self::build_dedup_map(points);
+            let written = Self::write_deduped_payloads(points, payload_storage, &dedup_map)
+                .and_then(|()| payload_storage.flush().map_err(Into::into));
+            if let Err(error) = written {
+                self.index_payloads_after_failed_write(payload_storage, &ids, &old_payloads);
+                return Err(error);
+            }
+            self.index_payload_writes(
+                points.iter().map(|p| (p.id, p.payload.as_ref())),
+                &old_payloads,
             );
-            payload_storage.flush()?;
-            Ok(old_payloads_for_hist)
+            Ok(old_payloads)
         })
-    }
-
-    /// Applies the per-point payload store/delete, secondary-index and
-    /// label-index updates for [`Self::store_metadata_rows`].
-    ///
-    /// Extracted from [`Self::upsert_metadata`] so each function stays within
-    /// the complexity budget. Both write guards are passed in by the caller,
-    /// which holds them across the whole batch in lock order (3 → 7).
-    ///
-    /// Returns the effective old payload of each point, in order, for the
-    /// caller's graph range index update once `label_idx` is released.
-    fn apply_metadata_point_writes(
-        &self,
-        points: &[Point],
-        payload_storage: &mut LogPayloadStorage,
-        label_idx: &mut crate::collection::graph::LabelIndex,
-    ) -> Result<Vec<Option<serde_json::Value>>> {
-        // Pass 1: resolve the old payload each occurrence would have seen in
-        // the sequential loop. Intra-batch duplicates observe the previous
-        // occurrence's payload (via `seen`), not the pre-batch value, exactly
-        // as the per-point store-then-retrieve interleaving behaved.
-        let mut seen: HashMap<u64, Option<serde_json::Value>> =
-            HashMap::with_capacity(points.len());
-        let mut effective_olds: Vec<Option<serde_json::Value>> = Vec::with_capacity(points.len());
-        for point in points {
-            let old_payload = match seen.get(&point.id) {
-                Some(prev) => prev.clone(),
-                None => payload_storage.retrieve(point.id).ok().flatten(),
-            };
-            effective_olds.push(old_payload);
-            seen.insert(point.id, point.payload.clone());
-        }
-
-        // Pass 2: payload writes, last-writer-wins deduped, buffered under
-        // the caller's single `flush()` barrier — the per-point `store` +
-        // `delete` calls each carried their own fsync (#1797 shape) for the
-        // same end state and the same durability point (return of
-        // `upsert_metadata`).
-        let dedup_map = Self::build_dedup_map(points);
-        Self::write_deduped_payloads(points, payload_storage, &dedup_map)?;
-
-        // Pass 3: in-memory index maintenance, per occurrence, in order.
-        for (point, old_payload) in points.iter().zip(&effective_olds) {
-            self.update_secondary_indexes_on_upsert(
-                point.id,
-                old_payload.as_ref(),
-                point.payload.as_ref(),
-            );
-
-            // Maintain label index for _labels-bearing payloads.
-            if let Some(ref old) = old_payload {
-                label_idx.remove_from_payload(point.id, old);
-            }
-            if let Some(ref payload) = point.payload {
-                label_idx.index_from_payload(point.id, payload);
-            }
-        }
-        Ok(effective_olds)
     }
 }
 
