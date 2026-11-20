@@ -518,6 +518,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Core: the query-cache collision counter test holds under a parallel run**
+  (core, tests, 2026-11-20).
+  `test_query_cache_forced_hash_collision_feeds_the_collision_counter`
+  asserted an exact delta on `velesdb_cache_collision_fallback_total`, a
+  process-wide counter that
+  `test_query_cache_collision_safe_with_forced_hash_collision` also bumps with
+  the same forced hasher, so a parallel run read 2 instead of 1 (58 failures
+  in 300 runs at 16 threads). `QueryCache`'s collision branch now also feeds,
+  in test builds, a per-cache counter; the test asserts that counter exactly
+  and only checks that the global metric advanced (0 failures in 300 runs, 0
+  in 200 under CPU load).
+
 - **Core: LIKE ranking scores the exact Jaccard; the fingerprint estimate is
   unbiased** (core, 2026-11-20). `TrigramIndex::search_like_ranked` scored
   candidates with the fingerprint estimate, although a candidate holds every
