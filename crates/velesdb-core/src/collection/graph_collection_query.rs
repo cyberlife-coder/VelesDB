@@ -72,16 +72,20 @@ impl GraphCollection {
         Ok(results)
     }
 
-    /// Executes a MATCH query with vector similarity scoring.
+    /// Executes a MATCH query with vector similarity scoring: a row is kept
+    /// when its score is on `similarity_threshold`'s side under the
+    /// collection's metric (at least it for a similarity, at most it for a
+    /// distance); `None` keeps every scored row.
     ///
     /// # Errors
     ///
-    /// Returns an error on dimension mismatch or execution failure.
+    /// Returns an error on a non-finite threshold, dimension mismatch or
+    /// execution failure.
     pub fn execute_match_with_similarity(
         &self,
         match_clause: &crate::velesql::MatchClause,
         query_vector: &[f32],
-        similarity_threshold: f32,
+        similarity_threshold: Option<f32>,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
         let mut results = self.inner.execute_match_with_similarity(

@@ -61,6 +61,8 @@ mod match_metrics_tests;
 mod match_order_by_validation_parity_tests;
 #[cfg(test)]
 mod match_row_bound_tests;
+#[cfg(test)]
+mod match_row_universe_tests;
 mod metadata_query;
 mod multi_vector;
 #[cfg(test)]
@@ -80,12 +82,16 @@ pub mod pushdown;
 #[cfg(test)]
 mod pushdown_tests;
 mod query_pipeline;
+pub(crate) mod row_universe;
 #[cfg(test)]
 mod scan_cap_observability_tests;
 mod select_dispatch;
 mod similarity_filter;
 mod similarity_scan;
 mod sparse_dispatch;
+pub(crate) mod text_match;
+#[cfg(test)]
+mod text_match_tests;
 mod validation;
 pub(crate) mod vector_group_by;
 mod where_eval;
@@ -154,6 +160,9 @@ impl Collection {
         if query.compound.is_none() {
             return self.execute_query_with_client(query, params, "default");
         }
+        // The compound's own rules (an aggregation is no operand, `V019`)
+        // before its operands run, each validated as the SELECT it is.
+        crate::velesql::QueryValidator::validate(query)?;
         // Compound semantics are velesql's (`velesql::execute_compound`),
         // shared with the `Database` executor and WASM; each operand runs here.
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
@@ -222,15 +231,33 @@ impl Collection {
             return Ok((results, None));
         }
 
-        // Resolve scalar WHERE parameters once so every downstream conversion
-        // to a payload Filter sees bound values; a missing parameter errors
-        // here instead of silently degrading to NULL.
-        let resolved_query = Self::resolve_query_where_params(query, params)?;
+        let resolved_query = self.bind_select(query, params)?;
         let query = resolved_query.as_ref().unwrap_or(query);
 
         // Phase 2-3: SELECT extraction, early-return, dispatch, and finalization.
         let results = self.execute_select_pipeline(query, params, &ctx)?;
         Ok((results, ctx.executed_filter_strategy()))
+    }
+
+    /// The statement a SELECT runs, checked once before any row is read: a
+    /// query vector this collection cannot score fails it here, whatever
+    /// plan, operator or row set would follow; its WHERE's shape is validated
+    /// as written — the one validation, which extraction relies on
+    /// ([`Self::validate_similarity_query_structure`]); then its scalar
+    /// parameters are resolved, so every downstream conversion to a payload
+    /// Filter sees bound values and a missing parameter errors here instead
+    /// of silently degrading to NULL, and its text MATCH leaves are bound.
+    /// `None` when there is no WHERE to bind.
+    fn bind_select(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Option<crate::velesql::Query>> {
+        self.check_select_query_vectors(&query.select, params)?;
+        if let Some(cond) = query.select.where_clause.as_ref() {
+            Self::validate_similarity_query_structure(cond)?;
+        }
+        self.bind_query_where(query, params, text_match::WhereReader::Select)
     }
 
     /// Runs the full SELECT pipeline: extraction, early-return check, dispatch,
@@ -315,8 +342,7 @@ impl Collection {
         // groups on the payload fields their aggregates landed in.
         let stmt = if args.is_vgb {
             results = self.apply_vector_group_by(stmt, &results, params)?;
-            stmt.order_by_aggregates_as_fields()
-                .map_err(|e| crate::error::Error::Query(e.to_string()))?
+            stmt.order_by_aggregates_as_fields()?
         } else {
             std::borrow::Cow::Borrowed(stmt)
         };
@@ -353,11 +379,7 @@ impl Collection {
         sql: &str,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        let query = self
-            .query
-            .query_cache
-            .parse(sql)
-            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        let query = self.query.query_cache.parse(sql)?;
         self.execute_query(&query, params)
     }
 

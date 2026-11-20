@@ -90,6 +90,9 @@ export {
   InvalidCollectionNameError,
   SnapshotBuildFailedError,
   IncompatibleSchemaVersionError,
+  AccessDeniedError,
+  QueryParameterError,
+  VELESQL_PARAMETER_ERROR,
   parseVelesError,
   VELES_ERROR_CODES,
 } from './errors';

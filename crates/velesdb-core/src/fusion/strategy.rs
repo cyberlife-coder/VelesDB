@@ -788,8 +788,7 @@ pub fn sort_fused_results(fused: &mut [(u64, f32)]) {
 /// `0.0`. The two are one score, so they must tie and leave the order to the
 /// id; `total_cmp` alone ranks `0.0` above `-0.0`, which a mixed-direction
 /// fusion produces side by side (a zero distance negated next to a zero
-/// similarity). Shared by [`sort_fused_results`] and the hybrid search's
-/// top-k heap, so a cut by `k` and a full sort agree.
+/// similarity). The order [`sort_fused_results`] sorts by.
 pub(crate) fn fused_score_cmp(a: f32, b: f32) -> std::cmp::Ordering {
     // `==` folds `-0.0` into `0.0` and leaves every other value bit-exact.
     // Arithmetic would not: `x + 0.0` quiets a signalling NaN and gives a NaN

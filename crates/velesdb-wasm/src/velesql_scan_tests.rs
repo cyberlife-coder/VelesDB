@@ -52,7 +52,10 @@ fn scan_all_refuses_over_cardinality_limit() {
             .extend(0..=crate::guardrails::MAX_INTERMEDIATE_CARDINALITY as u64);
     }
     let err = scan_all(&db, "big", None, &Params::new()).unwrap_err();
-    assert!(err.contains("VELES-027"), "missing guardrail code: {err}");
+    assert!(
+        err.to_string().contains("VELES-027"),
+        "missing guardrail code: {err}"
+    );
 }
 
 #[test]

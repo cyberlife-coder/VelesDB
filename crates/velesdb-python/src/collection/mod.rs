@@ -5,6 +5,8 @@
 //! - `query` — VelesQL query/match/explain methods
 //! - `mutation` — upsert, delete, flush, stream_insert
 //! - `index` — index CRUD (property, range)
+//! - `view` — construction from core's `AnyCollection`, and the reads core
+//!   dispatches by kind
 //!
 //! Note: Multiple `#[pymethods]` impl blocks across sub-modules are intentional.
 //! PyO3 >= 0.21 supports this natively via inventory-based method registration.
@@ -17,6 +19,7 @@ pub(crate) mod query;
 pub(crate) mod scroll;
 mod search;
 pub(crate) mod search_options;
+mod view;
 
 // The search quality parser, shared with `velesdb.validate_search_quality`.
 pub(crate) use search::parse_search_quality;
@@ -26,8 +29,9 @@ use std::sync::Arc;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use velesdb_core::{
-    Condition, Database as CoreDatabase, Filter, FusionStrategy as CoreFusionStrategy, GatedRead,
-    QueryOperationKind, SearchResult, VectorCollection as CoreCollection,
+    AnyCollection, Condition, Database as CoreDatabase, Filter,
+    FusionStrategy as CoreFusionStrategy, GatedRead, QueryOperationKind, SearchResult,
+    VectorCollection as CoreCollection,
 };
 
 /// Default fusion strategy when none is specified by the caller.
@@ -182,6 +186,11 @@ impl CollectionKind {
 pub struct Collection {
     /// Core collection (cheap to clone — all fields are `Arc`-wrapped internally).
     pub(crate) inner: CoreCollection,
+    /// The same collection as core dispatches it by kind: its size,
+    /// emptiness and point reads come from here, so a graph counts and reads
+    /// every stored node as core defines them (`AnyCollection::point_count`,
+    /// `is_empty`, `get`), not only the nodes its vector view holds.
+    any: AnyCollection,
     /// Shared handle to the owning database. `inner` is a *detached* collection
     /// leaf with no observer reference, so every search is routed back through
     /// this handle's control-plane read gate (`gated_search` / `authorize_read`)
@@ -197,23 +206,12 @@ pub struct Collection {
 impl Collection {
     /// Create a wrapper for a vector collection.
     pub fn new(inner: CoreCollection, db: Arc<CoreDatabase>, name: String) -> Self {
-        Self::new_with_kind(inner, db, name, CollectionKind::Vector)
-    }
-
-    /// Create a wrapper for a collection whose real kind may not be vector
-    /// (graph/metadata), so vector-only methods fail loud rather than returning
-    /// empty results (F2.2).
-    pub(crate) fn new_with_kind(
-        inner: CoreCollection,
-        db: Arc<CoreDatabase>,
-        name: String,
-        kind: CollectionKind,
-    ) -> Self {
         Self {
+            any: AnyCollection::Vector(inner.clone()),
             inner,
             db,
             name,
-            kind,
+            kind: CollectionKind::Vector,
         }
     }
 
@@ -299,9 +297,9 @@ impl Collection {
     }
 
     /// Runs a sparse-only or hybrid dense+sparse search after the read gate has
-    /// authorized it. Hybrid dense+sparse pre-filters both fusion branches via
-    /// core's `_filtered` leaf (caller filter ANDed with any observer scope);
-    /// sparse-only has no filtered leaf, so a scope filter still post-filters.
+    /// authorized it. Both run core's filtered leaf with the caller filter
+    /// ANDed with any observer scope: hybrid dense+sparse pre-filters both
+    /// fusion branches, sparse-only admits its hits by it.
     fn run_sparse_gated(
         &self,
         query: &SparseQuery<'_>,
@@ -309,7 +307,6 @@ impl Collection {
         scope_filter: Option<&Filter>,
     ) -> PyResult<Vec<SearchResult>> {
         use crate::collection_helpers::core_err;
-        use pyo3::exceptions::PyValueError;
 
         let SparseQuery {
             dense,
@@ -336,21 +333,18 @@ impl Collection {
                     )
                     .map_err(core_err)
             }
-            // Sparse-only: a caller filter was never supported here (preserved
-            // error). A governance scope filter still applies via post-filter,
-            // so a scoped observer narrows rather than being silently bypassed.
+            // Sparse-only: the caller filter ANDed with any observer scope
+            // admits the hits inside core's walk, so the best `top_k` matching
+            // hits come back however far below the best they rank.
             None => {
-                if caller_filter.is_some() {
-                    return Err(PyValueError::new_err(
-                        "Filter is not supported with sparse-only search; provide 'vector' for hybrid search",
-                    ));
+                let combined = and_scope(caller_filter.cloned(), scope_filter.cloned());
+                match combined {
+                    Some(filter) => self
+                        .inner
+                        .sparse_search_with_filter(sparse, top_k, index_name, &filter),
+                    None => self.inner.sparse_search(sparse, top_k, index_name),
                 }
-                let mut results = self
-                    .inner
-                    .sparse_search(sparse, top_k, index_name)
-                    .map_err(core_err)?;
-                retain_by_filters(&mut results, None, scope_filter);
-                Ok(results)
+                .map_err(core_err)
             }
         }
     }
@@ -494,7 +488,7 @@ impl Collection {
             PyString::intern(py, "storage_mode"),
             config.storage_mode.canonical_name(),
         )?;
-        dict.set_item(PyString::intern(py, "point_count"), config.point_count)?;
+        dict.set_item(PyString::intern(py, "point_count"), self.size())?;
         dict.set_item(PyString::intern(py, "metadata_only"), config.metadata_only)?;
         let auto_reindex = config
             .auto_reindex_config
@@ -522,7 +516,7 @@ impl Collection {
     fn is_empty(&self) -> PyResult<bool> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "is_empty")?;
-        Ok(self.inner.is_empty())
+        Ok(self.any.is_empty())
     }
 
     /// Get the vector dimension of this collection.
@@ -560,7 +554,8 @@ impl Collection {
         Ok(self.inner.storage_mode().canonical_name().to_owned())
     }
 
-    /// Get the number of points in the collection.
+    /// Get the number of points in the collection; for the view of a graph
+    /// collection, its every stored node, with an embedding or not.
     ///
     /// The count is a collection read, so the read gate decides it: a denial
     /// raises, and a scope — there are no rows to narrow — refuses the call
@@ -575,11 +570,11 @@ impl Collection {
     fn __len__(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "__len__")?;
-        Ok(self.inner.len())
+        Ok(self.size())
     }
 
-    /// Get the number of points in the collection, through the same read
-    /// gate as ``__len__``.
+    /// Get the number of points in the collection (a graph's every stored
+    /// node), through the same read gate as ``__len__``.
     ///
     /// Returns:
     ///     int: The point count
@@ -590,7 +585,7 @@ impl Collection {
     fn count(&self) -> PyResult<usize> {
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "count")?;
-        Ok(self.inner.len())
+        Ok(self.size())
     }
 
     /// Get all point IDs in the collection.
@@ -635,7 +630,7 @@ impl Collection {
         py.detach(|| self.inner.rebuild_index().map_err(core_err))
     }
 
-    /// All point IDs in the collection (vector and payload indexes union),
+    /// All point IDs in the collection — its rows, as ``all_ids`` lists them —
     /// ascending. Used by training paths that need every stored vector.
     ///
     /// Raises:
@@ -848,7 +843,12 @@ impl Collection {
         // observer callback is Python code that needs it anyway.
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "__contains__")?;
-        Ok(self.inner.get(&[id]).into_iter().next().flatten().is_some())
+        Ok(self
+            .read_points(&[id])
+            .into_iter()
+            .next()
+            .flatten()
+            .is_some())
     }
 
     /// Graceful shutdown: full durability flush including ``vectors.idx``.

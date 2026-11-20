@@ -8,14 +8,46 @@
 use velesdb_core::velesql::Condition;
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::velesql_value::Params;
 use crate::velesql_where;
 
-/// A single scanned row owned by the caller: `(id, score, payload_json)`.
+/// A single scanned row owned by the caller.
 ///
 /// Owning the payload (rather than borrowing) lets the caller drop the
 /// store lock before running the aggregation / sort pipeline.
-pub(crate) type OwnedScanRow = (u64, f32, Option<serde_json::Value>);
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct OwnedScanRow {
+    pub(crate) id: u64,
+    pub(crate) score: f32,
+    /// Whether `score` is the row's vector similarity — a `NEAR`'s, or the
+    /// first `similarity()` leaf's when it could score the row. Such a row
+    /// carries its score as its `vector_score` component, as core tags it
+    /// (`tag_vector_component_scores`); a metadata match, a fused or a sparse
+    /// score carries no component breakdown.
+    pub(crate) vector_scored: bool,
+    pub(crate) payload: Option<serde_json::Value>,
+}
+
+impl OwnedScanRow {
+    /// A row whose score is not a vector similarity.
+    pub(crate) fn new(id: u64, score: f32, payload: Option<serde_json::Value>) -> Self {
+        Self {
+            id,
+            score,
+            vector_scored: false,
+            payload,
+        }
+    }
+
+    /// A row whose score is its vector similarity.
+    pub(crate) fn vector_scored(id: u64, score: f32, payload: Option<serde_json::Value>) -> Self {
+        Self {
+            vector_scored: true,
+            ..Self::new(id, score, payload)
+        }
+    }
+}
 
 /// Scans a metadata-only or vector collection end-to-end, applying the
 /// optional WHERE clause. Returns rows in insertion order with `score` set
@@ -25,7 +57,7 @@ pub(crate) fn scan_all(
     from: &str,
     where_clause: Option<&Condition>,
     params: &Params,
-) -> Result<Vec<OwnedScanRow>, String> {
+) -> Result<Vec<OwnedScanRow>, ExecError> {
     let store = db.get_shared_store(from)?;
     let borrowed = store.borrow();
     // Capacity is bounded by the guardrail refusal, never by the raw store
@@ -45,7 +77,7 @@ pub(crate) fn scan_all(
         if filter.as_ref().is_some_and(|f| !f.matches(id, payload)) {
             continue;
         }
-        out.push((id, 0.0, payload.cloned()));
+        out.push(OwnedScanRow::new(id, 0.0, payload.cloned()));
         crate::guardrails::check_cardinality(out.len())?;
     }
     Ok(out)

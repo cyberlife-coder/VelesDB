@@ -11,6 +11,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
+import { NodeNotFoundError, QueryParameterError } from '../src/errors';
 import { VelesDBError } from '../src/types';
 
 class MockVectorStore {
@@ -33,7 +34,7 @@ class MockWasmDatabase {
   static last: MockWasmDatabase | null = null;
   edges: StoredEdge[] = [];
   matchRows: unknown[] = [];
-  matchError: string | null = null;
+  matchError: unknown = null;
   attachStore = vi.fn();
   delete_collection = vi.fn();
   executeQuery = vi.fn();
@@ -42,7 +43,10 @@ class MockWasmDatabase {
     // As the binding reads it: ids arrive as strings or numbers and leave as
     // decimal strings, as REST's EdgeResponse.
     const sent = JSON.parse(json) as { id?: string; source: string; target: string; label: string; properties?: unknown };
-    if (sent.target === '99') { throw "Node 99 not found in collection 'docs'"; }
+    // The binding throws core's NodeNotFound: an Error whose `code` is VELES-022.
+    if (sent.target === '99') {
+      throw Object.assign(new Error("[VELES-022] Node with ID '99' not found"), { code: 'VELES-022' });
+    }
     const edge: StoredEdge = { ...sent, id: sent.id ?? '7' };
     this.edges.push(edge);
     return edge.id;
@@ -181,10 +185,14 @@ describe('WASM backend graph operations through the WasmDatabase edge API', () =
     expect(await backend.getEdgeCount('docs')).toBe(0);
   });
 
-  it('when an endpoint is not a node, then addEdge is NOT_FOUND, as on REST', async () => {
+  it("when an endpoint is not a node, then addEdge is core's NodeNotFoundError (VELES-022), as on REST", async () => {
     const backend = await backendWithDocs();
 
-    await expectCode(backend.addEdge('docs', { id: 10, source: 1, target: 99, label: 'CITES' }), 'NOT_FOUND');
+    const error = await backend
+      .addEdge('docs', { id: 10, source: 1, target: 99, label: 'CITES' })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NodeNotFoundError);
+    expect(error).toMatchObject({ code: 'VELES-022' });
   });
 
   it('when the collection does not exist, then every graph operation is NOT_FOUND', async () => {
@@ -226,6 +234,21 @@ describe('WASM backend matchQuery through executeMatch', () => {
     MockWasmDatabase.last!.matchError = 'executeMatch runs MATCH statements only; use executeQuery';
 
     await expectCode(backend.matchQuery('docs', 'SELECT * FROM docs'), 'BAD_REQUEST');
+  });
+
+  it('when the binding refuses an unbound $param, then matchQuery raises QueryParameterError with core\'s VELES-038', async () => {
+    const backend = await backendWithDocs();
+    MockWasmDatabase.last!.matchError = Object.assign(
+      new Error('[VELES-038] Query parameter $v: not bound'),
+      { code: 'VELES-038' }
+    );
+
+    const error = await backend
+      .matchQuery('docs', 'MATCH (a)-[:CITES]->(b) WHERE similarity(b.vector, $v) > 0.5 RETURN b')
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(QueryParameterError);
+    expect(error).toMatchObject({ code: 'VELES-038', message: '[VELES-038] Query parameter $v: not bound' });
   });
 
   it('when a query vector and threshold are passed, then they reach executeMatch and rows keep their score', async () => {

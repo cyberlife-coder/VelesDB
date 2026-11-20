@@ -11,6 +11,7 @@ from typing import Any, List, Optional
 from llama_index.core.schema import TextNode
 from llama_index.core.vector_stores.types import VectorStoreQueryResult
 
+from velesdb_common.aggregates import is_aggregate_row
 from velesdb_common.graph_ops_base import GraphOpsBase
 from llamaindex_velesdb.security import validate_query
 
@@ -43,11 +44,22 @@ class GraphOpsMixin(GraphOpsBase):
 
         Raises:
             SecurityError: If query fails validation.
+            ValueError: If the query is an aggregate (``COUNT``, ``SUM``,
+                ``AVG``, ``MIN``, ``MAX`` or ``GROUP BY``): its rows are
+                values, not nodes with a similarity. Read them with
+                ``store.client.execute_query(query_str, params)``, which
+                returns them as dicts.
         """
         validate_query(query_str)
         if self._collection is None:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
         results = self._collection.query(query_str, params)
+        if any(is_aggregate_row(result) for result in results):
+            raise ValueError(
+                "velesql() returns nodes, and an aggregate (COUNT, SUM, AVG, MIN, "
+                "MAX or GROUP BY) returns rows of values: read them with "
+                "store.client.execute_query(query_str, params)"
+            )
         return self._build_query_result(
             results, higher_is_better=self._metric_higher_is_better()
         )

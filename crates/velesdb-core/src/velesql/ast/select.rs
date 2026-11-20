@@ -250,6 +250,28 @@ impl SelectOrderBy {
         }
     }
 
+    /// Orders two rows' scores under this item: two scores as
+    /// [`Self::directed`] orders them, and a `None` score — a row the item
+    /// cannot score, such as a row without a vector under
+    /// `similarity(vector, $q)` — as a null value, which every ORDER BY sorts
+    /// after every value under `ASC` and before every value under `DESC`
+    /// ([`compare_scores`](crate::velesql::compare_scores); `VELESQL_SPEC.md`,
+    /// "Value order and NULLs"), whatever the metric.
+    #[must_use]
+    pub fn directed_score(
+        &self,
+        a: Option<f32>,
+        b: Option<f32>,
+        higher_is_better: bool,
+    ) -> std::cmp::Ordering {
+        match (a, b) {
+            (Some(a), Some(b)) => self.directed(a.total_cmp(&b), higher_is_better),
+            // A null follows the keyword, not the metric.
+            _ if self.descending => crate::velesql::compare_scores(a, b).reverse(),
+            _ => crate::velesql::compare_scores(a, b),
+        }
+    }
+
     /// Returns a `(column_name, direction)` pair for display.
     #[must_use]
     pub fn to_display_pair(&self) -> (String, String) {

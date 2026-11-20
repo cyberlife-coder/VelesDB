@@ -4,7 +4,7 @@
  * Covers the pure helpers in `src/backends/wasm-helpers.ts`:
  * normalizeIdString, canonicalPayloadKey, canonicalPayloadKeyFromResultId,
  * toPointId, exactGraphId, sparseVectorToArrays, buildWasmContext,
- * buildCollectionInfo.
+ * buildCollectionInfo, describeWasmThrow, wasmThrowToError.
  * These are all pure/synchronous — no fetch or WASM module instantiation
  * required.
  */
@@ -20,7 +20,9 @@ import {
   buildWasmContext,
   buildCollectionInfo,
   describeWasmThrow,
+  wasmThrowToError,
 } from '../src/backends/wasm-helpers';
+import { CollectionNotFoundError, QueryParameterError } from '../src/errors';
 import { VelesDBError } from '../src/types';
 import type {
   CollectionData,
@@ -342,3 +344,32 @@ describe('describeWasmThrow is total (#2282)', () => {
   });
 });
 
+
+describe('wasmThrowToError', () => {
+  it('maps an Error carrying a core code to its typed class, message kept whole', () => {
+    const thrown = Object.assign(new Error('[VELES-038] Query parameter $v: not bound'), { code: 'VELES-038' });
+    const error = wasmThrowToError(thrown);
+    expect(error).toBeInstanceOf(QueryParameterError);
+    expect(error).toMatchObject({ code: 'VELES-038', message: '[VELES-038] Query parameter $v: not bound' });
+  });
+
+  it("maps the binding's missing collection (DROP COLLECTION, FLUSH) to CollectionNotFoundError", () => {
+    const thrown = Object.assign(new Error("[VELES-002] Collection 'ghost' not found"), { code: 'VELES-002' });
+    const error = wasmThrowToError(thrown);
+    expect(error).toBeInstanceOf(CollectionNotFoundError);
+    expect(error).toMatchObject({ code: 'VELES-002', message: "[VELES-002] Collection 'ghost' not found" });
+  });
+
+  it.each([
+    ['a bare string', 'Unknown column at position 7'],
+    ['an Error without a code', new Error('boom')],
+    ['an Error whose code is not a VELES code', Object.assign(new Error('x'), { code: 'VELES-38' })],
+    ['null', null],
+  ])('maps %s to a VelesDBError with the fallback code', (_what, thrown) => {
+    const error = wasmThrowToError(thrown);
+    expect(error).not.toBeInstanceOf(QueryParameterError);
+    expect(error).toBeInstanceOf(VelesDBError);
+    expect(error.code).toBe('BAD_REQUEST');
+    expect(wasmThrowToError(thrown, 'NOT_FOUND').code).toBe('NOT_FOUND');
+  });
+});

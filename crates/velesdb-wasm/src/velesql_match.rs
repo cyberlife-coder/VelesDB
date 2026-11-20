@@ -12,12 +12,15 @@ use velesdb_core::velesql::{
 };
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::graph_store::{WasmEdge, WasmGraphNode, WasmGraphStore};
 use crate::velesql_match_nodes::MatchNodes;
 use crate::velesql_match_orderby::{
     order_and_limit, BoundElement, MatchBinding, MatchCandidate, MatchOrder,
 };
-use crate::velesql_match_score::{where_holds, where_score, BoundNode, MatchScoring};
+use crate::velesql_match_score::{
+    check_query_vectors, where_holds, where_score, BoundNode, MatchScoring,
+};
 use crate::velesql_match_sources::Annotations;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
@@ -38,23 +41,22 @@ pub(crate) fn match_candidates(
     query: &Query,
     params: &Params,
     scoring: Option<&MatchScoring>,
-) -> Result<Vec<MatchCandidate>, String> {
+) -> Result<Vec<MatchCandidate>, ExecError> {
     let Some(clause) = query.match_clause.as_ref() else {
-        return Err("MATCH clause missing".to_string());
+        return Err(velesdb_core::Error::Internal("MATCH clause missing".to_string()).into());
     };
     if clause.patterns.is_empty() {
         return Ok(Vec::new());
     }
     if clause.patterns.len() > 1 {
-        return Err(format!(
+        return Err(ExecError::refused(format!(
             "Multi-pattern MATCH is not yet supported in WASM ({} patterns in this query). \
              Use a single pattern or use core (persistence-enabled) for multi-pattern MATCH.",
             clause.patterns.len()
-        ));
+        )));
     }
     // Inline pattern properties take the caller's `$name` values, as in core.
-    let clause =
-        &velesdb_core::velesql::bind_match_clause(clause, params).map_err(|e| e.to_string())?;
+    let clause = &velesdb_core::velesql::bind_match_clause(clause, params)?;
     let pattern = &clause.patterns[0];
     validate_pattern(pattern)?;
     let annotations = Annotations::resolve(db, clause)?;
@@ -63,9 +65,7 @@ pub(crate) fn match_candidates(
     let graph = store.borrow();
     let points = collection.as_ref().map(|c| c.borrow());
     let nodes = MatchNodes::new(&graph, points.as_deref());
-    if let Some(scoring) = scoring {
-        scoring.validate(&nodes)?;
-    }
+    check_query_vectors(&name, &nodes, clause, params, scoring)?;
     let walk = PathWalk {
         pattern,
         where_clause: clause.where_clause.as_ref(),
@@ -123,25 +123,30 @@ fn sort_by_score(candidates: &mut [MatchCandidate], higher_is_better: bool) {
     candidates.sort_by(|a, b| rank_scores(key(a), key(b), higher_is_better));
 }
 
-/// Rejects pattern shapes this executor would otherwise misread.
-fn validate_pattern(pattern: &GraphPattern) -> Result<(), String> {
+/// Rejects pattern shapes this executor would otherwise misread. The first
+/// two are invariants of the parser, which builds no such pattern: a pattern
+/// without a node is refused with core's own error for it (its walk's
+/// `Error::Query`), one whose relationships do not link its nodes — a shape
+/// core has no rule for — is an `Error::Internal`, as the other invariants
+/// of this executor are. The third names what WASM does not run.
+fn validate_pattern(pattern: &GraphPattern) -> Result<(), ExecError> {
     if pattern.nodes.is_empty() {
-        return Err("MATCH pattern has no node".to_string());
+        return Err(velesdb_core::Error::pattern_without_node().into());
     }
     if pattern.relationships.len() + 1 != pattern.nodes.len() {
-        return Err(format!(
+        return Err(velesdb_core::Error::Internal(format!(
             "MATCH pattern with {} nodes must have {} relationships, got {}",
             pattern.nodes.len(),
             pattern.nodes.len() - 1,
             pattern.relationships.len()
-        ));
+        ))
+        .into());
     }
     if pattern.relationships.iter().any(|rel| rel.range.is_some()) {
-        return Err(
+        return Err(ExecError::refused(
             "Variable-length relationships (e.g. [*1..3]) are not yet supported in WASM. \
-             Spell the hops out, or use core (persistence-enabled)."
-                .to_string(),
-        );
+             Spell the hops out, or use core (persistence-enabled).",
+        ));
     }
     Ok(())
 }
@@ -182,7 +187,7 @@ impl PathWalk<'_> {
     /// Walks the pattern from every start node and returns its rows, in walk
     /// order. The label index narrows the start nodes; every pattern check
     /// is the full one ([`Self::node_matches`]).
-    fn walk_all(&self, nodes: &MatchNodes<'_>) -> Result<Vec<MatchCandidate>, String> {
+    fn walk_all(&self, nodes: &MatchNodes<'_>) -> Result<Vec<MatchCandidate>, ExecError> {
         let mut out = Vec::new();
         let mut path = PathState::default();
         let first_label = self.pattern.nodes[0].labels.first().map(String::as_str);
@@ -206,7 +211,7 @@ impl PathWalk<'_> {
         start: u64,
         path: &mut PathState,
         out: &mut Vec<MatchCandidate>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecError> {
         // A lone node must exist to be returned; as a path anchor an id known
         // only through its edges still starts a walk, as it always has.
         if self.pattern.nodes.len() == 1 && nodes.get(start).is_none() {
@@ -229,7 +234,7 @@ impl PathWalk<'_> {
         nodes: &MatchNodes<'_>,
         path: &mut PathState,
         out: &mut Vec<MatchCandidate>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecError> {
         let depth = path.nodes.len();
         if depth == self.pattern.nodes.len() {
             return self.emit(nodes, path, out);
@@ -308,7 +313,7 @@ impl PathWalk<'_> {
         nodes: &MatchNodes<'_>,
         path: &PathState,
         out: &mut Vec<MatchCandidate>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecError> {
         // Each bound node as WHERE, ORDER BY and RETURN read it: its labels,
         // and its properties united with the annotation its alias carries.
         let bound: Vec<(&NodePattern, u64, WasmGraphNode)> = self
@@ -362,11 +367,14 @@ impl PathWalk<'_> {
         nodes: &MatchNodes<'_>,
         path: &PathState,
         scope: &[BoundNode<'_>],
-    ) -> Result<RowScore, String> {
+    ) -> Result<RowScore, ExecError> {
         let Some(scoring) = self.scoring else {
             return where_score(self.where_clause, scope, nodes, self.params).map(RowScore::Kept);
         };
-        let last = *path.nodes.last().ok_or("MATCH row binds no node")?;
+        let last = *path
+            .nodes
+            .last()
+            .ok_or_else(|| velesdb_core::Error::Internal("MATCH row binds no node".to_string()))?;
         Ok(scoring
             .score(nodes, last)
             .map_or(RowScore::Dropped, |score| RowScore::Kept(Some(score))))
@@ -398,7 +406,7 @@ impl PathWalk<'_> {
         bound: &[(&NodePattern, u64, WasmGraphNode)],
         edges: &[BoundElement],
         scope: &[BoundNode<'_>],
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ExecError> {
         let Some(cond) = self.where_clause else {
             return Ok(true);
         };
@@ -479,8 +487,9 @@ fn edge_matches(edge: &WasmEdge, rel: &RelationshipPattern) -> bool {
 }
 
 /// The collection (graph store name) a MATCH reads: the `_collection`
-/// param — how core and the server name a MATCH target, since MATCH has no
-/// `FROM` — else the default `graph` store. A node's `@collection`
+/// param, read by core's rule ([`velesdb_core::velesql::collection_param`],
+/// how core and the server name a MATCH target, since MATCH has no `FROM`),
+/// else the default `graph` store. A node's `@collection`
 /// annotation never selects it: it adds that collection's properties to the
 /// node ([`Annotations`]), as in core. The read gate and the executor both
 /// resolve the target here, so a policy is always asked about the graph
@@ -488,15 +497,11 @@ fn edge_matches(edge: &WasmEdge, rel: &RelationshipPattern) -> bool {
 ///
 /// # Errors
 ///
-/// Returns an error when `_collection` is present but not a string.
-pub(crate) fn match_target(params: &Params) -> Result<String, String> {
-    match params.get(MATCH_TARGET_PARAM) {
-        None => Ok(DEFAULT_GRAPH.to_string()),
-        Some(serde_json::Value::String(name)) => Ok(name.clone()),
-        Some(other) => Err(format!(
-            "MATCH param '{MATCH_TARGET_PARAM}' must be a collection name (string), got {other}"
-        )),
-    }
+/// Core's `QueryParameter` (VELES-038) when `_collection` is present but
+/// not a non-empty string.
+pub(crate) fn match_target(params: &Params) -> Result<String, ExecError> {
+    let named = velesdb_core::velesql::collection_param(params)?;
+    Ok(named.unwrap_or(DEFAULT_GRAPH).to_string())
 }
 
 /// Resolves the graph store a MATCH runs against (see [`match_target`]),
@@ -505,7 +510,7 @@ pub(crate) fn match_target(params: &Params) -> Result<String, String> {
 fn inferred_graph_store(
     db: &mut DatabaseInner,
     params: &Params,
-) -> Result<(String, std::rc::Rc<std::cell::RefCell<WasmGraphStore>>), String> {
+) -> Result<(String, std::rc::Rc<std::cell::RefCell<WasmGraphStore>>), ExecError> {
     let name = match_target(params)?;
     // A collection with points and no edge yet still has nodes to bind; it
     // gets an empty, unregistered graph store for this MATCH.
@@ -514,13 +519,11 @@ fn inferred_graph_store(
         None if db.contains(&name) => {
             std::rc::Rc::new(std::cell::RefCell::new(WasmGraphStore::new()))
         }
-        None => return Err(format!("Graph '{name}' is empty; no data to match")),
+        None => return Err(velesdb_core::Error::CollectionNotFound(name).into()),
     };
     Ok((name, store))
 }
 
-/// Param naming the collection a MATCH targets (core's `_collection`).
-const MATCH_TARGET_PARAM: &str = "_collection";
 /// Graph store a MATCH reads when nothing names one.
 const DEFAULT_GRAPH: &str = "graph";
 
@@ -612,7 +615,7 @@ fn build_match_row(
     bound: &[(&NodePattern, u64, WasmGraphNode)],
     edges: Vec<BoundElement>,
     score: Option<f32>,
-) -> Result<MatchCandidate, String> {
+) -> Result<MatchCandidate, ExecError> {
     let mut map = serde_json::Map::new();
     let mut nodes = Vec::with_capacity(bound.len());
     for (pattern, id, data) in bound {

@@ -423,13 +423,18 @@ pub async fn collection_sanity(
     build_sanity_response(&state, &config, &collection)
 }
 
-/// Build the JSON sanity check response body.
+/// Build the JSON sanity check response body. `point_count` is the
+/// collection's size (a graph's nodes, with an embedding or not); the
+/// checks are core's diagnostics ([`velesdb_core::AnyCollection::diagnostics`]),
+/// the very fields `/diagnostics` reports, so the two endpoints agree — a
+/// metadata collection with rows has data but is not search-ready. The
+/// hints follow search readiness.
 fn build_sanity_response(
     state: &AppState,
     config: &velesdb_core::collection::CollectionConfig,
     collection: &velesdb_core::AnyCollection,
 ) -> axum::response::Response {
-    let has_data = config.point_count > 0;
+    let diagnostics = collection.diagnostics();
     Json(serde_json::json!({
         "collection": config.name,
         "dimension": config.dimension,
@@ -437,9 +442,9 @@ fn build_sanity_response(
         "point_count": config.point_count,
         "is_empty": collection.is_empty(),
         "checks": {
-            "has_vectors": has_data,
-            "search_ready": has_data,
-            "dimension_configured": config.dimension > 0
+            "has_vectors": diagnostics.has_vectors,
+            "search_ready": diagnostics.search_ready,
+            "dimension_configured": diagnostics.dimension_configured
         },
         "diagnostics": {
             "search_requests_total": state.onboarding_metrics.search_requests_total.load(std::sync::atomic::Ordering::Relaxed),
@@ -447,18 +452,31 @@ fn build_sanity_response(
             "empty_search_results_total": state.onboarding_metrics.empty_search_results_total.load(std::sync::atomic::Ordering::Relaxed),
             "filter_parse_errors_total": state.onboarding_metrics.filter_parse_errors_total.load(std::sync::atomic::Ordering::Relaxed)
         },
-        "hints": if has_data {
-            vec![
-                "Run a search without strict filters first, then tighten filters progressively."
-            ]
-        } else {
-            vec![
-                "Insert at least one known vector before evaluating search quality.",
-                "Verify you are querying the intended collection."
-            ]
-        }
+        "hints": sanity_hints(&diagnostics)
     }))
     .into_response()
+}
+
+/// What `/sanity` suggests next, from the collection's search readiness: a
+/// search-ready one is searched, a collection without a vector dimension
+/// (metadata-only, or a graph without embeddings) is queried with VelesQL,
+/// and one with a dimension but no vector yet needs vectors first.
+fn sanity_hints(
+    diagnostics: &velesdb_core::collection::CollectionDiagnostics,
+) -> Vec<&'static str> {
+    if diagnostics.search_ready {
+        vec!["Run a search without strict filters first, then tighten filters progressively."]
+    } else if !diagnostics.dimension_configured {
+        vec![
+            "This collection has no vector dimension: query it with VelesQL instead of a vector search.",
+            "Verify you are querying the intended collection.",
+        ]
+    } else {
+        vec![
+            "Insert at least one known vector before evaluating search quality.",
+            "Verify you are querying the intended collection.",
+        ]
+    }
 }
 
 /// Delete a collection.

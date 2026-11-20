@@ -308,18 +308,31 @@ fn deny_aborts_an_aggregate_with_the_observers_error() {
     );
 }
 
-/// GIVEN an aggregate with no FROM, whose collection comes from `_collection`
-/// WHEN the observer denies that collection
-/// THEN the gate is asked about the collection actually read, and denies it.
+/// GIVEN an aggregate with no FROM (only an AST built by hand has none: the
+///       grammar requires one) and a `_collection` naming `c`
+/// WHEN it runs
+/// THEN it is refused for naming no collection: `_collection` addresses a
+///      top-level MATCH alone, so the gate is never asked about `c`.
 #[test]
-fn an_aggregate_targeted_by_the_collection_param_is_gated_on_that_collection() {
+fn an_aggregate_without_from_is_not_addressed_by_the_collection_param() {
     let (_dir, db, observer) = setup();
-    observer.deny("c", "no reads on c");
     let mut query = Parser::parse("SELECT COUNT(*) AS n FROM c").expect("test: parse");
     query.select.from.clear();
     let params = HashMap::from([("_collection".to_string(), json!("c"))]);
 
-    assert_denied_with(db.execute_aggregate(&query, &params), "no reads on c");
+    let err = db
+        .execute_aggregate(&query, &params)
+        .expect_err("test: an aggregate naming no collection is refused");
+    assert_eq!(err.code(), "VELES-010", "{err}");
+    assert!(
+        err.to_string().contains("requires a target collection"),
+        "{err}"
+    );
+    assert!(
+        !observer.asked().iter().any(|c| c == "c"),
+        "{:?}",
+        observer.asked()
+    );
 }
 
 // =========================================================================

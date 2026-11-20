@@ -113,7 +113,8 @@ pub(super) fn load_stored_ids(db: &Database, collection_name: &str) -> HashSet<u
 
 /// Removes all existing points from a collection.
 pub(super) fn clear_collection(collection: &Collection) -> Result<(), AgentMemoryError> {
-    let existing_ids = collection.all_ids();
+    // Every stored id, so nothing is left behind (`all_ids` lists rows only).
+    let existing_ids = collection.stored_ids();
     if !existing_ids.is_empty() {
         collection
             .delete(&existing_ids)

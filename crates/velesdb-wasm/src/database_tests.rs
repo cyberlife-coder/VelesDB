@@ -123,7 +123,7 @@ fn test_create_duplicate_returns_error() {
     assert!(err.is_err(), "duplicate create should fail");
     let msg = err.unwrap_err();
     assert!(
-        msg.contains("already exists"),
+        msg.to_string().contains("already exists"),
         "error should mention 'already exists', got: {msg}"
     );
 }
@@ -167,7 +167,7 @@ fn test_delete_missing_returns_error() {
     assert!(err.is_err(), "delete nonexistent should fail");
     let msg = err.unwrap_err();
     assert!(
-        msg.contains("not found"),
+        msg.to_string().contains("not found"),
         "error should mention 'not found', got: {msg}"
     );
 }
@@ -183,7 +183,7 @@ fn test_get_missing_returns_error() {
         Ok(_) => unreachable!("already asserted is_err"),
     };
     assert!(
-        msg.contains("not found"),
+        msg.to_string().contains("not found"),
         "error should mention 'not found', got: {msg}"
     );
 }

@@ -349,6 +349,29 @@ fn test_query_nonexistent_database() {
         .failure();
 }
 
+/// A query core refuses (an unbound `$name`, VELES-038) exits 5, as the
+/// exit-code table documents, through the real `query execute` path.
+#[test]
+fn test_query_execute_exits_5_on_a_query_refusal() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    fs::create_dir_all(&db_path).unwrap();
+    velesdb_cmd()
+        .args(["collection", "create-metadata"])
+        .arg(&db_path)
+        .arg("tags")
+        .assert()
+        .success();
+
+    velesdb_cmd()
+        .args(["query", "execute"])
+        .arg(&db_path)
+        .arg("DELETE FROM tags WHERE name = $nope")
+        .assert()
+        .code(5)
+        .stderr(predicate::str::contains("VELES-038"));
+}
+
 // =============================================================================
 // Query Search (MultiSearch) Command Tests
 // =============================================================================

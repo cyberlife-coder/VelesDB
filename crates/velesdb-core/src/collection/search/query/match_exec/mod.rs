@@ -22,6 +22,7 @@ mod vector_first;
 pub(in crate::collection::search::query) mod where_eval;
 mod where_similarity_score;
 
+use crate::collection::search::query::row_universe::RowUniverse;
 use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
@@ -49,12 +50,20 @@ pub(crate) use sources::MatchSources;
 /// in the reversed order is the ABBA half of a hold-and-wait cycle with
 /// the delete path.
 ///
-/// `metric` is resolved from `config` (rank 1) BEFORE either guard is
-/// acquired, so similarity evaluation never takes the rank-1 lock while
-/// ranks 2/3 are held.
+/// `metric` and `rows` are resolved from `config` (rank 1) BEFORE either
+/// guard is acquired, so similarity evaluation never takes the rank-1 lock
+/// while ranks 2/3 are held.
+///
+/// `rows` is the collection's rule of which ids are rows ([`RowUniverse`]):
+/// every node a MATCH binds, starts from or walks through is one of them,
+/// however the walk reaches it — the start-node scan, the label index, a
+/// seed, an edge ([`Self::is_row`]).
 pub(in crate::collection::search::query) struct MatchStorageGuards<'a> {
     /// Distance metric snapshot (from `config`, rank 1) taken before the guards.
     pub(in crate::collection::search::query) metric: DistanceMetric,
+    /// Which ids are the collection's rows, its nodes (from `config`, rank 1,
+    /// taken before the guards).
+    pub(in crate::collection::search::query) rows: RowUniverse,
     /// `vector_storage` read guard (rank 2).
     pub(in crate::collection::search::query) vector_guard: &'a MmapStorage,
     /// `payload_storage` read guard (rank 3).
@@ -91,11 +100,13 @@ impl<'a> MatchStorageGuards<'a> {
     /// evaluator, which reads no annotated alias.
     pub(in crate::collection::search::query) fn single(
         metric: DistanceMetric,
+        rows: RowUniverse,
         vector_guard: &'a MmapStorage,
         payload_guard: &'a LogPayloadStorage,
     ) -> Self {
         Self {
             metric,
+            rows,
             vector_guard,
             payload_guard,
             payload_memo: PayloadMemo::new(payload_guard),
@@ -107,15 +118,31 @@ impl<'a> MatchStorageGuards<'a> {
     /// alias's collection too.
     pub(in crate::collection::search::query) fn over(
         metric: DistanceMetric,
+        rows: RowUniverse,
         reads: &'a MatchReads<'_>,
     ) -> Self {
         Self {
             metric,
+            rows,
             vector_guard: &reads.vector,
             payload_guard: &reads.payload,
             payload_memo: PayloadMemo::with_annotations(&reads.payload, reads.annotations()),
             where_filters: WhereFilterMemo::default(),
         }
+    }
+}
+
+impl MatchStorageGuards<'_> {
+    /// Whether `id` is a node of the walk: a row of the collection, by the
+    /// rule every read reads its rows by ([`RowUniverse::contains`]).
+    pub(in crate::collection::search::query) fn is_row(&self, id: u64) -> bool {
+        self.rows
+            .contains(self.vector_guard, self.payload_guard, id)
+    }
+
+    /// Every node of the walk: the collection's rows, in storage order.
+    pub(in crate::collection::search::query) fn row_ids(&self) -> Vec<u64> {
+        self.rows.ids(self.vector_guard, self.payload_guard)
     }
 }
 
@@ -452,6 +479,7 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
         ctx: Option<&QueryContext>,
     ) -> Result<Vec<MatchResult>> {
+        self.check_match_query_vectors(match_clause, params, None)?;
         self.execute_match_reading(
             match_clause,
             params,
@@ -499,31 +527,42 @@ impl Collection {
         starts: StartNodes<'_>,
         order: RowOrder,
     ) -> Result<Vec<MatchResult>> {
+        // Every text MATCH of the WHERE is read as its hit set, from the text
+        // index, before any guard is taken (`bind_match_statement_text`).
+        let match_clause = &*self.bind_match_statement_text(match_clause)?;
         let bound = self.row_bound(match_clause, order, ctx);
-        // Metric snapshot (config, rank 1) BEFORE the guards. See
+        // Metric and rows snapshot (config, rank 1) BEFORE the guards. See
         // `MatchStorageGuards`.
-        let metric = self.storage.config.read().metric;
+        let (metric, rows) = {
+            let config = self.storage.config.read();
+            (config.metric, RowUniverse::of(&config))
+        };
         let reads = MatchReads::acquire(self, sources);
-        let guards = MatchStorageGuards::over(metric, &reads);
+        let guards = MatchStorageGuards::over(metric, rows, &reads);
         self.walk_match(match_clause, params, ctx, &guards, starts, bound)
     }
 
-    /// Guard-accepting MATCH execution: the body of
-    /// [`Self::execute_match_with_context`], for callers that already hold the
-    /// storage guards in decree order and must not re-acquire them.
+    /// Guard-accepting MATCH execution of a graph predicate's pattern: the
+    /// body of [`Self::execute_match_with_context`], for callers that already
+    /// hold the storage guards in decree order and must not re-acquire them
+    /// (the anchor evaluation of a graph predicate). It takes the predicate,
+    /// not a clause, so the clause it walks holds no WHERE
+    /// (`Collection::build_anchor_match_clause`), and so no text `MATCH`
+    /// either: binding one reads the text index, which a caller holding the
+    /// storage guards must not do.
     ///
     /// # Errors
     ///
     /// Returns an error if the query cannot be executed or a guard-rail is violated.
     pub(in crate::collection::search::query) fn execute_match_with_guards(
         &self,
-        match_clause: &MatchClause,
+        predicate: &crate::velesql::GraphMatchPredicate,
         params: &HashMap<String, serde_json::Value>,
-        ctx: Option<&QueryContext>,
         guards: &MatchStorageGuards<'_>,
     ) -> Result<Vec<MatchResult>> {
-        let bound = self.row_bound(match_clause, RowOrder::Clause, ctx);
-        self.walk_match(match_clause, params, ctx, guards, StartNodes::Scan, bound)
+        let match_clause = &Self::build_anchor_match_clause(predicate);
+        let bound = self.row_bound(match_clause, RowOrder::Clause, None);
+        self.walk_match(match_clause, params, None, guards, StartNodes::Scan, bound)
     }
 
     /// The walk's [`RowBound`]: the context's cardinality limit, else this

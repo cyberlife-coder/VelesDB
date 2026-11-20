@@ -58,7 +58,7 @@ fn breaker_state(col: &Collection) -> CircuitState {
 }
 
 /// A MATCH ordered by `similarity(field, $q)` with `$q` unbound passes
-/// validation and fails with VELES-010 inside the MATCH ordering step, a
+/// validation and fails with VELES-038 inside the MATCH ordering step, a
 /// recording site — and leaves the breaker closed however often it is sent.
 #[test]
 fn unbound_order_by_parameter_never_opens_the_breaker() {
@@ -74,7 +74,7 @@ fn unbound_order_by_parameter_never_opens_the_breaker() {
         let err = col
             .match_query_ordered(&clause, &HashMap::new())
             .expect_err("test: $q is not bound");
-        assert_eq!(err.code(), "VELES-010", "{err}");
+        assert_eq!(err.code(), "VELES-038", "{err}");
     }
 
     assert_eq!(breaker_state(&col), CircuitState::Closed);

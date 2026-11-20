@@ -12,6 +12,7 @@
 use velesdb_core::point::{Point, SearchResult};
 use velesdb_core::velesql::{GroupOutput, SelectStatement};
 
+use crate::exec_error::ExecError;
 use crate::velesql_result::QueryResultRow;
 
 /// Orders finished vector GROUP BY groups by the statement's ORDER BY, under
@@ -26,10 +27,10 @@ pub(crate) fn order_groups(
     stmt: &SelectStatement,
     groups: Vec<GroupOutput>,
     higher_is_better: bool,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     let stmt = stmt
         .order_by_aggregates_as_fields()
-        .map_err(|e| e.to_string())?;
+        .map_err(velesdb_core::Error::from)?;
     let mut results: Vec<SearchResult> = groups
         .into_iter()
         .map(|group| {

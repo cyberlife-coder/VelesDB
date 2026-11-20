@@ -105,8 +105,12 @@ struct Case {
 struct RejectedCase {
     id: String,
     query: String,
-    /// The validation code (`V0xx`) the refusal must carry, as `[V0xx]`.
+    /// The code the refusal must carry in brackets: a validation code
+    /// (`[V0xx]`) or core's error code (`[VELES-0xx]`).
     expected_code: String,
+    /// Bindings added to `query_params` for this case alone.
+    #[serde(default)]
+    params: serde_json::Map<String, Value>,
 }
 
 /// A vector GROUP BY (`NEAR` + GROUP BY), compared on the order of its
@@ -133,6 +137,9 @@ struct VectorGroupCase {
 #[derive(Deserialize)]
 struct DmlCase {
     statements: Vec<String>,
+    /// Bindings added to `query_params` for this case's statements.
+    #[serde(default)]
+    params: serde_json::Map<String, Value>,
     #[serde(flatten)]
     check: Case,
 }
@@ -231,6 +238,19 @@ fn seed_dataset(db: &mut DatabaseInner, ds: &Dataset) {
         let Value::Object(obj) = &point.payload else {
             panic!("test: fixture payload must be a JSON object");
         };
+        // An `id` or `vector` column is the point's own, by core's DML rule
+        // (`velesql::bind_insert_row`): no INSERT writes a payload field of
+        // that name, so such a point is seeded through the store.
+        if obj.contains_key("id") || obj.contains_key("vector") {
+            let store = db.get_shared_store(&ds.collection).expect("test: store");
+            crate::store_insert::insert_with_payload(
+                &mut store.borrow_mut(),
+                point.id,
+                &point.vector,
+                Some(point.payload.clone()),
+            );
+            continue;
+        }
         let mut columns = vec!["id".to_string(), "vector".to_string()];
         let mut values = vec![point.id.to_string(), "$v".to_string()];
         let mut bound = serde_json::Map::new();
@@ -491,8 +511,12 @@ fn test_wasm_velesql_executor_fusion_cases() {
 fn test_wasm_velesql_executor_rejected_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
-    let params = params_json(&fixture);
     for case in &fixture.rejected_cases {
+        let mut bound = fixture.query_params.clone();
+        if let Value::Object(map) = &mut bound {
+            map.extend(case.params.clone());
+        }
+        let params = serde_json::to_string(&bound).expect("test: serialize case params");
         let Err(err) = execute(&mut db, &case.query, Some(&params)) else {
             panic!(
                 "WASM accepted rejected case {}: query={:?}",
@@ -500,11 +524,21 @@ fn test_wasm_velesql_executor_rejected_cases() {
             );
         };
         assert!(
-            err.contains(&format!("[{}]", case.expected_code)),
+            err.to_string()
+                .contains(&format!("[{}]", case.expected_code)),
             "WASM refused case {} without {}: {err}",
             case.id,
             case.expected_code
         );
+        // A core code reaches JS from the error's variant, not its text.
+        if case.expected_code.starts_with("VELES-") {
+            assert_eq!(
+                err.code(),
+                Some(case.expected_code.as_str()),
+                "WASM case {} carries its code as a core error: {err}",
+                case.id
+            );
+        }
     }
 }
 
@@ -582,8 +616,12 @@ fn test_wasm_velesql_executor_vector_group_cases() {
 #[test]
 fn test_wasm_velesql_executor_dml_cases() {
     let fixture = load_fixture();
-    let params = params_json(&fixture);
     for case in &fixture.dml_cases {
+        let mut bound = fixture.query_params.clone();
+        if let Value::Object(map) = &mut bound {
+            map.extend(case.params.clone());
+        }
+        let params = serde_json::to_string(&bound).expect("test: serialize case params");
         let mut db = build_dataset(&fixture.dataset);
         for statement in &case.statements {
             execute(&mut db, statement, Some(&params)).unwrap_or_else(|e| {

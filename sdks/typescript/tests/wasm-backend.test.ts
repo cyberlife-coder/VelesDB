@@ -6,7 +6,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
-import { VelesDBError, NotFoundError, ConnectionError } from '../src/types';
+import { VelesDBError, NotFoundError, ConnectionError, VectorDocument } from '../src/types';
+import { DimensionMismatchError, VectorRequiredError } from '../src/errors';
 import { FakeSparseIndex } from './helpers/fake-sparse-index';
 
 // Mock WASM module with class-based VectorStore. Like the binding, it takes
@@ -294,16 +295,57 @@ describe('WasmBackend', () => {
 
     // A mutant of either code literal below leaves the rest of the suite
     // green (#2341): only asserting `.code` pins the promised error code
-    // against a silent rename or copy-paste drift.
-    it('tags a dimension mismatch on upsert with DIMENSION_MISMATCH', async () => {
+    // against a silent rename or copy-paste drift. The code is core's, as
+    // the REST backend relays it for the same input.
+    it('refuses a dimension mismatch on upsert with core\'s VELES-004', async () => {
       const outcome = await backend.upsert('vectors', {
         id: '1',
         vector: [1.0, 0.0],
       }).catch((err) => err);
 
-      expect(outcome).toBeInstanceOf(VelesDBError);
-      expect((outcome as VelesDBError).code).toBe('DIMENSION_MISMATCH');
+      expect(outcome).toBeInstanceOf(DimensionMismatchError);
+      expect((outcome as VelesDBError).code).toBe('VELES-004');
       expect((outcome as VelesDBError).message).toMatch(/expected 4, got 2/);
+    });
+
+    it('refuses an empty vector on upsert with core\'s VELES-016, as REST does', async () => {
+      const outcome = await backend.upsert('vectors', { id: '1', vector: [] }).catch((err) => err);
+
+      expect(outcome).toBeInstanceOf(VectorRequiredError);
+      expect((outcome as VelesDBError).code).toBe('VELES-016');
+      expect((outcome as VelesDBError).message).toContain("collection 'vectors'");
+    });
+
+    it('refuses an empty vector on upsertBatch with VELES-016 before any insert', async () => {
+      const collections = (backend as any).collections;
+      const store = collections.get('vectors').store as MockVectorStore;
+
+      const outcome = await backend.upsertBatch('vectors', [
+        { id: '1', vector: [1.0, 0.0, 0.0, 0.0] },
+        { id: '2', vector: [] },
+      ]).catch((err) => err);
+
+      expect(outcome).toBeInstanceOf(VectorRequiredError);
+      expect(store.insert_batch).not.toHaveBeenCalled();
+      expect(store.insert_with_payload).not.toHaveBeenCalled();
+    });
+
+    it('refuses an omitted vector on upsert and upsertBatch with VELES-016, never a TypeError', async () => {
+      const collections = (backend as any).collections;
+      const store = collections.get('vectors').store as MockVectorStore;
+      const missing = { id: '2' } as unknown as VectorDocument;
+
+      const single = await backend.upsert('vectors', missing).catch((err) => err);
+      const batch = await backend.upsertBatch('vectors', [
+        { id: '1', vector: [1.0, 0.0, 0.0, 0.0] },
+        missing,
+      ]).catch((err) => err);
+
+      for (const outcome of [single, batch]) {
+        expect(outcome).toBeInstanceOf(VectorRequiredError);
+        expect((outcome as VelesDBError).code).toBe('VELES-016');
+      }
+      expect(store.insert_batch).not.toHaveBeenCalled();
     });
 
     it('should throw on non-existent collection', async () => {
@@ -372,15 +414,15 @@ describe('WasmBackend', () => {
       ['first', [{ id: '1', vector: [1.0, 0.0] }, { id: '2', vector: [0.0, 1.0, 0.0, 0.0] }], '1'],
       ['last', [{ id: '1', vector: [1.0, 0.0, 0.0, 0.0] }, { id: '2', vector: [0.0, 1.0] }], '2'],
     ])(
-      'tags a dimension mismatch on upsertBatch with DIMENSION_MISMATCH when the bad vector is %s, refusing before any insert',
+      'refuses a dimension mismatch on upsertBatch with VELES-004 when the bad vector is %s, refusing before any insert',
       async (_position, docs, badDocId) => {
         const collections = (backend as any).collections;
         const store = collections.get('vectors').store as MockVectorStore;
 
         const outcome = await backend.upsertBatch('vectors', docs).catch((err) => err);
 
-        expect(outcome).toBeInstanceOf(VelesDBError);
-        expect((outcome as VelesDBError).code).toBe('DIMENSION_MISMATCH');
+        expect(outcome).toBeInstanceOf(DimensionMismatchError);
+        expect((outcome as VelesDBError).code).toBe('VELES-004');
         expect((outcome as VelesDBError).message).toBe(
           `Vector dimension mismatch for doc ${badDocId}: expected 4, got 2`,
         );

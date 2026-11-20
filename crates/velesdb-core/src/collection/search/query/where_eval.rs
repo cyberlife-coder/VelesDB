@@ -23,9 +23,10 @@ pub(crate) struct GraphMatchEvalCache {
     /// and lets us build each leaf `Filter` exactly once instead of per row.
     filters: Vec<(usize, crate::filter::Filter)>,
     /// Resolved query vectors for `similarity()` leaves, keyed the same way
-    /// (leaf pointer): `resolve_vector` cloned the literal (or re-parsed the
-    /// `$param` JSON) for EVERY candidate row — a 3 KB alloc+copy per row at
-    /// 768 dims. The vector is invariant across the evaluation.
+    /// (leaf pointer): binding it (`velesql::bind_vector`) cloned the
+    /// literal (or re-read the `$param` JSON) for EVERY candidate row — a
+    /// 3 KB alloc+copy per row at 768 dims. The vector is invariant across
+    /// the evaluation.
     similarity_vectors: Vec<(usize, Vec<f32>)>,
     /// Metric snapshot for similarity comparisons: `evaluate_similarity` took
     /// the `config` read lock TWICE per row (once inside
@@ -82,19 +83,26 @@ impl GraphMatchEvalCache {
         if let Some(idx) = self.similarity_vectors.iter().position(|(k, _)| *k == key) {
             return Ok(&self.similarity_vectors[idx].1);
         }
-        let resolved = Collection::resolve_vector(&sim.vector, params)?;
+        let resolved = crate::velesql::bind_vector(&sim.vector, params)?;
         self.similarity_vectors.push((key, resolved));
         let idx = self.similarity_vectors.len() - 1;
         Ok(&self.similarity_vectors[idx].1)
     }
 
     /// Returns the collection's metric, reading the `config` lock at most
-    /// once per evaluation (the per-row path read it twice per candidate).
-    fn metric_snapshot(&mut self, collection: &Collection) -> crate::distance::DistanceMetric {
+    /// once per evaluation (the per-row path read it twice per candidate) —
+    /// and never under the caller's storage guards: `guards`, when the
+    /// caller holds them, carry the metric it read before taking them
+    /// (config ranks first in the lock order).
+    fn metric_snapshot(
+        &mut self,
+        collection: &Collection,
+        guards: Option<&MatchStorageGuards<'_>>,
+    ) -> crate::distance::DistanceMetric {
         if let Some(metric) = self.metric {
             return metric;
         }
-        let metric = collection.storage.config.read().metric;
+        let metric = guards.map_or_else(|| collection.storage.config.read().metric, |g| g.metric);
         self.metric = Some(metric);
         metric
     }
@@ -285,7 +293,13 @@ impl Collection {
                 .map(|known| !known)),
             Condition::Group(inner) => self.eval_condition(inner, ctx, graph_cache),
             Condition::Similarity(sim) => self.evaluate_similarity(sim, ctx, graph_cache),
-            Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) => Ok(Some(true)),
+            // A `MATCH` left in a bound WHERE is its ranking, which reads TRUE
+            // as a `NEAR` does: a text search returned only its hits, a hybrid
+            // fuses it as a boost. Every other one was bound to its hit set
+            // (`Collection::bind_where_text_matches`).
+            Condition::VectorSearch(_) | Condition::VectorFusedSearch(_) | Condition::Match(_) => {
+                Ok(Some(true))
+            }
             // #904: reuse the per-query cached `Filter` for this metadata leaf
             // instead of rebuilding it (and cloning the AST) on every row.
             other => {
@@ -367,17 +381,16 @@ impl Collection {
         // vector (was one alloc+copy or `$param` re-parse per row) and the
         // metric snapshot (was TWO `config` read-lock acquisitions per row —
         // one inside `compute_metric_score`, one for the direction).
-        let metric = graph_cache.metric_snapshot(self);
+        let metric = graph_cache.metric_snapshot(self, ctx.guards);
         let query_vec = graph_cache.similarity_query_vector(sim, params)?;
         // A length-mismatched vector can't be scored against `query_vec`, so
         // the predicate is UNKNOWN rather than false — fabricating a score
         // used to read as a perfect match for distance metrics like
         // Euclidean, and answering `false` would let an enclosing `NOT` admit
         // a row nothing was ever computed for.
-        if record_vector.len() != query_vec.len() || record_vector.is_empty() {
+        let Some(score) = metric.checked_calculate(&record_vector, query_vec) else {
             return Ok(None);
-        }
-        let score = metric.calculate(&record_vector, query_vec);
+        };
         Ok(Some(crate::velesql::similarity_holds(
             sim.operator,
             score,

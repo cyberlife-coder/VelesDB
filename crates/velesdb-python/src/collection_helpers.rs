@@ -65,78 +65,88 @@ use velesdb_core::{Filter, Point, SearchResult};
 /// | VELES-035  | `SnapshotBuildFailed`     | `VelesDBError`                |
 /// | VELES-036  | `IncompatibleSchemaVersion` | `VelesDBError`              |
 /// | VELES-037  | `AccessDenied`            | `PermissionError`             |
+/// | VELES-038  | `QueryParameter`          | `VelesQLParameterError` (a `ValueError`) |
 ///
-/// The wildcard arm at the bottom handles future variants added under
-/// the `#[non_exhaustive]` attribute on `velesdb_core::Error`. New
-/// variants fall through to `VelesDBError` until this mapping is
-/// updated; the unit test `test_core_err_mapping_covers_every_code`
-/// in `exceptions.rs` guards against silently adding a code without a
-/// Python mapping.
+/// The class comes from the error's code, through [`PYTHON_CLASSES`]; a
+/// code the table does not list — a future variant added under the
+/// `#[non_exhaustive]` attribute on `velesdb_core::Error` among them —
+/// raises `VelesDBError`, so `except velesdb.VelesDBError` still catches it.
+/// The message is core's, save for the lookup misses, the taken edge id and
+/// the dimension mismatch ([`python_message`]).
 pub fn core_err(e: velesdb_core::Error) -> PyErr {
+    python_class(e.code())(python_message(&e))
+}
+
+/// A Python exception class, built from its message.
+pub(crate) type PyErrClass = fn(String) -> PyErr;
+
+/// The Python class of every `VELES-XXX` code that does not raise
+/// `VelesDBError` (the mapping table on [`core_err`]). Keyed by code, so
+/// `exceptions_tests` checks every variant's class and every key against
+/// the codes core returns.
+pub(crate) const PYTHON_CLASSES: &[(&str, PyErrClass)] = &[
+    // Conflicts / lifecycle — custom VelesDB exceptions
+    ("VELES-001", |m| CollectionExistsError::new_err(m)),
+    ("VELES-002", |m| CollectionNotFoundError::new_err(m)),
+    ("VELES-019", |m| EdgeExistsError::new_err(m)),
+    ("VELES-031", |m| DatabaseLockedError::new_err(m)),
+    // Lookup misses — Python's canonical KeyError
+    ("VELES-003", |m| PyKeyError::new_err(m)),
+    ("VELES-020", |m| PyKeyError::new_err(m)),
+    ("VELES-022", |m| PyKeyError::new_err(m)),
+    // Dimension mismatch — the only numeric arg-invalid case with its own class
+    ("VELES-004", |m| DimensionMismatchError::new_err(m)),
+    // A `$name` unbound or mistyped — a `ValueError` subclass of its own
+    ("VELES-038", |m| {
+        crate::velesql::VelesQLParameterError::new_err(m)
+    }),
+    // Argument / configuration invalid — ValueError
+    ("VELES-005", |m| PyValueError::new_err(m)),
+    ("VELES-009", |m| PyValueError::new_err(m)),
+    ("VELES-010", |m| PyValueError::new_err(m)),
+    ("VELES-014", |m| PyValueError::new_err(m)),
+    ("VELES-015", |m| PyValueError::new_err(m)),
+    ("VELES-016", |m| PyValueError::new_err(m)),
+    ("VELES-017", |m| PyValueError::new_err(m)),
+    ("VELES-018", |m| PyValueError::new_err(m)),
+    ("VELES-021", |m| PyValueError::new_err(m)),
+    ("VELES-028", |m| PyValueError::new_err(m)),
+    ("VELES-032", |m| PyValueError::new_err(m)),
+    ("VELES-034", |m| PyValueError::new_err(m)),
+    // An observer turned the request down: not a malformed request.
+    ("VELES-037", |m| PyPermissionError::new_err(m)),
+    // Numeric overflow / allocation failure — specific Python builtins
+    ("VELES-023", |m| PyOverflowError::new_err(m)),
+    ("VELES-033", |m| PyMemoryError::new_err(m)),
+];
+
+/// The class `code` raises as: its [`PYTHON_CLASSES`] entry, else
+/// `VelesDBError`, the catch-all for every engine, I/O and internal error.
+fn python_class(code: &str) -> PyErrClass {
+    PYTHON_CLASSES
+        .iter()
+        .find(|&&(listed, _)| listed == code)
+        .map_or(
+            crate::exceptions::VelesDBError::new_err as PyErrClass,
+            |&(_, class)| class,
+        )
+}
+
+/// The message a Python exception carries for `e`: core's, save for the
+/// lookup misses, the taken edge id and the dimension mismatch, which read
+/// without the code prefix.
+fn python_message(e: &velesdb_core::Error) -> String {
     use velesdb_core::Error as E;
-    match &e {
-        // Conflicts / lifecycle — custom VelesDB exceptions
-        E::CollectionExists(_) => CollectionExistsError::new_err(e.to_string()),
-        E::CollectionNotFound(name) => {
-            CollectionNotFoundError::new_err(format!("Collection '{name}' not found"))
-        }
-        E::EdgeExists(id) => EdgeExistsError::new_err(format!("Edge with ID {id} already exists")),
-        E::DatabaseLocked(_) => DatabaseLockedError::new_err(e.to_string()),
-
-        // Lookup misses — Python's canonical KeyError
-        E::PointNotFound(id) => PyKeyError::new_err(format!("Point {id} not found")),
-        E::EdgeNotFound(id) => PyKeyError::new_err(format!("Edge {id} not found")),
-        E::NodeNotFound(id) => PyKeyError::new_err(format!("Node {id} not found")),
-
-        // Dimension mismatch — the only numeric arg-invalid case with its own class
+    match e {
+        E::CollectionNotFound(name) => format!("Collection '{name}' not found"),
+        E::EdgeExists(id) => format!("Edge with ID {id} already exists"),
+        E::PointNotFound(id) => format!("Point {id} not found"),
+        E::EdgeNotFound(id) => format!("Edge {id} not found"),
+        E::NodeNotFound(id) => format!("Node {id} not found"),
         E::DimensionMismatch { expected, actual } => {
-            DimensionMismatchError::new_err(format!("Expected {expected} dimensions, got {actual}"))
+            format!("Expected {expected} dimensions, got {actual}")
         }
-
-        // Argument / configuration invalid — ValueError
-        E::InvalidVector(_)
-        | E::Config(_)
-        | E::Query(_)
-        | E::VectorNotAllowed(_)
-        | E::SearchNotSupported(_)
-        | E::VectorRequired(_)
-        | E::SchemaValidation(_)
-        | E::GraphNotSupported(_)
-        | E::InvalidEdgeLabel(_)
-        | E::InvalidQuantizerConfig(_)
-        | E::InvalidDimension { .. }
-        | E::InvalidCollectionName { .. } => PyValueError::new_err(e.to_string()),
-
-        // Numeric overflow / allocation failure — specific Python builtins
-        // An observer turned the request down: not a malformed request.
-        E::AccessDenied(_) => PyPermissionError::new_err(e.to_string()),
-        E::Overflow(_) => PyOverflowError::new_err(e.to_string()),
-        E::AllocationFailed(_) => PyMemoryError::new_err(e.to_string()),
-
-        // Engine / IO / internal — VelesDBError so callers can catch with
-        // `except velesdb.VelesDBError` as a catch-all for all engine errors.
-        E::Storage(_)
-        | E::Index(_)
-        | E::IndexCorrupted(_)
-        | E::Io(_)
-        | E::Serialization(_)
-        | E::Internal(_)
-        | E::ColumnStoreError(_)
-        | E::GpuError(_)
-        | E::EpochMismatch(_)
-        | E::GuardRail { .. }
-        | E::TrainingFailed(_)
-        | E::SparseIndexError(_)
-        | E::SnapshotBuildFailed(_)
-        | E::IncompatibleSchemaVersion { .. } => {
-            crate::exceptions::VelesDBError::new_err(e.to_string())
-        }
-
-        // Forward-compat: unknown future variants fall back to VelesDBError.
-        // A new variant added to `velesdb_core::Error` should trigger the
-        // unit test `test_core_err_mapping_covers_every_code` and be given
-        // an explicit arm above before this wildcard catches it silently.
-        _ => crate::exceptions::VelesDBError::new_err(e.to_string()),
+        _ => e.to_string(),
     }
 }
 
@@ -231,60 +241,45 @@ fn set_component_scores(
     Ok(())
 }
 
-/// The score the engine tagged `result` with for component `name`, `None`
-/// when it recorded none (a BM25-only row has no vector score).
-fn component_score(result: &SearchResult, name: &str) -> Option<f32> {
-    result
-        .component_scores
-        .as_ref()?
-        .iter()
-        .find(|(component, _)| *component == name)
-        .map(|(_, value)| *value)
-}
-
-/// The `vector_score` of a multi-model row: the tagged component, or — on a
-/// result core left untagged — its own score, the value core's `ScoreContext`
-/// resolves `vector_score` to on such a row. Some dense paths still return
-/// untagged rows (a `NEAR` with a metadata filter), so dropping the fallback
-/// would blank their vector score.
-fn vector_score(result: &SearchResult) -> Option<f32> {
-    match result.component_scores {
-        Some(_) => component_score(result, "vector_score"),
-        None => Some(result.score),
-    }
-}
-
 /// Convert a `SearchResult` to a multi-model Python dict (EPIC-031).
 ///
-/// `vector_score` follows [`vector_score`]; `graph_score` is the tagged
-/// component of that name, `None` when absent (core tags none today);
-/// `fused_score` is the row's final score.
+/// `vector_score` and `graph_score` are the components of those names core
+/// tagged the row with, `None` when absent: core tags `vector_score` on every
+/// row a vector scored (a `NEAR`, filtered or not, a `similarity()` threshold
+/// or `ORDER BY similarity(field, $v)`, a hybrid, a MATCH `similarity()`), so a
+/// row without one — a metadata, BM25-only or depth-ranked row — has none.
+/// No search tags `graph_score` today. `fused_score` is the row's final score.
 pub fn search_result_to_multimodel_dict(
     py: Python<'_>,
     result: &SearchResult,
 ) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
-    let none = py.None();
     let payload_py = payload_to_python(py, &result.point.payload)?;
-
-    // Multi-model fields
-    dict.set_item(PyString::intern(py, "node_id"), result.point.id)?;
-    dict.set_item(PyString::intern(py, "vector_score"), vector_score(result))?;
-    dict.set_item(
-        PyString::intern(py, "graph_score"),
-        component_score(result, "graph_score"),
-    )?;
-    dict.set_item(PyString::intern(py, "fused_score"), result.score)?;
-    dict.set_item(PyString::intern(py, "bindings"), payload_py.clone_ref(py))?;
-    dict.set_item(PyString::intern(py, "column_data"), &none)?;
-
+    set_multimodel_fields(py, &dict, result, payload_py.clone_ref(py))?;
     // Legacy fields for compatibility
     dict.set_item(PyString::intern(py, "id"), result.point.id)?;
     dict.set_item(PyString::intern(py, "score"), result.score)?;
     dict.set_item(PyString::intern(py, "payload"), payload_py)?;
     set_component_scores(py, &dict, result)?;
-
     Ok(dict.into_any().unbind())
+}
+
+/// Sets the multi-model fields of a row on `dict`
+/// ([`search_result_to_multimodel_dict`]): `bindings` is its payload.
+fn set_multimodel_fields(
+    py: Python<'_>,
+    dict: &Bound<'_, PyDict>,
+    result: &SearchResult,
+    bindings: Py<PyAny>,
+) -> PyResult<()> {
+    let vector_score = result.component_score("vector_score");
+    let graph_score = result.component_score("graph_score");
+    dict.set_item(PyString::intern(py, "node_id"), result.point.id)?;
+    dict.set_item(PyString::intern(py, "vector_score"), vector_score)?;
+    dict.set_item(PyString::intern(py, "graph_score"), graph_score)?;
+    dict.set_item(PyString::intern(py, "fused_score"), result.score)?;
+    dict.set_item(PyString::intern(py, "bindings"), bindings)?;
+    dict.set_item(PyString::intern(py, "column_data"), py.None())
 }
 
 /// Convert a `Point` to a Python dict.
@@ -478,21 +473,26 @@ pub fn extract_point_id(
         .extract(py)
 }
 
-/// Extract the `"vector"` field from a point dict as `Vec<f32>`.
+/// Extract the `"vector"` field from a point dict as `Vec<f32>`: empty when
+/// the point carries none (no key, or `None`). Core decides what a point
+/// without a vector is: refused on a vector collection (`VELES-016`,
+/// `ValueError`), a payload row of a metadata collection, a graph node
+/// without an embedding.
 pub fn extract_point_vector(
     py: Python<'_>,
     dict: &HashMap<String, Py<PyAny>>,
 ) -> PyResult<Vec<f32>> {
-    let obj = dict
-        .get("vector")
-        .ok_or_else(|| PyValueError::new_err("Point missing 'vector' field"))?;
-    extract_vector(py, obj)
+    match dict.get("vector") {
+        Some(obj) if !obj.is_none(py) => extract_vector(py, obj),
+        _ => Ok(Vec::new()),
+    }
 }
 
 /// Parse a list of point dicts into core `Point` values.
 ///
-/// Each dict must contain `"id"` (u64) and `"vector"` (list/numpy) keys,
-/// with optional `"payload"` (dict) and `"sparse_vector"` entries.
+/// Each dict must contain an `"id"` (u64) key, with optional `"vector"`
+/// (list/numpy; see [`extract_point_vector`]), `"payload"` (dict) and
+/// `"sparse_vector"` entries.
 ///
 /// Shared by [`Collection::upsert`] and [`Collection::stream_insert`].
 pub fn parse_point_dicts(

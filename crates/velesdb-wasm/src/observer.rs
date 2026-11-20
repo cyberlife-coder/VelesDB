@@ -98,19 +98,20 @@ pub trait WasmObserver {
 /// Zero-overhead when `observer` is `None`: a single `Option` discriminant
 /// check and an early return — the context struct is not even constructed.
 /// Only when an observer is present do we build the borrowed context and
-/// dispatch. `Deny` is mapped to an `Err(String)` the caller renders as an
-/// empty result plus an error at the FFI boundary.
+/// dispatch. `Deny` is mapped to core's `Error::AccessDenied` (`VELES-037`),
+/// the error core's own read gate refuses with, which the FFI boundary
+/// throws as a JS `Error` whose `code` is `VELES-037`.
 ///
 /// # Errors
 ///
-/// Returns `Err(msg)` when the observer denies the read; `msg` is the
-/// observer-supplied denial reason.
+/// Returns `Error::AccessDenied(msg)` when the observer denies the read;
+/// `msg` is the observer-supplied denial reason.
 #[inline]
 pub(crate) fn gate(
     observer: Option<&Rc<dyn WasmObserver>>,
     collection: &str,
     operation: WasmQueryOperationKind,
-) -> Result<(), String> {
+) -> Result<(), velesdb_core::Error> {
     // Fast path: no observer → nothing to build, nothing to check.
     let Some(obs) = observer else {
         return Ok(());
@@ -123,7 +124,7 @@ pub(crate) fn gate(
     };
     match obs.on_query_request(&ctx) {
         WasmAccessDecision::Allow => Ok(()),
-        WasmAccessDecision::Deny(msg) => Err(msg),
+        WasmAccessDecision::Deny(msg) => Err(velesdb_core::Error::AccessDenied(msg)),
     }
 }
 

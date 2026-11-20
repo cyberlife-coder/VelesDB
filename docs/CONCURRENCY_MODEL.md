@@ -408,15 +408,166 @@ default, `--purge`/`--stub` to fix); see
 [#1469](https://github.com/cyberlife-coder/VelesDB/issues/1469) and
 `guides/GRAPH_PATTERNS.md`.
 
-**Payload-derived indexes.** `label_index` and `graph_range_indexes` (both
-position 7, with no order between them: a path holds one, releases it, then
-takes the other) are derived from the stored payloads. Every write and delete
-path updates them while still holding the `payload_storage` (3) write guard
-it read the old payloads and wrote the new ones under — `upsert`,
-`upsert_metadata`, both bulk paths, the node-payload write and `delete` — so
-two writers to the same id cannot interleave and leave the indexes describing
-a payload storage no longer holds. BM25, the secondary indexes and the
-histograms are still updated after that guard is released.
+**Payload-derived indexes.** The secondary indexes (`secondary_indexes`,
+position 6), `label_index` and `graph_range_indexes` (both position 7, with
+no order between them: a path holds one, releases it, then takes the other)
+are derived from the stored payloads. Every write and delete path updates
+them — the secondary indexes first, each released before the next is taken
+(`Collection::index_payload_writes`) — while still holding the
+`payload_storage` (3) write guard it read the old payloads and wrote the new
+ones under: `upsert`, `upsert_metadata`, both bulk paths, the node-payload
+write and `delete`, a failed write included (the indexes then follow what
+storage holds). So two writers to the same id cannot interleave and leave
+the indexes describing a payload storage no longer holds, and a reader that
+read the payload store's revision under its read guard finds every write
+that revision counts in the secondary indexes — what a ranked walk's
+prefilter bitmap relies on
+(`the_secondary_indexes_follow_a_write_before_it_releases_its_guards`). A
+`CREATE INDEX` fills the new index holding `payload_storage` (3) read and
+`secondary_indexes` (6) write, so no write lands while it fills and no reader
+sees it before it holds every row
+(`a_secondary_index_is_seen_only_once_it_holds_every_row`).
+BM25 and the histograms are still updated after that guard is released.
+
+**BM25 and its snapshot: `text_wal` (position 1a).** A BM25 change is
+appended to the BM25 WAL, then applied in memory; `flush_full` serializes the
+index, then truncates the WAL. A change appended before the truncate and
+applied after the serialization would be in neither, and lost on the next
+open — for a graph too, whose open re-indexes only the payloads stored after
+the log position its coverage marker records. So every change holds
+`text_wal` shared across its append and its apply
+(`Collection::change_text_index`), always taken with no other collection
+lock held (`Collection::text_wal_shared` checks it in every unit test): a
+write's payload effects take it once their storage guards are released; a
+vector collection's row write and a delete take it first, before their node
+locks and storage write guards (1c, 2, 3, 4, 7), and hold it through their
+BM25 change (`Collection::change_text_index_ordered`). `flush_full` holds it
+exclusively, with no other collection lock, from the serialization through
+the truncate (`Collection::flush_bm25_index`): a change lands wholly before
+the snapshot, which holds it, or wholly after the truncate, in the WAL.
+Because a delete waits for that guard before it takes anything else, no
+read or write of another id waits on a guard a delete holds while the
+snapshot is serialized and synced
+(`a_delete_waiting_for_a_bm25_snapshot_holds_up_no_read`).
+A graph's flush reads the payload log position it records before taking the
+guard, under `payload_storage` (3) alone, which loses nothing: a payload
+stored at or after the position is re-indexed on open, and one stored before
+it has its BM25 change done before the guard is granted (in the snapshot) or
+made after the truncate (in the WAL). Nothing is acquired while `text_wal` is
+held but what a delete takes after it and the BM25 index's own locks.
+A text or sparse search scores its candidates holding only its index's own
+locks (and `sparse_indexes`, 9, for a sparse one), sets aside those a
+filter's prefilter bitmap rules out under `secondary_indexes` (6) alone —
+having read the stores' revision under `vector_storage` (2) and
+`payload_storage` (3) read just before, released — then takes
+`vector_storage` (2) and `payload_storage` (3) read to admit the best of
+them as rows and read them (`collection/search/ranked.rs`), one batch of
+candidates per hold of the guards (`WALK_BATCH`): a writer waits for one
+batch of that admission, never for the scoring nor the whole walk. What the
+walk returns is the exact top `k` of the scored candidates admitted by one
+state of the stores, the one its finishing hold reads.
+Every store and delete records the ids it wrote in its store's change log
+under the store's write guard (`storage::ChangeLog`, which keeps the last
+`CAPACITY` ids in a buffer no larger), and each hold reads the ids written
+since the last one — the first hold, since the revision read before the
+prefilter bitmap, which describes the stores at that revision or later
+(the secondary indexes follow every write under its payload guard, above):
+a candidate refused for one of them, or set aside by the prefilter, is
+offered again (`a_candidate_refused_before_a_write_is_offered_again`,
+`a_candidate_the_prefilter_set_aside_is_offered_after_a_write`,
+`a_write_after_the_prefilter_and_before_the_first_hold_is_offered`), and a
+row it then admits above the rows kept displaces the worst
+(`rows_a_write_admits_above_the_kept_displace_the_worst`); the rows an
+earlier hold kept are judged again under the hold that finishes, for a
+write since or for time
+(`a_row_deleted_between_two_holds_is_judged_again_and_replaced`,
+`a_kept_row_that_expires_between_two_holds_is_dropped`), and a row dropped
+there is replaced under that same hold, which goes on offering what is left
+of its batch. A hold's work is its batch plus the candidates written since
+the last one and those they displace, so writes racing the walk never make
+a writer wait for more than a batch of fresh candidates
+(`a_walk_raced_by_small_writes_keeps_its_batches`). The walk is set back
+when more ids were written between two holds than the logs keep — it starts
+over — and when a drop under the hold that would finish it leaves it
+unsettled at the end of the batch; after `RESTARTS` setbacks it runs its
+next pass under one hold. So the walk always ends: past the candidates
+writes put back and the rows they displace, which a hold's budget pays for
+on top of its batch, every hold that does not end it offers candidates no
+hold offered before, or sets it back
+(`a_walk_starts_over_when_the_writes_overflow_the_change_log`,
+`a_walk_raced_by_writes_without_end_still_finishes`,
+`a_walk_whose_kept_rows_a_writer_keeps_toggling_ends`,
+`a_walk_counts_the_finishes_a_writer_keeps_failing`).
+A score reads one state of the BM25 index: a document enters or leaves its
+postings, its documents and the corpus statistics (document count, total
+length) and its internal id is allocated or released under one hold of the
+postings' write guard, and a score reads all of them under the postings'
+read guard (`index/bm25.rs`, `CorpusStats`) — so two removals of one point
+release its id once (`test_concurrent_removal_recycles_the_doc_id_once`), and
+a term is never counted in more documents than the corpus holds — a torn
+read made every idf negative and every hit vanish
+(`documents_added_while_a_score_runs_are_weighed_against_the_corpus_holding_them`,
+`concurrent_writes_never_hide_a_stable_document`).
+A vector read judges the index's candidates — live or dead, accepted or
+not — under one hold of `vector_storage` (2) and `payload_storage` (3) read
+per answer of the index, taking no guard while the index searches; an
+answer short of what was asked settles the read only when it holds every
+vector the read can reach — every stored one, or every member of the
+bitmap or anchor set its search is restricted to — or, for a restricted
+search, when no dead candidate is in it and the graph holds no tombstone
+(read from the index's id mappings before the storage guards are taken):
+an HNSW walk answers short past the tombstones overwrites leave, which it
+filters itself
+(`expired_rows_overwritten_in_the_graph_never_empty_a_read`,
+`a_short_answer_without_a_dead_candidate_is_not_the_index_running_out`);
+when its answers stay too few past a bound it scores every stored vector,
+one chunk per hold of `vector_storage` alone, and walks them like a text
+search (`collection/search/live.rs`).
+A WHERE's text `MATCH` is bound to its BM25 hits before any storage guard
+is taken (`collection/search/query/text_match.rs`): the text index's own
+locks, then nothing.
+`bm25_flush_race_tests` pauses a change between its append and its apply
+while a full flush runs, and finds the change after a reopen.
+
+**The size counter.** A collection's size (`len`, `is_empty`,
+`config().point_count`) is a lock-free counter beside the storages, moved by
+every write that changes which ids a store holds while that write's storage
+guard is held (`collection/core/size.rs`). On a vector or metadata
+collection a write to one store takes no guard of the other. A vector
+collection's writes follow one rule of **node locks** (position **1c**): a
+row write — `upsert`, `upsert_bulk`, `upsert_bulk_from_raw`, and the
+streaming drain and the DML writes that run through them — takes `text_wal`
+(1a) shared, then the node locks of its ids, and holds both across its
+payload store, its vector store (payloads first) and its BM25 change
+(`Collection::write_rows`); a payload write to its rows alone
+(`upsert_metadata`) checks that its ids store vectors through the vector
+store's shared id index under those locks
+(`Collection::write_payloads_where_vectors`); and a delete takes them before
+its storage guards. So a delete of an id lands wholly before or after a
+write of it — the row keeps its vector and its payload or loses both, and
+its BM25 document follows whichever came last
+(`a_delete_racing_an_upsert_of_its_row_waits_for_both_stores`) — while no
+vector guard is held across a payload store and sync. The histograms are
+changed once the node locks are released: their I/O lock (12) is taken with
+no other lock held. On a graph,
+whose size is `|vectors ∪ payloads|`, a write that only stores into ids its
+store already holds — an overwrite of existing nodes — cannot change the
+size and runs under its store's write guard alone (`StoreEffect::Stores`).
+Any other graph write first takes the **node locks** of its ids (position
+**1c**: 64 stripes, taken in ascending stripe order), reads which of those
+ids the other store holds through that store's shared id index (the
+index's own internal lock — no store guard), then takes its own store's
+write guard and counts the nodes among its ids before and after writing. Every write that can change an id's
+membership of either store holds that id's node lock while it does — a
+delete takes them before both write guards — so the membership it read
+stays true until the size has moved, and two writes that can change the
+same part of the size never measure it at the same time. No graph write
+takes the other store's guard at all: its payload writers and vector
+writers wait on each other only where their ids share a stripe. On no kind
+of collection does a payload write hold a vector guard, so a search never
+waits on `vector_storage` behind one. A writer of an overwrite first takes its store's write guard to
+check, and releases it before taking the node locks when the check fails.
+A flush takes each store's write guard in turn to flush it.
 
 **Pending points: async index builder, deferred indexer.** Their locks
 (the async index builder's `buffer` and `placed`, and the deferred
@@ -995,6 +1146,8 @@ ensure no data is lost.
 │                                                                        │
 │  4. load_bm25_index()                                                  │
 │     └─ bm25.snapshot + bm25.wal replay; payload rebuild if no snapshot │
+│        (a graph's only where bm25.coverage vouches for it, else        │
+│        rebuilt from the payloads, rewritten and vouched for)           │
 │                                                                        │
 │  5. Property index, label index + graph range indexes (both rebuilt    │
 │     from the payloads in one scan), range index, edge_store.bin,       │
@@ -1002,7 +1155,8 @@ ensure no data is lost.
 │     └─ each sparse snapshot, then its WAL replayed over it             │
 │                                                                        │
 │  6. reconcile_point_count()                                            │
-│     └─ Set config.point_count = storage.len() (authoritative source)   │
+│     └─ Count the size from storage (a graph: |vectors ∪ payloads|);    │
+│        every write then moves it by what it changed (size.rs)          │
 │                                                                        │
 │  7. recover_index_state() — reconciliation passes                      │
 │     ├─ Pass 1 (gap): recover_hnsw_gap                                  │
@@ -1121,7 +1275,7 @@ Two distinct write paths can leave vectors in storage but absent from HNSW:
 
 | Gap Source | Mechanism | Typical Window |
 |-----------|-----------|---------------|
-| **Normal insert gap** | `batch_store_all` writes vectors before `bulk_index_or_defer` inserts into HNSW. Crash between Phase 1 and Phase 3 of the 3-phase upsert pipeline. | Duration of Phase 2 (secondary indexes, quantization, text indexing) |
+| **Normal insert gap** | `batch_store_all` writes vectors before `bulk_index_or_defer` inserts into HNSW. Crash between Phase 1 and Phase 3 of the 3-phase upsert pipeline. | Duration of Phase 2 (histograms, quantization) |
 | **Deferred indexer gap** | `DeferredIndexer` buffers vectors in memory (up to `merge_threshold`, default 1 024) before batch-merging into HNSW. Crash before merge loses the buffer. | Up to `merge_threshold` vectors (memory-only, not WAL-protected) |
 
 Both gaps are recovered by the same `recover_hnsw_gap` mechanism

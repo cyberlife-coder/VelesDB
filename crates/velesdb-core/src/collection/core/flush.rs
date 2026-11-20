@@ -6,6 +6,7 @@
 //! - Delta/deferred buffer draining into HNSW
 //! - Secondary index and sparse index persistence
 
+use crate::collection::search::query::row_universe::RowUniverse;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::{PayloadStorage, VectorStorage};
@@ -170,19 +171,52 @@ impl Collection {
     }
 
     /// Persists the BM25 index as an atomic snapshot and truncates its
-    /// WAL on success (issue #389).
+    /// WAL on success (issue #389). A graph's snapshot is followed by the
+    /// coverage marker that vouches for it (`bm25_coverage.rs`).
+    ///
+    /// No BM25 change is lost to the truncate. Every change holds `text_wal`
+    /// shared from its WAL append through its in-memory apply
+    /// ([`Self::change_text_index`]), and this holds it exclusively from the
+    /// serialization through the truncate, so a change lands wholly before
+    /// the snapshot — which then holds it — or wholly after the truncate, in
+    /// the WAL the next open replays. Without the guard a change appended
+    /// before the truncate and applied after the serialization was in
+    /// neither.
+    ///
+    /// A delete takes `text_wal` before its node locks and storage guards,
+    /// so one waiting for this guard holds none of them: no read or write of
+    /// another id queues behind the snapshot's serialization and sync.
+    ///
+    /// A graph's marker records the payload log position read before the
+    /// exclusive guard is taken, under `payload_storage` alone. A payload
+    /// stored at or after it is indexed again on open, whatever the snapshot
+    /// holds; one stored before it has its BM25 change done before the guard
+    /// is granted — in the snapshot — or made after the truncate — in the
+    /// WAL — as above.
     ///
     /// Skipped entirely when the index is empty: no snapshot file is
     /// created, so a pre-existing (non-BM25) collection reopened by
     /// newer code does not gain a spurious empty snapshot.
-    fn flush_bm25_index(&self) -> Result<()> {
+    ///
+    /// LOCK ORDER: config(1), released; payload_storage(3, read, a graph
+    /// only), released; text_wal(1a, exclusive) alone.
+    pub(super) fn flush_bm25_index(&self) -> Result<()> {
         if self.storage.text_index.is_empty() {
             return Ok(());
         }
-        crate::index::bm25_persistence::save_snapshot(
-            &self.storage.path,
-            &self.storage.text_index,
-        )?;
+        let path = &self.storage.path;
+        let payloads_from = (self.row_universe() == RowUniverse::StoredNodes)
+            .then(|| self.storage.payload_storage.read().wal_position());
+        // Held through the truncate: that is its whole point.
+        let _snapshot = self.storage.text_wal.write();
+        match payloads_from {
+            Some(payloads_from) => {
+                Self::save_graph_bm25(path, &self.storage.text_index, payloads_from)?;
+            }
+            None => {
+                crate::index::bm25_persistence::save_snapshot(path, &self.storage.text_index)?;
+            }
+        }
         let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(&self.storage.path);
         crate::index::bm25_persistence_wal::wal_truncate(&wal_path)?;
         Ok(())
@@ -444,8 +478,6 @@ impl Collection {
     /// atomic load and is optimised out entirely when the feature
     /// is disabled.
     pub(crate) fn save_config(&self) -> Result<()> {
-        use std::io::Write;
-
         #[cfg(feature = "test-fault-injection")]
         {
             if crate::fault_injection::should_fail_save_config() {
@@ -456,30 +488,14 @@ impl Collection {
             }
         }
 
-        let config = self.storage.config.read();
+        // `config()` carries the live size as `point_count`, and releases the
+        // config lock before the disk I/O below, which ends in two fsyncs.
+        let config = self.config();
         let config_path = self.storage.path.join("config.json");
         let tmp_path = self.storage.path.join("config.json.tmp");
-        let config_data = serde_json::to_string_pretty(&*config)
+        let config_data = serde_json::to_string_pretty(&config)
             .map_err(|e| Error::Serialization(e.to_string()))?;
-        // Serialization is the guard's last use. Everything below is disk I/O
-        // ending in two fsyncs, and none of it should run under the config
-        // lock.
-        drop(config);
-
-        let file = std::fs::File::create(&tmp_path)?;
-        let mut writer = std::io::BufWriter::new(file);
-        writer.write_all(config_data.as_bytes())?;
-        writer.flush()?;
-        writer.get_ref().sync_all()?;
-        std::fs::rename(&tmp_path, &config_path)?;
-        // The file contents are fsynced above, but the *rename* is only durable
-        // once the directory entry is fsynced. `config.json` is authoritative
-        // and not reconstructible (HNSW params, storage mode, advanced config),
-        // so a power loss right after a create/reconfigure could otherwise leave
-        // a data directory whose collection has no loadable config. This mirrors
-        // the barrier `storage::atomic_write` applies everywhere else.
-        crate::storage::atomic_write::sync_parent_directory(&config_path)?;
-        Ok(())
+        write_config_file(&tmp_path, &config_path, &config_data)
     }
 
     /// Vacuums the HNSW index of this collection, rebuilding the
@@ -540,3 +556,29 @@ impl Collection {
 #[cfg(test)]
 #[path = "flush_hooks.rs"]
 pub(crate) mod flush_hooks;
+
+/// Writes `data` to `tmp_path`, fsyncs it and renames it over `config_path`,
+/// then fsyncs the directory entry.
+///
+/// The file contents are fsynced before the rename, but the *rename* is only
+/// durable once the directory entry is fsynced. `config.json` is
+/// authoritative and not reconstructible (HNSW params, storage mode, advanced
+/// config), so a power loss right after a create/reconfigure could otherwise
+/// leave a data directory whose collection has no loadable config. This
+/// mirrors the barrier `storage::atomic_write` applies everywhere else.
+fn write_config_file(
+    tmp_path: &std::path::Path,
+    config_path: &std::path::Path,
+    data: &str,
+) -> Result<()> {
+    use std::io::Write;
+
+    let file = std::fs::File::create(tmp_path)?;
+    let mut writer = std::io::BufWriter::new(file);
+    writer.write_all(data.as_bytes())?;
+    writer.flush()?;
+    writer.get_ref().sync_all()?;
+    std::fs::rename(tmp_path, config_path)?;
+    crate::storage::atomic_write::sync_parent_directory(config_path)?;
+    Ok(())
+}

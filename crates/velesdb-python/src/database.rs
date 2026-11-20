@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::agent;
-use crate::collection::{Collection, CollectionKind};
+use crate::collection::Collection;
 use crate::collection_helpers::core_err;
 use crate::graph_collection::{PyGraphCollection, PyGraphSchema};
 use crate::observer::PyObserver;
@@ -76,19 +76,13 @@ fn open_core(
 /// Wraps an [`AnyCollection`] in the single Python-facing [`Collection`] type.
 ///
 /// The Python SDK exposes one `Collection` class (backed by a core
-/// `VectorCollection`) over all collection kinds. A flat match discriminates
-/// the real variant, so the captured [`CollectionKind`] is derived from the
-/// actual collection and cannot diverge from it. Non-vector kinds share the
-/// same backing store and are exposed through the structural
-/// `into_vector_view()` re-wrap; vector-only methods remain gated by `kind`
-/// via `Collection::ensure_vector`, so they fail loud (F2.2) rather than
-/// returning misleading results.
-///
-/// `AnyCollection` is `#[non_exhaustive]`, which outside the defining crate
-/// merely requires a wildcard arm — the flat match here satisfies that, and
-/// the `_` arm doubles as the fail-closed path for any future variant. (The
-/// nested `into_vector()`/`into_graph()`/`into_metadata()` chain this
-/// replaces was never *required* by `#[non_exhaustive]`.)
+/// `VectorCollection`) over all collection kinds; [`Collection::from_any`]
+/// reads the kind from the variant, so it cannot diverge from the actual
+/// collection, and keeps the `AnyCollection` itself for the reads core
+/// dispatches by kind. Vector-only methods remain gated by the kind via
+/// `Collection::ensure_vector`, so they fail loud (F2.2) rather than
+/// returning misleading results. A variant the view does not know (the enum
+/// is `#[non_exhaustive]`) is refused.
 ///
 /// Shared by [`Database::get_collection`] and
 /// [`Database::create_metadata_collection`] so both construct the wrapper
@@ -98,22 +92,9 @@ fn wrap_any_collection(
     db: &Arc<CoreDatabase>,
     name: &str,
 ) -> PyResult<Collection> {
-    let (vc, kind) = match any_coll {
-        AnyCollection::Vector(v) => (v, CollectionKind::Vector),
-        AnyCollection::Graph(g) => (g.into_vector_view(), CollectionKind::Graph),
-        AnyCollection::Metadata(m) => (m.into_vector_view(), CollectionKind::Metadata),
-        _ => {
-            return Err(PyRuntimeError::new_err(
-                "unsupported collection kind for the Python Collection view",
-            ));
-        }
-    };
-    Ok(Collection::new_with_kind(
-        vc,
-        Arc::clone(db),
-        name.to_string(),
-        kind,
-    ))
+    Collection::from_any(any_coll, Arc::clone(db), name.to_string()).ok_or_else(|| {
+        PyRuntimeError::new_err("unsupported collection kind for the Python Collection view")
+    })
 }
 
 /// VelesDB Database - the main entry point for interacting with VelesDB.
@@ -628,6 +609,10 @@ impl Database {
     ///     Each dict contains ``node_id``, ``vector_score``, ``graph_score``,
     ///     ``fused_score``, ``bindings``, ``column_data``, ``id``, ``score``,
     ///     and ``payload`` fields.
+    ///     An aggregate (``COUNT``, ``SUM``, ``AVG``, ``MIN``, ``MAX``, or a
+    ///     ``GROUP BY``) returns its rows instead, as REST, Tauri and the CLI
+    ///     do: one dict of its values without ``GROUP BY``
+    ///     (``[{"count": 3}]``), one dict per group with it.
     ///     Returns an empty list for DDL/DML statements.
     ///
     /// Raises:
@@ -662,16 +647,9 @@ impl Database {
         sql: &str,
         params: Option<std::collections::HashMap<String, Py<PyAny>>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
-        use crate::collection::query::{convert_params, parse_velesql};
-        use crate::collection_helpers::search_results_to_multimodel_dicts;
+        use crate::collection::query::{parse_velesql, run_parsed_on_db};
 
-        let parsed = parse_velesql(sql)?;
-        let rust_params = convert_params(py, params)?;
-        let inner = Arc::clone(&self.inner);
-        let results = py
-            .detach(move || inner.execute_query(&parsed, &rust_params))
-            .map_err(core_err)?;
-        search_results_to_multimodel_dicts(py, results)
+        run_parsed_on_db(py, parse_velesql(sql)?, params, &self.inner)
     }
 
     /// Toggle automatic re-indexing on a collection at runtime.

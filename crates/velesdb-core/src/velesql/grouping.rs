@@ -198,9 +198,7 @@ impl<'s> Grouper<'s> {
         higher_is_better: bool,
     ) -> crate::error::Result<Self> {
         if let Some(having) = having {
-            having
-                .check_thresholds(true)
-                .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+            having.check_thresholds(true)?;
         }
         let selected = select_aggregations(&stmt.columns);
         let first_columns = selected

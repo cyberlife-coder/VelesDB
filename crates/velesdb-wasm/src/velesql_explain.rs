@@ -21,10 +21,11 @@
 use velesdb_core::velesql::{PlanStep, Query, QueryPlan};
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::velesql_result::QueryResultRow;
 
 /// Builds an EXPLAIN plan as a sequence of synthetic rows (one per step).
-pub(crate) fn explain(db: &DatabaseInner, query: &Query) -> Result<Vec<QueryResultRow>, String> {
+pub(crate) fn explain(db: &DatabaseInner, query: &Query) -> Result<Vec<QueryResultRow>, ExecError> {
     step_rows(db, query)
         .into_iter()
         .enumerate()

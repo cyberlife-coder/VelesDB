@@ -50,7 +50,12 @@ pub struct CollectionConfig {
     /// Distance metric.
     pub metric: DistanceMetric,
 
-    /// Number of points in the collection.
+    /// Number of points in the collection: its size, as `Collection::len`
+    /// reports it — a graph's stored nodes, with an embedding or not. A live
+    /// collection keeps the count beside its storages
+    /// (`collection/core/size.rs`) and fills this field from it in the
+    /// configuration it hands out and persists; the copy under the
+    /// collection's config lock is not maintained.
     pub point_count: usize,
 
     /// On-disk schema version for forward-compatibility detection.
@@ -179,6 +184,31 @@ pub struct CollectionConfig {
     /// exhaustive fallback); no schema-version bump guards it, by design.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub indexed_fields: BTreeSet<String>,
+}
+
+impl CollectionConfig {
+    /// What a query vector against this collection must match: the
+    /// dimension of the vectors it stores, or none when it stores none — a
+    /// metadata collection, or a graph created without embeddings, whose
+    /// `dimension` is 0.
+    ///
+    /// The one answer to "does this collection store vectors": the DML
+    /// `vector` column ([`Self::vector_column`]) derives from it.
+    pub(crate) fn query_vector_target(&self) -> crate::velesql::QueryVectorTarget<'_> {
+        crate::velesql::QueryVectorTarget {
+            collection: &self.name,
+            dimension: (!self.metadata_only && self.dimension > 0).then_some(self.dimension),
+        }
+    }
+
+    /// What a DML row's `vector` column is to this collection: required in
+    /// a vector collection, optional in a graph with embeddings, forbidden
+    /// in a metadata collection and a graph without embeddings — each with
+    /// the dimension of the vectors it stores.
+    pub(crate) fn vector_column(&self) -> crate::velesql::VectorColumn<'_> {
+        self.query_vector_target()
+            .vector_column(self.graph_schema.is_some())
+    }
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 
+import { DimensionMismatchError, parseVelesError, VectorRequiredError } from '../errors';
 import type { SparseVector } from '../types';
 import { VelesDBError } from '../types';
 import type { CollectionData, WasmModule, WasmContext } from './wasm-types';
@@ -54,6 +55,24 @@ export function describeWasmThrow(thrown: unknown): string {
   }
   const text = tryRead(() => String(thrown));
   return typeof text.value === 'string' ? text.value : `a value of type ${typeof thrown}`;
+}
+
+/** A core error code, as velesdb-wasm sets it on the `Error` it throws. */
+const VELES_CODE = /^VELES-\d{3}$/;
+
+/**
+ * The SDK error for what velesdb-wasm threw: the typed class of the core
+ * code it carries as `error.code` (VELES-034 an `InvalidCollectionNameError`,
+ * VELES-038 a `QueryParameterError`, …), or a `VelesDBError` with `fallback`
+ * when it carries none — a bare string, the binding's own refusals. Total,
+ * as {@link describeWasmThrow} is: it runs inside a catch block.
+ */
+export function wasmThrowToError(thrown: unknown, fallback = 'BAD_REQUEST'): VelesDBError {
+  const message = describeWasmThrow(thrown);
+  const code = tryRead(() => (thrown as { code?: unknown }).code).value;
+  return typeof code === 'string' && VELES_CODE.test(code)
+    ? parseVelesError(code, message)
+    : new VelesDBError(message, fallback);
 }
 
 /** Normalize a string ID that looks like a pure integer. */
@@ -264,4 +283,29 @@ export function selectStarRow(row: Record<string, unknown>): Record<string, unkn
     }
   }
   return projected;
+}
+
+/**
+ * Refuses a vector written to the collection `collection` of `dimension` as
+ * core refuses it, so the WASM backend throws what the REST backend relays
+ * for the same input: an empty vector on a collection that stores vectors
+ * is a `VectorRequiredError` (VELES-016) — every row of a vector collection
+ * stores one — and a vector of another length a `DimensionMismatchError`
+ * (VELES-004), its message led by `mismatch`. A sparse-only collection
+ * (dimension 0) takes the empty vector.
+ */
+export function requireVectorOfDimension(
+  collection: string,
+  length: number,
+  dimension: number,
+  mismatch = 'Vector dimension mismatch',
+): void {
+  if (length === 0 && dimension > 0) {
+    throw new VectorRequiredError(
+      `[VELES-016] Vector required for collection '${collection}' (not metadata-only)`,
+    );
+  }
+  if (length !== dimension) {
+    throw new DimensionMismatchError(`${mismatch}: expected ${dimension}, got ${length}`);
+  }
 }

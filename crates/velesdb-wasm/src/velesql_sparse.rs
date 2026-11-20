@@ -33,6 +33,7 @@ use velesdb_core::velesql::{
 };
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::sparse::SparseIndex;
 use crate::store_state::StoreState;
 use crate::velesql_scan::OwnedScanRow;
@@ -59,7 +60,7 @@ pub(crate) fn execute_sparse_search(
     stmt: &SelectStatement,
     svs: &SparseVectorSearch,
     params: &Params,
-) -> Result<Vec<OwnedScanRow>, String> {
+) -> Result<Vec<OwnedScanRow>, ExecError> {
     let store = db.get_shared_store(&stmt.from)?;
     let store = store.borrow();
     let keep = crate::velesql_select::eligible_ids(db, stmt, &store, params)?;
@@ -68,7 +69,7 @@ pub(crate) fn execute_sparse_search(
     }
     let search = SparseQuery {
         index: sparse_index(&store, svs)?,
-        vector: svs.vector.resolve(params).map_err(|e| e.to_string())?,
+        vector: svs.vector.resolve(params)?,
         keep: keep.as_ref(),
     };
     let fetch = crate::velesql_fused::fetch_limit(stmt);
@@ -96,13 +97,11 @@ impl SparseQuery<'_> {
 
 /// The store's sparse index, the one a `SPARSE_NEAR` names: WASM keeps a
 /// single, default, index per store. A missing one is refused with core's
-/// error (`Error::Config`, VELES-009), the text core's
-/// `sparse_index_not_found` writes; `a_missing_sparse_index_fails_with_cores_message`
-/// pins the two together.
+/// refusal ([`velesdb_core::Error::sparse_index_not_found`], VELES-009).
 fn sparse_index<'a>(
     store: &'a StoreState,
     svs: &SparseVectorSearch,
-) -> Result<&'a SparseIndex, String> {
+) -> Result<&'a SparseIndex, ExecError> {
     let name = svs
         .index_name
         .as_deref()
@@ -111,10 +110,7 @@ fn sparse_index<'a>(
         .sparse_index
         .as_ref()
         .filter(|_| name == DEFAULT_SPARSE_INDEX_NAME)
-        .ok_or_else(|| {
-            let shown = if name.is_empty() { "<default>" } else { name };
-            velesdb_core::Error::Config(format!("Sparse index '{shown}' not found")).to_string()
-        })
+        .ok_or_else(|| velesdb_core::Error::sparse_index_not_found(name).into())
 }
 
 /// Core's hybrid search: each branch's `dense_sparse_candidate_k(fetch)` best
@@ -126,9 +122,8 @@ fn fuse_hybrid(
     store: &StoreState,
     params: &Params,
     fetch: usize,
-) -> Result<Vec<(u64, f32)>, String> {
-    crate::velesql_select::validate_vector_collection(store, &stmt.from)?;
-    let query = crate::velesql_select::resolve_query_vector(dense, store, params)?;
+) -> Result<Vec<(u64, f32)>, ExecError> {
+    let query = crate::velesql_select::resolve_query_vector(dense, params)?;
     let depth = dense_sparse_candidate_k(fetch);
     let mut dense_branch = crate::velesql_select::score_all(&query, store);
     if let Some(keep) = sparse.keep {
@@ -149,7 +144,7 @@ fn fuse_hybrid(
     ];
     let mut fused = strategy
         .fuse_with_directions(vec![dense_branch, sparse_branch], &directions)
-        .map_err(|e| format!("Fusion error: {e}"))?;
+        .map_err(velesdb_core::Error::from)?;
     fused.truncate(fetch);
     Ok(fused)
 }
@@ -163,7 +158,7 @@ fn every_kept_point(store: &StoreState, keep: Option<&HashSet<u64>>) -> Vec<Owne
         .filter(|(_, id)| keep.is_none_or(|k| k.contains(id)))
         .map(|(idx, &id)| {
             let payload = store.payloads.get(idx).and_then(Clone::clone);
-            (id, velesdb_core::velesql::METADATA_MATCH_SCORE, payload)
+            OwnedScanRow::new(id, velesdb_core::velesql::METADATA_MATCH_SCORE, payload)
         })
         .collect()
 }

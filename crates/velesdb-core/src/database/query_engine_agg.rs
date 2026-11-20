@@ -9,16 +9,17 @@ use std::collections::HashMap;
 
 use super::read_authorization::GateDecisions;
 use super::Database;
-use crate::{Error, Result};
+use crate::Result;
 
 impl Database {
     /// Executes a `GROUP BY` / scalar-aggregate SELECT, returning the aggregate
     /// result as JSON (a single object for scalar aggregates, an array of group
     /// objects for `GROUP BY`).
     ///
-    /// The target collection is resolved from the query's `FROM` clause, falling
-    /// back to a `"_collection"` key in `params` (the convention the REPL/SDK use
-    /// to inject the active collection). Callers should gate on
+    /// The target collection is the query's `FROM` clause, which the grammar
+    /// requires of every `SELECT`; `params` never names it (`_collection`
+    /// addresses a top-level `MATCH` alone, [`crate::velesql::collection_target`]).
+    /// Callers should gate on
     /// [`crate::velesql::SelectStatement::is_aggregation_query`] — non-aggregate
     /// SELECTs belong on [`Database::execute_query`].
     ///
@@ -64,7 +65,7 @@ impl Database {
         if let Some(rewritten) = self.resolve_subqueries(query, params, decisions)? {
             return self.execute_aggregate_gated(&rewritten, params, decisions);
         }
-        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
+        crate::velesql::QueryValidator::validate(query)?;
         let authorized = self.authorize_statement(query, params, decisions)?;
         if !authorized.query().select.joins.is_empty() {
             return self.aggregate_joined(authorized.query(), params);
@@ -97,5 +98,5 @@ impl Database {
 }
 
 /// The refusal of an aggregation query that names no collection.
-const AGGREGATE_TARGET_MISSING: &str = "aggregation query requires a target collection. Use \
-     SELECT ... FROM <collection> ... GROUP BY, or pass {\"_collection\": \"name\"} in params.";
+const AGGREGATE_TARGET_MISSING: &str =
+    "aggregation query requires a target collection. Use SELECT ... FROM <collection> ... GROUP BY.";

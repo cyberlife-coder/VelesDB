@@ -226,7 +226,9 @@ pub async fn upsert_metadata<R: Runtime>(
             request
                 .points
                 .into_iter()
-                .map(|p| velesdb_core::Point::new(p.id, vec![], Some(p.payload)))
+                .map(|p| {
+                    velesdb_core::Point::new(p.id, p.vector.unwrap_or_default(), Some(p.payload))
+                })
                 .collect()
         },
         |coll, points| {

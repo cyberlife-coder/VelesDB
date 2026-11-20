@@ -349,7 +349,7 @@ class TestAsRetrieverE2E:
         temp_vectorstore.add_texts(texts)
         
         retriever = temp_vectorstore.as_retriever(search_kwargs={"k": 2})
-        results = retriever.get_relevant_documents("Document")
+        results = retriever.invoke("Document")
         
         assert len(results) == 2
         assert all(isinstance(doc, Document) for doc in results)

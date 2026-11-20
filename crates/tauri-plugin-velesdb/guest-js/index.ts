@@ -172,10 +172,11 @@ export interface QueryRequest {
   /** Query parameters (for parameterized queries). */
   params?: Record<string, unknown>;
   /**
-   * Collection a statement without `FROM` runs on — required for a top-level
-   * `MATCH`, whose pattern names none. Sent to the engine as
-   * `params._collection` unless that key is set, which then takes precedence
-   * (the REST server's `/query` rule); a statement with `FROM` reads its `FROM`.
+   * Collection a top-level `MATCH` runs on — required for it, since its
+   * pattern names none. Sent to the engine as `params._collection` unless
+   * that key is set, which then takes precedence (the REST server's `/query`
+   * rule); every other statement ignores it. A `_collection` that is not a
+   * non-empty string is refused with `VELES-038`.
    */
   collection?: string;
 }
@@ -324,7 +325,11 @@ export interface GuardrailLimits {
 export interface HybridResult {
   /** Node/point ID, as a decimal string (`"0"` for an aggregate's row). */
   nodeId: string;
-  /** Vector similarity score, `null` for an aggregate. */
+  /**
+   * Vector similarity score: the `vector_score` component core tagged the row
+   * with (every row a vector scored carries one), `null` on a row no vector
+   * scored (a metadata, text-only or aggregate row).
+   */
   vectorScore: number | null;
   /** Graph traversal score; the `query` command sets none, so `null`. */
   graphScore: number | null;

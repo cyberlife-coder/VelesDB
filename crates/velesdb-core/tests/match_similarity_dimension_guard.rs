@@ -79,7 +79,7 @@ fn test_execute_match_with_similarity_dimension_mismatch_returns_error() {
     let wrong_dim_query = vec![1.0, 0.0];
 
     let err = collection
-        .execute_match_with_similarity(&match_clause, &wrong_dim_query, 0.0, &HashMap::new())
+        .execute_match_with_similarity(&match_clause, &wrong_dim_query, None, &HashMap::new())
         .expect_err("dimension mismatch must return an error");
 
     match err {

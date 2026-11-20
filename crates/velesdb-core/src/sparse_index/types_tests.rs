@@ -95,7 +95,19 @@ fn test_scored_doc_tiebreak_by_doc_id() {
         score: 3.0,
         doc_id: 2,
     };
-    assert!(a < b); // Same score, lower doc_id is "less"
+    assert!(a > b); // Same score: the lower doc_id ranks first
+}
+
+/// A NaN score ranks below every number, whatever its sign bit, and `-0.0`
+/// ties with `0.0`: the order `distance::rank_scores` gives every ranking.
+#[test]
+fn test_scored_doc_nan_ranks_last_and_signed_zeros_tie() {
+    let doc = |score: f32, doc_id: u64| ScoredDoc { score, doc_id };
+    for nan in [f32::NAN, -f32::NAN] {
+        assert!(doc(nan, 1) < doc(f32::NEG_INFINITY, 2), "{nan}");
+    }
+    assert!(doc(-0.0, 1) > doc(0.0, 2));
+    assert!(doc(-0.0, 1) == doc(0.0, 1));
 }
 
 #[test]

@@ -6,7 +6,7 @@ as the vector backend in any Haystack 2.x indexing or retrieval pipeline.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from haystack import default_from_dict, default_to_dict
 from haystack.dataclasses import Document
@@ -412,24 +412,38 @@ def _build_sparse_by_id(
 def _documents_to_points(
     documents: List[Document],
     sparse_by_id: Optional[Dict[str, dict]] = None,
+    *,
+    vectors_required: bool,
 ) -> List[dict]:
-    """Convert each document to its VelesDB point dict, logging documents
-    that lack an embedding so the caller still gets feedback when the
-    underlying SDK accepts vector-less points.
+    """Convert each document to its VelesDB point dict.
+
+    When the collection stores vectors (*vectors_required*), every one of its
+    rows stores one: a document without an embedding (``None`` or empty) is
+    refused here, before anything is written, with a ``ValueError`` naming
+    it — core would refuse the whole batch (``VELES-016``). A metadata-only
+    collection takes documents without one.
 
     *sparse_by_id* (when given) maps document ids to their sparse vector dict;
     each is attached to its point so the upsert creates the corresponding
     sparse index.
     """
-    sparse_by_id = sparse_by_id or {}
-    points: List[dict] = []
-    for doc in documents:
-        if doc.embedding is None:
-            logger.warning(
-                "Document '%s' has no embedding; stored without vector.", doc.id
+    if vectors_required:
+        missing = [doc.id for doc in documents if not _has_embedding(doc)]
+        if missing:
+            raise ValueError(
+                f"{len(missing)} document(s) have no embedding, and every document "
+                "of a vector collection needs one; nothing was written. Embed them "
+                f"first, or write them to a metadata-only collection: {missing[:10]}"
             )
-        points.append(_doc_to_point(doc, sparse_vector=sparse_by_id.get(doc.id)))
-    return points
+    sparse_by_id = sparse_by_id or {}
+    return [
+        _doc_to_point(doc, sparse_vector=sparse_by_id.get(doc.id)) for doc in documents
+    ]
+
+
+def _has_embedding(doc: Document) -> bool:
+    """Whether *doc* carries a non-empty embedding."""
+    return doc.embedding is not None and len(doc.embedding) > 0
 
 
 def _resolve_survivors_for_policy(
@@ -460,17 +474,32 @@ def _resolve_survivors_for_policy(
     return documents
 
 
-def _flush_stream_batches(collection: Any, points: List[dict], batch_size: int) -> None:
-    """Send *points* to *collection* in batches via the streaming channel.
+def _row_writer(collection: Any, *, streaming: bool) -> Callable[[List[dict]], Any]:
+    """The binding call that stores *collection*'s rows.
+
+    A metadata-only collection stores payload rows, which the vector write
+    paths do not take: its rows go through ``upsert_metadata`` whichever
+    method wrote them. A vector collection's rows go through
+    ``stream_insert`` when *streaming*, else ``upsert``.
+    """
+    if collection.is_metadata_only():
+        return collection.upsert_metadata
+    return collection.stream_insert if streaming else collection.upsert
+
+
+def _flush_stream_batches(
+    write: Callable[[List[dict]], Any], points: List[dict], batch_size: int
+) -> None:
+    """Send *points* in batches of *batch_size* through *write*.
 
     Mirrors ``langchain_velesdb.point_builder.flush_stream_batches`` and
     ``llamaindex_velesdb.node_builder.flush_in_batches`` — kept local (rather
     than imported cross-package) so this MIT-licensed integration does not
     take on a dependency on the sibling LangChain/LlamaIndex distributions.
-    Only calls the ``velesdb`` binding's ``stream_insert``; no core logic.
+    Only calls the ``velesdb`` binding; no core logic.
     """
     for start in range(0, len(points), batch_size):
-        collection.stream_insert(points[start : start + batch_size])
+        write(points[start : start + batch_size])
 
 
 class VelesDBDocumentStore(CollectionAdminMixin):
@@ -621,7 +650,9 @@ class VelesDBDocumentStore(CollectionAdminMixin):
             DuplicateDocumentError: When *policy* is ``FAIL`` and at least
                 one document already exists in the store.
             ValueError: When a SHA-256 hash collision is detected — two
-                distinct string IDs that map to the same integer ID.
+                distinct string IDs that map to the same integer ID — or
+                when a document has no embedding and the collection stores
+                vectors (nothing is written then).
         """
         if not documents:
             return 0
@@ -631,8 +662,10 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         survivors = _resolve_survivors_for_policy(col, documents, int_id_map, policy)
         if survivors is None:
             return 0
-        points = _documents_to_points(survivors, sparse_by_id)
-        result = col.upsert(points)
+        points = _documents_to_points(
+            survivors, sparse_by_id, vectors_required=not col.is_metadata_only()
+        )
+        result = _row_writer(col, streaming=False)(points)
         return result if isinstance(result, int) else len(points)
 
     def stream_insert(
@@ -643,7 +676,8 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         """Insert *documents* via VelesDB's streaming ingestion channel.
 
         Sends every point through ``Collection.stream_insert`` in a single
-        call. Unlike :meth:`write_documents`, this bypasses the
+        call (a metadata-only collection's rows go through
+        ``upsert_metadata``, see :func:`_row_writer`). Unlike :meth:`write_documents`, this bypasses the
         ``DuplicatePolicy`` checks (streaming is an append-only bulk-loading
         path) — pre-dedupe on the caller side if that matters. For very
         large batches where the bounded streaming channel's backpressure
@@ -661,12 +695,19 @@ class VelesDBDocumentStore(CollectionAdminMixin):
 
         Returns:
             Number of points inserted.
+
+        Raises:
+            ValueError: When a document has no embedding and the collection
+                stores vectors (nothing is written then).
         """
         if not documents:
             return 0
         sparse_by_id = _build_sparse_by_id(documents, sparse_vectors)
-        points = _documents_to_points(documents, sparse_by_id)
-        self._get_collection().stream_insert(points)
+        col = self._get_collection()
+        points = _documents_to_points(
+            documents, sparse_by_id, vectors_required=not col.is_metadata_only()
+        )
+        _row_writer(col, streaming=True)(points)
         return len(points)
 
     def write_documents_streaming(
@@ -698,7 +739,9 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         Raises:
             DuplicateDocumentError: When *policy* is ``FAIL`` and at least
                 one document already exists in the store.
-            ValueError: When a SHA-256 hash collision is detected.
+            ValueError: When a SHA-256 hash collision is detected, or when a
+                document has no embedding and the collection stores vectors
+                (nothing is written then).
         """
         if not documents:
             return 0
@@ -708,8 +751,10 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         survivors = _resolve_survivors_for_policy(col, documents, int_id_map, policy)
         if survivors is None:
             return 0
-        points = _documents_to_points(survivors, sparse_by_id)
-        _flush_stream_batches(col, points, batch_size)
+        points = _documents_to_points(
+            survivors, sparse_by_id, vectors_required=not col.is_metadata_only()
+        )
+        _flush_stream_batches(_row_writer(col, streaming=True), points, batch_size)
         return len(points)
 
     def delete_documents(

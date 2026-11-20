@@ -6,7 +6,6 @@
 use super::MatchStorageGuards;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
-use crate::storage::{PayloadStorage, VectorStorage};
 use crate::velesql::{GraphPattern, NodePattern};
 use std::collections::HashMap;
 
@@ -47,10 +46,13 @@ impl Collection {
         let first_node = pattern
             .nodes
             .first()
-            .ok_or_else(|| Error::Query("Pattern must have at least one node".to_string()))?;
+            .ok_or_else(Error::pattern_without_node)?;
         Ok(seeds
             .iter()
-            .filter(|&&id| Self::node_matches_bound_pattern(id, first_node, &guards.payload_memo))
+            .filter(|&&id| {
+                guards.is_row(id)
+                    && Self::node_matches_bound_pattern(id, first_node, &guards.payload_memo)
+            })
             .map(|&id| Self::build_start_binding(id, first_node))
             .collect())
     }
@@ -63,12 +65,12 @@ impl Collection {
         let first_node = pattern
             .nodes
             .first()
-            .ok_or_else(|| Error::Query("Pattern must have at least one node".to_string()))?;
+            .ok_or_else(Error::pattern_without_node)?;
 
         // Fast path: use label index when labels are specified.
         if !first_node.labels.is_empty() {
             let has_large = self.graph.label_index.read().has_large_ids();
-            let indexed = self.find_start_nodes_indexed(first_node, &guards.payload_memo);
+            let indexed = self.find_start_nodes_indexed(first_node, guards);
 
             if has_large {
                 // RoaringBitmap cannot index IDs > u32::MAX, so the bitmap
@@ -106,14 +108,16 @@ impl Collection {
 
     /// O(k) label-indexed lookup for start nodes.
     ///
-    /// Reads through the caller's hoisted guards (`memo`) — never re-acquires
-    /// the payload lock (see the lock note on [`Self::find_start_nodes`]).
-    /// The bitmap decides the labels; the inline properties are checked on
-    /// the node's annotated union.
+    /// Reads through the caller's hoisted guards — never re-acquires the
+    /// payload lock (see the lock note on [`Self::find_start_nodes`]). The
+    /// bitmap decides the labels, among the collection's rows only (it may
+    /// index a payload that is no row: what an earlier version let
+    /// `upsert_metadata` store on a vector collection); the inline properties
+    /// are checked on the node's annotated union.
     fn find_start_nodes_indexed(
         &self,
         first_node: &crate::velesql::NodePattern,
-        memo: &super::PayloadMemo<'_>,
+        guards: &MatchStorageGuards<'_>,
     ) -> Vec<(u64, HashMap<String, u64>)> {
         let label_idx = self.graph.label_index.read();
         let bitmap = label_idx.lookup_intersection(&first_node.labels);
@@ -123,25 +127,24 @@ impl Collection {
             return Vec::new();
         };
 
-        if first_node.properties.is_empty() {
-            return bitmap
-                .iter()
-                .map(|id| Self::build_start_binding(u64::from(id), first_node))
-                .collect();
-        }
-
         bitmap
             .iter()
+            .map(u64::from)
+            .filter(|&id| guards.is_row(id))
             .filter(|&id| {
-                let id = u64::from(id);
-                let (_, properties) = memo.read_unmemoized(first_node.collection.as_deref(), id);
-                Self::properties_hold(id, properties.as_deref(), &first_node.properties)
+                first_node.properties.is_empty() || {
+                    let (_, properties) = guards
+                        .payload_memo
+                        .read_unmemoized(first_node.collection.as_deref(), id);
+                    Self::properties_hold(id, properties.as_deref(), &first_node.properties)
+                }
             })
-            .map(|id| Self::build_start_binding(u64::from(id), first_node))
+            .map(|id| Self::build_start_binding(id, first_node))
             .collect()
     }
 
-    /// O(N) full scan fallback for start nodes (no labels, or large-ID fallback).
+    /// O(N) full scan fallback for start nodes (no labels, or large-ID
+    /// fallback) over the collection's rows ([`MatchStorageGuards::row_ids`]).
     ///
     /// Reads only through the hoisted guards — never re-acquires
     /// `vector_storage` or `payload_storage` (see the lock note on
@@ -151,13 +154,8 @@ impl Collection {
         first_node: &crate::velesql::NodePattern,
         guards: &MatchStorageGuards<'_>,
     ) -> Vec<(u64, HashMap<String, u64>)> {
-        let mut all_ids: std::collections::HashSet<u64> =
-            guards.vector_guard.ids().into_iter().collect();
-        for id in guards.payload_guard.ids() {
-            all_ids.insert(id);
-        }
-
-        all_ids
+        guards
+            .row_ids()
             .into_iter()
             .filter(|id| {
                 if Self::pattern_reads_nothing(first_node) {

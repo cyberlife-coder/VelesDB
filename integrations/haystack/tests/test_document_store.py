@@ -1139,6 +1139,9 @@ def test_stream_insert_calls_collection_stream_insert() -> None:
     inserted_points: List[dict] = []
 
     class _MockCollection:
+        def is_metadata_only(self) -> bool:
+            return False
+
         def stream_insert(self, points: list) -> None:
             inserted_points.extend(points)
 
@@ -1166,6 +1169,9 @@ def test_stream_insert_forwards_named_sparse_vectors() -> None:
     inserted_points: List[dict] = []
 
     class _MockCollection:
+        def is_metadata_only(self) -> bool:
+            return False
+
         def stream_insert(self, points: list) -> None:
             inserted_points.extend(points)
 
@@ -1184,6 +1190,9 @@ def test_write_documents_streaming_batches_via_stream_insert() -> None:
     call_batches: List[list] = []
 
     class _MockCollection:
+        def is_metadata_only(self) -> bool:
+            return False
+
         def stream_insert(self, points: list) -> None:
             call_batches.append(list(points))
 
@@ -1227,6 +1236,9 @@ def test_write_documents_streaming_forwards_sparse_vectors() -> None:
     call_batches: List[list] = []
 
     class _MockCollection:
+        def is_metadata_only(self) -> bool:
+            return False
+
         def stream_insert(self, points: list) -> None:
             call_batches.append(list(points))
 
@@ -1322,6 +1334,9 @@ def test_is_metadata_only_delegates_to_collection() -> None:
 
     class _MockCollection:
         def is_metadata_only(self) -> bool:
+            return False
+
+        def is_metadata_only(self) -> bool:
             return True
 
     store._collection = _MockCollection()
@@ -1333,6 +1348,9 @@ def test_flush_delegates_to_collection() -> None:
     calls: List[bool] = []
 
     class _MockCollection:
+        def is_metadata_only(self) -> bool:
+            return False
+
         def flush(self) -> None:
             calls.append(True)
 

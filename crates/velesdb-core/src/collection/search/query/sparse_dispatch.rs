@@ -121,9 +121,11 @@ impl Collection {
 
     /// Computes the GraphFirst anchor set for a sparse-only fetch.
     ///
-    /// Returns `None` for hybrid dense+sparse queries and for residual
-    /// conditions the in-fetch filter cannot cover (text MATCH,
-    /// similarity()) — those drop rows after the fetch and keep the window.
+    /// Returns `None` for hybrid dense+sparse queries and for a residual
+    /// `similarity()` the in-fetch filter cannot cover — it drops rows after
+    /// the fetch and keeps the window. A text `MATCH` beside a `SPARSE_NEAR`
+    /// is bound to its hit set before dispatch (`velesql::text_match`), so
+    /// the in-fetch filter covers it.
     fn sparse_anchor_prefilter(
         &self,
         stmt: &crate::velesql::SelectStatement,
@@ -140,9 +142,6 @@ impl Collection {
         let Some(cond) = stmt.where_clause.as_ref() else {
             return Ok(None);
         };
-        if Self::extract_match_query(cond).is_some() {
-            return Ok(None);
-        }
         self.compute_required_anchor_ids(cond, params, &stmt.from_alias, graph_cache)
     }
 
@@ -215,9 +214,7 @@ impl Collection {
             return self.postprocess_ranked_results(stmt, params, results);
         }
         let groups = self.apply_vector_group_by(stmt, &results, params)?;
-        let stmt = stmt
-            .order_by_aggregates_as_fields()
-            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        let stmt = stmt.order_by_aggregates_as_fields()?;
         self.postprocess_ranked_results(&stmt, params, groups)
     }
 

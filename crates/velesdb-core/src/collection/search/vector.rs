@@ -9,8 +9,8 @@ use crate::quantization::{
     distance_pq_l2, pq_adc_batch_rescore, PQVector, ProductQuantizer, StorageMode,
 };
 use crate::scored_result::ScoredResult;
-use crate::validation::validate_dimension_match;
 
+use super::live::Nearest;
 use super::pending::PendingRestriction;
 
 /// Estimates the real selectivity from a pre-filter bitmap.
@@ -31,8 +31,13 @@ pub(crate) fn estimate_real_selectivity(
 
 /// Tags each `SearchResult` with a `vector_score` component equal to its score.
 ///
-/// For pure vector search, the HNSW/PQ score IS the vector component.
-pub(super) fn tag_vector_component_scores(results: &mut [SearchResult]) {
+/// For pure vector search, the HNSW/PQ score IS the vector component. Every
+/// path whose row score is a vector similarity calls this — the HNSW search
+/// epilogues, the filtered and anchored exact rescans, the `similarity()`
+/// scan, the `ORDER BY similarity(field, $v)` write-back and MATCH rows a
+/// `similarity()` scored — so a surface reading `vector_score` from the
+/// components never has to guess it from the final score.
+pub(crate) fn tag_vector_component_scores(results: &mut [SearchResult]) {
     for result in results {
         result.component_scores = Some(smallvec::smallvec![("vector_score", result.score),]);
     }
@@ -212,50 +217,33 @@ fn rescore_per_item(
 }
 
 impl Collection {
-    /// Shared search-pipeline prologue: rejects metadata-only collections,
-    /// validates the query dimension against the collection config, and reads
-    /// the configured distance metric in a single lock scope.
+    /// Shared search-pipeline prologue: checks the query vector against the
+    /// vectors this collection stores
+    /// ([`crate::velesql::QueryVectorTarget::check_len`] — a collection that
+    /// stores none, metadata or a graph without embeddings, refuses with
+    /// `Error::SearchNotSupported`, then the dimension) and reads the
+    /// configured distance metric in a single lock scope.
     ///
     /// Factored from `search_with_ef` / `search_with_quality` /
     /// `search_with_forced_rerank` / `search_with_quality_no_rerank` for #452.
-    /// Centralising the `metadata_only` check here (Devin #616 feedback)
-    /// makes the 4 methods return a clean `Error::SearchNotSupported` instead
-    /// of failing deeper inside the HNSW index on metadata-only collections —
-    /// matching the behaviour of the inherent `search()` method.
     /// `#[inline]` preserves pre-refactor inlining (Phase 3.2 learning).
     #[inline]
     pub(super) fn validate_query_and_read_metric(&self, query: &[f32]) -> Result<DistanceMetric> {
-        let config = self.storage.config.read();
-        if config.metadata_only {
-            return Err(Error::SearchNotSupported(config.name.clone()));
-        }
-        validate_dimension_match(config.dimension, query.len())?;
-        Ok(config.metric)
+        self.validate_queries_and_read_metric(&[query])
     }
 
-    /// Shared search-pipeline epilogue: hydrates points and payloads, then tags
-    /// each result with its `vector_score` component. The caller has merged
-    /// the pending points already (`search_merging_pending`).
-    ///
-    /// Factored from `search_with_ef` / `search_with_quality` /
-    /// `search_with_forced_rerank` / `search_with_quality_no_rerank` for #452.
-    /// Marked `#[inline]` so rustc preserves the pre-refactor inlining decisions
-    /// across the now-extracted call boundary (Phase 3.2 learning).
-    #[inline]
-    pub(super) fn finalize_search_results(
+    /// [`Self::validate_query_and_read_metric`] for every query of a batch
+    /// or a fused search, under one lock scope.
+    pub(super) fn validate_queries_and_read_metric(
         &self,
-        index_results: &[ScoredResult],
-    ) -> Vec<SearchResult> {
-        let vector_storage = self.storage.vector_storage.read();
-        let payload_storage = self.storage.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(index_results, &*vector_storage, &*payload_storage);
-        // Resolution is both guards' last use; tagging reads only `results`.
-        drop(payload_storage);
-        drop(vector_storage);
-        tag_vector_component_scores(&mut results);
-        results
+        queries: &[&[f32]],
+    ) -> Result<DistanceMetric> {
+        let config = self.storage.config.read();
+        let target = config.query_vector_target();
+        for query in queries {
+            target.check_len(query.len())?;
+        }
+        Ok(config.metric)
     }
 
     /// Searches for the k nearest neighbors of the query vector.
@@ -267,15 +255,7 @@ impl Collection {
     /// Returns an error if the query vector dimension doesn't match the collection,
     /// or if this is a metadata-only collection (use `query()` instead).
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-        let config = self.storage.config.read();
-
-        // Metadata-only collections don't support vector search
-        if config.metadata_only {
-            return Err(Error::SearchNotSupported(config.name.clone()));
-        }
-
-        validate_dimension_match(config.dimension, query.len())?;
-        drop(config);
+        let metric = self.validate_query_and_read_metric(query)?;
 
         // Every typed wrapper — VectorCollection, MetadataCollection,
         // GraphCollection — delegates its `search` here, so this one call
@@ -285,23 +265,10 @@ impl Collection {
         crate::validation::validate_vector_is_finite(query)?;
 
         // Use HNSW index for fast ANN search
-        let index_results = self.search_ids_with_adc_if_pq(
-            query,
-            k,
-            self.runtime_search_quality(),
-            PendingRestriction::NONE,
-        )?;
-
-        let vector_storage = self.storage.vector_storage.read();
-        let payload_storage = self.storage.payload_storage.read();
-
-        let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
-        // Resolution is both guards' last use; tagging reads only `results`.
-        drop(payload_storage);
-        drop(vector_storage);
-        tag_vector_component_scores(&mut results);
-        Ok(results)
+        let quality = self.runtime_search_quality();
+        self.nearest_live(&Nearest::rows(query, metric, k), |n| {
+            self.search_ids_with_adc_if_pq(query, n, quality, PendingRestriction::NONE)
+        })
     }
 
     /// Performs vector similarity search with custom `ef_search` parameter.
@@ -323,11 +290,11 @@ impl Collection {
         // Convert ef_search to a value-preserving SearchQuality.
         let quality = super::vector_filter::ef_to_quality(ef_search);
 
-        let index_results =
-            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+        self.nearest_live(&Nearest::rows(query, metric, k), |asked| {
+            self.search_merging_pending(query, asked, metric, PendingRestriction::NONE, |n| {
                 self.storage.index.search_with_quality(query, n, quality)
-            })?;
-        Ok(self.finalize_search_results(&index_results))
+            })
+        })
     }
 
     /// Rejects a Perfect (brute-force) search on a collection larger than the
@@ -383,11 +350,11 @@ impl Collection {
         let metric = self.validate_query_and_read_metric(query)?;
         self.enforce_perfect_mode_limit(quality)?;
 
-        let index_results =
-            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+        self.nearest_live(&Nearest::rows(query, metric, k), |asked| {
+            self.search_merging_pending(query, asked, metric, PendingRestriction::NONE, |n| {
                 self.storage.index.search_with_quality(query, n, quality)
-            })?;
-        Ok(self.finalize_search_results(&index_results))
+            })
+        })
     }
 
     /// Routes vector search through `QuerySearchOptions` from a WITH clause.
@@ -435,14 +402,14 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let metric = self.validate_query_and_read_metric(query)?;
 
-        let index_results =
-            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+        self.nearest_live(&Nearest::rows(query, metric, k), |asked| {
+            self.search_merging_pending(query, asked, metric, PendingRestriction::NONE, |n| {
                 let rerank_k = n.saturating_mul(4).max(n + 32);
                 self.storage
                     .index
                     .search_with_rerank_quality(query, n, rerank_k, quality)
-            })?;
-        Ok(self.finalize_search_results(&index_results))
+            })
+        })
     }
 
     /// Searches with a quality profile but suppresses two-stage reranking.
@@ -463,20 +430,22 @@ impl Collection {
         // implicit contract that "no rerank" only suppresses reranking, not the
         // candidate-pool sizing.
         let ef_search = quality.ef_search_for_scale(k, self.storage.index.len());
-        let index_results =
-            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+        self.nearest_live(&Nearest::rows(query, metric, k), |asked| {
+            self.search_merging_pending(query, asked, metric, PendingRestriction::NONE, |n| {
                 Ok(self
                     .storage
                     .index
                     .search_hnsw_only(query, n, ef_search.max(n)))
-            })?;
-        Ok(self.finalize_search_results(&index_results))
+            })
+        })
     }
 
     /// Performs fast vector similarity search returning only IDs and scores.
     ///
-    /// Perf: faster than `search()` because it skips vector/payload retrieval.
-    /// Use this when you only need IDs and scores, not full point data.
+    /// The nearest live rows, as [`Self::search`] finds them — a deleted or
+    /// TTL-expired row takes no place among the `k` — without copying any
+    /// vector. Use this when you only need IDs and scores, not full point
+    /// data.
     ///
     /// # Arguments
     ///
@@ -491,25 +460,21 @@ impl Collection {
     ///
     /// Returns an error if the query vector dimension doesn't match the collection.
     pub fn search_ids(&self, query: &[f32], k: usize) -> Result<Vec<ScoredResult>> {
-        // Rejects metadata-only + validates dimension in one lock scope.
-        // Metric is unused here (search_ids_with_adc_if_pq re-reads config)
-        // but reusing the helper keeps the metadata_only guard consistent
-        // with the 4 other dispatch paths (#452 Devin #616 feedback).
-        let _metric = self.validate_query_and_read_metric(query)?;
-
-        // Perf: Direct HNSW search without vector/payload retrieval
-        self.search_ids_with_adc_if_pq(
-            query,
-            k,
-            self.runtime_search_quality(),
-            PendingRestriction::NONE,
-        )
+        // Rejects metadata-only + validates dimension in one lock scope, as
+        // the other dispatch paths do (#452 Devin #616 feedback).
+        let metric = self.validate_query_and_read_metric(query)?;
+        let quality = self.runtime_search_quality();
+        self.nearest_live_ids(&Nearest::rows(query, metric, k), |n| {
+            self.search_ids_with_adc_if_pq(query, n, quality, PendingRestriction::NONE)
+        })
     }
 
     /// Searches for the k nearest neighbors with metadata filtering.
     ///
-    /// Performs post-filtering: retrieves more candidates from HNSW,
-    /// then filters by metadata conditions.
+    /// Performs post-filtering: retrieves more candidates from HNSW — as
+    /// many live ones as the filter's selectivity calls for, a deleted or
+    /// TTL-expired candidate taking no place among them — then filters by
+    /// metadata conditions (`collection/search/live.rs`).
     ///
     /// # Arguments
     ///
@@ -550,18 +515,27 @@ impl Collection {
         opts: Option<&crate::collection::search::query::QuerySearchOptions>,
     ) -> Result<Vec<SearchResult>> {
         let metric = self.validate_query_and_read_metric(query)?;
-        let higher_is_better = metric.higher_is_better();
 
         // Raw search path: no stats handle threaded here, and get_stats() may
         // trigger a full analyze() on a cold cache — keep the structure-only
         // estimate so this path's cost profile is unchanged.
         let candidates_k = super::vector_filter::compute_oversampled_k(k, filter, None);
 
-        // Attempt bitmap pre-filter from secondary indexes.
-        let index_results =
-            self.search_with_optional_bitmap(query, candidates_k, filter, metric, opts)?;
-
-        Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
+        // Attempt bitmap pre-filter from secondary indexes, once per read:
+        // the search it restricts reaches the bitmap's members alone. The
+        // filter re-matches every candidate: the bitmap can be a superset of
+        // its matches, and a post-filtered search merges pending points
+        // unfiltered.
+        let bitmap = self.build_prefilter_bitmap(filter);
+        let want = Nearest::judging(query, metric, k, candidates_k);
+        let want = bitmap
+            .as_ref()
+            .map_or(want, |bitmap| want.within(bitmap.len()));
+        self.nearest_live_where(
+            &want,
+            |id, payload| filter.matches_point(id, payload),
+            |n| self.search_with_optional_bitmap(query, n, bitmap.as_ref(), metric, opts),
+        )
     }
 
     /// Searches HNSW with an optional bitmap pre-filter from secondary indexes.
@@ -569,25 +543,25 @@ impl Collection {
         &self,
         query: &[f32],
         candidates_k: usize,
-        filter: &crate::filter::Filter,
+        bitmap: Option<&roaring::RoaringBitmap>,
         metric: DistanceMetric,
         opts: Option<&crate::collection::search::query::QuerySearchOptions>,
     ) -> Result<Vec<ScoredResult>> {
-        if let Some(bitmap) = self.build_prefilter_bitmap(filter) {
+        if let Some(bitmap) = bitmap {
             if let Some(opts) = opts {
                 opts.record_executed_strategy(crate::velesql::FilterStrategy::PreFilter);
             }
-            let restriction = PendingRestriction::within(&bitmap).and_post_filtered();
+            let restriction = PendingRestriction::within(bitmap).and_post_filtered();
             // `search_with_quality_and_bitmap` at the configured quality —
             // the same call the `WITH (ef_search = N)` arm of
-            // `search_with_bitmap_strategy` runs. The ef it used to compute
+            // `run_filtered_index_search` runs. The ef it used to compute
             // itself (`candidates_k.max(k * 10)`) ignored `[search]` (#2430).
             return self.search_merging_pending(query, candidates_k, metric, restriction, |n| {
                 self.storage.index.search_with_quality_and_bitmap(
                     query,
                     n,
                     self.runtime_search_quality(),
-                    &bitmap,
+                    bitmap,
                 )
             });
         }

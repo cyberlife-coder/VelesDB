@@ -31,6 +31,7 @@ use velesdb_core::velesql::{
 };
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::velesql_match_orderby::{BoundElement, MatchBinding, MatchCandidate};
 pub(crate) use crate::velesql_match_score::MatchScoring;
 use crate::velesql_value::parse_params;
@@ -48,16 +49,13 @@ pub(crate) fn execute_match_rows(
     sql: &str,
     params_json: Option<&str>,
     scoring: Option<MatchScoring>,
-) -> Result<Vec<serde_json::Value>, String> {
-    let query = Parser::parse(sql).map_err(|e| {
-        format!(
-            "VelesQL parse error at position {}: {} (near '{}')",
-            e.position, e.message, e.fragment
-        )
-    })?;
-    QueryValidator::validate(&query).map_err(|e| e.to_string())?;
+) -> Result<Vec<serde_json::Value>, ExecError> {
+    let query = Parser::parse(sql).map_err(velesdb_core::Error::from)?;
+    QueryValidator::validate(&query).map_err(velesdb_core::Error::from)?;
     let Some(clause) = query.match_clause.as_ref() else {
-        return Err("executeMatch runs MATCH statements only; use executeQuery".to_string());
+        return Err(ExecError::refused(
+            "executeMatch runs MATCH statements only; use executeQuery",
+        ));
     };
     let params = parse_params(params_json)?;
     let candidates =

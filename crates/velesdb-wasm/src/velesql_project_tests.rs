@@ -2,8 +2,8 @@ use super::*;
 
 fn rows() -> Vec<OwnedScanRow> {
     vec![
-        (1, 0.9, Some(serde_json::json!({"cat": "a", "title": "X"}))),
-        (2, 0.5, Some(serde_json::json!({"cat": "b", "title": "Y"}))),
+        OwnedScanRow::new(1, 0.9, Some(serde_json::json!({"cat": "a", "title": "X"}))),
+        OwnedScanRow::new(2, 0.5, Some(serde_json::json!({"cat": "b", "title": "Y"}))),
     ]
 }
 
@@ -14,6 +14,24 @@ fn test_to_search_results_preserves_id_score_payload() {
     assert_eq!(results[0].point.id, 1);
     assert!((results[0].score - 0.9).abs() < f32::EPSILON);
     assert_eq!(results[1].point.payload.as_ref().unwrap()["cat"], "b");
+}
+
+#[test]
+fn test_to_search_results_tags_only_a_vector_scored_row() {
+    let rows = vec![
+        OwnedScanRow::vector_scored(1, 0.75, None),
+        OwnedScanRow::new(2, 1.0, None),
+    ];
+    let results = to_search_results(rows);
+    let tagged = results[0]
+        .component_scores
+        .as_deref()
+        .expect("test: a vector-scored row carries its vector component");
+    assert_eq!(tagged, [("vector_score", 0.75)]);
+    assert!(
+        results[1].component_scores.is_none(),
+        "a row whose score is not a vector similarity carries no breakdown"
+    );
 }
 
 #[test]

@@ -17,6 +17,7 @@
 
 pub mod async_ops;
 pub(crate) mod atomic_write;
+mod change_log;
 mod compaction;
 mod guard;
 mod histogram;
@@ -56,6 +57,8 @@ mod idx_persistence_tests;
 #[cfg(test)]
 mod log_payload_tests;
 #[cfg(test)]
+mod log_payload_torn_tests;
+#[cfg(test)]
 mod loom_tests;
 #[cfg(test)]
 mod metrics_tests;
@@ -71,11 +74,19 @@ mod tests;
 mod wal_recovery_tests;
 
 // Re-export public types
+pub(crate) use change_log::ChangeLog;
 pub use guard::VectorSliceGuard;
+pub(crate) use log_payload::HeldPayloadIds;
 pub use log_payload::{DurabilityMode, LogPayloadStorage};
 pub use metrics::{LatencyStats, StorageMetrics};
+pub(crate) use mmap::HeldVectorIds;
 pub use mmap::MmapStorage;
 pub use traits::{PayloadStorage, VectorStorage};
+
+/// The payload WAL's fault seam, for the collection tests that drive a
+/// write into a failed barrier.
+#[cfg(test)]
+pub(crate) use log_payload_io::fail_next_wal_flush;
 pub use wal_cursor::{WalConsumerId, WalCursor, WalPosition, WalRecord, WalWatermarkRegistry};
 pub use wal_cursor_reader::LogWalCursor;
 

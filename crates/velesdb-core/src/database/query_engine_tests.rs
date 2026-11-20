@@ -254,44 +254,32 @@ fn test_join_row_budget_order_by_uses_ceiling() {
 // Database::execute_aggregate (single-source aggregation entry)
 // =========================================================================
 
-/// `Database::execute_aggregate` resolves the target collection from the
-/// `_collection` param when the query has no explicit `FROM` (the convention the
-/// CLI REPL and SDKs use to inject the active collection), and runs GROUP BY.
+/// `Database::execute_aggregate` reads its target from the query's `FROM`
+/// alone: `_collection` addresses a top-level MATCH
+/// (`velesql::collection_target`), so an aggregate AST without `FROM` — one
+/// the grammar never builds — is refused as naming no collection, whatever
+/// `_collection` says.
 #[test]
-fn test_execute_aggregate_resolves_collection_via_param() {
+fn test_execute_aggregate_is_not_addressed_by_the_collection_param() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
     db.create_collection("orders", 2, DistanceMetric::Cosine)
         .unwrap();
-    let coll = db.get_vector_collection("orders").unwrap();
-    let points: Vec<Point> = [(10, "x"), (11, "x"), (12, "y"), (13, "y")]
-        .into_iter()
-        .map(|(id, cat)| {
-            Point::new(
-                id,
-                vec![1.0, 0.0],
-                Some(serde_json::json!({ "category": cat })),
-            )
-        })
-        .collect();
-    coll.upsert(points).unwrap();
 
-    // Parse with FROM (the grammar requires it), then clear it to simulate the
-    // programmatic / REPL convention of supplying the target via `_collection`.
     let mut query =
         Parser::parse("SELECT category, COUNT(*) AS n FROM orders GROUP BY category").unwrap();
     query.select.from = String::new();
-    let mut params = std::collections::HashMap::new();
-    params.insert(
-        "_collection".to_string(),
+    let params = std::collections::HashMap::from([(
+        crate::velesql::COLLECTION_PARAM.to_string(),
         serde_json::Value::String("orders".to_string()),
-    );
+    )]);
 
-    let value = db.execute_aggregate(&query, &params).unwrap();
-    let groups = value
-        .as_array()
-        .expect("GROUP BY returns an array of groups");
-    assert_eq!(groups.len(), 2, "two category groups (x, y); got {value:?}");
+    let err = db.execute_aggregate(&query, &params).unwrap_err();
+    assert_eq!(err.code(), "VELES-010", "{err}");
+    assert!(
+        err.to_string().contains("requires a target collection"),
+        "{err}"
+    );
 }
 
 /// `Database::execute_aggregate` surfaces a `CollectionNotFound` error for an

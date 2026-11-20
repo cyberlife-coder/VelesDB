@@ -152,6 +152,7 @@ fn validate_dimension(expected: usize, actual: usize) -> io::Result<()> {
 impl VectorStorage for MmapStorage {
     fn store(&mut self, id: u64, vector: &[f32]) -> io::Result<()> {
         validate_dimension(self.dimension, vector.len())?;
+        self.changes.record([id]);
 
         let vector_bytes = vector_to_bytes(vector);
 
@@ -214,6 +215,7 @@ impl VectorStorage for MmapStorage {
         if vectors.is_empty() {
             return Ok(0);
         }
+        self.changes.record(vectors.iter().map(|&(id, _)| id));
 
         let vector_size = self.dimension * std::mem::size_of::<f32>();
 
@@ -301,6 +303,7 @@ impl VectorStorage for MmapStorage {
     }
 
     fn delete(&mut self, id: u64) -> io::Result<()> {
+        self.changes.record([id]);
         // 1. Write to WAL with CRC32 framing (Issue #317).
         // Issue #423 Component 4: Skip WAL when DurabilityMode::None.
         // #898 follow-up: the delete intent MUST reach the WAL before the
@@ -401,6 +404,7 @@ impl MmapStorage {
         if ids.is_empty() {
             return Ok(());
         }
+        self.changes.record(ids.iter().copied());
 
         // 1. Group WAL write: all delete frames, one syscall, one barrier.
         if self.durability != DurabilityMode::None {

@@ -107,7 +107,10 @@ fn test_fusion_over_single_near_is_rejected_like_core() {
     // A single-vector NEAR plus a metadata filter is one fusable branch. Core's
     // validator refuses USING FUSION there (V012); WASM used to accept it and
     // re-rank the hits by RRF against a constant metadata branch.
-    assert!(err.contains("V012"), "core's fusion refusal, got: {err}");
+    assert!(
+        err.to_string().contains("V012"),
+        "core's fusion refusal, got: {err}"
+    );
 }
 
 #[test]
@@ -138,7 +141,7 @@ fn test_weighted_fusion_single_branch_does_not_leak_filtered_rows() {
             );
         }
         Err(msg) => assert!(
-            msg.to_lowercase().contains("fusion"),
+            msg.to_string().to_lowercase().contains("fusion"),
             "rejection must name fusion, got: {msg}"
         ),
     }
@@ -259,7 +262,7 @@ fn test_similarity_on_metadata_collection_errors() {
         Some(r#"{"q": [1.0, 0.0]}"#),
     );
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("metadata-only"));
+    assert_eq!(err.expect_err("test: err").code(), Some("VELES-015"));
 }
 
 // =========================================================================
@@ -275,7 +278,10 @@ fn test_similarity_dim_mismatch_errors() {
         Some(r#"{"q": [1.0, 0.0]}"#),
     );
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("dimension mismatch"));
+    assert!(err
+        .expect_err("test: err")
+        .to_string()
+        .contains("dimension mismatch"));
 }
 
 #[test]
@@ -672,6 +678,7 @@ fn test_multiple_similarity_different_params_returns_error_or() {
     assert!(err.is_err());
     assert!(err
         .expect_err("test: err")
+        .to_string()
         .contains("Multiple similarity()"));
 }
 

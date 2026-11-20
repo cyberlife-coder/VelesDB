@@ -54,6 +54,8 @@ mod explain;
 // explain_tests exercises the REST `api_types` EXPLAIN conversions (gated with the
 // server/persistence layer), so it stays persistence-gated even though `explain`
 // itself is now persistence-free (P1.4).
+mod collection_target;
+mod ddl_options;
 pub mod distinct_evaluator;
 #[cfg(test)]
 mod distinct_evaluator_tests;
@@ -85,20 +87,35 @@ mod json_path_tests;
 pub mod match_planner;
 #[cfg(test)]
 mod match_planner_tests;
+pub use ddl_options::{resolve_metric, resolve_storage_mode};
+mod dml_binding;
+pub use collection_target::{
+    collection_param, collection_target, with_collection_param, COLLECTION_PARAM,
+};
+pub use dml_binding::{
+    bind_insert_row, bind_update_assignments, check_dml_where, BoundAssignments, BoundInsertRow,
+    VectorColumn,
+};
+mod match_threshold;
+pub use match_threshold::{match_threshold_keeps, validate_match_threshold};
 #[cfg(test)]
 mod orderby_multi_tests;
 #[cfg(test)]
 mod parallel_aggregation_tests;
 mod param_binding;
-pub use param_binding::{bind_condition, bind_match_clause, bind_value};
+pub use param_binding::{bind_condition, bind_match_clause, bind_value, bind_vector};
+pub(crate) use param_binding::{bind_dml_value, bind_dml_vector};
 pub(crate) mod condition_tree;
 mod edge_query;
 mod hash_join;
 mod join_row;
 mod pattern_match;
+mod query_vectors;
 mod score_context;
 mod set_operation;
+mod side_qualifier;
 mod similarity_threshold;
+pub(crate) mod text_match;
 mod vector_predicates;
 #[cfg(feature = "persistence")]
 pub(crate) use edge_query::literal_id;
@@ -106,12 +123,16 @@ pub use edge_query::EdgeQuery;
 pub use hash_join::{hash_join, JoinKeys};
 pub use join_row::{merge_side, scope_base, side_alias};
 pub use pattern_match::{element_property, has_every_label, inline_properties_hold};
+pub use query_vectors::{match_query_vectors, select_query_vectors, QueryVectorTarget};
 pub use score_context::{
     evaluate_arithmetic, evaluate_let_bindings, is_builtin_score_variable, ScoreContext,
 };
 pub use set_operation::{
     compound_window, execute_compound, operand_queries, row_key, CompoundWindow,
 };
+#[cfg(feature = "persistence")]
+pub(crate) use side_qualifier::base_column;
+pub use side_qualifier::{base_side, resolve_base_qualifiers};
 pub use similarity_threshold::{similarity_holds, SIMILARITY_EQ_TOLERANCE};
 pub use vector_predicates::{
     payload_vector, validate_vector_predicates, METADATA_MATCH_SCORE, PRIMARY_VECTOR_FIELD,
@@ -330,10 +351,10 @@ pub use explain::{
     EXACT_POST_FILTER_MIN_SELECTIVITY,
 };
 pub use grouping::{row_field, GroupInput, GroupOutput, Grouper};
-pub use json_order::compare_json_values;
 #[cfg(feature = "persistence")]
 pub(crate) use json_order::compare_number_literal;
 pub(crate) use json_order::compare_numbers;
+pub use json_order::{compare_json_values, compare_scores};
 pub use parser::Parser;
 pub use planner::{
     Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats, SelectivityMethod,

@@ -120,3 +120,60 @@ class TestDatabaseExecuteQueryErrors:
             temp_db.execute_query("SELECT * FROM no_such_collection LIMIT 5")
         assert isinstance(exc_info.value, velesdb.VelesDBError)
         assert "no_such_collection" in str(exc_info.value)
+
+
+class TestAggregatesReturnTheirRows:
+    """An aggregate returns its rows, as REST, Tauri and the CLI do."""
+
+    @staticmethod
+    def _seed(db):
+        collection = db.create_collection("agg_rows", 2)
+        collection.upsert(
+            [
+                {"id": i, "vector": [1.0, float(i)], "payload": {"cat": cat, "n": i}}
+                for i, cat in [(1, "a"), (2, "a"), (3, "b"), (4, "b"), (5, "b")]
+            ]
+        )
+        return collection
+
+    def test_execute_query_counts(self, temp_db):
+        self._seed(temp_db)
+        assert temp_db.execute_query("SELECT COUNT(*) FROM agg_rows WHERE cat = 'b'") == [
+            {"count": 3}
+        ]
+
+    def test_execute_query_groups(self, temp_db):
+        self._seed(temp_db)
+        rows = temp_db.execute_query(
+            "SELECT cat, COUNT(*) FROM agg_rows GROUP BY cat ORDER BY cat"
+        )
+        assert rows == [{"cat": "a", "count": 2}, {"cat": "b", "count": 3}]
+
+    def test_collection_query_counts(self, temp_db):
+        collection = self._seed(temp_db)
+        assert collection.query("SELECT COUNT(*), SUM(n) FROM agg_rows WHERE n > 1") == [
+            {"count": 4, "sum_n": 14.0}
+        ]
+
+    def test_graph_collection_query_counts(self, temp_db):
+        graph = temp_db.create_graph_collection("agg_graph")
+        graph.upsert_node(1, {"kind": "a"})
+        graph.upsert_node(2, {"kind": "a"})
+        graph.upsert_node(3, {"kind": "b"})
+        assert graph.query("SELECT COUNT(*) FROM agg_graph WHERE kind = 'a'") == [
+            {"count": 2}
+        ]
+
+    @pytest.mark.parametrize("statement", [
+        "SELECT COUNT(*) FROM agg_rows UNION ALL SELECT COUNT(*) FROM agg_rows",
+        "SELECT cat, COUNT(*) FROM agg_rows GROUP BY cat "
+        "EXCEPT SELECT cat, COUNT(*) FROM agg_rows GROUP BY cat",
+    ])
+    def test_a_compound_of_aggregates_is_refused(self, temp_db, statement):
+        """An aggregate in a compound is refused (V019), never answered by
+        its first operand alone."""
+        collection = self._seed(temp_db)
+        with pytest.raises(Exception, match="V019"):
+            temp_db.execute_query(statement)
+        with pytest.raises(Exception, match="V019"):
+            collection.query(statement)

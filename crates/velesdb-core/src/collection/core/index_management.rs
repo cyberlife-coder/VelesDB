@@ -79,50 +79,40 @@ impl Collection {
         Ok(())
     }
 
-    /// Inserts the (empty) secondary index entry if absent and backfills it
-    /// from existing payloads, **without** touching the persisted authority.
+    /// Inserts the secondary index entry if absent and backfills it from
+    /// existing payloads, **without** touching the persisted authority.
     ///
     /// Shared by [`create_index`](Self::create_index) — which then records the
     /// field in `config.indexed_fields` — and `restore_secondary_indexes_from_config`,
     /// where the config set is already the authority, so neither path rewrites
-    /// `config.json` during an open-time restore.
-    pub(crate) fn build_and_backfill_secondary_index(&self, field_name: &str) {
-        let mut indexes = self.query.secondary_indexes.write();
-        let is_new = !indexes.contains_key(field_name);
-        indexes
-            .entry(field_name.to_string())
-            .or_insert_with(|| SecondaryIndex::BTree(parking_lot::RwLock::new(BTreeMap::new())));
-
-        // Backfill: scan existing payloads to populate the index.
-        // Runs for both new indexes AND existing indexes (to catch points
-        // inserted via bulk paths that skipped per-point index updates).
-        drop(indexes); // Release write lock before reading payloads
-        self.backfill_secondary_index(field_name, is_new);
-    }
-
-    /// Scans existing payloads and populates the secondary index for `field_name`.
+    /// `config.json` during an open-time restore. The backfill runs for an
+    /// existing index too, to catch points a path that skipped per-point
+    /// index updates once stored.
     ///
-    /// Runs for both new and existing indexes to catch points inserted via
-    /// bulk paths that skipped per-point index updates.
-    fn backfill_secondary_index(&self, field_name: &str, is_new: bool) {
+    /// The index is filled before any reader can see it, and no write lands
+    /// while it fills: a filtered search builds its prefilter bitmap from the
+    /// secondary indexes (`Collection::ranked_within_prefilter`), and one
+    /// built from an index still empty set every candidate aside.
+    ///
+    /// LOCK ORDER: payload_storage(3), read → secondary_indexes(6), write,
+    /// both held through the fill.
+    pub(crate) fn build_and_backfill_secondary_index(&self, field_name: &str) {
         use crate::storage::PayloadStorage;
 
         let payload_storage = self.storage.payload_storage.read();
-        let ids = PayloadStorage::ids(&*payload_storage);
-        let indexes = self.query.secondary_indexes.read();
-        let Some(index) = indexes.get(field_name) else {
-            return;
-        };
-        let SecondaryIndex::BTree(ref tree) = index;
-        let mut tree_guard = tree.write();
-        for id in ids {
-            Self::backfill_single_payload(&*payload_storage, id, field_name, &mut tree_guard);
+        let mut indexes = self.query.secondary_indexes.write();
+        let is_new = !indexes.contains_key(field_name);
+        let SecondaryIndex::BTree(tree) = indexes
+            .entry(field_name.to_string())
+            .or_insert_with(|| SecondaryIndex::BTree(parking_lot::RwLock::new(BTreeMap::new())));
+        let tree = tree.get_mut();
+        for id in PayloadStorage::ids(&*payload_storage) {
+            Self::backfill_single_payload(&*payload_storage, id, field_name, tree);
         }
-        // The loop is every guard's last use; the log below needs none of them.
-        // Dropped in borrow order — `tree_guard` borrows out of `indexes`.
-        drop(tree_guard);
         drop(indexes);
         drop(payload_storage);
+        #[cfg(test)]
+        super::write_hooks::after_index_visible();
 
         if !is_new {
             tracing::debug!(
@@ -134,7 +124,8 @@ impl Collection {
 
     /// Indexes a single payload entry for the given field, if present.
     ///
-    /// Callers are responsible for deduplication (see `backfill_secondary_index`).
+    /// Callers are responsible for deduplication (see
+    /// `build_and_backfill_secondary_index`).
     fn backfill_single_payload(
         payload_storage: &dyn crate::storage::PayloadStorage,
         id: u64,

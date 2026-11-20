@@ -73,7 +73,15 @@ impl<'a> MatchNodes<'a> {
         state.data.get(start..start + state.dimension)
     }
 
-    /// The collection's dimension and metric, when it has vectors.
+    /// The dimension of the collection's vectors, `0` when it stores none
+    /// or the walk reads no collection (the rule
+    /// `store_search::query_vector_target` reads it by).
+    pub(crate) fn store_dimension(&self) -> usize {
+        self.collection.map_or(0, |state| state.dimension)
+    }
+
+    /// The dimension and metric of the collection's vectors, when it stores
+    /// any.
     pub(crate) fn vector_space(&self) -> Option<(usize, crate::DistanceMetric)> {
         self.collection
             .filter(|state| state.dimension > 0)

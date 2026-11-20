@@ -48,6 +48,7 @@
 use velesdb_core::velesql::{DmlStatement, Parser, Query, QueryValidator};
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::velesql_result::{classify_query, QueryResult, QueryResultRow};
 use crate::velesql_value::{parse_params, Params};
 use crate::{
@@ -57,22 +58,18 @@ use crate::{
 
 /// Executes a VelesQL query against the database.
 ///
-/// Returns a [`QueryResult`] on success. Errors surface as `String` so the
-/// FFI boundary can map them to `JsValue` without re-parsing.
+/// Returns a [`QueryResult`] on success. An error core defines stays core's
+/// ([`ExecError::Core`]), so the FFI boundary reads its code from the
+/// variant; the executor's own refusals are messages.
 pub(crate) fn execute(
     db: &mut DatabaseInner,
     sql: &str,
     params_json: Option<&str>,
-) -> Result<QueryResult, String> {
-    let parsed = Parser::parse(sql).map_err(|e| {
-        format!(
-            "VelesQL parse error at position {}: {} (near '{}')",
-            e.position, e.message, e.fragment
-        )
-    })?;
+) -> Result<QueryResult, ExecError> {
+    let parsed = Parser::parse(sql).map_err(velesdb_core::Error::from)?;
     let params = parse_params(params_json)?;
 
-    QueryValidator::validate(&parsed).map_err(|e| e.to_string())?;
+    QueryValidator::validate(&parsed).map_err(velesdb_core::Error::from)?;
     reject_unsupported_top_level(&parsed)?;
 
     let kind = classify_query(&parsed);
@@ -100,7 +97,7 @@ fn dispatch(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
-) -> Result<DispatchOutcome, String> {
+) -> Result<DispatchOutcome, ExecError> {
     if query.is_match_query() {
         return velesql_graph::execute_match(db, query, params).map(DispatchOutcome::Rows);
     }
@@ -126,51 +123,42 @@ fn dispatch(
 
 /// Dispatches DML statements (INSERT / UPDATE / DELETE / graph mutations).
 ///
-/// All variants except `SelectEdges` yield a mutation count; `SelectEdges`
-/// is a row-producing DML statement and propagates its rows unchanged.
+/// All variants except `SelectEdges` yield a mutation count ([`mutate`]);
+/// `SelectEdges` is a row-producing DML statement and propagates its rows
+/// unchanged.
 fn dispatch_dml(
     db: &mut DatabaseInner,
     dml: &DmlStatement,
     params: &Params,
-) -> Result<DispatchOutcome, String> {
+) -> Result<DispatchOutcome, ExecError> {
+    if let DmlStatement::SelectEdges(s) = dml {
+        return velesql_graph::select_edges(db, s, params).map(DispatchOutcome::Rows);
+    }
+    mutate(db, dml, params).map(DispatchOutcome::Mutation)
+}
+
+/// Runs a mutating DML statement; returns how many points, nodes or edges
+/// it wrote or removed.
+fn mutate(db: &mut DatabaseInner, dml: &DmlStatement, params: &Params) -> Result<u32, ExecError> {
     match dml {
-        DmlStatement::Insert(s) | DmlStatement::Upsert(s) => {
-            let n = velesql_insert::execute(db, s, params)?;
-            Ok(DispatchOutcome::Mutation(n))
-        }
-        DmlStatement::Update(s) => {
-            let n = velesql_update::execute(db, s, params)?;
-            Ok(DispatchOutcome::Mutation(n))
-        }
-        DmlStatement::Delete(s) => {
-            let n = velesql_delete::execute(db, s, params)?;
-            Ok(DispatchOutcome::Mutation(n))
-        }
-        DmlStatement::InsertEdge(s) => {
-            velesql_graph::insert_edge(db, s, params)?;
-            Ok(DispatchOutcome::Mutation(1))
-        }
-        DmlStatement::DeleteEdge(s) => {
-            let n = velesql_graph::delete_edge(db, s)?;
-            Ok(DispatchOutcome::Mutation(n))
-        }
-        DmlStatement::SelectEdges(s) => {
-            velesql_graph::select_edges(db, s, params).map(DispatchOutcome::Rows)
-        }
-        DmlStatement::InsertNode(s) => {
-            velesql_graph::insert_node(db, s)?;
-            Ok(DispatchOutcome::Mutation(1))
-        }
-        _ => Err(format!("Unsupported DML variant in WASM: {dml:?}")),
+        DmlStatement::Insert(s) | DmlStatement::Upsert(s) => velesql_insert::execute(db, s, params),
+        DmlStatement::Update(s) => velesql_update::execute(db, s, params),
+        DmlStatement::Delete(s) => velesql_delete::execute(db, s, params),
+        DmlStatement::InsertEdge(s) => velesql_graph::insert_edge(db, s, params).map(|()| 1),
+        DmlStatement::DeleteEdge(s) => velesql_graph::delete_edge(db, s),
+        DmlStatement::InsertNode(s) => velesql_graph::insert_node(db, s).map(|()| 1),
+        _ => Err(ExecError::refused(format!(
+            "Unsupported DML variant in WASM: {dml:?}"
+        ))),
     }
 }
 
 /// Rejects top-level features that the executor cannot handle yet.
-fn reject_unsupported_top_level(query: &Query) -> Result<(), String> {
+fn reject_unsupported_top_level(query: &Query) -> Result<(), ExecError> {
     if query.is_train() {
-        return Err(
-            "TRAIN QUANTIZER requires the persistence feature; not available in WASM".to_string(),
-        );
+        return Err(ExecError::refused(
+            "TRAIN QUANTIZER requires the persistence feature; not available in WASM",
+        ));
     }
     Ok(())
 }

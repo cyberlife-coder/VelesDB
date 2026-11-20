@@ -48,12 +48,13 @@ async fn test_match_missing_collection_returns_veles_002() {
 }
 
 /// POST /match whose WHERE references an unbound `$v` parameter must surface
-/// the core `Error::Query` code (`VELES-010` post-#1212) with a 400 status,
-/// not a blanket 500 / invented `EXECUTION_ERROR`. A request `vector` plus a
-/// seeded node routes through `execute_match_with_similarity`, whose WHERE
-/// evaluation resolves `$v` and fails deterministically when it is absent.
+/// the core `Error::QueryParameter` code (`VELES-038`) with a 400 status —
+/// not a blanket 500 / invented `EXECUTION_ERROR`, and not the `VELES-010` of
+/// a malformed statement. A request `vector` plus a seeded node routes
+/// through `execute_match_with_similarity`, whose WHERE evaluation resolves
+/// `$v` and fails deterministically when it is absent.
 #[tokio::test]
-async fn test_match_missing_param_returns_veles_010() {
+async fn test_match_missing_param_returns_veles_038() {
     let temp_dir = TempDir::new().expect("temp dir");
     let app = create_test_app(&temp_dir);
     seed_vector_node(&app).await;
@@ -82,7 +83,52 @@ async fn test_match_missing_param_returns_veles_010() {
         "missing bind-param is a client error (400), not a server 500"
     );
     let json = body_json(response).await;
-    assert_eq!(json["code"], "VELES-010");
+    assert_eq!(json["code"], "VELES-038", "{json}");
+}
+
+/// The VelesQL endpoints answer a parameter failure with their own code,
+/// `VELESQL_PARAMETER_ERROR`, naming the parameter in `details` — not the
+/// endpoint's catch-all `VELESQL_EXECUTION_ERROR`, which a client could only
+/// tell apart by reading the message. Status `422`, as every caller error on
+/// `/query`. Both a missing parameter and a mistyped one take it.
+#[tokio::test]
+async fn test_query_parameter_failure_answers_velesql_parameter_error() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_vector_node(&app).await;
+
+    for params in [json!({}), json!({ "v": "not a vector" })] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/query")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "query": "SELECT * FROM people WHERE vector NEAR $v LIMIT 3",
+                            "params": params
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("request");
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let json = body_json(response).await;
+        assert_eq!(json["error"]["code"], "VELESQL_PARAMETER_ERROR", "{json}");
+        assert_eq!(json["error"]["details"]["parameter"], "v", "{json}");
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("[VELES-038]"),
+            "{json}"
+        );
+    }
 }
 
 /// An `ORDER BY` MATCH cannot sort by is refused with the same validation

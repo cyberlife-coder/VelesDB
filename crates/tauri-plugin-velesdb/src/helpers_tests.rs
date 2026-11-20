@@ -284,6 +284,31 @@ fn test_require_collection_accepts_graph_and_metadata_via_vector_view() {
     }
 }
 
+/// A graph's `count` is its node count, as every core surface reports it:
+/// it read the vector store, so a graph without embeddings holding nodes
+/// answered `count: 0`.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_collection_info_counts_the_nodes_of_a_graph() {
+    let tmp = tempfile::TempDir::new().expect("test: create temp dir");
+    let db = velesdb_core::Database::open(tmp.path().to_str().expect("test: path"))
+        .expect("test: open db");
+    db.create_graph_collection("kg", velesdb_core::GraphSchema::schemaless())
+        .expect("test: create graph collection");
+    let graph = db.get_graph_collection("kg").expect("test: graph");
+    graph
+        .upsert_node_payload(1, &serde_json::json!({}))
+        .expect("test: node 1");
+    graph
+        .upsert_node_payload(2, &serde_json::json!({}))
+        .expect("test: node 2");
+
+    let any = db.get_any_collection("kg").expect("test: any");
+    let info = collection_info("kg".to_string(), &any);
+    assert_eq!(info.count, 2);
+    assert_eq!(info.storage_mode, "graph");
+}
+
 #[cfg(feature = "persistence")]
 #[test]
 fn test_require_collection_still_rejects_missing_collection() {

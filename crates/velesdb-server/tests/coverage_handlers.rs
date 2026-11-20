@@ -91,6 +91,27 @@ async fn seed_vector_collection(app: &axum::Router, name: &str) {
     assert_eq!(resp.status(), StatusCode::OK, "test setup: upsert");
 }
 
+/// A point without a vector on a vector collection is the client's error,
+/// with core's code: `VELES-016`, every row of a vector collection storing a
+/// vector. A vector of another dimension keeps `VELES-004`.
+#[tokio::test]
+async fn test_upsert_without_a_vector_on_a_vector_collection_is_veles_016() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_vector_collection(&app, "rows").await;
+
+    for (vector, code) in [(json!([]), "VELES-016"), (json!([1.0]), "VELES-004")] {
+        let resp = post(
+            &app,
+            "/collections/rows/points",
+            json!({"points": [{"id": 9, "vector": vector, "payload": {"a": 1}}]}),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{vector}");
+        assert_eq!(read_json(resp).await["code"], code, "{vector}");
+    }
+}
+
 // ============================================================================
 // multi.rs — parse_fusion_strategy: every valid arm returns 200
 // ============================================================================

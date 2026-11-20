@@ -7,6 +7,11 @@ import pytest
 from unittest.mock import MagicMock
 
 
+def _node_collection(mock_store):
+    """The companion metadata collection a mocked store's database hands out."""
+    return mock_store._get_db.return_value.get_collection.return_value
+
+
 class TestGraphLoader:
     """Tests for GraphLoader class."""
 
@@ -21,20 +26,36 @@ class TestGraphLoader:
         assert loader._native_graph is None   # no graph_collection_name -> native branch skipped
 
     def test_add_node_with_metadata(self):
-        """Test adding a node with metadata."""
+        """A node without a vector goes to the companion metadata collection,
+        never to the vector store's collection, whose rows are vectors."""
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
-        mock_collection = MagicMock()
-        mock_collection.info.return_value = {"metadata_only": True}
-        mock_store._collection = mock_collection
+        mock_store.collection_name = "docs"
 
         loader = GraphLoader(mock_store)
         loader.add_node(node_id=1, label="PERSON", metadata={"name": "John"})
 
-        mock_collection.upsert_metadata.assert_called_once_with(
+        mock_store._get_db.return_value.get_collection.assert_called_once_with(
+            "docs_graph_nodes"
+        )
+        _node_collection(mock_store).upsert_metadata.assert_called_once_with(
             [{"id": 1, "payload": {"label": "PERSON", "name": "John"}}]
         )
+        mock_store._collection.upsert_metadata.assert_not_called()
+
+    def test_add_node_creates_the_node_collection_when_missing(self):
+        from llamaindex_velesdb import GraphLoader
+
+        mock_store = MagicMock()
+        mock_store.collection_name = "docs"
+        db = mock_store._get_db.return_value
+        db.get_collection.return_value = None
+
+        GraphLoader(mock_store).add_node(node_id=1, label="PERSON")
+
+        db.create_metadata_collection.assert_called_once_with("docs_graph_nodes")
+        db.create_metadata_collection.return_value.upsert_metadata.assert_called_once()
 
     def test_add_node_with_vector(self):
         """Test adding a node with embedding vector."""
@@ -125,9 +146,7 @@ class TestGraphLoader:
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
-        mock_collection = MagicMock()
-        mock_collection.info.return_value = {"metadata_only": True}
-        mock_store._collection = mock_collection
+        mock_collection = _node_collection(mock_store)
 
         # Mock LlamaIndex node
         mock_node = MagicMock()
@@ -157,9 +176,7 @@ class TestGraphLoader:
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
-        mock_collection = MagicMock()
-        mock_collection.info.return_value = {"metadata_only": True}
-        mock_store._collection = mock_collection
+        mock_collection = _node_collection(mock_store)
 
         # Mock LlamaIndex node with None content
         mock_node = MagicMock()
@@ -179,29 +196,8 @@ class TestGraphLoader:
         call_args = mock_collection.upsert_metadata.call_args[0][0][0]
         assert call_args["payload"]["text_preview"] == ""
 
-    def test_load_from_nodes_on_vector_collection_without_vectors(self):
-        """load_from_nodes should still store metadata on vector collections."""
-        from llamaindex_velesdb import GraphLoader
-
-        mock_store = MagicMock()
-        mock_collection = MagicMock()
-        mock_collection.info.return_value = {"metadata_only": False}
-        mock_store._collection = mock_collection
-
-        mock_node = MagicMock()
-        mock_node.node_id = "test-node-vector-collection"
-        mock_node.get_content.return_value = "Vector collection node"
-        mock_node.metadata = {"source": "doc.txt"}
-
-        loader = GraphLoader(mock_store)
-        result = loader.load_from_nodes([mock_node], node_label="DOCUMENT")
-
-        assert result["nodes"] == 1
-        assert result["edges"] == 0
-        mock_collection.upsert_metadata.assert_called_once()
-
     def test_add_node_no_collection_raises(self):
-        """Test that add_node raises when collection cannot be initialized."""
+        """A node with a vector raises when the collection cannot be initialized."""
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
@@ -211,6 +207,14 @@ class TestGraphLoader:
         loader = GraphLoader(mock_store)
 
         with pytest.raises(ValueError, match="cannot initialize collection"):
+            loader.add_node(node_id=1, label="TEST", vector=[0.1, 0.2])
+
+    def test_add_node_without_vector_and_without_database_raises(self):
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(MagicMock(spec=[]))
+
+        with pytest.raises(ValueError, match="no database"):
             loader.add_node(node_id=1, label="TEST")
 
     def test_add_edge_no_collection_raises(self):
@@ -236,9 +240,6 @@ class TestGraphLoaderIntegration:
         from llamaindex_velesdb import GraphLoader
 
         mock_store = MagicMock()
-        mock_collection = MagicMock()
-        mock_collection.info.return_value = {"metadata_only": True}
-        mock_store._collection = mock_collection
 
         loader = GraphLoader(mock_store)
 
@@ -262,13 +263,49 @@ class TestGraphLoaderIntegration:
         mock_store = MagicMock()
         mock_store._collection = None
         mock_collection = MagicMock()
-        mock_collection.info.return_value = {"metadata_only": True}
         mock_store._get_collection = MagicMock(return_value=mock_collection)
 
         loader = GraphLoader(mock_store)
-        loader.add_node(node_id=1, label="PERSON", metadata={"name": "A"})
+        loader.add_node(node_id=1, label="PERSON", metadata={"name": "A"}, vector=[0.1, 0.2])
 
-        mock_store._get_collection.assert_called_once()
+        mock_store._get_collection.assert_called_once_with(2)
+        mock_collection.upsert.assert_called_once()
+
+
+class TestGraphLoaderEmptyVector:
+    """An empty vector is no vector: the node goes where a node without one
+    goes, never to a write core refuses with VELES-016."""
+
+    def test_an_empty_vector_without_a_graph_collection_goes_to_the_companion(
+        self, tmp_path
+    ):
+        pytest.importorskip("velesdb")
+        from llamaindex_velesdb import GraphLoader, VelesDBVectorStore
+        from llamaindex_velesdb.graph_loader import node_collection_name
+
+        store = VelesDBVectorStore(path=str(tmp_path), collection_name="docs")
+        loader = GraphLoader(store)
+        loader.add_node(node_id=1, label="DOC", vector=[1.0, 0.0, 0.0, 0.0])
+        loader.add_node(node_id=99, label="X", metadata={"name": "x"}, vector=[])
+
+        db = store._get_db()
+        companion = db.get_collection(node_collection_name("docs"))
+        assert companion.get([99])[0]["payload"] == {"label": "X", "name": "x"}
+        assert db.get_collection("docs").all_ids() == [1]
+
+    def test_an_empty_vector_on_a_graph_with_embeddings_stores_a_node_without_one(
+        self, tmp_path
+    ):
+        pytest.importorskip("velesdb")
+        from llamaindex_velesdb import GraphLoader, VelesDBVectorStore
+
+        store = VelesDBVectorStore(path=str(tmp_path), collection_name="docs")
+        store._get_db().create_graph_collection("kg", dimension=4)
+        loader = GraphLoader(store, graph_collection_name="kg")
+        loader.add_node(node_id=7, label="X", vector=[])
+
+        graph = store._get_db().get_graph_collection("kg")
+        assert graph.get_node_payload(7) == {"label": "X", "_labels": ["X"]}
 
 
 class TestGraphLoaderNativeGraph:
@@ -683,24 +720,54 @@ class TestLoadFromNodesExtractRelations:
 
         assert counts == {"nodes": 4, "edges": 6, "skipped_relations": 0}
 
-    def test_given_7_1_0_loader_points_when_cleanup_snippet_run_then_only_they_go(
+    def test_given_no_graph_collection_when_loaded_then_nodes_in_the_node_collection(
         self, native_store
     ):
-        """The README's cleanup for the metadata-only points a 7.1.0 loader
-        wrote into the vector store's collection, run verbatim."""
+        """Without a graph collection, nodes without a vector go to the vector
+        store's companion metadata collection: core refuses a payload without
+        a vector on the vector store's collection (VELES-016)."""
         from llama_index.core.schema import TextNode
+        from llamaindex_velesdb import GraphLoader
         from velesdb_common.ids import stable_hash_id
+
+        stored = TextNode(text="chunk a", id_="a", embedding=[1.0, 0.0, 0.0, 0.0])
+        native_store.add([stored])
+
+        counts = GraphLoader(native_store).load_from_nodes([stored])
+
+        assert counts == {"nodes": 1, "edges": 0, "skipped_relations": 0}
+        db = native_store._get_db()
+        node = db.get_collection("docs_graph_nodes").get([stable_hash_id("DOCUMENT:a")])[0]
+        assert node["payload"]["node_id"] == "a"
+        assert node["payload"]["label"] == "DOCUMENT"
+        assert len(db.get_collection("docs")) == 1, "the vector store holds its node only"
+
+    def test_given_node_write_refused_when_loaded_then_it_raises(self, native_store):
+        """A refused node write is raised, never logged and skipped: here the
+        companion's name is taken by a vector collection, which stores no
+        payload without a vector."""
+        from llama_index.core.schema import TextNode
+        from llamaindex_velesdb import GraphLoader
+
+        native_store._get_db().create_collection("docs_graph_nodes", dimension=4)
+
+        with pytest.raises(ValueError, match="VELES-016"):
+            GraphLoader(native_store).load_from_nodes([TextNode(text="chunk a", id_="a")])
+
+    def test_given_7_1_0_cleanup_snippet_when_run_then_stored_nodes_stay(self, native_store):
+        """The README's cleanup for the metadata-only points a 7.1.0 loader
+        wrote into the vector store's collection, run verbatim. Core no longer
+        lets one be written, nor counts or reads one an older version left;
+        the snippet frees their disk and deletes nothing else."""
+        from llama_index.core.schema import TextNode
 
         nodes = [TextNode(text="chunk a", id_="a", embedding=[1.0, 0.0, 0.0, 0.0])]
         vector_store = native_store
         vector_store.add(nodes)
-        collection = vector_store.client.get_collection(vector_store.collection_name)
-        orphan = stable_hash_id("DOCUMENT:a")  # what 7.1.0's load_from_nodes wrote
-        # A metadata-only point: get() cannot see it, but the collection counts it.
-        collection.upsert_metadata([{"id": orphan, "payload": {"label": "DOCUMENT"}}])
-        assert len(collection) == 2
 
         # --- README snippet ---
+        from velesdb_common.ids import stable_hash_id
+
         node_label = "DOCUMENT"  # the node_label passed to load_from_nodes
         collection = vector_store.client.get_collection(vector_store.collection_name)
         collection.delete([stable_hash_id(f"{node_label}:{n.node_id}") for n in nodes])

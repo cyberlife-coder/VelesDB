@@ -4,16 +4,14 @@
 //! sparse (optionally filtered) and dense searches in parallel, and fuses
 //! results using the requested fusion strategy.
 
-use crate::collection::expiry::{is_payload_expired, now_unix_secs};
-use crate::collection::search::resolve;
+use crate::collection::search::query::row_universe::RowScope;
+use crate::collection::search::ranked::Ranked;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::fusion::FusionStrategy;
-use crate::index::sparse::{
-    sparse_search, sparse_search_filtered, SparseVector, DEFAULT_SPARSE_INDEX_NAME,
-};
-use crate::point::{Point, SearchResult};
-use crate::storage::{PayloadStorage, VectorStorage};
+use crate::index::sparse::{SparseVector, DEFAULT_SPARSE_INDEX_NAME};
+use crate::point::SearchResult;
+use crate::sparse_index::search::sparse_scores;
 use crate::velesql::{Condition, SparseVectorSearch};
 
 /// The two ranked branches of a hybrid search, before fusion: the dense hits
@@ -27,8 +25,9 @@ impl Collection {
 
     /// Recursively walks the condition tree to find a `SparseVectorSearch` node.
     ///
-    /// A query has at most one: `validate_similarity_query_structure` rejects
-    /// a second `SPARSE_NEAR` before this runs, so the left-most node it
+    /// A query has at most one, never under `NOT`:
+    /// `validate_similarity_query_structure` rejects a second `SPARSE_NEAR`,
+    /// and one under `NOT`, before this runs, so the left-most node it
     /// returns is the only one.
     pub(crate) fn extract_sparse_vector_search(
         condition: &Condition,
@@ -64,13 +63,9 @@ impl Collection {
     /// Execute a sparse-only search, optionally filtered by payload
     /// conditions and/or restricted to a GraphFirst anchor-id set.
     ///
-    /// With `anchors`, the sparse index's per-id filter makes the fetch
-    /// exact at `limit` *within* the graph matches — no over-fetch window.
-    ///
-    /// # Lock ordering
-    ///
-    /// `payload_storage(3)` is acquired before `sparse_indexes(9)` to respect
-    /// the canonical lock order defined in `docs/CONCURRENCY_MODEL.md`.
+    /// Both are part of the walk's admission, so the fetch is exact at
+    /// `limit` among the rows they admit — no over-fetch window
+    /// ([`Self::sparse_hits`]).
     pub(crate) fn execute_sparse_search_in_anchors(
         &self,
         svs: &SparseVectorSearch,
@@ -90,70 +85,101 @@ impl Collection {
             .and_then(Self::extract_metadata_filter)
             .map(|cond| crate::filter::Filter::new(crate::filter::Condition::from(cond)));
 
-        let results = if metadata_filter.is_some() || anchors.is_some() {
-            self.sparse_search_with_id_filter(
-                index_name,
-                &query_vec,
-                limit,
-                metadata_filter.as_ref(),
-                anchors,
-            )?
-        } else {
-            let indexes = self.query.sparse_indexes.read(); // lock 9 only (no payload needed)
-            let index = indexes
-                .get(index_name)
-                .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
-            let r = sparse_search(index, &query_vec, limit);
-            drop(indexes);
-            r
-        };
-
-        Ok(self.resolve_sparse_results(&results, limit))
+        self.sparse_hits(
+            index_name,
+            &query_vec,
+            limit,
+            metadata_filter.as_ref(),
+            anchors,
+        )
     }
 
-    /// Runs a sparse search with a per-id filter combining anchor membership
-    /// and the metadata payload filter.
+    /// The best `k` hits of `query` on the sparse index `index_name`,
+    /// hydrated: the collection's rows ([`RowScope::All`]) — given
+    /// `anchors`, among those ids, and given a payload `filter`, those whose
+    /// payload it matches — all decided by the walk's admission before the
+    /// top-`k` cut ([`Collection::ranked_hits`]), so a posting left for an
+    /// id that is no row (a vector collection's id without a vector, from an
+    /// earlier version) cannot crowd a row out, and a matching row is found
+    /// however far below the best it ranks.
     ///
-    /// # Lock ordering
+    /// # Errors
     ///
-    /// `payload_storage(3)` is acquired before `sparse_indexes(9)` to respect
-    /// the canonical lock order defined in `docs/CONCURRENCY_MODEL.md`.
-    // `payload_storage`(3) and `sparse_indexes`(9) are both held across the
-    // search because `filter_fn` closes over them and runs per candidate
-    // inside it. Releasing either early would leave the closure reading a
-    // guard that is gone; the numbered order is the documented one.
-    #[expect(clippy::significant_drop_tightening)]
-    fn sparse_search_with_id_filter(
+    /// Returns an error if the named sparse index does not exist.
+    ///
+    /// LOCK ORDER: config(1), released; sparse_indexes(9) alone across the
+    /// scoring, released; secondary_indexes(6) alone for the prefilter,
+    /// released; then vector_storage(2) → payload_storage(3), both read, per
+    /// batch of the walk ([`Collection::ranked_hits`]).
+    pub(crate) fn sparse_hits(
         &self,
         index_name: &str,
-        query_vec: &SparseVector,
-        limit: usize,
-        metadata_filter: Option<&crate::filter::Filter>,
+        query: &SparseVector,
+        k: usize,
+        filter: Option<&crate::filter::Filter>,
         anchors: Option<&std::collections::HashSet<u64>>,
-    ) -> Result<Vec<crate::sparse_index::ScoredDoc>> {
-        let payload_storage = metadata_filter.map(|_| self.storage.payload_storage.read()); // lock 3
-        let indexes = self.query.sparse_indexes.read(); // lock 9
+    ) -> Result<Vec<SearchResult>> {
+        let rows = RowScope::All.universe(self.row_universe());
+        let ranked = self.sparse_ranked(index_name, query, filter)?;
+        Ok(self.ranked_hits(
+            ranked,
+            k,
+            rows,
+            |id| anchors.is_none_or(|a| a.contains(&id)),
+            |id, payload| filter.is_none_or(|f| f.matches_point(id, payload)),
+        ))
+    }
+
+    /// The best `k` hits of `query` on the sparse index `index_name` among
+    /// the collection's rows ([`RowScope::All`]) whose payload `filter`, when
+    /// given, matches, as scored documents: the sparse branch of a hybrid
+    /// search, which fusion ranks again ([`Collection::ranked_rows`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named sparse index does not exist.
+    ///
+    /// LOCK ORDER: config(1), released; sparse_indexes(9) alone across the
+    /// scoring, released; secondary_indexes(6) alone for the prefilter,
+    /// released; then vector_storage(2) → payload_storage(3), both read, per
+    /// batch of the walk ([`Collection::ranked_rows`]).
+    pub(crate) fn sparse_rows(
+        &self,
+        index_name: &str,
+        query: &SparseVector,
+        k: usize,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<Vec<crate::index::sparse::ScoredDoc>> {
+        let rows = RowScope::All.universe(self.row_universe());
+        let ranked = self.sparse_ranked(index_name, query, filter)?;
+        Ok(self
+            .ranked_rows(ranked, k, rows, |_| true, filter)
+            .into_iter()
+            .map(|(doc_id, score)| crate::index::sparse::ScoredDoc { score, doc_id })
+            .collect())
+    }
+
+    /// Every hit of `query` on the sparse index `index_name`, scored under
+    /// `sparse_indexes`' read guard alone, but those `filter`'s prefilter
+    /// bitmap rules out ([`Collection::ranked_within_prefilter`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named sparse index does not exist.
+    fn sparse_ranked(
+        &self,
+        index_name: &str,
+        query: &SparseVector,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<Ranked> {
+        let indexes = self.query.sparse_indexes.read();
         let index = indexes
             .get(index_name)
-            .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
-        let filter_fn = |id: u64| {
-            if anchors.is_some_and(|a| !a.contains(&id)) {
-                return false;
-            }
-            match (metadata_filter, &payload_storage) {
-                (Some(filter), Some(storage)) => {
-                    let payload = storage.retrieve(id).ok().flatten();
-                    filter.matches_point(id, payload.as_ref())
-                }
-                _ => true,
-            }
-        };
-        Ok(sparse_search_filtered(
-            index,
-            query_vec,
-            limit,
-            Some(&filter_fn),
-        ))
+            .ok_or_else(|| Error::sparse_index_not_found(index_name))?;
+        let mut scored = Vec::new();
+        sparse_scores(index, query, |doc_id, score| scored.push((doc_id, score)));
+        drop(indexes);
+        Ok(self.ranked_within_prefilter(scored, filter))
     }
 
     // ------------------------------------------------------------------
@@ -205,16 +231,16 @@ impl Collection {
     ///
     /// # Lock ordering
     ///
-    /// When a `metadata_filter` is present, `payload_storage(3)` is acquired
-    /// before `sparse_indexes(9)` (see `sparse_branch` and
-    /// `docs/CONCURRENCY_MODEL.md`).
+    /// The sparse branch scores under `sparse_indexes` (9) alone, then
+    /// admits and filters its hits under `vector_storage` (2) and
+    /// `payload_storage` (3) ([`Self::sparse_rows`]).
     ///
     /// The branches run one after the other, on this thread. Both take
     /// collection locks — the dense one `vector_storage` (2) for the points
-    /// not yet indexed, the sparse one `payload_storage` (3) and
-    /// `sparse_indexes` (9) — and no job on a rayon pool may take a
-    /// collection lock (`docs/CONCURRENCY_MODEL.md`, "Collection locks and
-    /// rayon").
+    /// not yet indexed, the sparse one `sparse_indexes` (9), then
+    /// `vector_storage` (2) and `payload_storage` (3) — and no job on a
+    /// rayon pool may take a collection lock (`docs/CONCURRENCY_MODEL.md`,
+    /// "Collection locks and rayon").
     ///
     /// # Errors
     ///
@@ -259,16 +285,13 @@ impl Collection {
         })
     }
 
-    /// The sparse branch of a hybrid search on the named sparse index.
+    /// The sparse branch of a hybrid search on the named sparse index: its
+    /// best `candidate_k` rows ([`Self::sparse_rows`]).
     ///
     /// # Errors
     ///
     /// Returns an error if the named sparse index does not exist, as the
     /// sparse-only search does.
-    // With a filter, payload_storage(3) is taken before sparse_indexes(9) and
-    // both are held for the whole filtered search, because the filter closure
-    // reads through them per candidate.
-    #[expect(clippy::significant_drop_tightening)]
     fn sparse_branch(
         &self,
         sparse_query: &SparseVector,
@@ -276,26 +299,7 @@ impl Collection {
         candidate_k: usize,
         metadata_filter: Option<&crate::filter::Filter>,
     ) -> Result<Vec<crate::index::sparse::ScoredDoc>> {
-        // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
-        let payload_storage = metadata_filter.map(|_| self.storage.payload_storage.read());
-        let indexes = self.query.sparse_indexes.read();
-        let index = indexes
-            .get(index_name)
-            .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
-        let (Some(filter), Some(payload_storage)) = (metadata_filter, payload_storage.as_ref())
-        else {
-            return Ok(sparse_search(index, sparse_query, candidate_k));
-        };
-        let filter_fn = |id: u64| {
-            let payload = payload_storage.retrieve(id).ok().flatten();
-            filter.matches_point(id, payload.as_ref())
-        };
-        Ok(sparse_search_filtered(
-            index,
-            sparse_query,
-            candidate_k,
-            Some(&filter_fn),
-        ))
+        self.sparse_rows(index_name, sparse_query, candidate_k, metadata_filter)
     }
 
     /// Fuse dense and sparse branch results into ranked `SearchResult`s.
@@ -333,9 +337,8 @@ impl Collection {
             self.storage.config.read().metric.score_direction(),
             crate::fusion::ScoreDirection::HigherIsBetter,
         ];
-        let fused = strategy
-            .fuse_with_directions(vec![dense_results, sparse_tuples], &directions)
-            .map_err(|e| Error::Config(format!("Fusion error: {e}")))?;
+        let fused =
+            strategy.fuse_with_directions(vec![dense_results, sparse_tuples], &directions)?;
 
         Ok(self.resolve_fused_results(&fused, limit))
     }
@@ -344,64 +347,18 @@ impl Collection {
     // Result resolution helpers
     // ------------------------------------------------------------------
 
-    /// Hydrate a sequence of `(id, score)` pairs into full `SearchResult`s.
-    ///
-    /// Shared by both sparse-only and fused search paths. Acquires
-    /// `vector_storage(2)` and `payload_storage(3)` read locks.
-    fn resolve_id_score_pairs(
-        &self,
-        pairs: impl Iterator<Item = (u64, f32)>,
-        limit: usize,
-    ) -> Vec<SearchResult> {
-        let vector_storage = self.storage.vector_storage.read();
-        let payload_storage = self.storage.payload_storage.read();
-        let now_secs = now_unix_secs();
-
-        // Sized by the hits resolved, never by the caller's `limit`; an
-        // expired hit is skipped before the `limit` is counted, so the next
-        // live one takes its place.
-        let out: Vec<SearchResult> = pairs
-            .filter_map(|(id, score)| {
-                let payload = payload_storage.retrieve(id).ok().flatten();
-                if is_payload_expired(payload.as_ref(), now_secs) {
-                    return None;
-                }
-                let vector = vector_storage
-                    .retrieve(id)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                let point = Point {
-                    id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                };
-                Some(SearchResult::new(point, score))
-            })
-            .take(limit)
-            .collect();
-        // The collect is both guards' last use; nothing below reads storage.
-        drop(payload_storage);
-        drop(vector_storage);
-        out
-    }
-
-    /// Resolve `ScoredDoc` results to full `SearchResult` with Point data.
-    pub(crate) fn resolve_sparse_results(
-        &self,
-        results: &[crate::index::sparse::ScoredDoc],
-        limit: usize,
-    ) -> Vec<SearchResult> {
-        self.resolve_id_score_pairs(results.iter().map(|sd| (sd.doc_id, sd.score)), limit)
-    }
-
-    /// Resolve fused `(id, score)` tuples to `SearchResult`.
+    /// Resolve fused `(id, score)` tuples to `SearchResult`: the first
+    /// `limit` that are rows of the collection ([`RowScope::All`]) and live
+    /// ([`Collection::first_rows`]).
     pub(crate) fn resolve_fused_results(
         &self,
         fused: &[(u64, f32)],
         limit: usize,
     ) -> Vec<SearchResult> {
-        self.resolve_id_score_pairs(fused.iter().copied(), limit)
+        self.first_rows(
+            fused.iter().copied(),
+            limit,
+            RowScope::All.universe(self.row_universe()),
+        )
     }
 }

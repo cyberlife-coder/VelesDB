@@ -416,6 +416,79 @@ fn test_update_document_removes_old_terms() {
     assert_eq!(new_term_results[0].0, 1);
 }
 
+/// Replacement text that tokenizes to nothing (every token is one character
+/// or punctuation) must drop the previous version, not leave it searchable.
+#[test]
+fn test_update_to_tokenless_text_removes_document() {
+    let index = Bm25Index::new();
+    index.add_document(1, "alpha beta");
+    index.add_document(2, "alpha gamma");
+
+    index.add_document(1, "N/A");
+
+    let hits: Vec<u64> = index.search("alpha", 10).iter().map(|hit| hit.0).collect();
+    assert_eq!(hits, vec![2], "point 1 no longer contains 'alpha'");
+    assert!(index.search("beta", 10).is_empty());
+    assert_eq!(index.len(), 1);
+
+    // The released slot is reusable: re-adding real text indexes it again.
+    index.add_document(1, "delta epsilon");
+    assert_eq!(index.search("delta", 10).len(), 1);
+    assert_eq!(index.len(), 2);
+}
+
+/// Tokenless text for a point that was never indexed stays a no-op.
+#[test]
+fn test_tokenless_text_for_unknown_point_is_noop() {
+    let index = Bm25Index::new();
+    index.add_document(7, "-");
+    assert_eq!(index.len(), 0);
+    assert!(index.is_empty());
+}
+
+/// Concurrent removals of one point release its internal id once. Each used
+/// to push the id it had read before the other took the mapping, so the free
+/// list held it twice and gave it to two later points.
+#[test]
+fn test_concurrent_removal_recycles_the_doc_id_once() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    const THREADS: usize = 8;
+    for round in 0..200 {
+        let index = Arc::new(Bm25Index::new());
+        index.add_document(1, "alpha beta");
+        let barrier = Arc::new(Barrier::new(THREADS));
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|i| {
+                let idx = Arc::clone(&index);
+                let sync = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    sync.wait();
+                    // Both release paths: the explicit one and a tokenless update.
+                    if i % 2 == 0 {
+                        idx.remove_document(1);
+                    } else {
+                        idx.add_document(1, "-");
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+
+        // An id recycled twice goes to both points below, and the second
+        // takes over the reverse mapping the first is resolved through.
+        index.add_document(2, "bravo words");
+        index.add_document(3, "charlie words");
+        let hit = |term: &str| index.search(term, 10).first().map(|hit| hit.0);
+        assert_eq!(hit("bravo"), Some(2), "round {round}");
+        assert_eq!(hit("charlie"), Some(3), "round {round}");
+    }
+}
+
 // =========================================================================
 // #897 — snapshot validation on load (untrusted on-disk state)
 // =========================================================================
@@ -495,4 +568,29 @@ fn test_from_snapshot_counts_only_scorable_corpus() {
         1,
         "doc_count must reflect only the scorable corpus, not all documents"
     );
+}
+
+/// Documents scoring the same rank by ascending id, whatever order they
+/// were indexed in — the one tie rule of every ranking — so the cut at `k`
+/// keeps the lowest ids, as a collection's ranked walk does.
+#[test]
+fn test_bm25_search_ties_rank_by_ascending_id() {
+    let index = Bm25Index::new();
+    for id in [9, 3, 7, 5, 8] {
+        index.add_document(id, "rust language");
+    }
+    index.add_document(1, "rust rust rust");
+
+    let order: Vec<u64> = index
+        .search("rust", 10)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(order, [1, 3, 5, 7, 8, 9]);
+    let cut: Vec<u64> = index
+        .search("rust", 3)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(cut, [1, 3, 5]);
 }

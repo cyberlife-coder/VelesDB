@@ -11,6 +11,7 @@ mod having;
 mod having_tests;
 
 use super::match_exec::MatchStorageGuards;
+use super::row_universe::{RowScope, RowUniverse};
 use super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -44,6 +45,22 @@ struct SequentialAggCtx<'a> {
     use_runtime_where_eval: bool,
     /// See [`RuntimeWhereCtx::match_guards`].
     match_guards: &'a MatchStorageGuards<'a>,
+}
+
+/// The rows of `ids` an aggregate reads, each with its payload (`None` when
+/// it has none): every one but a row TTL-expired at `now_secs` — an
+/// aggregate counts the rows a SELECT returns, and a SELECT returns no
+/// expired row. Every aggregate scan reads its rows through this one rule.
+pub(super) fn live_rows<'a>(
+    ids: &'a [u64],
+    payload_storage: &'a dyn PayloadStorage,
+    now_secs: u64,
+) -> impl Iterator<Item = (u64, Option<serde_json::Value>)> + 'a {
+    ids.iter().filter_map(move |&id| {
+        let payload = payload_storage.retrieve(id).ok().flatten();
+        (!crate::collection::expiry::is_payload_expired(payload.as_ref(), now_secs))
+            .then_some((id, payload))
+    })
 }
 
 /// Threshold for switching to parallel aggregation.
@@ -85,13 +102,14 @@ impl Collection {
     ) -> Result<serde_json::Value> {
         // Validate here too: the Tauri plugin and embedders call this entry
         // point directly, not through `Database::execute_aggregate`, and every
-        // V0xx rule, a bad `mode` included (#2267), must hold on every path.
-        crate::velesql::QueryValidator::validate(query)
-            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        // V0xx rule, a bad `mode` included (#2267), must hold on every path —
+        // as must the query-vector check every SELECT entry point runs.
+        self.validate_aggregate(query, params)?;
         // Resolve scalar WHERE parameters once (same guard as the SELECT
         // pipeline) so both the static-filter and runtime-eval paths see
         // bound values and missing parameters fail loudly.
-        let resolved_query = Self::resolve_query_where_params(query, params)?;
+        let resolved_query =
+            self.bind_query_where(query, params, super::text_match::WhereReader::Aggregate)?;
         let query = resolved_query.as_ref().unwrap_or(query);
         let stmt = &query.select;
 
@@ -155,14 +173,20 @@ impl Collection {
         // reversed here. See tests/tokio_blocking_lock_contention_repro.rs. This
         // site also feeds `aggregate_parallel`, which scans under these guards
         // on `pools::on_guarded_pool`, never the global rayon pool.
-        let metric = self.storage.config.read().metric;
+        let (metric, rows) = self.aggregate_config_snapshot();
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
-        let match_guards = MatchStorageGuards::single(metric, &vector_storage, &payload_storage);
+        let match_guards =
+            MatchStorageGuards::single(metric, rows, &vector_storage, &payload_storage);
         // Id order, so a float SUM or AVG is the same on every run, whatever
         // the storage order: the parallel path sums fixed chunks of this
         // order and merges them in order.
-        let ids = Self::aggregate_scan_ids(&*vector_storage, &*payload_storage, filter.as_ref());
+        let ids = Self::aggregate_scan_ids(
+            RowScope::of_where(where_clause).universe(rows),
+            &vector_storage,
+            &payload_storage,
+            filter.as_ref(),
+        );
 
         if ids.len() >= PARALLEL_THRESHOLD && !use_runtime_where_eval {
             Ok(Self::aggregate_parallel(
@@ -186,24 +210,51 @@ impl Collection {
         }
     }
 
+    /// The checks an aggregate passes before any row is read:
+    /// `QueryValidator`'s rules, the WHERE shapes a SELECT refuses
+    /// ([`Self::validate_similarity_query_structure`]), then its query
+    /// vectors against this collection ([`Self::check_select_query_vectors`]).
+    fn validate_aggregate(
+        &self,
+        query: &Query,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        crate::velesql::QueryValidator::validate(query)?;
+        if let Some(cond) = query.select.where_clause.as_ref() {
+            Self::validate_similarity_query_structure(cond)?;
+        }
+        self.check_select_query_vectors(&query.select, params)
+    }
+
+    /// The metric and the collection's rows ([`RowUniverse::of`]), read from
+    /// `config` (rank 1) before an aggregate takes its storage guards.
+    pub(super) fn aggregate_config_snapshot(
+        &self,
+    ) -> (crate::distance::DistanceMetric, RowUniverse) {
+        let config = self.storage.config.read();
+        (config.metric, RowUniverse::of(&config))
+    }
+
     /// The points an aggregate scans, in id order (so a float SUM or AVG is
-    /// the same on every run): the existing points `id = n` / `id IN (...)`
+    /// the same on every run): the existing rows `id = n` / `id IN (...)`
     /// names when the static WHERE does — the lookup EXPLAIN reports — else
-    /// every point of the scan universe (`Self::scan_universe_ids`), so a
-    /// metadata collection's payload-only points count too.
+    /// every row of `universe`, the rows a SELECT reads: a point no SELECT
+    /// can reach counts in no aggregate either. Each is then read through
+    /// [`live_rows`], which skips a TTL-expired row, as a SELECT does.
     pub(super) fn aggregate_scan_ids(
-        vector_storage: &dyn VectorStorage,
-        payload_storage: &dyn PayloadStorage,
+        universe: RowUniverse,
+        vector_storage: &crate::storage::MmapStorage,
+        payload_storage: &crate::storage::LogPayloadStorage,
         filter: Option<&crate::filter::Filter>,
     ) -> Vec<u64> {
         let Some(named) = filter.and_then(|f| f.condition.point_ids()) else {
-            let mut ids = Self::scan_universe_ids(vector_storage, payload_storage);
+            let mut ids = universe.ids(vector_storage, payload_storage);
             ids.sort_unstable();
             return ids;
         };
         named
             .into_iter()
-            .filter(|&id| Self::in_scan_universe(vector_storage, payload_storage, id))
+            .filter(|&id| universe.contains(vector_storage, payload_storage, id))
             .collect()
     }
 
@@ -219,10 +270,10 @@ impl Collection {
         filter: Option<&crate::filter::Filter>,
         columns: &AggregateColumns,
     ) -> crate::velesql::AggregateResult {
+        let now_secs = crate::collection::expiry::now_unix_secs();
         let aggregate_chunk = |chunk: &[u64]| {
             let mut chunk_agg = Aggregator::new();
-            for &id in chunk {
-                let payload = payload_storage.retrieve(id).ok().flatten();
+            for (id, payload) in live_rows(chunk, payload_storage, now_secs) {
                 if let Some(f) = filter {
                     if !f.matches_point(id, payload.as_ref()) {
                         continue;
@@ -312,9 +363,9 @@ impl Collection {
             .is_some_and(Self::condition_requires_vector_eval);
         let mut aggregator = Aggregator::new();
         let mut graph_cache = GraphMatchEvalCache::default();
+        let now_secs = crate::collection::expiry::now_unix_secs();
 
-        for &id in ids {
-            let payload = ctx.payload_storage.retrieve(id).ok().flatten();
+        for (id, payload) in live_rows(ids, ctx.payload_storage, now_secs) {
             if !self.record_passes_filter(
                 id,
                 payload.as_ref(),

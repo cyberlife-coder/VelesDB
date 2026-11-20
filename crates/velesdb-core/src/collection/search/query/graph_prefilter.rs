@@ -106,24 +106,40 @@ impl Collection {
         filter_condition: Option<&Condition>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
+        let metadata_filter = filter_condition
+            .and_then(Self::extract_metadata_filter)
+            .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
+        self.search_near_within_anchors(vector, anchor_ids, metadata_filter.as_ref(), limit)
+    }
+
+    /// [`Self::search_near_with_anchor_ids`] admitting the anchors by a
+    /// payload `filter` already lowered: the top-`limit` vector neighbors
+    /// among the anchors it matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match.
+    pub(crate) fn search_near_within_anchors(
+        &self,
+        vector: &[f32],
+        anchor_ids: &HashSet<u64>,
+        filter: Option<&crate::filter::Filter>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
         if anchor_ids.is_empty() {
             return Ok(Vec::new());
         }
         let metric = self.validate_query_and_read_metric(vector)?;
-        let metadata_filter = filter_condition
-            .and_then(Self::extract_metadata_filter)
-            .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
-
         if anchor_ids.len() <= ANCHORED_EXACT_SCORE_MAX {
             return Ok(self.score_anchors_exact(
                 vector,
                 anchor_ids,
-                metadata_filter.as_ref(),
+                filter,
                 limit,
                 metric.higher_is_better(),
             ));
         }
-        self.search_anchors_bitmap(vector, anchor_ids, metadata_filter, limit, metric)
+        self.search_anchors_bitmap(vector, anchor_ids, filter, limit, metric)
     }
 
     /// Bitmap-filtered HNSW search over a large anchor set (adaptive retry
@@ -132,7 +148,7 @@ impl Collection {
         &self,
         vector: &[f32],
         anchor_ids: &HashSet<u64>,
-        metadata_filter: Option<crate::filter::Filter>,
+        metadata_filter: Option<&crate::filter::Filter>,
         limit: usize,
         metric: crate::distance::DistanceMetric,
     ) -> Result<Vec<SearchResult>> {
@@ -142,17 +158,13 @@ impl Collection {
                 bitmap.insert(id32);
             }
         }
-        if let Some(meta_bitmap) = metadata_filter
-            .as_ref()
-            .and_then(|f| self.build_prefilter_bitmap(f))
-        {
+        if let Some(meta_bitmap) = metadata_filter.and_then(|f| self.build_prefilter_bitmap(f)) {
             bitmap &= meta_bitmap;
         }
 
         // Residual (non-indexed) metadata conditions are applied after the
         // fetch — oversample for them; pure graph prefilters need no slack.
         let candidates_k = metadata_filter
-            .as_ref()
             .map_or(limit, |f| {
                 super::super::vector_filter::compute_oversampled_k(
                     limit,
@@ -163,23 +175,32 @@ impl Collection {
             .min(super::MAX_LIMIT);
         // The pending points get the same restriction as the index: the
         // anchors (narrowed by the indexed metadata), and the residual
-        // metadata filter `filter_and_hydrate` applies below.
+        // metadata filter the nearest live rows are judged by below.
         let restriction = crate::collection::search::pending::PendingRestriction::within(&bitmap)
             .post_filtered_if(metadata_filter.is_some());
-        let index_results =
-            self.search_merging_pending(vector, candidates_k, metric, restriction, |n| {
-                self.storage.index.search_with_quality_and_bitmap(
-                    vector,
-                    n,
-                    self.runtime_search_quality(),
-                    &bitmap,
-                )
-            })?;
-
-        let pass_all =
-            crate::filter::Filter::new(crate::filter::Condition::And { conditions: vec![] });
-        let filter = metadata_filter.unwrap_or(pass_all);
-        Ok(self.filter_and_hydrate(index_results, &filter, limit, metric.higher_is_better()))
+        // The anchors judge every candidate too: an exact scan past dead
+        // candidates scores every stored vector, not the bitmap's alone. The
+        // index search reaches the bitmap's members alone: an answer holding
+        // every stored one settles the read, however short.
+        let accept = |id: u64, payload: Option<&serde_json::Value>| {
+            u32::try_from(id).is_ok_and(|id| bitmap.contains(id))
+                && metadata_filter.is_none_or(|filter| filter.matches_point(id, payload))
+        };
+        self.nearest_live_where(
+            &crate::collection::search::live::Nearest::judging(vector, metric, limit, candidates_k)
+                .within(bitmap.len()),
+            accept,
+            |n| {
+                self.search_merging_pending(vector, n, metric, restriction, |m| {
+                    self.storage.index.search_with_quality_and_bitmap(
+                        vector,
+                        m,
+                        self.runtime_search_quality(),
+                        &bitmap,
+                    )
+                })
+            },
+        )
     }
 
     /// Exact anchored scoring: hydrates every anchor, applies the metadata
@@ -216,6 +237,7 @@ impl Collection {
             crate::distance::rank_scores(a.score, b.score, higher_is_better)
         });
         scored.truncate(limit);
+        crate::collection::search::tag_vector_component_scores(&mut scored);
         scored
     }
 

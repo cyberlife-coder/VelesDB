@@ -82,6 +82,20 @@ pub(crate) fn authorize_unscoped_read(
 
 /// The `VELES-009` refusal of a read scope that `what` has no channel to
 /// apply: it fails closed rather than running unscoped.
+/// AND-composes the caller's filter with the read gate's scope filter, so the
+/// scope can only narrow what the caller asked for.
+pub(crate) fn and_scope(
+    caller: Option<velesdb_core::Filter>,
+    scope: Option<velesdb_core::Filter>,
+) -> Option<velesdb_core::Filter> {
+    match (caller, scope) {
+        (Some(caller), Some(scope)) => Some(velesdb_core::Filter::new(
+            velesdb_core::Condition::and(vec![caller.condition, scope.condition]),
+        )),
+        (caller, scope) => caller.or(scope),
+    }
+}
+
 pub(crate) fn scope_unsupported(what: &str) -> velesdb_core::Error {
     velesdb_core::Error::Config(format!("scope narrowing is not supported for {what}"))
 }

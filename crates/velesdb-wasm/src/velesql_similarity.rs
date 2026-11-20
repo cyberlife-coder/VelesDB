@@ -18,8 +18,9 @@ use velesdb_core::velesql::{
 };
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::store_state::StoreState;
-use crate::velesql_value::{resolve_vector, Params};
+use crate::velesql_value::Params;
 
 /// The condition with every `similarity()` leaf removed.
 ///
@@ -187,7 +188,7 @@ impl SimilarityEvaluator {
         collection: &str,
         cond: Option<&Condition>,
         params: &Params,
-    ) -> Result<Option<Self>, String> {
+    ) -> Result<Option<Self>, ExecError> {
         let mut sims = Vec::new();
         if let Some(cond) = cond {
             collect_similarity_leaves(cond, &mut sims);
@@ -205,9 +206,9 @@ impl SimilarityEvaluator {
             {
                 continue;
             }
-            let query = resolve_vector(&sim.vector, params)?;
+            let query = velesdb_core::velesql::bind_vector(&sim.vector, params)?;
             let scores = if sim.field == PRIMARY_VECTOR_FIELD {
-                own_vector_scores(&borrowed, collection, &query)?
+                own_vector_scores(&borrowed, &query)?
             } else {
                 payload_vector_scores(&borrowed, &sim.field, &query)
             };
@@ -266,23 +267,16 @@ fn collect_similarity_leaves<'c>(cond: &'c Condition, out: &mut Vec<&'c Similari
     }
 }
 
-/// `similarity(vector, $v)`: every row's own vector against `query`.
-fn own_vector_scores(
-    store: &StoreState,
-    collection: &str,
-    query: &[f32],
-) -> Result<Vec<Option<f32>>, String> {
-    if store.dimension == 0 {
-        return Err(format!(
-            "Collection '{collection}' is metadata-only; similarity() requires a vector collection"
-        ));
-    }
+/// `similarity(vector, $v)`: every row's own vector against `query`, whose
+/// components must be finite. A query the collection cannot score is the
+/// SELECT's refusal, raised before any row is read
+/// (`velesql_select::check_select`, core's `QueryVectorTarget::check_select`),
+/// not refused again here: a row it still reaches with no vector of the
+/// query's length is UNKNOWN, as in core.
+fn own_vector_scores(store: &StoreState, query: &[f32]) -> Result<Vec<Option<f32>>, ExecError> {
+    velesdb_core::validation::validate_vector_is_finite(query)?;
     if query.len() != store.dimension {
-        return Err(format!(
-            "similarity() query dimension mismatch: expected {}, got {}",
-            store.dimension,
-            query.len()
-        ));
+        return Ok(vec![None; store.ids.len()]);
     }
     Ok(crate::vector_ops::compute_scores(
         query,
@@ -303,8 +297,7 @@ fn payload_vector_scores(store: &StoreState, field: &str, query: &[f32]) -> Vec<
         .map(|idx| {
             let payload = store.payloads.get(idx).and_then(Option::as_ref)?;
             let vector = payload_vector(payload, field).ok().flatten()?;
-            (vector.len() == query.len() && !vector.is_empty())
-                .then(|| store.metric.calculate(&vector, query))
+            store.metric.checked_calculate(&vector, query)
         })
         .collect()
 }
@@ -330,7 +323,7 @@ pub(crate) fn evaluate_where_with_similarity(
     idx: usize,
     eval: Option<&SimilarityEvaluator>,
     params: &Params,
-) -> Result<bool, String> {
+) -> Result<bool, ExecError> {
     Ok(where_truth(cond, id, payload, idx, eval, params)? == Some(true))
 }
 
@@ -342,33 +335,28 @@ fn where_truth(
     idx: usize,
     eval: Option<&SimilarityEvaluator>,
     params: &Params,
-) -> Result<Option<bool>, String> {
-    use crate::velesql_where::{and, or, truth};
-    match cond {
-        Condition::And(l, r) => Ok(and(
-            where_truth(l, id, payload, idx, eval, params)?,
-            where_truth(r, id, payload, idx, eval, params)?,
-        )),
-        Condition::Or(l, r) => Ok(or(
-            where_truth(l, id, payload, idx, eval, params)?,
-            where_truth(r, id, payload, idx, eval, params)?,
-        )),
-        Condition::Not(inner) => {
-            Ok(where_truth(inner, id, payload, idx, eval, params)?.map(|known| !known))
-        }
-        Condition::Group(inner) => where_truth(inner, id, payload, idx, eval, params),
-        Condition::Similarity(sim) => {
-            // No evaluator => no vector collection context; this should
-            // never happen when the query was validated upstream, but we
-            // surface a clear error rather than silently passing or
-            // failing the row.
-            let evaluator = eval.ok_or_else(|| {
-                "similarity() predicate found without a vector-collection evaluator".to_string()
-            })?;
-            Ok(evaluator.truth(sim, idx))
-        }
-        other => truth(other, id, payload, params),
-    }
+) -> Result<Option<bool>, ExecError> {
+    crate::velesql_where::fold_truth(cond, &|leaf| match leaf {
+        Condition::Similarity(sim) => similarity_truth(sim, idx, eval),
+        other => crate::velesql_where::truth(other, id, payload, params),
+    })
+}
+
+/// The truth of a `similarity()` leaf for row `idx`.
+fn similarity_truth(
+    sim: &SimilarityCondition,
+    idx: usize,
+    eval: Option<&SimilarityEvaluator>,
+) -> Result<Option<bool>, ExecError> {
+    // No evaluator => no vector collection context; this should never happen
+    // when the query was validated upstream, but we surface a clear error
+    // rather than silently passing or failing the row.
+    let evaluator = eval.ok_or_else(|| {
+        velesdb_core::Error::Internal(
+            "similarity() predicate found without a vector-collection evaluator".to_string(),
+        )
+    })?;
+    Ok(evaluator.truth(sim, idx))
 }
 
 #[cfg(test)]

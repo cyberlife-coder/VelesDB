@@ -6,6 +6,7 @@ users should import from ``langchain_velesdb`` or ``llamaindex_velesdb``
 directly.
 """
 
+from velesdb_common.aggregates import is_aggregate_row
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.graph_ops_base import GraphOpsBase
 from velesdb_common.ids import make_initial_id_counter, stable_hash_id
@@ -64,6 +65,8 @@ from velesdb_common.graph import (
 )
 
 __all__ = [
+    # aggregates
+    "is_aggregate_row",
     # fusion
     "build_fusion_strategy",
     # collection admin

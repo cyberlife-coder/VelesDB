@@ -94,7 +94,11 @@ fn an_operand_that_joins_is_refused() {
     )
     .map(|_| ())
     .expect_err("test: refused");
-    assert!(err.contains("UNION / INTERSECT / EXCEPT operand"), "{err}");
+    assert!(
+        err.to_string()
+            .contains("UNION / INTERSECT / EXCEPT operand"),
+        "{err}"
+    );
 }
 
 /// `ORDER BY similarity(vector, $q)` over a compound reads each row's own

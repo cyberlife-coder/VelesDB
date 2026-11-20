@@ -95,8 +95,12 @@ struct Case {
 struct RejectedCase {
     id: String,
     query: String,
-    /// The validation code (`V0xx`) the refusal must carry, as `[V0xx]`.
+    /// The code the refusal must carry in brackets: a validation code
+    /// (`[V0xx]`) or core's error code (`[VELES-0xx]`).
     expected_code: String,
+    /// Bindings added to `query_params` for this case alone.
+    #[serde(default)]
+    params: HashMap<String, Value>,
 }
 
 /// A vector GROUP BY (`NEAR` + GROUP BY), run through
@@ -124,6 +128,9 @@ struct VectorGroupCase {
 #[derive(Deserialize)]
 struct DmlCase {
     statements: Vec<String>,
+    /// Bindings added to `query_params` for this case's statements.
+    #[serde(default)]
+    params: HashMap<String, Value>,
     #[serde(flatten)]
     check: Case,
 }
@@ -277,12 +284,11 @@ fn test_velesql_executor_conformance_rejected_cases() {
     let fixture = load_fixture();
     let (_dir, db) = open_loaded_db(&fixture.dataset);
     for case in &fixture.rejected_cases {
+        let mut params = fixture.query_params.clone();
+        params.extend(case.params.clone());
         let outcome = Parser::parse(&case.query)
             .map_err(|e| e.to_string())
-            .and_then(|q| {
-                db.execute_query(&q, &fixture.query_params)
-                    .map_err(|e| e.to_string())
-            });
+            .and_then(|q| db.execute_query(&q, &params).map_err(|e| e.to_string()));
         let err = outcome.expect_err(&format!(
             "rejected case {} was accepted: query={:?}",
             case.id, case.query
@@ -417,8 +423,10 @@ fn test_velesql_executor_conformance_dml_cases() {
     let fixture = load_fixture();
     for case in &fixture.dml_cases {
         let (_dir, db) = open_loaded_db(&fixture.dataset);
+        let mut params = fixture.query_params.clone();
+        params.extend(case.params.clone());
         for statement in &case.statements {
-            run_query(&db, &case.check.id, statement, &fixture.query_params);
+            run_query(&db, &case.check.id, statement, &params);
         }
         assert_case(&db, &case.check, &fixture.query_params);
     }

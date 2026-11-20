@@ -233,8 +233,8 @@ fn scenario_where_missing_param_errors() {
     // THEN an explicit missing-parameter error is raised (not an empty result)
     let err = result.expect_err("missing parameter must be an error, not an empty result set");
     assert!(
-        err.to_string().contains("Missing parameter"),
-        "error should name the missing parameter, got: {err}"
+        matches!(err, velesdb_core::Error::QueryParameter { .. }),
+        "an unbound parameter is a parameter error (VELES-038), got: {err}"
     );
 }
 
@@ -255,8 +255,8 @@ fn scenario_where_in_missing_param_errors() {
     // THEN the unbound $b is reported as an error
     let err = result.expect_err("missing IN parameter must be an error");
     assert!(
-        err.to_string().contains("Missing parameter"),
-        "error should name the missing parameter, got: {err}"
+        matches!(err, velesdb_core::Error::QueryParameter { .. }),
+        "an unbound parameter is a parameter error (VELES-038), got: {err}"
     );
 }
 
@@ -303,8 +303,8 @@ fn scenario_update_where_missing_param_errors() {
     // THEN an explicit missing-parameter error is raised (no rows touched)
     let err = result.expect_err("missing UPDATE WHERE parameter must be an error");
     assert!(
-        err.to_string().contains("Missing parameter"),
-        "error should name the missing parameter, got: {err}"
+        matches!(err, velesdb_core::Error::QueryParameter { .. }),
+        "an unbound parameter is a parameter error (VELES-038), got: {err}"
     );
 }
 
@@ -386,8 +386,8 @@ fn scenario_where_contains_missing_param_errors() {
     // THEN an explicit missing-parameter error is raised (not an empty result)
     let err = result.expect_err("missing CONTAINS parameter must be an error");
     assert!(
-        err.to_string().contains("Missing parameter"),
-        "error should name the missing parameter, got: {err}"
+        matches!(err, velesdb_core::Error::QueryParameter { .. }),
+        "an unbound parameter is a parameter error (VELES-038), got: {err}"
     );
 }
 
@@ -447,8 +447,8 @@ fn scenario_having_missing_param_errors() {
     // THEN an explicit missing-parameter error is raised (not an empty result)
     let err = result.expect_err("missing HAVING parameter must be an error, not zero groups");
     assert!(
-        err.to_string().contains("Missing parameter"),
-        "error should name the missing parameter, got: {err}"
+        matches!(err, velesdb_core::Error::QueryParameter { .. }),
+        "an unbound parameter is a parameter error (VELES-038), got: {err}"
     );
 }
 

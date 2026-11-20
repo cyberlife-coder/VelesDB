@@ -37,9 +37,9 @@ fn test_extract_point_id_missing_at_index_zero() {
 }
 
 /// A multi-model row reads `vector_score`/`graph_score` from the components
-/// core tagged, `None` when a tagged row lacks one, and carries
-/// `component_scores` as `search_result_to_dict` does. An untagged row keeps
-/// its score as `vector_score`, as core's `ScoreContext` reads it.
+/// core tagged, `None` when the row lacks one, and carries
+/// `component_scores` as `search_result_to_dict` does. An untagged row — no
+/// vector scored it — reports no `vector_score`: its score is not one.
 #[test]
 fn test_multimodel_dict_reports_only_the_tagged_component_scores() {
     pyo3::Python::initialize();
@@ -84,7 +84,8 @@ fn test_multimodel_dict_reports_only_the_tagged_component_scores() {
         assert_eq!(field(&row(&hybrid), "vector_score"), Some(0.02));
 
         let untagged = row(&SearchResult::new(point(), 0.9));
-        assert_eq!(field(&untagged, "vector_score"), Some(0.9));
+        assert_eq!(field(&untagged, "vector_score"), None);
+        assert_eq!(field(&untagged, "fused_score"), Some(0.9));
         assert_eq!(field(&untagged, "graph_score"), None);
         assert!(untagged
             .get_item("component_scores")

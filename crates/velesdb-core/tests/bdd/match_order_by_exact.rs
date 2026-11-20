@@ -5,7 +5,7 @@
 //! sort. Verified against source: the structured `OrderByExpr` is carried into
 //! the MATCH AST (graph_pattern.rs `OrderByItem.expr`) and evaluated in
 //! `match_exec/order_by.rs` by reusing `ordering::evaluate_arithmetic`
-//! (arithmetic) and `extraction::resolve_vector` + the configured metric
+//! (arithmetic) and `velesql::bind_vector` + the configured metric
 //! (similarity). Aggregates without GROUP BY stay rejected (see
 //! `velesql_reject_conformance.rs`).
 //!

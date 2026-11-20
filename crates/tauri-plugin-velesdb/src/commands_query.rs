@@ -83,7 +83,14 @@ async fn dispatch_tauri_query(
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
     // `SelectStatement::is_aggregation_query` is the routing test every
     // surface shares: a vector GROUP BY runs inside `execute_query`.
-    let params = effective_params(request);
+    // The request's `collection` fills `_collection` for a top-level MATCH
+    // when the caller set none: core's one rule, shared with REST `/query`.
+    let params = velesdb_core::velesql::with_collection_param(
+        &parsed,
+        &request.params,
+        request.collection.as_deref(),
+    )
+    .into_owned();
     if parsed.select.is_aggregation_query() && !parsed.select.from.is_empty() {
         return execute_tauri_aggregation(state, parsed, params).await;
     }
@@ -98,26 +105,6 @@ async fn dispatch_tauri_query(
         })
         .await
         .map_err(CommandError::from)
-}
-
-/// The parameters a statement executes with: the caller's, plus a non-empty
-/// `collection` as `_collection` when the caller set no `_collection` — the
-/// rule of the REST server's `/query`, where the body's `collection` fills
-/// the key a `MATCH` is addressed by and never overrides an explicit one.
-/// Core reads `_collection` only for a statement without `FROM`
-/// (`read_authorization::read_target`), so a `FROM` still decides.
-fn effective_params(request: QueryRequest) -> Params {
-    let QueryRequest {
-        mut params,
-        collection,
-        ..
-    } = request;
-    if let Some(name) = collection.filter(|name| !name.is_empty()) {
-        params
-            .entry("_collection".to_string())
-            .or_insert(serde_json::Value::String(name));
-    }
-    params
 }
 
 /// Executes an aggregation query through `Database::execute_aggregate`, never a
@@ -144,13 +131,22 @@ async fn execute_tauri_aggregation(
 }
 
 /// Converts a `SearchResult` to a `HybridResult`.
+///
+/// `vector_score` and `graph_score` are the components of those names core
+/// tagged the row with, `None` when absent: core tags `vector_score` on every
+/// row a vector scored, so a metadata, BM25-only or depth-ranked row reports
+/// none instead of repeating its final score. `fused_score` is that score.
 pub(crate) fn search_result_to_hybrid(r: &velesdb_core::SearchResult) -> HybridResult {
     HybridResult {
         node_id: r.point.id,
-        vector_score: Some(r.score),
-        graph_score: None,
+        vector_score: r.component_score("vector_score"),
+        graph_score: r.component_score("graph_score"),
         fused_score: r.score,
         bindings: r.point.payload.clone(),
         column_data: None,
     }
 }
+
+#[cfg(test)]
+#[path = "commands_query_tests.rs"]
+mod tests;

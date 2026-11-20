@@ -79,6 +79,12 @@ pub(crate) fn structured_js_error(code: &str, message: &str) -> wasm_bindgen::Js
     wasm_bindgen::JsValue::from_str(&format!("[{code}] {message}"))
 }
 
+/// Renders a core error for JS: a structured `Error` whose `code` is the
+/// error's (see [`structured_js_error`]).
+pub(crate) fn core_error_to_js(err: CoreError) -> wasm_bindgen::JsValue {
+    WasmError::from(err).into_js_value()
+}
+
 impl From<CoreError> for WasmError {
     fn from(err: CoreError) -> Self {
         Self {

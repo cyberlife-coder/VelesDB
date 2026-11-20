@@ -154,6 +154,11 @@ fn node_vector_needs_a_collection_with_embeddings() {
     let stored = embedded.get_node(1).unwrap().unwrap();
     assert_eq!(stored.vector, Some(vec![1.0, 0.0]));
     assert_eq!(stored.label, "Person");
+
+    // A node added without a vector to a collection with embeddings reads
+    // back with no vector — not an empty one.
+    embedded.add_node(person_node(2)).unwrap();
+    assert_eq!(embedded.get_node(2).unwrap().unwrap().vector, None);
 }
 
 #[test]

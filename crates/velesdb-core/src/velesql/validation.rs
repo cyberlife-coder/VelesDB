@@ -58,14 +58,42 @@ impl QueryValidator {
         }
 
         Self::validate_select(&query.select, config)?;
+        Self::validate_compound_operands(query, config)
+    }
 
-        if let Some(ref compound) = query.compound {
-            for (_, right_select) in &compound.operations {
-                Self::validate_select(right_select, config)?;
-            }
+    /// Validates each later operand of a compound as the SELECT it is, then
+    /// refuses (`V019`) a compound one of whose operands is an aggregation
+    /// ([`SelectStatement::is_aggregation_query`]): an aggregate's rows are
+    /// no points for the compound to combine, and the aggregate engine runs
+    /// one SELECT — routed there, a compound used to answer for its first
+    /// operand alone and drop the others. One rule for every entry point
+    /// that validates, `execute_query` and `execute_aggregate` alike.
+    ///
+    /// [`SelectStatement::is_aggregation_query`]: super::SelectStatement::is_aggregation_query
+    fn validate_compound_operands(
+        query: &Query,
+        config: &ValidationConfig,
+    ) -> Result<(), ValidationError> {
+        let Some(compound) = &query.compound else {
+            return Ok(());
+        };
+        let rest = compound.operations.iter().map(|(_, select)| select);
+        for select in rest.clone() {
+            Self::validate_select(select, config)?;
         }
-
-        Ok(())
+        if !std::iter::once(&query.select)
+            .chain(rest)
+            .any(super::SelectStatement::is_aggregation_query)
+        {
+            return Ok(());
+        }
+        Err(ValidationError::new(
+            ValidationErrorKind::CompoundAggregation,
+            None,
+            "UNION / INTERSECT / EXCEPT",
+            "an aggregation (COUNT, SUM, AVG, MIN, MAX or GROUP BY) cannot be an operand of a \
+             compound query: run each aggregate as its own statement",
+        ))
     }
 
     /// Validates a bare MATCH clause: the rules [`validate`](Self::validate)

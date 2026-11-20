@@ -1,4 +1,4 @@
-//! Label, sparse-vector, and deferred-indexing helpers for CRUD operations.
+//! Payload-index, sparse-vector, and deferred-indexing helpers for CRUD operations.
 //!
 //! Extracted from `crud.rs` to reduce NLOC.
 
@@ -36,7 +36,8 @@ impl Collection {
         }
     }
 
-    /// Applies a batch of payload writes to the label and range indexes.
+    /// Applies a batch of payload writes to the indexes derived from the
+    /// payloads: the secondary indexes, then the label and range indexes.
     ///
     /// `writes` is each write's `(id, payload stored)` in batch order, `None`
     /// for a write that deleted the payload; `old_payloads` is positional, the
@@ -44,9 +45,16 @@ impl Collection {
     /// repeat (what `collect_old_payloads` returns). A repeated id resolves to
     /// its previous occurrence, so the batch indexes what storage ends with.
     ///
-    /// Callers hold `payload_storage` (3) across the write and this call, so
-    /// no other writer can store a newer payload for these ids in between and
-    /// leave the indexes describing one storage no longer has.
+    /// Callers hold `payload_storage` (3) for writing across the write and
+    /// this call, so no other writer can store a newer payload for these ids
+    /// in between and leave the indexes describing one storage no longer
+    /// has — and a reader that read the payload store's revision under its
+    /// read guard finds every write that revision counts in the indexes: what
+    /// a filtered ranked walk's prefilter bitmap relies on
+    /// (`Collection::ranked_within_prefilter`).
+    ///
+    /// LOCK ORDER: under payload_storage(3): secondary_indexes(6), released;
+    /// label_index(7), released; graph_range_indexes(7).
     pub(super) fn index_payload_writes<'a, I>(&self, writes: I, old_payloads: &'a [Option<Value>])
     where
         I: Iterator<Item = (u64, Option<&'a Value>)> + Clone,
@@ -54,19 +62,28 @@ impl Collection {
         let labelled =
             |payload: Option<&Value>| payload.is_some_and(|v| v.get("_labels").is_some());
         // An update that drops every label still has entries to remove, so the
-        // old payloads decide this too. Unlabelled batches (every plain vector
-        // upsert) allocate nothing and take no index lock.
-        if !writes.clone().any(|(_, new)| labelled(new))
-            && !old_payloads.iter().any(|old| labelled(old.as_ref()))
-        {
+        // old payloads decide this too. Unlabelled batches without a secondary
+        // index (every plain vector upsert) allocate nothing and take no index
+        // lock but the secondary map's read.
+        let graph = writes.clone().any(|(_, new)| labelled(new))
+            || old_payloads.iter().any(|old| labelled(old.as_ref()));
+        let secondary = !self.query.secondary_indexes.read().is_empty();
+        if !graph && !secondary {
             return;
         }
         let changes = Self::payload_changes(writes, old_payloads);
-        self.apply_payload_index_changes(changes.iter().copied());
+        if secondary {
+            for &(id, old, new) in &changes {
+                self.update_secondary_indexes_on_upsert(id, old, new);
+            }
+        }
+        if graph {
+            self.apply_payload_index_changes(changes.iter().copied());
+        }
     }
 
-    /// Brings the label and range indexes in line with what `storage` holds
-    /// for `ids` after a batch write that returned an error.
+    /// Brings the secondary, label and range indexes in line with what
+    /// `storage` holds for `ids` after a batch write that returned an error.
     ///
     /// A failed batch write is not all-or-nothing: `LogPayloadStorage` makes
     /// each record readable as it writes it, so a failure mid-batch leaves the
@@ -146,68 +163,154 @@ impl Collection {
         self.apply_range_index_changes(changes);
     }
 
-    /// Updates the BM25 text index for a single point (WAL-then-apply).
+    /// The payload-derived state a batch of payload writes changes beyond its
+    /// storage guard: the persisted column histograms, then BM25 — the one
+    /// routine every write path runs (the vector upsert, the metadata upsert,
+    /// both bulk paths and the node-payload write), so a payload written by
+    /// any of them is counted and searchable alike. The secondary, label and
+    /// range indexes are not: each path maintains them under its payload
+    /// write guard ([`Self::index_payload_writes`]).
     ///
-    /// Applies the BM25 side of a whole batch under ONE durability barrier.
+    /// `writes` is each write's `(id, payload stored)` in batch order, `None`
+    /// for a write that deleted the payload; `old_payloads` is positional, the
+    /// pre-batch payload of each id's first occurrence and `None` for a repeat
+    /// (what `collect_old_payloads` returns). The caller has stored and synced
+    /// the payloads, so the BM25 WAL never leads payload durability.
     ///
-    /// The single upsert, metadata upsert, and bulk-import paths all route
-    /// here: a per-point WAL append cost one `open` and one `fsync` PER
-    /// DOCUMENT (#1797); every frame goes into a single `wal_append_batch`
-    /// call instead.
-    ///
-    /// # The three cases a mixed batch contains
-    ///
-    /// Classified explicitly rather than folded together, because they are not
-    /// the same operation and the single-point path distinguishes them:
-    ///
-    /// * payload carrying text → an `Add` frame;
-    /// * payload with NO text  → nothing at all, no WAL entry (empty text is
-    ///   not indexed — an empty extraction never was);
-    /// * no payload at all     → a `Remove` frame, preserving delete semantics.
-    ///
-    /// # Ordering
-    ///
-    /// WAL-before-apply, at BATCH granularity: every frame is written and
-    /// fsynced first, and the in-memory index is touched only once that
-    /// succeeded. A WAL failure returns `Err` with the index untouched — never
-    /// partially updated for a batch that was never acknowledged, which matters
-    /// because a lost WAL entry is NOT rebuilt when a BM25 snapshot exists.
+    /// The histograms count only each id's last write (Bug #47) in one
+    /// decrement-and-increment cycle (Bug #49). BM25 is WAL-before-apply at
+    /// batch granularity (#389, #1797): one durability barrier for the
+    /// batch, the in-memory index touched only once it succeeded — see
+    /// [`Self::classify_text_mutations`] for which writes add, remove or do
+    /// nothing. A batch that stores and replaces no payload reads no
+    /// statistics file, and one that stores no payload into an empty index
+    /// skips BM25 without classifying it.
     ///
     /// # Errors
     ///
-    /// Propagates any WAL open / write / flush / fsync failure.
-    pub(super) fn bulk_update_text_index(
+    /// Propagates any BM25 WAL open / write / flush / fsync failure; the
+    /// histograms, which describe the stored payloads, are updated first.
+    pub(super) fn apply_payload_effects(
         &self,
-        points: &[Point],
-        old_payloads: &[Option<serde_json::Value>],
+        writes: &[(u64, Option<&Value>)],
+        old_payloads: &[Option<Value>],
     ) -> Result<()> {
+        self.apply_payload_histograms(writes, old_payloads);
+        self.apply_payload_text(writes, old_payloads, |adds, removes| {
+            self.change_text_index(adds, removes)
+        })
+    }
+
+    /// The histogram half of [`Self::apply_payload_effects`]: each id's last
+    /// write counted, in one decrement-and-increment cycle; a batch that
+    /// stores and replaces no payload reads no statistics file.
+    ///
+    /// LOCK ORDER: stats_io_mutex(12), with no other collection lock held.
+    pub(super) fn apply_payload_histograms(
+        &self,
+        writes: &[(u64, Option<&Value>)],
+        old_payloads: &[Option<Value>],
+    ) {
         debug_assert_eq!(
-            points.len(),
+            writes.len(),
             old_payloads.len(),
             "old_payloads is positional: a short slice would silently drop removals"
         );
-        let writes = points.iter().map(|p| (p.id, p.payload.as_ref()));
-        self.apply_text_changes(&Self::payload_changes(writes, old_payloads))
+        let stores_none = writes.iter().all(|(_, new)| new.is_none());
+        if !stores_none || old_payloads.iter().any(Option::is_some) {
+            self.update_histograms_replace(old_payloads, &last_writes(writes));
+        }
     }
 
-    /// Applies a batch's payload changes to BM25 under one WAL barrier; see
-    /// [`Self::bulk_update_text_index`] and [`Self::classify_text_mutations`].
+    /// The BM25 half of [`Self::apply_payload_effects`]: the batch's adds and
+    /// removes ([`Self::classify_text_mutations`]) handed to `change` — the
+    /// change a write makes under the guard it holds — unless there are
+    /// none; a batch that stores no payload into an empty index skips it
+    /// without classifying it.
     ///
     /// # Errors
     ///
-    /// Propagates any WAL open / write / flush / fsync failure.
-    pub(super) fn apply_text_changes(&self, changes: &[NodePayloadChange<'_>]) -> Result<()> {
-        let (adds, removes) = Self::classify_text_mutations(changes);
+    /// What `change` returns.
+    pub(super) fn apply_payload_text(
+        &self,
+        writes: &[(u64, Option<&Value>)],
+        old_payloads: &[Option<Value>],
+        change: impl FnOnce(&[(u64, String)], &[u64]) -> Result<()>,
+    ) -> Result<()> {
+        let stores_none = writes.iter().all(|(_, new)| new.is_none());
+        if stores_none && self.storage.text_index.is_empty() {
+            return Ok(());
+        }
+        let changes = Self::payload_changes(writes.iter().copied(), old_payloads);
+        let (adds, removes) = Self::classify_text_mutations(&changes);
         if adds.is_empty() && removes.is_empty() {
             return Ok(());
         }
-        self.append_text_batch_to_wal(&adds, &removes)?;
+        change(&adds, &removes)
+    }
+
+    /// Appends `adds` and `removes` to the BM25 WAL under one barrier, then
+    /// applies them in memory — WAL-before-apply — holding `text_wal` shared
+    /// across both, so the BM25 snapshot `flush_full` takes cannot fall
+    /// between them: a change is in the snapshot, or in the WAL that
+    /// survives its truncate (`Collection::flush_bm25_index`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates any WAL open / write / flush / fsync failure; memory is
+    /// then left as it was.
+    ///
+    /// LOCK ORDER: text_wal(1a, shared), with no collection lock held;
+    /// nothing is taken under it but the BM25 index's own locks.
+    pub(super) fn change_text_index(&self, adds: &[(u64, String)], removes: &[u64]) -> Result<()> {
+        let ordered = self.text_wal_shared();
+        self.change_text_index_ordered(&ordered, adds, removes)
+    }
+
+    /// `text_wal` taken shared: what every BM25 change holds across its WAL
+    /// append and its in-memory apply ([`Self::change_text_index`]), and what
+    /// a delete takes before its node locks and storage guards, so that it
+    /// never waits for a BM25 snapshot holding them
+    /// ([`Self::change_text_index_ordered`]).
+    ///
+    /// LOCK ORDER: text_wal(1a), taken with no collection lock held — which
+    /// a unit test checks here, on every BM25 change and delete it drives.
+    pub(super) fn text_wal_shared(&self) -> TextWalShared<'_> {
+        #[cfg(test)]
+        assert_eq!(
+            crate::lock_audit::guards_held(),
+            0,
+            "a BM25 change or a delete takes text_wal (1a) holding no collection lock, \
+             config (1) included (collection/types.rs, LOCK ORDERING)"
+        );
+        #[cfg(test)]
+        super::write_hooks::before_text_wal();
+        self.storage.text_wal.read()
+    }
+
+    /// [`Self::change_text_index`] under the `text_wal` guard the caller
+    /// already holds — a delete, which takes it first and keeps it across
+    /// its storage writes. Taking it again here could deadlock: a snapshot
+    /// queued for the exclusive guard parks every new shared taker.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::change_text_index`].
+    pub(super) fn change_text_index_ordered(
+        &self,
+        _ordered: &TextWalShared<'_>,
+        adds: &[(u64, String)],
+        removes: &[u64],
+    ) -> Result<()> {
+        self.append_text_batch_to_wal(adds, removes)?;
+        #[cfg(test)]
+        super::write_hooks::after_text_wal();
 
         // Only now is the batch durable, so only now does memory change.
-        for (id, text) in &adds {
+        for (id, text) in adds {
             self.storage.text_index.add_document(*id, text);
         }
-        for id in &removes {
+        for id in removes {
             self.storage.text_index.remove_document(*id);
         }
         Ok(())
@@ -296,27 +399,6 @@ impl Collection {
             let _ = (adds, removes);
         }
         Ok(())
-    }
-
-    /// Appends `remove_document` mutations for a whole batch to the BM25 WAL
-    /// under ONE durability barrier.
-    ///
-    /// Calling a single-frame append in a loop pays one `open` + one fsync
-    /// PER ID (the #1797 failure mode, resurfacing on the delete path —
-    /// finding C3). The frames are identical
-    /// to N sequential appends; only the syscall count differs. Callers keep
-    /// WAL-before-apply at batch granularity: let this return `Ok` first,
-    /// then remove the documents from the in-memory index.
-    ///
-    /// # Errors
-    ///
-    /// Propagates any WAL open / write / flush / fsync failure; nothing was
-    /// acknowledged in that case and the in-memory index must not be touched.
-    #[cfg(feature = "persistence")]
-    pub(super) fn append_bm25_wal_remove_batch(&self, ids: &[u64]) -> Result<()> {
-        use crate::index::bm25_persistence_wal::{wal_append_batch, wal_path_for_bm25, WalOp};
-        let ops: Vec<WalOp<'_>> = ids.iter().map(|&id| WalOp::Remove { id }).collect();
-        wal_append_batch(&wal_path_for_bm25(&self.storage.path), &ops)
     }
 
     /// Appends `(name, point_id, sparse_vector)` triples to the per-index
@@ -514,6 +596,21 @@ impl Collection {
     }
 }
 
+/// Each write's payload when it is its id's last write in the batch, `None`
+/// for an earlier one: what the batch leaves stored, positionally.
+fn last_writes<'a>(writes: &[(u64, Option<&'a Value>)]) -> Vec<Option<&'a Value>> {
+    let last: HashMap<u64, usize> = writes
+        .iter()
+        .enumerate()
+        .map(|(i, &(id, _))| (id, i))
+        .collect();
+    writes
+        .iter()
+        .enumerate()
+        .map(|(i, &(id, payload))| payload.filter(|_| last.get(&id) == Some(&i)))
+        .collect()
+}
+
 /// The last occurrence of each point id in `points`, ordered by id: the
 /// version an upsert batch leaves behind.
 fn latest_versions(points: &[Point]) -> BTreeMap<u64, &Point> {
@@ -560,3 +657,7 @@ fn dropped_sparse_entries(
         })
         .collect()
 }
+
+/// `text_wal` held shared ([`Collection::text_wal_shared`]): the proof a
+/// BM25 change under a caller's guard asks for.
+pub(super) type TextWalShared<'a> = crate::lock_audit::ReadGuard<'a, ()>;

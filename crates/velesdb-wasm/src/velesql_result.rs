@@ -9,6 +9,7 @@
 //! Rows are serialized as JSON strings (identical to Mobile), which keeps the
 //! FFI boundary simple: the caller deserializes `data_json` with `JSON.parse`.
 
+use crate::exec_error::ExecError;
 use wasm_bindgen::prelude::*;
 
 /// Classifies a VelesQL statement outcome at the Rust layer.
@@ -95,7 +96,7 @@ impl QueryResultRow {
         id: u64,
         score: f32,
         payload: Option<&serde_json::Value>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ExecError> {
         let mut map = serde_json::Map::new();
         map.insert("id".to_string(), serde_json::json!(id));
         map.insert("score".to_string(), serde_json::json!(score));
@@ -107,7 +108,7 @@ impl QueryResultRow {
             }
         }
         let data_json = serde_json::to_string(&serde_json::Value::Object(map))
-            .map_err(|e| format!("Failed to serialize row to JSON: {e}"))?;
+            .map_err(|e| velesdb_core::Error::Serialization(format!("row to JSON: {e}")))?;
         Ok(Self {
             id,
             score,
@@ -128,9 +129,10 @@ impl QueryResultRow {
         id: u64,
         score: f32,
         projected: &serde_json::Value,
-    ) -> Result<Self, String> {
-        let data_json = serde_json::to_string(projected)
-            .map_err(|e| format!("Failed to serialize projected row to JSON: {e}"))?;
+    ) -> Result<Self, ExecError> {
+        let data_json = serde_json::to_string(projected).map_err(|e| {
+            velesdb_core::Error::Serialization(format!("projected row to JSON: {e}"))
+        })?;
         Ok(Self {
             id,
             score,
@@ -144,9 +146,9 @@ impl QueryResultRow {
     /// The JSON object is used verbatim as `data_json`; its `id` field (if any)
     /// is preserved. `id` is set to 0 and `score` to 0.0 because there is no
     /// vector involved.
-    pub(crate) fn synthetic(data: serde_json::Value) -> Result<Self, String> {
+    pub(crate) fn synthetic(data: serde_json::Value) -> Result<Self, ExecError> {
         let data_json = serde_json::to_string(&data)
-            .map_err(|e| format!("Failed to serialize synthetic row: {e}"))?;
+            .map_err(|e| velesdb_core::Error::Serialization(format!("synthetic row: {e}")))?;
         Ok(Self {
             id: 0,
             score: 0.0,

@@ -75,7 +75,8 @@ VelesQL without declaring a `vector` column.
 ### Graph patterns: `executeMatch`
 
 A `MATCH` reads one graph: the `_collection` param, else the default `graph`
-(MATCH has no `FROM`). As in core, the points of the collection with that name
+(MATCH has no `FROM`). A `_collection` that is not a non-empty string is core's
+`VELES-038`, and one naming no collection is `VELES-002`. As in core, the points of the collection with that name
 are its nodes (payload as properties, `_labels` as labels), and its edges come
 from `INSERT EDGE`. The walk is core's:
 
@@ -126,7 +127,16 @@ under a distance metric "more similar" means "closer". `ORDER BY similarity()`
 is most-similar-first and `RETURN similarity()` projects the score, which the
 row also carries as `score`. `executeMatch(sql, params, vector, threshold)`
 takes REST `/match`'s query vector and threshold: it scores each row's last
-node, drops rows past the threshold and orders by score.
+node, drops rows past the threshold (a row is kept when its score is at least
+it under a similarity metric, at most it under a distance metric — core's
+`velesql::match_threshold_keeps`; without one, every row is kept) and orders by
+score. The threshold follows core's rule (`velesql::validate_match_threshold`),
+applied once when the call builds its scoring: a finite number, given with a
+`vector`, else `VELES-010`. Before the walk, that vector and every
+`similarity()` query vector of the MATCH are checked against the collection by
+core's `velesql::QueryVectorTarget::check_match`, as REST `/match` checks them: a collection
+without vectors refuses with `VELES-015`, another dimension with `VELES-004` —
+whether or not the walk would find a row.
 
 ## What runs in WASM
 
@@ -200,9 +210,9 @@ core's `QueryValidator` first, so a refusal carries the same `[Vnnn]` code.
 | `GROUP BY` / `HAVING` / aggregates, vector `GROUP BY` | Same groups and values | `aggregate_cases` G001–G027, `vector_group_cases` V001–V010 |
 | `UNION` / `INTERSECT` / `EXCEPT` | Same ids, in order | `setops_cases` S001–S008 |
 | `JOIN` (`INNER` / `LEFT` / `RIGHT` / `FULL`, any column) | Same joined rows | `join_cases` J001–J018 |
-| `INSERT` / `UPSERT` / `UPDATE` / `DELETE` | Same effect | `dml_cases` W001–W010 |
+| `INSERT` / `UPSERT` / `UPDATE` / `DELETE` | Same effect; a row and a `SET` list are bound by core's DML binder (`velesql::bind_insert_row`, `bind_update_assignments`), so the same refusals in the same words, an `UPDATE` or a `DELETE` resolves its collection, then refuses a WHERE holding a `similarity()`, `NEAR`, graph or full-text `MATCH` predicate with core's `VELES-010` before any `$name` is bound (`velesql::check_dml_where`), then an `UPDATE` binds before it reads a row (an unbound `$v` refuses it whatever its WHERE matches; a WHERE matching no row updates none), and a `DELETE` binds its WHERE before it reads the ids it names (`id = $id`, `id IN ($a, $b)`); a bound `vector` has the collection's dimension — one of another dimension refused with `VELES-004`, an empty one with `VELES-016`, every row of a vector collection storing a vector | `dml_cases` W001–W012, `velesql_exec_error_code_tests.rs` |
 | Fixed-length `MATCH`: hops, anonymous nodes, inline properties, `WHERE`, `ORDER BY` | Same rows; edges are stored beside the collection rather than on it (D004, storage only) | `match_cases` M001–M006; labels, relationship properties, repeated aliases and `@collection` against core's semantics in `velesql_match_parity_tests.rs` |
-| Shapes core's validator refuses | Same `[Vnnn]` code | `rejected_cases` R001–R017 |
+| Shapes core's validator refuses; DML vector parameters of the wrong type; a query vector of another dimension, whatever the operator, boolean position, ORDER BY or MATCH plan; an unbound `DELETE … WHERE id = $id`; an `UPDATE` on a missing collection | Same `[Vnnn]` code; same `VELES-038` / `VELES-004` / `VELES-002`, carried as core's error | `rejected_cases` R001–R031 |
 | `NOW()` / `INTERVAL` | Same — `NOW()` reads the page's clock | `crates/velesdb-wasm/tests/velesql_temporal_web.rs` |
 
 What WASM does **not** run, refused by name (the next section lists the
@@ -295,10 +305,12 @@ Both rules, and the ranking of every accepted shape, are pinned against core by
 `ORDER BY similarity()` is the search score. `ORDER BY similarity(field, $v)`
 scores each row as core does: `vector` against the row's own vector, any other
 field against the payload's named vector, a row without one of the query's
-dimension taking the worst key (last under `DESC`). It is refused only over
-grouped rows. A `MATCH` orders as core's does: `depth`, `alias.property`,
+dimension a null key — last under `ASC`, first under `DESC`, keeping its own
+score (core's `velesql::compare_scores`). It is refused only over grouped
+rows. A `MATCH` orders as core's does: `depth`, `alias.property`,
 `similarity()`, `similarity(alias.vector, $v)` (the node `alias` binds, the
-target for a bare field) and arithmetic over the target.
+target for a bare field) and arithmetic over the target, an unscored row a
+null key there too.
 
 ## Error surface: mixed, coerce before reading
 
@@ -315,6 +327,38 @@ the historical `@wiscale/velesdb-wasm@4.0.0` package:
 | `db.get_collection('nope')` | plain string, `Collection 'nope' not found` |
 | `db.executeQuery('SELECT * FROM missing')` | plain string, `Collection 'missing' not found` |
 | A VelesQL syntax error | plain string, `VelesQL parse error at position N: …` with a caret-annotated excerpt |
+
+Today the VelesQL executor carries an error core defines as core's error,
+from where it is raised to the boundary, which reads its `code` from the
+error's variant, never from the message: `executeQuery` and `executeMatch`
+throw a JS `Error` with core's `code` and core's message — `VELES-010` for a
+syntax or validation error (the `[Vnnn]` validation code stays in the
+message; a syntax error reads as core's, `[E00n] … at position N`),
+`VELES-038` for a `$name` that is unbound or bound to a value its position
+cannot take (`[VELES-038] Query parameter $v: not bound`; an `INSERT` or
+`UPDATE` vector included) and for a `_collection` that is not a non-empty
+string, `VELES-002` for a missing collection (`DROP COLLECTION`, `FLUSH`, the
+edge reads and a `MATCH` whose `_collection` names none included),
+`VELES-015` for any query vector on a collection without vectors (a `NEAR`,
+a `NEAR_FUSED` vector, a `similarity(vector, …)` or a MATCH `similarity()`,
+under `NOT` or `OR` alike, and `executeMatch`'s `vector`), `VELES-004` for a
+query vector of another dimension — both checked by core's
+`velesql::QueryVectorTarget::check_select` / `check_match` before any row is
+read, as in core, so the refusal does not depend on the scan, the operator or
+the rows (the scans after it check only that the vector is finite),
+`VELES-009` for a missing sparse index, a fusion the strategy refuses or more
+`NEAR_FUSED` vectors than a fusion takes, `VELES-010` for the `INSERT` /
+`UPDATE` refusals core words the same way (no `id`, a `vector` missing on a
+vector collection, an `UPDATE` of `id`, an unknown `CREATE COLLECTION`
+storage mode, a MATCH pattern without a node), `VELES-014` for a `vector` set
+on a collection that stores none, `VELES-027` for a guard rail and
+`VELES-037` for a read the observer denies. The collection and edge methods
+(`createCollection`, `deleteCollection`, `getCollection`, `addEdge`,
+`getEdges`, …) throw the same way. Only what core has no rule for stays a
+plain string: a statement, clause or value core runs and WASM does not, and
+the WASM surface's own inputs (the params JSON, a decimal edge id,
+`createCollection`'s metric argument, `executeMatch` on a statement that is
+not a `MATCH`).
 
 Write handlers that survive both:
 

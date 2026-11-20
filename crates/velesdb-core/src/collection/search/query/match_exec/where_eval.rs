@@ -7,7 +7,7 @@
 use super::MatchStorageGuards;
 use crate::collection::graph::GraphEdge;
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::storage::VectorStorage;
 use std::collections::HashMap;
 
@@ -35,39 +35,6 @@ fn ordering_holds(op: crate::velesql::CompareOp, ordering: std::cmp::Ordering) -
         CompareOp::Gt => ordering.is_gt(),
         CompareOp::Lte => ordering.is_le(),
         CompareOp::Gte => ordering.is_ge(),
-    }
-}
-
-/// Resolves a query vector from a `VectorExpr`, looking up parameters as needed.
-pub(super) fn resolve_query_vector(
-    vector: &crate::velesql::VectorExpr,
-    params: &HashMap<String, serde_json::Value>,
-) -> Result<Vec<f32>> {
-    use crate::velesql::VectorExpr;
-
-    match vector {
-        VectorExpr::Literal(v) => Ok(v.clone()),
-        VectorExpr::Parameter(name) => {
-            let param_value = params
-                .get(name)
-                .ok_or_else(|| Error::Query(format!("Missing vector parameter: ${name}")))?;
-
-            match param_value {
-                serde_json::Value::Array(arr) => Ok(arr
-                    .iter()
-                    .filter_map(|v| {
-                        v.as_f64().map(|f| {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let r = f as f32;
-                            r
-                        })
-                    })
-                    .collect()),
-                _ => Err(Error::Query(format!(
-                    "Parameter ${name} must be a vector array"
-                ))),
-            }
-        }
     }
 }
 
@@ -200,10 +167,10 @@ impl Collection {
             }
             // Fix #492: metadata conditions converted to filter engine evaluation.
             Condition::In(_)
+            | Condition::Match(_)
             | Condition::Between(_)
             | Condition::Like(_)
             | Condition::IsNull(_)
-            | Condition::Match(_)
             | Condition::ContainsText(_)
             | Condition::Contains(_)
             | Condition::GeoDistance(_)
@@ -327,6 +294,18 @@ impl Collection {
         ctx: &MatchWhereCtx<'_>,
         condition: &crate::velesql::Condition,
     ) -> Result<Option<bool>> {
+        // A text MATCH is bound to its hit set before the walk; lowered here
+        // it would read TRUE. Defensive: the walk is reached only through
+        // `Collection::execute_match_from`, which binds the WHERE first
+        // (`Collection::bind_match_statement_text`), and through
+        // `Collection::execute_match_with_guards`, whose clause is built from
+        // a graph predicate's pattern and holds no WHERE. Kept as an error,
+        // not a panic, should a third entry point forget the binding.
+        if matches!(condition, crate::velesql::Condition::Match(_)) {
+            return Err(crate::error::Error::Internal(
+                "a text MATCH reached the MATCH WHERE unbound to its hits".to_string(),
+            ));
+        }
         // Fix #486: Resolve the target node ID from the condition's column
         // alias, mirroring what evaluate_comparison_condition does. Without
         // this, `WHERE a.category IN (...)` would evaluate against node_id
@@ -455,7 +434,7 @@ impl Collection {
         // A vector that cannot be scored against the query — none, empty,
         // or of another length — leaves the predicate UNKNOWN, as on the
         // SELECT path: `NOT similarity(...)` must not admit it.
-        let query_vector = resolve_query_vector(&sim.vector, params)?;
+        let query_vector = crate::velesql::bind_vector(&sim.vector, params)?;
         if query_vector.is_empty() {
             return Ok(None);
         }
@@ -464,14 +443,12 @@ impl Collection {
             return Ok(None);
         };
 
-        if node_vector.len() != query_vector.len() {
-            return Ok(None);
-        }
-
         let metric = guards.metric;
         let higher_is_better = metric.higher_is_better();
 
-        let score = metric.calculate(&node_vector, &query_vector);
+        let Some(score) = metric.checked_calculate(&node_vector, &query_vector) else {
+            return Ok(None);
+        };
 
         Ok(Some(crate::velesql::similarity_holds(
             sim.operator,
@@ -556,7 +533,6 @@ fn column_of_metadata_condition(condition: &crate::velesql::Condition) -> Option
         crate::velesql::Condition::Between(btw) => Some(&btw.column),
         crate::velesql::Condition::Like(lk) => Some(&lk.column),
         crate::velesql::Condition::IsNull(isn) => Some(&isn.column),
-        crate::velesql::Condition::Match(m) => Some(&m.column),
         crate::velesql::Condition::ContainsText(ct) => Some(&ct.column),
         crate::velesql::Condition::Contains(c) => Some(&c.column),
         crate::velesql::Condition::GeoDistance(gd) => Some(&gd.column),
@@ -637,10 +613,6 @@ fn rewrite_condition_aliases(
         Condition::IsNull(mut isn) => {
             isn.column = strip_alias_owned(&isn.column, is_alias);
             Condition::IsNull(isn)
-        }
-        Condition::Match(mut m) => {
-            m.column = strip_alias_owned(&m.column, is_alias);
-            Condition::Match(m)
         }
         Condition::ContainsText(mut ct) => {
             ct.column = strip_alias_owned(&ct.column, is_alias);

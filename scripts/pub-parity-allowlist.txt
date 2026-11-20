@@ -76,3 +76,8 @@ crates/tauri-plugin-velesdb/src/types.rs struct SemanticQueryRequest
 crates/tauri-plugin-velesdb/src/types.rs struct SemanticQueryResult
 crates/tauri-plugin-velesdb/src/types.rs struct SemanticStoreRequest
 crates/tauri-plugin-velesdb/src/types.rs struct SemanticStoreWithTtlRequest
+# Never emitted: the parser never sees the bind parameters, so a missing or
+# mistyped `$name` is the engine's `Error::QueryParameter` (VELES-038). The
+# constructor was called only by its own tests; `ParseErrorKind::MissingParameter`
+# (E005) went with it.
+crates/velesdb-core/src/velesql/error.rs fn missing_parameter

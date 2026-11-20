@@ -192,7 +192,7 @@ fn a_scored_match_reads_every_row_before_its_limit() {
         #[allow(clippy::cast_precision_loss)]
         let query = [target as f32, 1.0];
         let rows = col
-            .execute_match_with_similarity(&limited, &query, f32::MAX, &HashMap::new())
+            .execute_match_with_similarity(&limited, &query, None, &HashMap::new())
             .expect("test: scored match");
 
         assert_eq!(rows.len(), 1, "target {target}");

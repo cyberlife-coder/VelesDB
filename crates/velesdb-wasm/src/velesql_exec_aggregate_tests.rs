@@ -355,7 +355,7 @@ fn test_group_by_honours_with_max_groups_as_core_does() {
         None,
     )
     .expect_err("test: too many groups");
-    assert!(err.contains("Too many groups"), "got: {err}");
+    assert!(err.to_string().contains("Too many groups"), "got: {err}");
 }
 
 #[test]
@@ -380,7 +380,7 @@ fn test_having_parameter_bound_to_a_string_is_refused_with_v018() {
     )
     .expect_err("test: a string threshold");
     assert!(
-        err.contains("[V018]") && err.contains("\"many\""),
+        err.to_string().contains("[V018]") && err.to_string().contains("\"many\""),
         "got: {err}"
     );
 }

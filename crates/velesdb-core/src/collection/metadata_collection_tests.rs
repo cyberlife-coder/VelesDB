@@ -92,28 +92,32 @@ fn test_delete_points() {
 }
 
 // =========================================================================
-// text_search returns empty for metadata-only (no vector_storage entries)
+// text_search reads a metadata collection's rows: its payloads
 // =========================================================================
 
+/// BM25 indexes a metadata collection's payloads, and the text search reads
+/// its rows as SELECT does (`Collection::get`): it used to hydrate only ids
+/// with a vector, so a metadata collection answered no hit at all.
 #[test]
-fn test_text_search_returns_empty_for_metadata_only() {
+fn test_text_search_finds_metadata_rows() {
     let dir = tempdir().unwrap();
     let coll = MetadataCollection::create(dir.path().to_path_buf(), "docs").unwrap();
 
     coll.upsert(vec![
         Point::metadata_only(1, json!({"title": "Rust programming language"})),
         Point::metadata_only(2, json!({"title": "Python programming guide"})),
+        Point::metadata_only(3, json!({"title": "Cooking"})),
     ])
     .unwrap();
 
-    // text_search delegates to BM25 + hydrate_point; hydrate_point requires
-    // vector_storage entries which metadata-only points lack, so the result
-    // set is empty.  The call itself must not error.
-    let results = coll.text_search("programming", 10).unwrap();
-    assert!(
-        results.is_empty(),
-        "text_search returns empty for metadata-only points (no vector storage)"
-    );
+    let mut ids: Vec<u64> = coll
+        .text_search("programming", 10)
+        .unwrap()
+        .iter()
+        .map(|hit| hit.point.id)
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![1, 2]);
 }
 
 // =========================================================================

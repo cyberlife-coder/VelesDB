@@ -136,6 +136,59 @@ impl<T: ?Sized> RwLock<T> {
     }
 }
 
+/// A collection's configuration lock: a [`RwLock`] ranked first in the lock
+/// order (`collection/types.rs`, position 1), so it is taken while the
+/// thread holds no other collection lock. Under `cfg(test)` taking it
+/// panics otherwise — the live guard of that rank: a read of the
+/// configuration under a storage guard (which kind of collection a write
+/// writes, read under `vector_storage`) waits behind a configuration writer
+/// that may itself wait on that guard.
+pub(crate) struct ConfigLock<T>(RwLock<T>);
+
+impl<T> ConfigLock<T> {
+    /// A new lock holding `value`.
+    pub(crate) const fn new(value: T) -> Self {
+        Self(RwLock::new(value))
+    }
+
+    /// Takes the shared guard ([`RwLock::read`]), holding no other
+    /// collection lock.
+    #[track_caller]
+    pub(crate) fn read(&self) -> ReadGuard<'_, T> {
+        Self::assert_ranks_first();
+        self.0.read()
+    }
+
+    /// Takes the exclusive guard ([`RwLock::write`]), holding no other
+    /// collection lock.
+    #[track_caller]
+    pub(crate) fn write(&self) -> WriteGuard<'_, T> {
+        Self::assert_ranks_first();
+        self.0.write()
+    }
+
+    #[inline]
+    #[track_caller]
+    fn assert_ranks_first() {
+        #[cfg(test)]
+        HELD.with(|held| {
+            assert!(
+                held.get() == 0,
+                "the collection configuration was locked under {} other collection lock \
+                 guard(s): it ranks first (collection/types.rs, LOCK ORDERING) — read what \
+                 the write needs from it before taking any",
+                held.get()
+            );
+        });
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for ConfigLock<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for RwLock<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)

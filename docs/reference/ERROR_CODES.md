@@ -33,8 +33,11 @@ Sources of truth:
 
 - Parser `E0XX`: `crates/velesdb-core/src/velesql/error.rs`
   (`E001` SyntaxError/UnexpectedToken, `E002` UnknownColumn, `E003` CollectionNotFound,
-  `E004` DimensionMismatch, `E005` MissingParameter, `E006` TypeMismatch,
-  `E007` ComplexityLimit).
+  `E004` DimensionMismatch, `E006` TypeMismatch, `E007` ComplexityLimit).
+  A missing or mistyped `$name` parameter is not a parse failure — the parser
+  never sees the parameters — but the engine error `VELES-038`
+  (`QueryParameter`). `E005` (`MissingParameter`) is still declared, deprecated,
+  so the kinds keep their discriminants: no query produces it.
 - Engine/runtime `VELES-XXX`: this document (and `crates/velesdb-core/src/error.rs`).
 - REST VelesQL `VELESQL_*`: `docs/reference/VELESQL_CONTRACT.md`.
 
@@ -102,7 +105,7 @@ version incompatibility, or internal bugs:
 
 - **Variant**: `DimensionMismatch { expected: usize, actual: usize }`
 - **Message**: `Vector dimension mismatch: expected {expected}, got {actual}`
-- **Cause**: Inserting or searching with a vector whose dimension does not match the collection's configured dimension.
+- **Cause**: Inserting or searching with a vector whose dimension does not match the collection's configured dimension. A VelesQL statement's query vectors — every `NEAR`, every `NEAR_FUSED` vector, every `similarity(vector, …)` of a SELECT WHERE (under `AND`, `OR` or `NOT`, whatever the operator) and `ORDER BY`, every `similarity()` of a MATCH WHERE and `ORDER BY`, and REST `/match`'s `vector` — are checked against the collection once, before any plan is chosen or any row is read (`velesql::QueryVectorTarget`), so the refusal does not depend on the planner's strategy, the operator, or whether any row matched; core and the WASM executor alike. A named-vector `similarity(field, …)` reads a payload array row by row: a row whose array is absent or of another length is UNKNOWN for that leaf, not an error. A DML `vector` the statement binds (`INSERT`, `UPDATE … SET vector`) is checked against the collection's dimension by the binder every engine shares (`velesql::VectorColumn`): on a graph with embeddings an empty one is a vector of dimension 0, refused here. A row without a vector on a vector collection — an empty vector included, through any write surface — is `VELES-016`, not this code.
 - **Resolution**: Ensure all vectors have exactly `expected` dimensions. Check the collection's configuration to confirm the expected dimension.
 - **Recoverable**: Yes
 
@@ -142,7 +145,7 @@ version incompatibility, or internal bugs:
 
 - **Variant**: `Config(String)`
 - **Message**: `Configuration error: {details}`
-- **Cause**: Invalid **engine/collection configuration** (e.g., unsupported distance metric, invalid HNSW parameters, invalid EXPLAIN threshold). This code is reserved for configuration of the engine itself — not for a malformed query. A query the caller wrote wrong (unsupported query shape, missing/malformed bind parameter) is reported as `VELES-010` (`Query`), not `VELES-009`.
+- **Cause**: Invalid **engine/collection configuration** (e.g., unsupported distance metric, invalid HNSW parameters, invalid EXPLAIN threshold). This code is reserved for configuration of the engine itself — not for a malformed query. A query the caller wrote wrong (unsupported query shape) is reported as `VELES-010` (`Query`), and a missing or malformed bind parameter as `VELES-038` (`QueryParameter`), not `VELES-009`.
 - **Resolution**: Review the configuration values. Consult `CollectionConfig` documentation for valid parameter ranges.
 - **Recoverable**: Yes
 
@@ -150,7 +153,7 @@ version incompatibility, or internal bugs:
 
 - **Variant**: `Query(String)`
 - **Message**: `Query error: {details}`
-- **Cause**: A VelesQL query failed to parse, validate, or execute. This wraps parse errors with position and context information, and also covers **query-shape and bind-parameter rejections** at execution time: an unsupported query shape (e.g. multiple `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate, an empty MATCH pattern) and a missing or malformed bind parameter (e.g. `$v` not provided, a sparse-vector parameter that is not a valid index/value map). USING FUSION misconfigurations carry the embedded validation code `V012` (`FusionMisconfigured`), a `WITH (mode = ...)` that is not a string, names no search mode, or gives a `custom:`/`adaptive:` ef outside `[16, 4096]` carries `V013` (`InvalidSearchMode`), a `WITH (ef_search = ...)` that is not an integer or falls outside `[16, 4096]` carries `V014` (`InvalidEfSearch`), a MATCH `ORDER BY` the MATCH executor cannot sort by — an aggregate, a bare pattern alias, a `RETURN` alias or an unqualified property — carries `V015` (`UnsupportedMatchOrderBy`), an ORDER BY in a `GROUP BY` query that names no column of the grouped rows (an aggregate the SELECT does not list, a column outside `GROUP BY`) carries `V016` (`OrderByNotInResult`), and an aggregate query whose output columns would share a name (a `GROUP BY` or selected column — a selected column counts even outside `GROUP BY` — and an aggregate's alias or default name, two aggregates, or, in a vector `GROUP BY`, an aggregate named `id` or `score`) carries `V017` (`DuplicateOutputColumn`), and a `HAVING` the query cannot evaluate — `HAVING` without `GROUP BY`, or a threshold that is neither a number nor `NULL`, literal, bound parameter or scalar subquery (`HAVING COUNT(*) > 'many'`) — carries `V018` (`InvalidHaving`); a `NULL` threshold matches no group and is no error.
+- **Cause**: A VelesQL query failed to parse, validate, or execute. This wraps parse errors with position and context information, and also covers **query-shape rejections** at execution time: an unsupported query shape (e.g. multiple `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate, an empty MATCH pattern). A missing or malformed bind parameter is not a `VELES-010`: it has its own code, `VELES-038` (`QueryParameter`). USING FUSION misconfigurations carry the embedded validation code `V012` (`FusionMisconfigured`), a `WITH (mode = ...)` that is not a string, names no search mode, or gives a `custom:`/`adaptive:` ef outside `[16, 4096]` carries `V013` (`InvalidSearchMode`), a `WITH (ef_search = ...)` that is not an integer or falls outside `[16, 4096]` carries `V014` (`InvalidEfSearch`), a MATCH `ORDER BY` the MATCH executor cannot sort by — an aggregate, a bare pattern alias, a `RETURN` alias or an unqualified property — carries `V015` (`UnsupportedMatchOrderBy`), an ORDER BY in a `GROUP BY` query that names no column of the grouped rows (an aggregate the SELECT does not list, a column outside `GROUP BY`) carries `V016` (`OrderByNotInResult`), and an aggregate query whose output columns would share a name (a `GROUP BY` or selected column — a selected column counts even outside `GROUP BY` — and an aggregate's alias or default name, two aggregates, or, in a vector `GROUP BY`, an aggregate named `id` or `score`) carries `V017` (`DuplicateOutputColumn`), and a `HAVING` the query cannot evaluate — `HAVING` without `GROUP BY`, or a threshold that is neither a number nor `NULL`, literal, bound parameter or scalar subquery (`HAVING COUNT(*) > 'many'`) — carries `V018` (`InvalidHaving`); a `NULL` threshold matches no group and is no error. A compound (`UNION`, `INTERSECT`, `EXCEPT`) one of whose operands is an aggregation — scalar aggregates or `GROUP BY`, a vector `GROUP BY` excepted — carries `V019` (`CompoundAggregation`), on `execute_query` and `execute_aggregate` alike: its first operand used to answer alone.
 - **Resolution**: Check the VelesQL syntax. Refer to `docs/VELESQL_SPEC.md` for the grammar specification. The error message includes the position of the parsing failure.
 - **Recoverable**: Yes
 
@@ -181,25 +184,25 @@ version incompatibility, or internal bugs:
 ### VELES-014: VectorNotAllowed
 
 - **Variant**: `VectorNotAllowed(String)`
-- **Message**: `Vector not allowed on metadata-only collection '{name}'`
-- **Cause**: Attempting to insert a vector into a `MetadataCollection`, which stores only structured metadata without vectors.
-- **Resolution**: Use a `VectorCollection` for data that includes vectors, or omit the vector field when inserting into a metadata collection.
+- **Message**: `Vector not allowed on '{name}': this write stores no vector`
+- **Cause**: A vector given to a write that stores none. Either a vector written into a collection that stores no vectors — a `MetadataCollection`, or a graph collection created without embeddings — through any write surface: the collection API (`upsert`, `upsert_bulk`, a graph's `upsert_bulk_from_raw` — on a metadata collection the raw bulk path compares its buffer's dimension with 0, `VELES-004` — a metadata collection's `upsert`) and VelesQL DML alike (`INSERT`/`UPSERT` with a `vector` column, `UPDATE … SET vector`), in core and the WASM executor. Or a point carrying a non-empty dense vector given to `upsert_metadata` on a `VectorCollection` (Python `Collection.upsert_metadata`): it writes payloads only, so the whole batch is refused before anything is written instead of storing the payload and dropping the vector. A query vector against a collection that stores none is `VELES-015`.
+- **Resolution**: Use a `VectorCollection`, or a graph created with embeddings, for data that includes vectors; or omit the vector when writing into a collection that stores none. To write a vector with its payload, call `upsert`; `upsert_metadata` replaces payloads only.
 - **Recoverable**: Yes
 
 ### VELES-015: SearchNotSupported
 
 - **Variant**: `SearchNotSupported(String)`
-- **Message**: `Vector search not supported on metadata-only collection '{name}'. Use query() instead.`
-- **Cause**: Attempting a vector similarity search on a `MetadataCollection` that has no vector index.
-- **Resolution**: Use `query()` for metadata-only collections (filter-based queries). For vector similarity search, use a `VectorCollection`.
+- **Message**: `Vector search not supported on '{name}': it stores no vectors. Use query() instead.`
+- **Cause**: A vector search, or a query vector, against a collection that stores no vectors — a `MetadataCollection`, or a graph collection created without embeddings: the search APIs (single, batch, filtered batch, multi-query/fused, hybrid), REST `/match` with a `vector` (on a graph without embeddings: `/match` answers a metadata collection `VELES-002`, having no graph to traverse), and every query vector of a VelesQL statement (the same set `VELES-004` lists), checked before the dimension. Core and the WASM executor alike; a standalone WASM `VectorStore` created metadata-only is named `'VectorStore'`, having no collection name.
+- **Resolution**: Use `query()` (filter-based queries) on such a collection. For vector similarity search, use a `VectorCollection` or a graph created with embeddings.
 - **Recoverable**: Yes
 
 ### VELES-016: VectorRequired
 
 - **Variant**: `VectorRequired(String)`
 - **Message**: `Vector required for collection '{name}' (not metadata-only)`
-- **Cause**: Inserting a point into a `VectorCollection` without providing a vector.
-- **Resolution**: Include a vector with the correct dimension when inserting into a vector collection. If you do not need vectors, use a `MetadataCollection` instead.
+- **Cause**: Writing a row into a `VectorCollection` without a vector — every row of a vector collection stores one — through any write surface, in core and every binding: `upsert`, `upsert_bulk` and streaming of a point with an empty vector (Python `upsert`/`upsert_bulk` of a point without `vector`, `None` or `[]`; REST, Tauri and mobile `upsert` with `"vector": []`; the WASM `VectorStore` `insert` of an empty vector, named `'VectorStore'`), VelesQL `INSERT` without a `vector` column or with an empty one and `UPDATE … SET vector` to an empty one (core and the WASM executor), and `upsert_metadata` (Python `Collection.upsert_metadata`, Tauri `upsert_metadata`) for an id that stores no vector, a payload there being no row. The whole batch is refused before anything is written. A vector of another, non-zero dimension is `VELES-004`.
+- **Resolution**: Write the point with its vector (an `upsert_metadata` then replaces its payload). If you do not need vectors, use a `MetadataCollection` instead.
 - **Recoverable**: Yes
 
 ### VELES-017: SchemaValidation
@@ -378,6 +381,15 @@ version incompatibility, or internal bugs:
 - **Surfaces**: REST `403 Forbidden` on every endpoint, VelesQL `/query` and `/aggregate` included; Python `PermissionError`; mobile `VelesError.Database` with `code = "VELES-037"`; Tauri `CommandError.code = "VELES-037"`.
 - **Recoverable**: Yes -- a caller error; it never counts toward a circuit breaker.
 
+### VELES-038: QueryParameter
+
+- **Variant**: `QueryParameter { name: String, reason: String }`
+- **Message**: `Query parameter ${name}: {reason}` (e.g. `Query parameter $v: not bound`)
+- **Cause**: A VelesQL statement names a `$name` parameter the caller did not bind, or bound to a value its position cannot take: an array or object where a scalar operand goes (a comparison, `IN`, `BETWEEN`, `CONTAINS`, a MATCH inline property, a `HAVING` threshold), anything but an array of f32-range numbers where a vector goes (`NEAR`, `similarity()`, `NEAR_FUSED`, a MATCH `similarity()` — an element that is not a number is refused, not dropped), anything but a `{"indices": [...], "values": [...]}` or `{index: weight}` object where a sparse vector goes (`SPARSE_NEAR`), or an unbound value in an `INSERT`/`UPDATE` (whose `vector` column binds as a `NEAR` vector does). The `_collection` parameter that addresses a top-level `MATCH` is refused the same way when it is not a non-empty string (`Query parameter $_collection: expected a collection name (a non-empty string), got 7`; `velesql::collection_param`). Every engine path binds through the same resolvers (`velesql::bind_value`, `bind_condition`, `bind_vector`, `bind_insert_row`, `bind_update_assignments`, `collection_param`), so the same parameter fails the same way on SELECT, MATCH, aggregation and DML, in core and in the WASM executor.
+- **Resolution**: Bind every `$name` the statement references in the query parameters, with a value of the type its position takes. The statement itself is well-formed; do not rewrite it.
+- **Surfaces**: REST `400 Bad Request` with `code = "VELES-038"` (e.g. `/collections/{name}/match`); the VelesQL endpoints (`/query`, `/aggregate`, `/query/explain`) answer `422` with `error.code = "VELESQL_PARAMETER_ERROR"` and `error.details.parameter` naming it, in place of the endpoint's own `VELESQL_*` code; Python `VelesQLParameterError`, a `ValueError` subclass; TypeScript SDK `QueryParameterError`, a `QueryError` subclass (from `VELES-038` or `VELESQL_PARAMETER_ERROR`); mobile `VelesError.Database` with `code = "VELES-038"`; Tauri `CommandError.code = "VELES-038"`.
+- **Recoverable**: Yes -- a caller error; it never counts toward a circuit breaker.
+
 ---
 
 ## Programmatic Usage
@@ -468,6 +480,7 @@ try {
 | VELES-035 | `SnapshotBuildFailed` | Yes | Graph |
 | VELES-036 | `IncompatibleSchemaVersion` | **No** | Schema |
 | VELES-037 | `AccessDenied` | Yes | Access |
+| VELES-038 | `QueryParameter` | Yes | VelesQL |
 
 ## Python SDK Exception Hierarchy
 
@@ -480,7 +493,7 @@ VelesDB Python SDK maps core error codes to typed Python exceptions:
 | `CollectionNotFoundError` | `VelesDBError` | VELES-002 | Collection name not found |
 | `PermissionError` (built-in) | `Exception` | VELES-037 | The observer denied a read or vetoed a DDL/DML statement |
 | `VelesQLSyntaxError` | `Exception` | — | VelesQL parse error |
-| `VelesQLParameterError` | `Exception` | — | Reserved, not raised today: a missing or wrong-type parameter raises `ValueError` (VELES-010) |
+| `VelesQLParameterError` | `ValueError` | VELES-038 | A `$name` parameter unbound, or bound to a value its position cannot take |
 
 ### Usage
 

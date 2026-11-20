@@ -152,7 +152,7 @@ pub struct ScoredDoc {
 
 impl PartialEq for ScoredDoc {
     fn eq(&self, other: &Self) -> bool {
-        self.score.total_cmp(&other.score) == Ordering::Equal && self.doc_id == other.doc_id
+        self.cmp(other) == Ordering::Equal
     }
 }
 
@@ -164,11 +164,17 @@ impl PartialOrd for ScoredDoc {
     }
 }
 
+/// The rank order, the better greater: a higher score, a NaN below every
+/// number whatever its sign bit and `-0.0` equal to `0.0`
+/// (`distance::score_order_key`); between equal scores the lower
+/// `doc_id`, the tie order of every sparse search and of fusion
+/// (`crate::fusion::sort_fused_results`). Sorting descending ranks best
+/// first.
 impl Ord for ScoredDoc {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.score
-            .total_cmp(&other.score)
-            .then_with(|| self.doc_id.cmp(&other.doc_id))
+        crate::distance::score_order_key(self.score)
+            .cmp(&crate::distance::score_order_key(other.score))
+            .then_with(|| other.doc_id.cmp(&self.doc_id))
     }
 }
 

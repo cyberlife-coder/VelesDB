@@ -179,5 +179,8 @@ fn test_array_bound_scalar_param_is_refused_like_core() {
     let params = parse_params(Some(r#"{"v": ["tech"]}"#)).expect("test: parse");
     let payload = serde_json::json!({"cat": ["tech"]});
     let err = matches(&c, 0, Some(&payload), &params).expect_err("test: refused");
-    assert!(err.contains("Unsupported parameter type"), "{err}");
+    assert!(
+        err.to_string().contains("[VELES-038]") && err.to_string().contains("$v"),
+        "{err}"
+    );
 }

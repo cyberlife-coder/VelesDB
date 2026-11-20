@@ -557,9 +557,9 @@ fn multi_query_search_takes_the_largest_k_without_wrapping() {
 
 #[wasm_bindgen_test]
 fn execute_query_where_scan_refuses_over_cardinality_limit() {
-    // `SELECT *` materializes every matching row; the 100_001st is refused.
-    // The executor's String channel degrades the structured error to text,
-    // but the `[VELES-027]` tag survives inside the message (#2679).
+    // `SELECT *` materializes every matching row; the 100_001st is refused
+    // with core's guard-rail error, a JS `Error` whose `code` is VELES-027
+    // (#2679).
     let mut db = velesdb_wasm::WasmDatabase::new();
     db.create_collection("big", 4, "cosine").expect("create");
     let handle = db.get_collection("big").expect("collection");
@@ -568,8 +568,63 @@ fn execute_query_where_scan_refuses_over_cardinality_limit() {
     handle.insert_batch_raw(&ids, &vectors, 4).expect("insert");
 
     let err = db.execute_query("SELECT * FROM big", None).unwrap_err();
-    let msg = err.as_string().unwrap_or_default();
-    assert!(msg.contains("VELES-027"), "missing guardrail tag: {msg}");
+    assert_eq!(js_error_code(&err).as_deref(), Some("VELES-027"));
+}
+
+#[wasm_bindgen_test]
+fn execute_query_throws_core_s_code_for_a_missing_collection() {
+    // `DROP COLLECTION` and `FLUSH` of a missing collection used to throw an
+    // uncoded string; every statement naming one now throws core's
+    // VELES-002, read from the error's variant.
+    let mut db = velesdb_wasm::WasmDatabase::new();
+    for sql in [
+        "DROP COLLECTION ghost",
+        "FLUSH ghost",
+        "SELECT * FROM ghost",
+    ] {
+        let err = db.execute_query(sql, None).unwrap_err();
+        assert_eq!(js_error_code(&err).as_deref(), Some("VELES-002"), "{sql}");
+    }
+    let err = db.delete_collection("ghost").unwrap_err();
+    assert_eq!(js_error_code(&err).as_deref(), Some("VELES-002"));
+}
+
+#[wasm_bindgen_test]
+fn execute_query_throws_core_s_code_for_a_mistyped_dml_vector() {
+    let mut db = velesdb_wasm::WasmDatabase::new();
+    db.create_collection("docs", 2, "cosine").expect("create");
+    let err = db
+        .execute_query(
+            "INSERT INTO docs (id, vector) VALUES (1, $v)",
+            Some(r#"{"v": [1.0, "x"]}"#.to_string()),
+        )
+        .unwrap_err();
+    assert_eq!(js_error_code(&err).as_deref(), Some("VELES-038"));
+}
+
+#[wasm_bindgen_test]
+fn execute_match_refuses_a_threshold_without_a_vector() {
+    let mut db = velesdb_wasm::WasmDatabase::new();
+    db.create_collection("docs", 2, "cosine").expect("create");
+    let err = db
+        .execute_match(
+            "MATCH (n) RETURN n LIMIT 5",
+            Some(r#"{"_collection": "docs"}"#.to_string()),
+            None,
+            Some(0.5),
+        )
+        .unwrap_err();
+    assert_eq!(js_error_code(&err).as_deref(), Some("VELES-010"));
+}
+
+#[wasm_bindgen_test]
+fn execute_query_refusal_of_its_own_stays_a_string() {
+    let mut db = velesdb_wasm::WasmDatabase::new();
+    let err = db
+        .execute_query("TRAIN QUANTIZER ON docs WITH (m = 8)", None)
+        .unwrap_err();
+    assert!(err.as_string().is_some(), "a refusal is a message string");
+    assert_eq!(js_error_code(&err), None);
 }
 
 #[wasm_bindgen_test]

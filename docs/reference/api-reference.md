@@ -919,7 +919,7 @@ Execute a VelesQL query.
 |-------|------|----------|-------------|
 | query | string | Yes | VelesQL query string |
 | params | object | No | Bound parameters (e.g., vectors) |
-| collection | string | Conditional | Required for top-level `MATCH ...` queries sent to `/query` |
+| collection | string | Conditional | Collection a statement without `FROM` (a top-level `MATCH ...`) runs on: passed as `params._collection` unless `params` already sets `_collection`, which wins |
 
 **Example:**
 ```json
@@ -945,7 +945,10 @@ Execute a VelesQL query.
 }
 ```
 
-**Contract note:** top-level `MATCH` on `/query` requires `collection` in request body.  
+**Contract note:** a top-level `MATCH` on `/query` names its collection with
+`collection` in the request body or `_collection` in `params`; when both are
+set, `_collection` wins. With neither, the request is refused with
+`VELESQL_MISSING_COLLECTION`. A statement with a `FROM` reads its `FROM`.  
 **Default LIMIT:** a SELECT without an explicit `LIMIT` clause returns at most
 10 rows (engine default). `MATCH ... RETURN` and compound queries
 (UNION/INTERSECT/EXCEPT) have no implicit limit and are bounded only by the
@@ -965,7 +968,7 @@ Execute aggregation-only VelesQL queries.
 |-------|------|----------|-------------|
 | query | string | Yes | Aggregation VelesQL query string |
 | params | object | No | Named parameters |
-| collection | string | Conditional | Optional fallback when query omits `FROM <collection>` |
+| collection | string | No | Not read: an aggregate runs on its `FROM`, which the grammar requires of every `SELECT` |
 
 **Example:**
 
@@ -1004,7 +1007,7 @@ Execute collection-scoped graph `MATCH` queries.
 | query | string | Yes | VelesQL `MATCH ... RETURN ...` query |
 | params | object | No | Named query params |
 | vector | array[float] | No | Optional vector for similarity scoring |
-| threshold | float | No | Similarity threshold in `[0.0, 1.0]` |
+| threshold | float | No | Score threshold for `vector`, in the collection metric's direction: a row is kept when its score is at least this under `cosine`, `dot` or `jaccard`, at most this under `euclidean` or `hamming`. Any finite number, sent with `vector` (a threshold without one is refused with `VELES-010`, since no row is scored); omitted, every scored row is kept |
 
 **Response:**
 ```json

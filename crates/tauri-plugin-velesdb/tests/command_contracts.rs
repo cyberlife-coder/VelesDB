@@ -180,6 +180,29 @@ fn query_explicit_collection_param_takes_precedence() {
     assert_eq!(err.code, "VELES-002", "{err:?}");
 }
 
+/// A `params._collection` that is no collection name is core's parameter
+/// error (`VELES-038`), the rule REST `/query` and every engine apply
+/// (`velesql::collection_param`).
+#[test]
+fn query_invalid_collection_param_is_a_parameter_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    create_graph(&app, serde_json::json!({ "name": "social" })).expect("create graph");
+
+    for bad in [serde_json::json!(""), serde_json::json!(7)] {
+        let err = run_query(
+            &app,
+            serde_json::json!({
+                "query": MATCH_SQL,
+                "collection": "social",
+                "params": { "_collection": bad }
+            }),
+        )
+        .expect_err("an invalid `_collection` is refused");
+        assert_eq!(err.code, "VELES-038", "{err:?}");
+    }
+}
+
 // ===========================================================================
 // HybridResult wire shape
 // ===========================================================================

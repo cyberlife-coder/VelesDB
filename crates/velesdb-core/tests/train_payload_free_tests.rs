@@ -8,8 +8,8 @@
 //! carries no payloads, so that view is empty and training reported "no
 //! vectors available" about a collection holding its full count.
 //!
-//! `all_point_ids` unions vector and payload storage and is documented as the
-//! authoritative set.
+//! `all_point_ids` lists the collection's rows — every vector of a vector
+//! collection — whether they carry a payload or not.
 
 use std::collections::HashMap;
 

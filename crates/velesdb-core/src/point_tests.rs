@@ -150,3 +150,21 @@ fn test_point_named_sparse_vectors_multiple() {
     assert_eq!(sv_map.get("title").unwrap().nnz(), 2);
     assert_eq!(sv_map.get("body").unwrap().nnz(), 2);
 }
+
+#[test]
+fn test_search_result_component_score_reads_a_tagged_component_only() {
+    let point = Point::new(1, vec![1.0], None);
+    let tagged = SearchResult::with_component_scores(
+        point.clone(),
+        0.9,
+        ComponentScores::from_slice(&[("vector_score", 0.8), ("bm25_score", 0.4)]),
+    );
+    assert_eq!(tagged.component_score("vector_score"), Some(0.8));
+    assert_eq!(tagged.component_score("bm25_score"), Some(0.4));
+    assert_eq!(tagged.component_score("graph_score"), None);
+    // An untagged result has no component, whatever its score.
+    assert_eq!(
+        SearchResult::new(point, 0.9).component_score("vector_score"),
+        None
+    );
+}

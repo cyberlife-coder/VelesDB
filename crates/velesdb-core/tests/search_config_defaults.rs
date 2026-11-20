@@ -475,8 +475,11 @@ fn a_configured_ef_search_reaches_hybrid_search() {
     );
 }
 
-/// `hybrid_search_with_filter` (the metadata-filtered variant, with its own
-/// candidate fetch in `text.rs`) follows the configured `[search]` quality too.
+/// `hybrid_search_with_filter` (the metadata-filtered variant) follows the
+/// configured `[search]` quality too. Its vector branch is the filtered
+/// vector search (`search_with_filter`), which oversamples for the filter:
+/// at `WIDE_K` that window is deep enough for `LOW_EF` and `HIGH_EF` to agree
+/// on every query, so it is asked for `K`.
 #[test]
 fn a_configured_ef_search_reaches_hybrid_search_with_filter() {
     let dir = tempfile::TempDir::new().expect("test: tempdir");
@@ -487,7 +490,7 @@ fn a_configured_ef_search_reaches_hybrid_search_with_filter() {
         |config| reopened(&dir, config),
         |collection, q| {
             ids(&collection
-                .hybrid_search_with_filter(q, "common", WIDE_K, Some(0.99), &even)
+                .hybrid_search_with_filter(q, "common", K, Some(0.99), &even)
                 .expect("test: hybrid_search_with_filter"))
         },
     );
@@ -499,8 +502,9 @@ fn a_configured_ef_search_reaches_hybrid_search_with_filter() {
 }
 
 /// The score-level fusion strategies (`maximum`, `average`, `rsf`) draw their
-/// vector stream from `hybrid_score_streams`, a third candidate fetch. It is
-/// private and reached through a `NEAR` + `MATCH` query carrying `USING FUSION`.
+/// vector stream from `hybrid_streams`, at their own depth
+/// (`fusion::dense_sparse_candidate_k`). It is private and reached through a
+/// `NEAR` + `MATCH` query carrying `USING FUSION`.
 ///
 /// The `MATCH` term is absent from the corpus on purpose, unlike the
 /// `"common"` of the other hybrid tests: here a shared term makes the BM25

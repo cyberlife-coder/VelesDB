@@ -510,7 +510,9 @@ pub struct QueryRequest {
     /// Named parameters for the query.
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
-    /// Optional collection name (required for top-level MATCH queries via `/query`).
+    /// Collection a statement without `FROM` (a top-level MATCH) runs on:
+    /// passed as `params._collection` unless `params` already sets
+    /// `_collection`, which wins. A statement with a `FROM` reads its `FROM`.
     #[serde(default)]
     pub collection: Option<String>,
 }
