@@ -988,6 +988,8 @@ VelesDB Server includes per-IP rate limiting backed by a token-bucket algorithm 
 
 ### Behavior
 
+The limiter is a token bucket per IP: with `rate_limit = N` a client may send `N` requests at once, and is given one request back every `1/N` seconds. A client that keeps to `N` requests per second is never refused, and an emptied bucket is full again one second later. (Until 2026-11-20 a request came back only every `N` seconds; see the CHANGELOG.)
+
 When a client exceeds the limit, the server responds with HTTP `429 Too Many Requests` and includes rate-limit headers:
 
 | Header | Description |
