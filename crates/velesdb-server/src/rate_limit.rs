@@ -19,7 +19,23 @@ type HeaderMiddleware = ::governor::middleware::StateInformationMiddleware;
 /// Concrete governor config type with per-IP keying and rate-limit headers.
 pub type RateLimitConfig = GovernorConfig<SmartIpKeyExtractor, HeaderMiddleware>;
 
+/// The interval after which one request is given back to a client that may
+/// send `requests_per_second`: a `requests_per_second`-th of a second.
+///
+/// `None` for a rate of zero, which has no interval. Above a billion requests
+/// per second the division rounds to nothing, so the interval is held at one
+/// nanosecond — the builder refuses a zero interval.
+fn refill_interval(requests_per_second: u32) -> Option<Duration> {
+    Duration::from_secs(1)
+        .checked_div(requests_per_second)
+        .map(|interval| interval.max(Duration::from_nanos(1)))
+}
+
 /// Build a [`GovernorConfig`] that enforces `burst` requests/second per IP.
+///
+/// A client may send `burst` requests at once and is given one back every
+/// `1 / burst` seconds, so a client that keeps to `burst` per second is never
+/// refused and an emptied bucket is full again a second later.
 ///
 /// Uses [`SmartIpKeyExtractor`] which inspects `x-forwarded-for`,
 /// `x-real-ip`, `forwarded` headers before falling back to the peer IP,
@@ -30,10 +46,16 @@ pub type RateLimitConfig = GovernorConfig<SmartIpKeyExtractor, HeaderMiddleware>
 ///
 /// # Errors
 ///
-/// Returns an error if the governor configuration cannot be built.
+/// Returns an error if `burst` is zero or the governor configuration cannot
+/// be built.
 pub fn build_rate_limit_config(burst: u32) -> anyhow::Result<Arc<RateLimitConfig>> {
+    let interval = refill_interval(burst)
+        .ok_or_else(|| anyhow::anyhow!("a rate limit of 0 requests per second has no bucket"))?;
     let mut builder = GovernorConfigBuilder::default();
-    builder.per_second(u64::from(burst));
+    // `period` is the time one request takes to come back. The builder's
+    // `per_second(n)` is that same interval expressed in seconds, not a rate:
+    // `per_second(burst)` gave one request back every `burst` seconds.
+    builder.period(interval);
     builder.burst_size(burst);
     let mut builder = builder.key_extractor(SmartIpKeyExtractor);
     let mut builder = builder.use_headers();
