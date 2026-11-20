@@ -265,7 +265,9 @@ impl QueryCache {
             .iter()
             .any(|entry| entry.canonical_query != new_entry.canonical_query)
         {
-            self.record_collision_fallback();
+            crate::metrics::global_guardrails_metrics().record_cache_collision_fallback();
+            #[cfg(test)]
+            self.collision_fallbacks.fetch_add(1, Ordering::Relaxed);
         }
         bucket.push(new_entry);
 
@@ -275,15 +277,6 @@ impl QueryCache {
         }
         debug_assert_eq!(self.size.load(Ordering::Relaxed), inner.order.len());
         drop(inner);
-    }
-
-    /// Counts one collision fallback in the process-wide guardrail metric
-    /// and, in test builds, in this cache's own counter.
-    #[cfg_attr(not(test), allow(clippy::unused_self))]
-    fn record_collision_fallback(&self) {
-        crate::metrics::global_guardrails_metrics().record_cache_collision_fallback();
-        #[cfg(test)]
-        self.collision_fallbacks.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Collision fallbacks recorded by this cache alone.

@@ -48,12 +48,14 @@ impl<T> Slab<T> {
     }
 
     fn push(&mut self, node: T) {
-        self.touch();
+        #[cfg(test)]
+        self.count_access();
         self.nodes.push(node);
     }
 
     fn swap_remove(&mut self, slot: usize) -> T {
-        self.touch();
+        #[cfg(test)]
+        self.count_access();
         self.nodes.swap_remove(slot)
     }
 
@@ -61,11 +63,10 @@ impl<T> Slab<T> {
         self.nodes.clear();
     }
 
-    /// Counts one node access in test builds; compiles to nothing otherwise.
-    #[inline]
-    #[cfg_attr(not(test), allow(clippy::unused_self))]
-    fn touch(&self) {
-        #[cfg(test)]
+    /// Counts one node access. Test builds only: every call site is
+    /// `#[cfg(test)]`, so release builds carry neither the counter nor a call.
+    #[cfg(test)]
+    fn count_access(&self) {
         self.accesses
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
@@ -75,14 +76,16 @@ impl<T> Index<usize> for Slab<T> {
     type Output = T;
 
     fn index(&self, slot: usize) -> &T {
-        self.touch();
+        #[cfg(test)]
+        self.count_access();
         &self.nodes[slot]
     }
 }
 
 impl<T> IndexMut<usize> for Slab<T> {
     fn index_mut(&mut self, slot: usize) -> &mut T {
-        self.touch();
+        #[cfg(test)]
+        self.count_access();
         &mut self.nodes[slot]
     }
 }
