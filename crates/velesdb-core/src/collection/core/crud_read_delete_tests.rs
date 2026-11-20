@@ -33,17 +33,18 @@ fn test_delete_counted_counts_only_ids_that_held_a_point() {
 }
 
 #[test]
-fn test_delete_counted_counts_a_payload_only_id() {
-    // A payload-only id (a graph node payload) is listed by `all_ids` and
-    // scroll; deleting it removes something, so it counts.
+fn test_delete_counted_removes_a_payload_only_id_without_counting_it() {
+    // A payload-only id of a vector collection (an edge endpoint's payload)
+    // is no row of it: `all_ids` does not list it, and deleting it removes
+    // the payload but counts nothing. A graph's payload-only node is a row.
     let dir = tempdir().unwrap();
     let coll = Collection::create(dir.path().to_path_buf(), 2, DistanceMetric::Cosine).unwrap();
     coll.store_node_payload(7, &json!({"name": "node"}))
         .unwrap();
-
-    assert_eq!(coll.delete_counted(&[7]).unwrap(), 1);
     assert!(coll.all_ids().is_empty());
+
     assert_eq!(coll.delete_counted(&[7]).unwrap(), 0);
+    assert!(coll.stored_ids().is_empty(), "the payload is removed");
 }
 
 #[test]

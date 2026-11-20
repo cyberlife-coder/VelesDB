@@ -4,8 +4,9 @@
 //! `list_collections`, `get_collection`) that mirror the REST server surface
 //! in `velesdb-server`. All state is in-memory (no persistence feature).
 //!
-//! Inner functions return `Result<_, String>` for native-target testability;
-//! the `#[wasm_bindgen]` methods convert to `JsValue` at the FFI boundary.
+//! Inner functions return an [`ExecError`] — core's error where core defines
+//! one — for native-target testability; the `#[wasm_bindgen]` methods
+//! convert to `JsValue` at the FFI boundary.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,12 +14,13 @@ use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
 
+use crate::exec_error::ExecError;
 use crate::graph_store::WasmGraphStore;
 use crate::observer::{gate, WasmObserver, WasmQueryOperationKind};
 use crate::parsing;
 use crate::store_new;
 use crate::store_state::StoreState;
-use crate::wasm_error::WasmError;
+use crate::wasm_error::core_error_to_js;
 use crate::VectorStore;
 
 // ---------------------------------------------------------------------------
@@ -80,17 +82,17 @@ impl DatabaseInner {
     /// Read-path gate for VelesQL / database-mediated reads.
     ///
     /// Zero-overhead when no observer is registered (single `Option` check).
-    /// Returns `Err(msg)` when the observer denies the read.
     ///
     /// # Errors
     ///
-    /// Propagates the observer's denial message.
+    /// Core's `Error::AccessDenied` (`VELES-037`) carrying the observer's
+    /// denial message.
     #[inline]
     pub(crate) fn check_query_access(
         &self,
         collection: &str,
         operation: WasmQueryOperationKind,
-    ) -> Result<(), String> {
+    ) -> Result<(), velesdb_core::Error> {
         gate(self.observer.as_ref(), collection, operation)
     }
 
@@ -112,25 +114,55 @@ impl DatabaseInner {
         self.graphs.get(name).map(Rc::clone)
     }
 
+    /// The graph store a statement reading or removing edges of `name`
+    /// addresses: `None` for a collection with no edge yet, and core's
+    /// `CollectionNotFound` (`VELES-002`) when `name` is neither a graph
+    /// store nor a collection.
+    pub(crate) fn existing_graph_store(
+        &self,
+        name: &str,
+    ) -> Result<Option<SharedGraph>, velesdb_core::Error> {
+        match self.get_graph_store(name) {
+            Some(graph) => Ok(Some(graph)),
+            None if self.contains(name) => Ok(None),
+            None => Err(velesdb_core::Error::CollectionNotFound(name.to_string())),
+        }
+    }
+
     /// Applies core's collection-name syntax rules (single source of truth).
     ///
     /// Without this, the lifecycle methods only ran a `HashMap` existence
     /// check, silently accepting names core would reject (path traversal,
-    /// reserved device names, forbidden characters). Returns a structured
-    /// [`WasmError`] carrying core's `VELES-034` code instead of pre-flattening
-    /// to a bare string (backlog #22), so the FFI layer can surface
-    /// `error.code` to browser clients.
-    pub(crate) fn validate_name(name: &str) -> Result<(), WasmError> {
-        velesdb_core::validate_collection_name(name).map_err(WasmError::from)
+    /// reserved device names, forbidden characters). Returns core's
+    /// `InvalidCollectionName` (`VELES-034`) instead of pre-flattening it to
+    /// a bare string (backlog #22), so the FFI layer can surface `error.code`
+    /// to browser clients.
+    pub(crate) fn validate_name(name: &str) -> Result<(), velesdb_core::Error> {
+        velesdb_core::validate_collection_name(name)
     }
 
+    /// Refuses `name` when a collection already holds it, with core's
+    /// `CollectionExists` (`VELES-001`).
+    fn ensure_free(&self, name: &str) -> Result<(), velesdb_core::Error> {
+        if self.collections.contains_key(name) {
+            return Err(velesdb_core::Error::CollectionExists(name.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Creates a collection from the JS surface's metric string.
     pub(crate) fn create_collection(
         &mut self,
         name: &str,
         dimension: usize,
         metric: &str,
-    ) -> Result<(), String> {
-        self.create_collection_with_mode(name, dimension, metric, crate::StorageMode::Full)
+    ) -> Result<(), ExecError> {
+        // A refusal of the WASM surface's own: `createCollection`'s metric is
+        // a JS argument, not a statement core parses, and keeps the message
+        // the JS API always threw. VelesQL's `CREATE COLLECTION` resolves its
+        // metric through core's rule instead (`velesql_ddl`).
+        let parsed_metric = parsing::parse_metric_inner(metric).map_err(ExecError::refused)?;
+        self.create_collection_with_mode(name, dimension, parsed_metric, crate::StorageMode::Full)
     }
 
     /// Creates a collection with an explicit storage mode (Full / SQ8 /
@@ -142,15 +174,12 @@ impl DatabaseInner {
         &mut self,
         name: &str,
         dimension: usize,
-        metric: &str,
+        metric: crate::DistanceMetric,
         mode: crate::StorageMode,
-    ) -> Result<(), String> {
-        Self::validate_name(name).map_err(|e| e.message().to_owned())?;
-        if self.collections.contains_key(name) {
-            return Err(format!("Collection '{name}' already exists"));
-        }
-        let parsed_metric = parsing::parse_metric_inner(metric)?;
-        let store = store_new::create_store(dimension, parsed_metric, mode);
+    ) -> Result<(), ExecError> {
+        Self::validate_name(name)?;
+        self.ensure_free(name)?;
+        let store = store_new::create_store(dimension, metric, mode);
         self.collections
             .insert(name.to_owned(), Rc::new(RefCell::new(store)));
         Ok(())
@@ -164,10 +193,8 @@ impl DatabaseInner {
         &mut self,
         name: &str,
         store: SharedStore,
-    ) -> Result<(), String> {
-        if self.collections.contains_key(name) {
-            return Err(format!("Collection '{name}' already exists"));
-        }
+    ) -> Result<(), velesdb_core::Error> {
+        self.ensure_free(name)?;
         self.collections.insert(name.to_owned(), store);
         Ok(())
     }
@@ -177,7 +204,11 @@ impl DatabaseInner {
     /// surface (which currently only supports Full). Returns an error if
     /// a collection by that name already exists.
     #[cfg(test)]
-    pub(crate) fn install_store(&mut self, name: &str, store: StoreState) -> Result<(), String> {
+    pub(crate) fn install_store(
+        &mut self,
+        name: &str,
+        store: StoreState,
+    ) -> Result<(), velesdb_core::Error> {
         self.attach_shared_store(name, Rc::new(RefCell::new(store)))
     }
 
@@ -186,11 +217,12 @@ impl DatabaseInner {
     /// Useful for storing reference data, lookups, or auxiliary information
     /// that does not require vector similarity search. Mirrors the Mobile
     /// bindings surface (`create_metadata_collection`).
-    pub(crate) fn create_metadata_collection(&mut self, name: &str) -> Result<(), String> {
-        Self::validate_name(name).map_err(|e| e.message().to_owned())?;
-        if self.collections.contains_key(name) {
-            return Err(format!("Collection '{name}' already exists"));
-        }
+    pub(crate) fn create_metadata_collection(
+        &mut self,
+        name: &str,
+    ) -> Result<(), velesdb_core::Error> {
+        Self::validate_name(name)?;
+        self.ensure_free(name)?;
         let store = store_new::create_metadata_only();
         self.collections
             .insert(name.to_owned(), Rc::new(RefCell::new(store)));
@@ -204,9 +236,9 @@ impl DatabaseInner {
     /// a subsequent `CREATE COLLECTION` with the same name cannot surface
     /// ghost nodes/edges left over from the previous lifecycle. Fixes
     /// Devin review PR #594 finding #3.
-    pub(crate) fn delete_collection(&mut self, name: &str) -> Result<(), String> {
+    pub(crate) fn delete_collection(&mut self, name: &str) -> Result<(), velesdb_core::Error> {
         if self.collections.remove(name).is_none() {
-            return Err(format!("Collection '{name}' not found"));
+            return Err(velesdb_core::Error::CollectionNotFound(name.to_string()));
         }
         // Drop the associated graph store, if any. No error when absent:
         // many collections never have a graph store attached.
@@ -246,11 +278,11 @@ impl DatabaseInner {
             .collect()
     }
 
-    pub(crate) fn get_shared_store(&self, name: &str) -> Result<SharedStore, String> {
+    pub(crate) fn get_shared_store(&self, name: &str) -> Result<SharedStore, velesdb_core::Error> {
         self.collections
             .get(name)
             .map(Rc::clone)
-            .ok_or_else(|| format!("Collection '{name}' not found"))
+            .ok_or_else(|| velesdb_core::Error::CollectionNotFound(name.to_string()))
     }
 
     pub(crate) fn contains(&self, name: &str) -> bool {
@@ -329,21 +361,18 @@ impl WasmDatabase {
     /// * `metric` — distance metric: `"cosine"`, `"euclidean"`, `"dot"`, etc.
     ///
     /// # Errors
-    /// Returns an error if the collection already exists or the metric is
-    /// invalid.
+    /// Throws an `Error` whose `code` is core's when the name is invalid
+    /// (`VELES-034`) or taken (`VELES-001`) (backlog #22); an unknown metric
+    /// is a message string.
     pub fn create_collection(
         &mut self,
         name: &str,
         dimension: usize,
         metric: &str,
     ) -> Result<(), JsValue> {
-        // Validate the name through the structured path first so an invalid
-        // name surfaces `error.code === "VELES-034"` to JS (backlog #22);
-        // remaining failures (metric, already-exists) keep their string form.
-        DatabaseInner::validate_name(name).map_err(WasmError::into_js_value)?;
         self.inner
             .create_collection(name, dimension, metric)
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(ExecError::into_js_value)
     }
 
     /// Attaches an existing `VectorStore` as collection `name`, sharing its
@@ -351,13 +380,14 @@ impl WasmDatabase {
     /// same points the store handle does, in both directions.
     ///
     /// # Errors
-    /// Returns an error if `name` is invalid or already taken.
+    /// Throws an `Error` whose `code` is core's when `name` is invalid
+    /// (`VELES-034`) or already taken (`VELES-001`).
     #[wasm_bindgen(js_name = attachStore)]
     pub fn attach_store(&mut self, name: &str, store: &VectorStore) -> Result<(), JsValue> {
-        DatabaseInner::validate_name(name).map_err(WasmError::into_js_value)?;
+        DatabaseInner::validate_name(name).map_err(core_error_to_js)?;
         self.inner
             .attach_shared_store(name, store.shared_state())
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(core_error_to_js)
     }
 
     /// Creates a metadata-only collection (no vectors, only payloads).
@@ -367,13 +397,13 @@ impl WasmDatabase {
     /// ideal target for reference data, lookup tables, or auxiliary metadata.
     ///
     /// # Errors
-    /// Returns an error if the collection already exists.
+    /// Throws an `Error` whose `code` is core's when the name is invalid
+    /// (`VELES-034`) or taken (`VELES-001`).
     #[wasm_bindgen(js_name = createMetadataCollection)]
     pub fn create_metadata_collection(&mut self, name: &str) -> Result<(), JsValue> {
-        DatabaseInner::validate_name(name).map_err(WasmError::into_js_value)?;
         self.inner
             .create_metadata_collection(name)
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(core_error_to_js)
     }
 
     /// Deletes a named collection and frees its memory.
@@ -393,11 +423,10 @@ impl WasmDatabase {
     /// handles DO see the wipe — only DROP detaches.
     ///
     /// # Errors
-    /// Returns an error if the collection does not exist.
+    /// Throws an `Error` whose `code` is `VELES-002` when the collection does
+    /// not exist.
     pub fn delete_collection(&mut self, name: &str) -> Result<(), JsValue> {
-        self.inner
-            .delete_collection(name)
-            .map_err(|e| JsValue::from_str(&e))
+        self.inner.delete_collection(name).map_err(core_error_to_js)
     }
 
     /// Lists all collection names as a JavaScript `Array<string>`.
@@ -412,12 +441,13 @@ impl WasmDatabase {
     /// inserts and deletions through the handle are visible in the database.
     ///
     /// # Errors
-    /// Returns an error if the collection does not exist.
+    /// Throws an `Error` whose `code` is `VELES-002` when the collection does
+    /// not exist.
     pub fn get_collection(&self, name: &str) -> Result<WasmCollectionHandle, JsValue> {
         let store = self
             .inner
             .get_shared_store(name)
-            .map_err(|e| JsValue::from_str(&e))?;
+            .map_err(core_error_to_js)?;
         Ok(WasmCollectionHandle {
             inner: store,
             // Snapshot the observer registered at hand-out time so the handle
@@ -461,9 +491,14 @@ impl WasmDatabase {
     /// ```
     ///
     /// # Errors
-    /// Returns a `JsValue` error string when parsing fails, parameters are
-    /// invalid, the target collection does not exist, or the statement uses
-    /// a feature that WASM does not support.
+    /// Throws when parsing fails, parameters are invalid, the target
+    /// collection does not exist, or the statement uses a feature that WASM
+    /// does not support. An error core defines is thrown as an `Error` whose
+    /// `code` is core's, read from the error's variant (`VELES-010` for a
+    /// parse or validation failure, `VELES-038` for a `$name` that is unbound
+    /// or of the wrong type, `VELES-002` for a missing collection,
+    /// `VELES-037` for a read the gate denies); the executor's own refusals
+    /// — a statement WASM does not run — are message strings.
     #[wasm_bindgen(js_name = executeQuery)]
     pub fn execute_query(
         &mut self,
@@ -471,7 +506,7 @@ impl WasmDatabase {
         params_json: Option<String>,
     ) -> Result<crate::velesql_result::QueryResult, JsValue> {
         crate::velesql_exec::execute(&mut self.inner, sql, params_json.as_deref())
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(ExecError::into_js_value)
     }
 
     /// Runs a VelesQL `MATCH` and returns its rows in core's `MatchResult`
@@ -483,8 +518,10 @@ impl WasmDatabase {
     /// caller. Name the collection with `_collection` in `params_json` (MATCH
     /// has no `FROM`); its points are the nodes, so `similarity()` scores
     /// their vectors. `vector` and `threshold` are REST `/match`'s: each row's
-    /// last node is scored, rows past the threshold (default `0.0`) are
-    /// dropped and the rest ordered by score. A row carries `score` when the
+    /// last node is scored, rows past the threshold are dropped (a row is kept
+    /// when its score is at least it under a similarity metric, at most it
+    /// under a distance metric; omitted, every row is kept) and the rest
+    /// ordered by score. A row carries `score` when the
     /// MATCH computes one.
     ///
     /// # Example (JavaScript)
@@ -497,10 +534,13 @@ impl WasmDatabase {
     /// ```
     ///
     /// # Errors
-    /// Returns a `JsValue` error string when parsing or validation fails, the
-    /// statement is not a MATCH, parameters are invalid, the read gate denies
-    /// a collection, `vector` has another dimension than the collection,
-    /// `threshold` is outside `[0, 1]`, or the MATCH fails.
+    /// Throws when parsing or validation fails, the statement is not a MATCH,
+    /// parameters are invalid, the read gate denies a collection, `vector`
+    /// has another dimension than the collection, `threshold` is not a finite
+    /// number or comes without `vector` (core's rule, as on REST), or the
+    /// MATCH fails. An error core defines is thrown as an `Error` whose
+    /// `code` is core's, read from the error's variant, as `executeQuery`
+    /// throws it; the executor's own refusals are message strings.
     #[wasm_bindgen(js_name = executeMatch)]
     pub fn execute_match(
         &mut self,
@@ -509,15 +549,15 @@ impl WasmDatabase {
         vector: Option<Vec<f32>>,
         threshold: Option<f32>,
     ) -> Result<String, JsValue> {
-        let scoring =
-            vector.map(|vector| crate::velesql_match_core::MatchScoring { vector, threshold });
+        let scoring = crate::velesql_match_core::MatchScoring::from_request(vector, threshold)
+            .map_err(ExecError::into_js_value)?;
         let rows = crate::velesql_match_core::execute_match_rows(
             &mut self.inner,
             sql,
             params_json.as_deref(),
             scoring,
         )
-        .map_err(|e| JsValue::from_str(&e))?;
+        .map_err(ExecError::into_js_value)?;
         serde_json::to_string(&rows).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -530,9 +570,11 @@ impl WasmDatabase {
     /// A MATCH on `name` reads the edge.
     ///
     /// # Errors
-    /// Returns a `JsValue` error string when `edge_json` is malformed, the
-    /// collection does not exist, an endpoint is not one of its nodes (its
-    /// points, or nodes written with `INSERT NODE`), or the id is taken.
+    /// Throws a message string when `edge_json` is malformed; an `Error`
+    /// whose `code` is core's when the collection does not exist
+    /// (`VELES-002`), an endpoint is not one of its nodes (its points, or
+    /// nodes written with `INSERT NODE`; `VELES-022`) or the id is taken
+    /// (`VELES-019`).
     #[wasm_bindgen(js_name = addEdge)]
     pub fn add_edge(&mut self, name: &str, edge_json: &str) -> Result<String, JsValue> {
         let edge = serde_json::from_str(edge_json)
@@ -540,7 +582,7 @@ impl WasmDatabase {
         self.inner
             .add_edge(name, edge)
             .map(|id| id.to_string())
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(ExecError::into_js_value)
     }
 
     /// The edges of collection `name` as a JSON array string of
@@ -550,14 +592,14 @@ impl WasmDatabase {
     /// may).
     ///
     /// # Errors
-    /// Returns a `JsValue` error string when the collection does not exist or
-    /// the read gate denies it.
+    /// Throws an `Error` whose `code` is `VELES-002` when the collection does
+    /// not exist, `VELES-037` when the read gate denies it.
     #[wasm_bindgen(js_name = getEdges)]
     pub fn get_edges(&self, name: &str, label: Option<String>) -> Result<String, JsValue> {
         let edges = self
             .inner
             .edges(name, label.as_deref())
-            .map_err(|e| JsValue::from_str(&e))?;
+            .map_err(ExecError::into_js_value)?;
         serde_json::to_string(&edges).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -565,14 +607,14 @@ impl WasmDatabase {
     /// collection `name`; `false` when it was absent.
     ///
     /// # Errors
-    /// Returns a `JsValue` error string when `id` is not a decimal `u64` or
-    /// the collection does not exist.
+    /// Throws a message string when `id` is not a decimal `u64`, an `Error`
+    /// whose `code` is `VELES-002` when the collection does not exist.
     #[wasm_bindgen(js_name = removeEdge)]
     pub fn remove_edge(&mut self, name: &str, id: &str) -> Result<bool, JsValue> {
-        let id = crate::database_graph::parse_edge_id(id).map_err(|e| JsValue::from_str(&e))?;
+        let id = crate::database_graph::parse_edge_id(id).map_err(ExecError::into_js_value)?;
         self.inner
             .remove_edge(name, id)
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(ExecError::into_js_value)
     }
 
     /// Removes the points `ids` of collection `name` and the edges they are
@@ -580,25 +622,26 @@ impl WasmDatabase {
     /// Use it instead of the store's `remove` once the collection has edges.
     ///
     /// # Errors
-    /// Returns a `JsValue` error string when the collection does not exist.
+    /// Throws an `Error` whose `code` is `VELES-002` when the collection does
+    /// not exist.
     #[wasm_bindgen(js_name = removePoints)]
     pub fn remove_points(&mut self, name: &str, ids: Vec<u64>) -> Result<u32, JsValue> {
         self.inner
             .remove_points(name, &ids)
             .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(ExecError::into_js_value)
     }
 
     /// The number of edges in collection `name`.
     ///
     /// # Errors
-    /// Returns a `JsValue` error string when the collection does not exist or
-    /// the read gate denies it.
+    /// Throws an `Error` whose `code` is `VELES-002` when the collection does
+    /// not exist, `VELES-037` when the read gate denies it.
     #[wasm_bindgen(js_name = edgeCount)]
     pub fn edge_count(&self, name: &str) -> Result<usize, JsValue> {
         self.inner
             .edge_count(name)
-            .map_err(|e| JsValue::from_str(&e))
+            .map_err(ExecError::into_js_value)
     }
 }
 
@@ -675,7 +718,7 @@ impl WasmCollectionHandle {
             &self.name,
             WasmQueryOperationKind::VectorSearch,
         )
-        .map_err(|e| JsValue::from_str(&e))?;
+        .map_err(core_error_to_js)?;
         let store = self.inner.borrow();
         store.search(query, k)
     }
@@ -692,7 +735,8 @@ impl WasmCollectionHandle {
     /// the getter with its message, as on `search`.
     ///
     /// # Errors
-    /// Returns the observer's denial message.
+    /// Throws an `Error` whose `code` is `VELES-037`, carrying the
+    /// observer's denial message.
     #[wasm_bindgen(getter)]
     pub fn len(&self) -> Result<usize, JsValue> {
         gate(
@@ -700,7 +744,7 @@ impl WasmCollectionHandle {
             &self.name,
             WasmQueryOperationKind::Select,
         )
-        .map_err(|e| JsValue::from_str(&e))?;
+        .map_err(core_error_to_js)?;
         Ok(self.inner.borrow().len())
     }
 
@@ -709,7 +753,8 @@ impl WasmCollectionHandle {
     /// Emptiness derives from the count — gated like [`Self::len`].
     ///
     /// # Errors
-    /// Returns the observer's denial message.
+    /// Throws an `Error` whose `code` is `VELES-037`, carrying the
+    /// observer's denial message.
     #[wasm_bindgen(getter)]
     pub fn is_empty(&self) -> Result<bool, JsValue> {
         Ok(self.len()? == 0)

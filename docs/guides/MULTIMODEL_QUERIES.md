@@ -71,7 +71,7 @@ All SDKs return results in a unified **HybridResult** format:
 | Field | Type | Description |
 |-------|------|-------------|
 | `nodeId` / `node_id` | u64 | Point/node identifier |
-| `vectorScore` / `vector_score` | f32? | Vector similarity score |
+| `vectorScore` / `vector_score` | f32? | Vector similarity score: the `vector_score` component core tagged the row with (every row a vector scored carries one); `null` on a row no vector scored |
 | `graphScore` / `graph_score` | f32? | Graph relevance score |
 | `fusedScore` / `fused_score` | f32 | Combined score |
 | `bindings` | object? | Matched node properties |

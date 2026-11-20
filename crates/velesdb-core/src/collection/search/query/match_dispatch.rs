@@ -21,7 +21,7 @@ impl Collection {
     pub(crate) fn compute_match_collection_stats(
         &self,
     ) -> crate::velesql::match_planner::MatchGraphStats {
-        let total_nodes = self.len();
+        let total_nodes = self.row_count();
         let total_edges = self.graph.edge_store.len();
         let avg_degree = if total_nodes > 0 {
             total_edges as f64 / total_nodes as f64
@@ -161,6 +161,9 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
         sources: &super::match_exec::MatchSources,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
+        // Before the planner: VectorFirst and GraphFirst must refuse the same
+        // query vectors (`QueryVectorTarget`).
+        self.check_match_query_vectors(match_clause, params, None)?;
         let start = std::time::Instant::now();
         if match_clause
             .where_clause
@@ -330,7 +333,7 @@ pub(in crate::collection::search::query) fn validate_match_clause(
     match_clause: &crate::velesql::MatchClause,
 ) -> Result<()> {
     crate::velesql::QueryValidator::validate_match_clause(match_clause)
-        .map_err(|e| crate::error::Error::Query(e.to_string()))
+        .map_err(crate::error::Error::from)
 }
 
 /// Counts a MATCH stopped by a guard rail during execution — depth,

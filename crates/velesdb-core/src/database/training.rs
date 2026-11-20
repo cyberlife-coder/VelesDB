@@ -107,9 +107,9 @@ impl Database {
         // payloads at all, so training saw an empty corpus and every
         // `TRAIN QUANTIZER` on it — pq, opq, rabitq, sq8 — failed with "no
         // vectors available for training" while the collection held its full
-        // count. `all_point_ids` unions vector and payload storage and is the
-        // authoritative set; the `is_empty` filter below already drops the
-        // metadata-only points it also brings in.
+        // count. `all_point_ids` lists the collection's rows — every vector
+        // of a vector collection, every node of a graph — and the `is_empty`
+        // filter below drops the rows without a vector it also brings in.
         let all_ids = collection.all_point_ids();
         // get_raw: PQ training only consumes vectors; TTL-expired points are
         // still valid training samples and must not shrink the corpus.

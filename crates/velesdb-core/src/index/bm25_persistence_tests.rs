@@ -84,7 +84,8 @@ fn test_save_load_snapshot_roundtrip() {
 
     let loaded = load_snapshot(dir.path())
         .expect("load_snapshot")
-        .expect("snapshot file should exist");
+        .expect("snapshot file should exist")
+        .index;
 
     assert_eq!(loaded.len(), index.len(), "doc_count should match");
     for query in ["rust", "programming", "python", "web"] {
@@ -189,7 +190,8 @@ fn test_snapshot_plus_wal_replay_preserves_query_topk() {
     // Phase C: reload from snapshot + replay WAL.
     let mut reloaded = load_snapshot(dir.path())
         .unwrap()
-        .expect("snapshot should exist");
+        .expect("snapshot should exist")
+        .index;
     let replayed_count = wal_replay(&wal_path, &reloaded).unwrap();
     let expected_replay = u64::try_from(mutations.len() + 1).expect("mutations is small");
     assert_eq!(replayed_count, expected_replay);
@@ -287,7 +289,10 @@ fn test_wal_append_then_save_snapshot_truncates_wal() {
     );
 
     // Next open: reload + replay → zero replayed entries, state intact.
-    let reloaded = load_snapshot(dir.path()).unwrap().expect("snapshot exists");
+    let reloaded = load_snapshot(dir.path())
+        .unwrap()
+        .expect("snapshot exists")
+        .index;
     let replayed = wal_replay(&wal_path, &reloaded).unwrap();
     assert_eq!(replayed, 0, "truncated WAL must replay zero entries");
     assert_eq!(reloaded.len(), index.len());

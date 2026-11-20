@@ -7,7 +7,7 @@ use crate::velesql::{
 };
 use crate::{Error, Result, SearchResult};
 
-use super::read_authorization::{narrow_where, read_target, AuthorizedQuery, GateDecisions};
+use super::read_authorization::{narrow_where, AuthorizedQuery, GateDecisions};
 use super::Database;
 
 /// Outcome of the non-VelesQL read gate ([`Database::read_gate_raw`]).
@@ -301,7 +301,7 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
         decisions: &GateDecisions,
     ) -> Result<crate::velesql::QueryPlan> {
-        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
+        crate::velesql::QueryValidator::validate(query)?;
         self.authorize_unscoped_statement(query, params, decisions)?;
 
         let plan_key = self.build_plan_key(query);
@@ -367,7 +367,7 @@ impl Database {
         query: &Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<ExplainOutput> {
-        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
+        crate::velesql::QueryValidator::validate(query)?;
 
         // One memo for the plan read and the executed read: EXPLAIN ANALYZE
         // is a single statement, so each collection it reads is decided once
@@ -424,9 +424,10 @@ impl Database {
 
     /// Runs one whole statement and, when it completes, reports it to the
     /// observer's `on_query` once, under the collection it reads first
-    /// ([`read_target`]) — `select.from`, or `_collection` for a MATCH or an
-    /// aggregate addressed through it, which is exactly the case a telemetry
-    /// hook must not lose.
+    /// ([`crate::velesql::collection_target`]) — `select.from`, or `_collection` for a top-level
+    /// MATCH, which is exactly the case a telemetry hook must not lose (a
+    /// `_collection` the gate refuses fails the statement, which reports
+    /// nothing).
     ///
     /// The statement is the unit: its scalar subqueries, compound operands
     /// and JOIN stages run inside `run` and are folded into this one
@@ -440,7 +441,8 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
         run: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
-        self.report_read(read_target(query, params).unwrap_or(""), run)
+        let target = crate::velesql::collection_target(query, params);
+        self.report_read(target.ok().flatten().unwrap_or(""), run)
     }
 
     /// Shared pre-flight + execution used by the plain path, the EXPLAIN
@@ -463,7 +465,7 @@ impl Database {
         if let Some(rewritten) = self.resolve_subqueries(query, params, decisions)? {
             return self.execute_query_gated(&rewritten, params, probe, decisions);
         }
-        crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
+        crate::velesql::QueryValidator::validate(query)?;
         let authorized = self.authorize_statement(query, params, decisions)?;
         let mut results = self.execute_query_inner(&authorized, params, probe, decisions)?;
         // `search.max_results` is the deployment-wide ceiling on the rows one

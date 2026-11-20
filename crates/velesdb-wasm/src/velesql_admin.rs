@@ -11,22 +11,25 @@
 use velesdb_core::velesql::{AdminStatement, FlushStatement};
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 
 /// Executes an admin statement. Returns `Ok(message)` on success.
-pub(crate) fn execute(db: &DatabaseInner, stmt: &AdminStatement) -> Result<String, String> {
+pub(crate) fn execute(db: &DatabaseInner, stmt: &AdminStatement) -> Result<String, ExecError> {
     match stmt {
         AdminStatement::Flush(s) => flush(db, s),
         // Defensive: `AdminStatement` is `#[non_exhaustive]`.
-        _ => Err(format!("Unsupported admin variant in WASM: {stmt:?}")),
+        _ => Err(ExecError::refused(format!(
+            "Unsupported admin variant in WASM: {stmt:?}"
+        ))),
     }
 }
 
 /// Validates the optional target collection and returns a message describing
 /// the no-op behaviour.
-fn flush(db: &DatabaseInner, stmt: &FlushStatement) -> Result<String, String> {
+fn flush(db: &DatabaseInner, stmt: &FlushStatement) -> Result<String, ExecError> {
     if let Some(name) = &stmt.collection {
         if !db.contains(name) {
-            return Err(format!("Collection '{name}' not found"));
+            return Err(velesdb_core::Error::CollectionNotFound(name.clone()).into());
         }
     }
     Ok("FLUSH is a no-op in WASM (in-memory only)".to_string())

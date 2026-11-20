@@ -40,7 +40,7 @@ fn test_insert_missing_id_column_errors() {
     let stmt = parse_insert("INSERT INTO docs (title) VALUES ('hello')");
     let err = execute(&db, &stmt, &empty_params());
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("'id'"));
+    assert!(err.expect_err("test: err").to_string().contains("'id'"));
 }
 
 #[test]
@@ -51,7 +51,11 @@ fn test_insert_vector_collection_without_vector_errors() {
     let stmt = parse_insert("INSERT INTO vecs (id, title) VALUES (1, 'x')");
     let err = execute(&db, &stmt, &empty_params());
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("vector"));
+    // Core's refusal of a row without a vector on a vector collection.
+    assert!(err
+        .expect_err("test: err")
+        .to_string()
+        .contains("VELES-016"));
 }
 
 #[test]
@@ -74,7 +78,10 @@ fn test_insert_vector_dimension_mismatch_errors() {
     let params = parse_params(Some(r#"{"v": [1.0, 0.0]}"#)).expect("test: parse params");
     let err = execute(&db, &stmt, &params);
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("dimension mismatch"));
+    assert!(err
+        .expect_err("test: err")
+        .to_string()
+        .contains("dimension mismatch"));
 }
 
 #[test]
@@ -85,6 +92,7 @@ fn test_insert_missing_collection_errors() {
     assert!(err.is_err());
     assert!(err
         .expect_err("test: err")
+        .to_string()
         .contains("Collection 'ghost' not found"));
 }
 
@@ -106,16 +114,24 @@ fn test_upsert_replaces_existing_row() {
     assert_eq!(store.borrow().len(), 1);
 }
 
+/// A row whose cells do not match its columns is refused by core's binder:
+/// the parser refuses such a statement, so this one is built by hand, as an
+/// embedder handing the executor a statement could build it.
 #[test]
 fn test_insert_rejects_row_arity_mismatch_at_parse_time() {
-    // The parser rejects row-arity mismatches, so this is mostly a
-    // defensive sanity check for the validate_statement path when a row
-    // is manually crafted.
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("docs").expect("test: create");
     let mut stmt = parse_insert("INSERT INTO docs (id, title) VALUES (1, 'a')");
-    stmt.rows.push(vec![Value::Integer(2)]); // arity mismatch
-    let db = DatabaseInner::new();
-    let err = execute(&db, &stmt, &empty_params());
-    assert!(err.is_err());
+    stmt.rows
+        .push(vec![velesdb_core::velesql::Value::Integer(2)]);
+    let err = execute(&db, &stmt, &empty_params()).expect_err("test: refused");
+    assert!(
+        err.to_string()
+            .contains("INSERT row has 1 values but 2 columns were declared"),
+        "{err}"
+    );
+    let store = db.get_shared_store("docs").expect("test: store");
+    assert_eq!(store.borrow().len(), 0, "nothing written");
 }
 
 /// A vector on a metadata-only collection is refused, as core refuses it,
@@ -132,7 +148,8 @@ fn a_vector_on_a_metadata_only_collection_is_refused() {
     .map(|_| ())
     .expect_err("test: refused");
     assert!(
-        err.contains("metadata-only collection cannot set 'vector'"),
+        err.to_string()
+            .contains("[VELES-014] Vector not allowed on 'm': this write stores no vector"),
         "{err}"
     );
 }

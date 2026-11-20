@@ -9,6 +9,784 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (core, REST server, CLI, Tauri, Python, WASM): a compound one
+  of whose operands is an aggregation is refused** (core, 2026-11-20).
+  `SELECT COUNT(*) FROM a UNION ALL SELECT COUNT(*) FROM b` — or a `UNION`
+  of two `GROUP BY`s, an `EXCEPT` of two counts — routed to the aggregate
+  engine (REST `/query` and `/aggregate`, the CLI, Tauri, Python's `query`
+  and `execute_query`) ran its first operand alone and returned
+  `[{"count": 2}]`, dropping the others without a word; `execute_query` ran
+  an aggregate operand as a plain scan. After: validation refuses a
+  compound holding an aggregation (scalar aggregates or `GROUP BY`, a
+  vector `GROUP BY` excepted) with `V019` (`CompoundAggregation`, a
+  `VELES-010`) on every engine and entry point — `Database::execute_query`,
+  `Database::execute_aggregate`, `Collection::execute_query`,
+  `Collection::execute_aggregate` and the WASM executor (conformance
+  `R032`). Migration: run each aggregate as its own statement and combine
+  the rows in the caller.
+
+- **BREAKING (core, WASM, every binding): a column the FROM side's name
+  qualifies is the base row's own** (core, 2026-11-20). `SELECT * FROM docs d
+  JOIN tags t ON d.id = t.doc_id WHERE d.cat = 'y'` returned `[]`: the
+  predicate stayed on the base query, alias-qualified, and read a `d.cat`
+  path no base row holds; so did `… WHERE d.content MATCH 'apple' AND
+  d.cat = 'y'` (and its `COUNT(*)`, `0`), and without a JOIN `SELECT * FROM
+  docs d WHERE d.cat = 'y'`. An unaliased FROM beside an aliased JOIN was
+  named after that JOIN (the parser lists every alias in `from_alias`), so
+  `FROM docs JOIN tags t … WHERE docs.cat = 'y'` scoped the base rows under
+  `t`, which the join overwrote, and read nothing either. After: the FROM
+  side goes by its alias, or its table's name when it has none
+  (`velesql::base_side`), and every WHERE column that name qualifies is the
+  base row's column (`velesql::resolve_base_qualifiers`), in a SELECT and an
+  aggregate, with or without a JOIN, in core and the WASM executor — the one
+  resolver the JOIN text-`MATCH` qualifier rule uses. A qualifier naming no
+  side is still the payload path it spells (`meta.lang`), and still refused
+  in a JOIN's text `MATCH`. Migration: a payload field nested under a key
+  equal to the FROM side's name reads as `name.key.field`.
+
+- **BREAKING (LangChain, LlamaIndex): `VelesDBVectorStore.query` keeps an
+  aggregate's values, and `velesql` refuses an aggregate** (integrations,
+  2026-11-20). With the binding routing an aggregate to the aggregate
+  engine (`Collection.query` returning `[{"count": 3}]`), LangChain's
+  `query("SELECT COUNT(*) …")` returned `[Document(page_content='',
+  metadata={})]` and LlamaIndex's `velesql(…)` a node with an empty id: the
+  point conversion dropped the values. After: LangChain returns one
+  `Document` per aggregate row, its `metadata` the row and its
+  `page_content` the row as `column: value` lines; LlamaIndex's `velesql()`,
+  which returns nodes with similarities, raises `ValueError` for an
+  aggregate and names `store.client.execute_query`, which returns the rows
+  (`velesdb_common.aggregates.is_aggregate_row` tells the rows apart). With
+  a wheel that returns points for an aggregate (velesdb 8.2.0 and older),
+  both return those points as before. Migration: read LangChain's
+  aggregate values from `doc.metadata`; run a LlamaIndex aggregate through
+  `store.client.execute_query(query, params)`.
+
+- **BREAKING (core, REST server, every binding): a text `MATCH` means one
+  thing wherever a WHERE is evaluated — the row is a BM25 hit for its
+  query — and a `MATCH` that ranks nothing is executed, not refused**
+  (core, 2026-11-19). The metadata filter dropped a `MATCH` leaf
+  (`extract_metadata_filter`) and only a WHERE that was a bare `MATCH`
+  reached the text search, so `content MATCH 'banana' AND cat = 'b'`
+  returned every `cat = 'b'` row whatever its text; and wherever the WHERE
+  was evaluated row by row — a graph predicate's post-filter, an aggregate,
+  a JOIN's filters, a MATCH statement's WHERE, the `similarity()` scans — the
+  same leaf was a case-sensitive substring test of the column, so
+  `content MATCH 'apple' AND MATCH (d)-[:REL]->(x)` kept "pineapple juice"
+  and dropped "Apple pie", `COUNT(*) … WHERE content MATCH 'apple banana'`
+  counted the rows holding that exact phrase while the SELECT returned every
+  row holding either word, and `NEAR $v AND content MATCH 'apple' AND MATCH
+  (…)` filtered the hybrid's rows by substring instead of boosting them.
+  After: a `MATCH` holds for the rows the text index scores for its query
+  (`text_search`'s terms and tokenizer; the column is still not consulted),
+  computed once per query and tested by membership everywhere
+  (`velesql::text_match`). The one `MATCH` the WHERE AND-requires ranks a
+  SELECT — alone by BM25 (the rest of the WHERE its admission filter: the
+  best `LIMIT` rows that hold both), beside one dense `NEAR` as the hybrid's
+  boost, which selects nothing; any other `MATCH` — under `OR` or `NOT`,
+  beside a `similarity()` threshold, in an aggregate, in a JOIN (on the
+  joined table's column, that table's hits), in a MATCH statement (the node
+  its alias binds) — is executed as a membership test. In a JOIN the side
+  a `MATCH` reads is the one its qualifier names: unqualified or qualified
+  by the FROM side's name (its alias, or its table's when it has none) it
+  is the base's own and ranks the joined rows when the WHERE AND-requires
+  it — `docs.content MATCH 'apple'` was a membership test returning the
+  rows in base order while `content MATCH 'apple'` ranked them — and a
+  qualifier naming no side (the table name of an aliased FROM) is refused,
+  where it read the base's text index. Still refused with
+  `VELES-010`, by the validation core and the WASM executor share
+  (`velesql::validate_vector_predicates`, now also run by
+  `execute_aggregate`): a second AND-required `MATCH` where one would rank,
+  an AND-required `MATCH` beside `SPARSE_NEAR`, `NEAR_FUSED`, or a `NEAR`
+  with a `similarity()` threshold, a `MATCH` on a MATCH statement's
+  relationship alias, and a `SPARSE_NEAR` under `NOT`, which ran without its
+  negation. Migration: expect BM25 hits (case-folded words) where a graph
+  post-filter, an aggregate, a JOIN or a MATCH statement matched substrings
+  — use `CONTAINS_TEXT` for a substring test; qualify a JOIN's `MATCH` by a
+  side's alias (or its table's name when it has none); combine the terms of
+  two AND-ed `MATCH` clauses in one; run a text search beside a sparse or fused
+  search as its own query, or test it under `OR` / `NOT`; negate the
+  metadata conditions beside a `SPARSE_NEAR` instead of the `SPARSE_NEAR`
+  itself.
+
+- **BREAKING (core, every binding): every sparse and text search ranks a
+  tie by ascending id and a NaN score last** (core, 2026-11-19). A text
+  search (`text_search`, `MATCH`, a hybrid's BM25 branch) ranked equal BM25
+  scores in the text index's document order, which a rebuild of the index
+  could change, so a hybrid's fused scores moved with it (the search fidelity
+  golden `F003` is re-pinned). The sparse index search
+  (`sparse_index::sparse_search`, `sparse_search_filtered`) ordered
+  equal scores by descending id, a side effect of sorting an ascending
+  comparator backwards, and ranked a positive NaN first (`f32::total_cmp`);
+  `VectorCollection::sparse_search` and `SPARSE_NEAR` ordered them by the
+  index's scoring order, and the top-`k` cut kept whichever tie the
+  accumulator visited first. After: `ScoredDoc`'s order — the one every
+  sparse path ranks by, the collection's ranked walk included — puts the
+  higher score first, a NaN below every number whatever its sign bit, and
+  between equal scores the lower id, the tie order of fusion
+  (`fusion::sort_fused_results`), so a branch cut at its depth keeps the
+  ids fusion would put first; the text index's own `Bm25Index::search`
+  ranks by the same rule, where it ordered ties by its scoring order.
+  Migration: read equal-score sparse and text hits in ascending id order; a caller sorting `ScoredDoc`s ascending gets
+  the worst first (`Ord` now ranks, the better greater).
+
+- **BREAKING (Python): `query` and `execute_query` return an aggregate's
+  rows** (python, 2026-11-20). `Database.execute_query`,
+  `Collection.query` and `GraphCollection.query` ran an aggregate through
+  the row path, so `SELECT COUNT(*) FROM docs WHERE cat = 'b'` returned the
+  matching points' dicts instead of a count, while REST `/query`, Tauri and
+  the CLI route it to the aggregation engine. Now they route it the same
+  way (`SelectStatement::is_aggregation_query`) and return its rows: one
+  dict of its values without `GROUP BY` (`[{"count": 3}]`), one dict per
+  group with it. Migration: read `rows[0]["count"]` (or the group dicts)
+  where code counted the returned points, or select the rows themselves
+  without the aggregate.
+
+- **BREAKING (Tauri): `upsert_metadata` refuses a point carrying a
+  `vector` with `VELES-014`** (tauri, 2026-11-19). `MetadataPointInput`
+  had no `vector` field, so a JSON `vector` was dropped by deserialization
+  and the payload stored without a word. After: it takes an optional
+  `vector` and hands it to core, which refuses the whole batch before
+  writing anything (`Error::VectorNotAllowed`), as core and Python do.
+  Migration: write a vector with `upsert`; `upsert_metadata` replaces
+  payloads only.
+
+- **BREAKING (core, Python): `upsert_metadata` on a vector collection
+  refuses a point carrying a dense vector with `VELES-014`** (core,
+  2026-11-19). It writes payloads only, and stored the payload while
+  dropping the vector without a word; the Python binding dropped a `vector`
+  key before core saw it, on every kind of collection. After: the whole
+  batch is refused before anything is written (`Error::VectorNotAllowed`,
+  Python `ValueError`), as a metadata collection refuses a vector; the
+  `VELES-014` message reads `Vector not allowed on '{name}': this write
+  stores no vector`. Migration: write a vector with `upsert`;
+  `upsert_metadata` replaces payloads only.
+
+- **BREAKING (TypeScript SDK): the WASM backend refuses a vector of the
+  wrong length as the REST backend does** (sdk, 2026-11-19). `upsert` and
+  `upsertBatch` of an empty vector threw `VelesDBError` with code
+  `DIMENSION_MISMATCH` where REST threw `VectorRequiredError` (`VELES-016`),
+  and a vector or query vector of another length threw `DIMENSION_MISMATCH`
+  where REST threw `DimensionMismatchError` (`VELES-004`). After: both
+  backends throw `VectorRequiredError` for an empty vector on a collection
+  that stores vectors, and `DimensionMismatchError` for one of another
+  length (a sparse-only WASM collection, dimension 0, still takes the empty
+  vector). Migration: catch `VectorRequiredError` / `DimensionMismatchError`
+  (or match `VELES-016` / `VELES-004`) instead of `DIMENSION_MISMATCH`.
+
+- **BREAKING (Haystack): `write_documents`, `stream_insert` and
+  `write_documents_streaming` refuse a document without an embedding up
+  front** (integrations, 2026-11-19). They logged "stored without vector"
+  while core refused the whole batch with `VELES-016`. After: on a
+  collection that stores vectors, a document whose embedding is `None` or
+  empty raises `ValueError` naming it before anything is written; a
+  metadata-only collection still takes such documents. Migration: embed
+  every document before writing it to a vector collection, or write
+  vectorless documents to a metadata-only collection.
+
+- **BREAKING (core, REST server, Python, Tauri): a vector collection stores
+  no payload without a vector, and lists, counts and searches its rows
+  only** (core, 2026-11-19). A vector collection's rows are its vectors
+  (`RowUniverse`), but `upsert_metadata` (Python `Collection.upsert_metadata`
+  and the DataFrame path, Tauri `upsert_metadata`) stored a payload for an id
+  holding no vector, and that payload stayed reachable by half the surfaces:
+  `get`, `SELECT`, `len` and `COUNT(*)` ignored it while `all_ids`,
+  `all_point_ids` and `scroll_batch` (REST `/points/scroll`) listed it,
+  `delete_counted` counted it, `TRUNCATE` counted it in `deleted_count`, and
+  its BM25 document and sparse vectors took places in a search's top-k —
+  `text_search("words", 1)`, `WHERE content MATCH 'words' LIMIT 1` and
+  `SPARSE_NEAR … LIMIT 1` answered `[]` while a row matched. After:
+  `upsert_metadata` on a vector collection replaces the payloads of points
+  that store a vector and refuses the whole batch, before writing anything,
+  with `VELES-016` (`Error::VectorRequired`, Python `ValueError`) when one id
+  stores none — checked under the node locks of its ids, which every delete
+  of a vector collection takes before its storage guards, so no concurrent
+  delete slips in between, and with no vector guard held across the payload
+  store and sync. `all_ids`, `all_point_ids` and
+  `scroll_batch` list the rows (`Collection::row_ids`), `delete_counted`
+  counts the ids that were rows, `TRUNCATE` deletes every stored id and
+  reports the rows it deleted, and text search (`text_search`,
+  `text_search_with_filter`, a full-text `MATCH`, the BM25 candidates of a
+  `LIKE`), the BM25 branch of every hybrid search and sparse search
+  (`SPARSE_NEAR`, `VectorCollection::sparse_search`, the sparse branch of a
+  hybrid search) rank only the collection's rows, before the top-k cut
+  (`collection/search/ranked.rs`: the index scores without a storage guard,
+  the best candidates are then admitted as rows under the storage read
+  guards); a hit deleted between ranking and reading is skipped, never
+  returned empty. A MATCH reads only the collection's rows too — the
+  start-node scan, the label index, seeds and every node an edge leads to or
+  a path passes through (`MatchStorageGuards::is_row`). What an
+  earlier version stored this way is not purged on open: it stays on disk,
+  unreachable, and a delete of its id removes it with its BM25 document and
+  sparse vectors. A payload `store_node_payload` writes on a vector
+  collection for an edge endpoint without a vector is no row either.
+  Migration: upsert a point's vector before (or with) its payload, or keep
+  payload-only records in a metadata collection. LlamaIndex `GraphLoader`
+  without a graph collection stored its vectorless nodes this way and now
+  writes them to a metadata collection beside the vector store's (next
+  entry).
+
+- **BREAKING (core, REST server, Python, WASM, Tauri, mobile): a point
+  without a vector on a vector collection is refused with `VELES-016` on
+  every write** (core, 2026-11-19). Before, the same mistake answered four
+  ways: `upsert_metadata` `VELES-016`; `upsert`, `upsert_bulk` and
+  streaming of a point with an empty vector `VELES-004` ("expected 2, got
+  0"), and so did REST, Tauri and mobile `upsert` with `"vector": []` and
+  the WASM `VectorStore` `insert`; VelesQL `INSERT` without a `vector`
+  column `VELES-010` ("INSERT on vector collection requires 'vector'
+  column"), and with an empty one, or `UPDATE … SET vector` to an empty one,
+  `VELES-004`; Python `upsert`/`upsert_bulk` of a point without `vector` a
+  code-less `ValueError` ("Point missing 'vector' field"). After: every one
+  is `Error::VectorRequired` (`VELES-016`, Python `ValueError`), decided by
+  core's one rule, `velesql::QueryVectorTarget::check_required_write` (the
+  collection API, `velesql::VectorColumn::check_write` for DML in core and
+  the WASM executor, the WASM store's ingest check); Python passes a point
+  without `vector` (or with `None`) to core as one without a vector, which a
+  metadata collection or a graph stores as a payload row or node. A vector of
+  another, non-zero dimension keeps `VELES-004`, and a graph with embeddings
+  keeps refusing an explicit empty DML `vector` with `VELES-004`.
+  Migration: match `VELES-016` (or `Error::VectorRequired`) where a client
+  matched `VELES-004`, `VELES-010` or the Python message for a point without
+  a vector.
+
+- **BREAKING (LlamaIndex): `GraphLoader` without a graph collection stores
+  its nodes without a vector in a metadata collection beside the vector
+  store's, and raises on a failed node write** (integrations, 2026-11-19).
+  It wrote them with `upsert_metadata` into the vector store's collection,
+  which core now refuses (`VELES-016`, above), and `load_from_nodes` logged
+  each refusal and returned `{"nodes": 0, "edges": 0, ...}`. After: they go
+  to `f"{collection_name}_graph_nodes"`, a metadata collection created on
+  first use (a node given a vector still goes to the vector store's
+  collection), and a node write that fails raises from `add_node` and
+  `load_from_nodes`. Edges stay in the in-memory graph store, ids keep
+  `stable_hash_id(f"{node_label}:{node.node_id}")`. Migration: read the
+  nodes from the `_graph_nodes` collection; a caller that relied on a failed
+  node being skipped catches the exception. Nodes an earlier version stored
+  in the vector store's collection are no rows there: load them again, then
+  delete them with the README's 7.1.0 cleanup.
+
+- **A delete waiting for a BM25 snapshot holds up no other read or write;
+  text and sparse search no longer hold the storage guards while they
+  score** (core, 2026-11-19). A delete took `text_wal` for its BM25 change
+  while holding its node locks and its storage write guards, so during a
+  full flush's BM25 snapshot (serialize, sync, truncate) every read of an
+  unrelated id queued behind the waiting delete. It now takes `text_wal`
+  first (lock order position 1a), before anything else it locks.
+  BM25 and sparse search scored their whole candidate set under the
+  `vector_storage` and `payload_storage` read guards; they now score under
+  their index's own locks and take the storage guards only to admit the best
+  candidates as rows and read them (`collection/search/ranked.rs`). The
+  configuration lock is checked, in every unit test, to be taken with no
+  other collection lock held (`lock_audit::ConfigLock`): a vector
+  collection's `upsert_metadata` read it under `vector_storage`'s guard.
+
+- **BREAKING (core, Python): a metadata collection writes its rows by one
+  rule on `upsert` and `upsert_bulk`, sparse vectors included** (core,
+  2026-11-19). Before: `upsert` (and `upsert_metadata`) on a metadata
+  collection dropped every sparse vector a point carried while `upsert_bulk`
+  stored them; a delete never removed a row's sparse postings, so
+  `SPARSE_NEAR` kept returning deleted ids, as empty points; and
+  `upsert_bulk` of a point carrying only sparse vectors answered `Ok(1)`
+  without making it a row — not counted, not listed, not deletable, yet
+  ranked by `SPARSE_NEAR`. After: both write a metadata collection's rows by
+  the rule a graph writes its rows without a vector
+  (`Collection::write_payload_rows`): `upsert` replaces a row — its payload,
+  an empty one when the point carries none, and its sparse vectors, dropped
+  when it carries none — and `upsert_bulk` keeps what a point does not
+  carry, creating a row with an empty payload where the id stores none, so a
+  row carrying only sparse vectors is a row. Both check sparse index names
+  and weights before writing anything (`upsert` did not, since it stored
+  none) — and `Collection::upsert_metadata` refuses a vector with
+  `VELES-014`, as `upsert` does, where it dropped it — fold a repeated id
+  first, and run the payload store, BM25, the
+  sparse vectors and the payload mirror in that order. Every delete removes
+  the ids' sparse postings, a metadata collection's included, and
+  `SPARSE_NEAR` ranks only the collection's rows. Migration: `upsert` of a
+  metadata row without a payload now stores `{}` where it used to delete the
+  row — delete it with `delete`; `upsert_bulk` reports a repeated id once.
+
+- **BREAKING (core, REST server, WASM): an omitted MATCH threshold is no
+  threshold, and a distance threshold can exceed 1** (core, REST server,
+  Python, WASM, TypeScript SDK docs, 2026-11-18). Core's
+  `MatchScoring.threshold` was a plain `f32`, so every caller had to invent a
+  "no threshold" value: REST `/collections/{name}/match` used `0.0`, which
+  under `euclidean` or `hamming` kept only exact duplicates of the query
+  vector, and it refused any threshold outside `[0, 1]`, so a distance
+  threshold above 1 could not be sent; the WASM `executeMatch` copied both
+  rules, and the Python binding mapped an omitted threshold to ±infinity by
+  metric. Before → after: `MatchScoring { threshold: f32 }` →
+  `MatchScoring { threshold: Option<f32> }`, and the `similarity_threshold:
+  f32` parameter of `Collection`, `VectorCollection` and `GraphCollection`
+  `::execute_match_with_similarity` → `Option<f32>`. `None` keeps every scored
+  row; `Some(t)` keeps a row scoring at least `t` under a similarity metric
+  (`cosine`, `dot`, `jaccard`) and at most `t` under a distance metric
+  (`euclidean`, `hamming`), as before. Core owns the one rule every surface
+  applies, `velesql::validate_match_threshold` (public, in every build):
+  a non-finite threshold is refused with `VELES-010` (`Error::Query`) before
+  any row is read (it used to drop every row without a word), and so is a
+  threshold sent without a query vector, which scores no row (REST `/match`,
+  Python `match_query` and WASM `executeMatch` ignored it). REST and Python
+  build their scoring with the new `MatchScoring::new(vector, threshold)`,
+  WASM through the same validator; REST's and Python's own finiteness checks
+  are gone. REST `/match` and WASM `executeMatch` accept any finite threshold
+  (they refused one outside `[0, 1]`) and keep every scored row when it is
+  omitted (they kept rows scoring `>= 0.0`, or `<= 0.0` under a distance).
+  Migration: a Rust caller passes `Some(t)` where it passed `t`, and `None`
+  where it passed a stand-in such as `0.0`, `f32::MAX` or `f32::INFINITY`; a
+  REST or WASM client that relied on the old `0.0` default sends
+  `"threshold": 0.0` explicitly, and one that sent a threshold without a
+  `vector` drops it.
+
+- **BREAKING (core, REST server, WASM, TypeScript SDK): a statement's query
+  vectors are checked once, before any plan or row** (core, REST server,
+  WASM, 2026-11-18). Before: whether a query vector a collection cannot score
+  failed the statement depended on how it was executed. `SELECT … WHERE
+  similarity(vector, $q) > 0.1` with a vector of another dimension was
+  refused with `VELES-004`, but `< 0.1`, `NOT similarity(…) > 0.1`, the same
+  leaf under `OR`, and `ORDER BY similarity(vector, $q)` answered rows (each
+  row's score UNKNOWN); a MATCH refused it when the planner chose VectorFirst
+  (a top-level `>`/`>=` leaf and a `LIMIT`) and answered `[]` under
+  GraphFirst; REST `/match` with a `vector` answered `[]` when the walk found
+  no row, and checked the dimension only after; a metadata collection
+  answered rows for the shapes that skip the vector search. After: core's
+  `velesql::QueryVectorTarget` checks every query vector of a statement —
+  each `NEAR`, each `NEAR_FUSED` vector, each `similarity(vector, …)` of a
+  SELECT `WHERE` (whatever the operator, under `AND`, `OR` or `NOT`) and
+  `ORDER BY`, each `similarity()` of a MATCH `WHERE` and `ORDER BY`
+  (`velesql::select_query_vectors`, `match_query_vectors`), and REST
+  `/match`'s `vector` — against the target collection before any strategy is
+  chosen or any row read: a collection that stores no vectors refuses with
+  `VELES-015`, then another dimension with `VELES-004`. Core's SELECT,
+  aggregate and every MATCH entry point (`/query`, `match_query_ordered`,
+  `execute_match`, `/match` with a vector) call it, and so does the WASM
+  executor's SELECT and MATCH (`executeMatch`'s `vector` included), both
+  through `QueryVectorTarget::check_select(stmt, params)` and
+  `check_match(clause, params, scoring_len)`, so neither engine composes the
+  check itself; the WASM `NEAR` and `similarity()` scans keep only the
+  finiteness check after it. A
+  named-vector `similarity(field, …)` still reads a payload array row by row,
+  and a row without a usable vector (a payload-only graph node) stays UNKNOWN
+  for the leaf. A graph created without embeddings (dimension 0) is a
+  collection without vectors like a metadata one: `NEAR`, `NEAR_FUSED`,
+  `similarity()` and every batch, filtered-batch, hybrid and fused search on
+  it refuse with `VELES-015` (they refused with `VELES-004` "expected 0, got
+  N"), and so do `GraphCollection::search` / `search_by_embedding` (Python
+  `search_by_embedding` raises `ValueError` `VELES-015`), which refused with
+  `VELES-014`, the code of a vector write; and `NEAR_FUSED`, `search_batch_parallel`
+  and `search_batch_with_filters` on a metadata collection refuse with
+  `VELES-015` too (`VELES-004` "expected 0"). The `VELES-015` message names
+  what it refuses without calling it metadata-only: `Vector search not
+  supported on '{name}': it stores no vectors. Use query() instead.` (was
+  `… on metadata-only collection '{name}'. …`); a standalone WASM
+  `VectorStore` created metadata-only is named `'VectorStore'` (its refusal
+  carried the sentence "vector search needs a vector store; this one is
+  metadata-only" in the name's place). Executor fixture cases R022–R029 pin
+  the wrong-dimension shapes for both engines. Migration: a caller that read
+  rows from such a statement handles the error; a client matching the
+  `VELES-015` text matches the new wording or, better, the code.
+
+- **BREAKING (core): a graph's SELECT reads every stored node** (core, REST
+  server, Python, Tauri, 2026-11-18; the WASM executor has no graph
+  collection — `CREATE GRAPH COLLECTION` is refused there). Before: on a graph with
+  embeddings, `SELECT *`, `SELECT COUNT(*)` and a `WHERE` read only the
+  embedded nodes — the scan hydrated through `Collection::get`, which needs a
+  vector — so a graph of two payload-only nodes and one embedded node
+  answered `DESCRIBE` 3 and MATCH 3 rows but `COUNT(*)` 1, `SELECT *` 1 row,
+  and `WHERE name = 'x'` (a payload-only node) none. After: one rule says
+  which stored ids are SELECT rows (`RowUniverse`), read from the kind of
+  collection alone and the same rule its size counts: a graph's stored nodes,
+  with an embedding, a payload or both; a vector collection's vectors (a
+  payload-only id there is no row, as before — now also while the collection
+  holds no vector at all, when a payload `upsert_metadata` wrote was read as a
+  row by `SELECT *` and `COUNT(*)` while `len()`, `is_empty()` and REST
+  `/empty` counted none, until the first vector made it disappear); a
+  metadata collection's payloads. The full scan, the candidate (`id IN`, index, bitmap) scans, the
+  ordered-index scan, the MATCH-in-WHERE anchor fetch, the exact
+  `similarity()` scan (a threshold under `OR` or `NOT`, a named-vector
+  threshold), both sides of a JOIN (hash, primary-key lookup and indexed
+  joins) and every aggregate read through it (`Collection::row_ids`,
+  `Collection::get`, `rows_where`), so a graph's `COUNT(*)`, rows, filters and joins
+  match its node count and MATCH, and a JOIN no longer depends on which side
+  the graph is on. A payload-only node's row carries an empty `vector`: its
+  `similarity(vector, …)` is UNKNOWN while its named vectors and other
+  predicates still decide it (`name = 'x' OR similarity(vector, $q) > 0.5`
+  keeps it). A `NEAR` ranks only the rows that store a vector, whichever plan
+  answers it: the metadata-first rescan reads the vector universe, as the
+  HNSW index does, and every score read from a row goes through one guard
+  that refuses a vector of another length (public
+  `DistanceMetric::checked_calculate`, which answers `None` there) instead of reaching a kernel's length
+  assertion; an aggregate whose WHERE holds a `NEAR` reads only those rows
+  too (see the aggregate entry below). DML follows the same rule (see the DML
+  entry below). Migration:
+  a query that relied on a graph's SELECT seeing only embedded nodes adds a
+  predicate on what only they carry; payloads stored without vectors in a
+  vector collection are read from a metadata collection, or upserted with
+  their vectors.
+
+- **BREAKING (core): DML reads a graph's rows as SELECT does and writes each
+  by what it stores** (core, 2026-11-18; the WASM executor has no graph
+  collection). Before: `UPDATE` and a non-id `DELETE` selected rows through
+  `Collection::get`, which needs a vector, so on a graph with embeddings they
+  skipped every payload-only node (`UPDATE g SET … WHERE id = 1` reported 0
+  rows for one), and on a graph without embeddings every `UPDATE` and non-id
+  `DELETE` was a silent no-op; `INSERT` into a graph refused a row without a
+  `vector` ("INSERT on vector collection requires 'vector' column"), so a
+  graph without embeddings took no SQL `INSERT` at all; and
+  `Collection::upsert` on a graph wrote a point with an empty vector into the
+  vector store — a zero-length vector in the storage and HNSW index of a graph
+  without embeddings. After: `UPDATE` and a non-id `DELETE` select through
+  `Collection::rows_where`, the rows a SELECT with that `WHERE` reads (a
+  `DELETE … WHERE id = …` still removes the named ids whatever they store).
+  `Collection::upsert` writes a graph's rows by what each stores: one with a
+  vector through the vector upsert (its dimension checked), one without
+  through the node-payload write (`store_node_payloads`, its label and
+  property indexes under one barrier), leaving the vector store — and an
+  embedding the node already has — alone; a repeated id resolves as the same
+  upserts made one by one do (a later write without a vector keeps the vector
+  an earlier one gave the id) and the observer hears of the batch once. A DML
+  row's `vector` column is the collection's `velesql::VectorColumn<'_>` (new,
+  public): the collection's `QueryVectorTarget` and whether it is a graph
+  (`VectorColumn::new(target, is_graph)`), so a vector is required in a vector
+  collection (`is_required`), optional in a graph with embeddings, and
+  forbidden in a metadata collection and a graph without embeddings
+  (`is_forbidden`) — derived from the one answer to "does this collection
+  store vectors" (`QueryVectorTarget::vector_column(is_graph)`, core's from
+  `CollectionConfig::query_vector_target`, the WASM executor's from its store)
+  and read by the DML binder (`BoundInsertRow::into_point(column)`,
+  `BoundAssignments::apply(point, column)`, entry below), which checks a bound
+  vector's dimension: an empty `vector` is refused with `VELES-004` on a graph
+  with embeddings as on a vector collection (it wrote a node without an
+  embedding on `INSERT` and kept the old embedding on `UPDATE`) — only a row
+  without the column is a row without a vector. So `INSERT INTO g (id, name)`
+  writes a node without an embedding into either kind of graph, `UPDATE g SET
+  vector = $v` on such a node of a graph with embeddings attaches one — as
+  `GraphCollection::upsert_node` with a vector does — with its dimension
+  checked (`VELES-004`), and a `vector` on a collection that stores none is
+  refused with `VELES-014`, as the collection API refuses it (see the
+  `VELES-014` entry below). `INSERT`, `UPSERT` and `UPDATE` return the rows
+  they leave stored, read back as a SELECT reads them, not the rows as the
+  statement wrote them: `UPSERT INTO g (id, a) VALUES (2, 7)` over a node
+  embedded at `[0, 1]` returns `(2, [0, 1], {a: 7})`, it returned an empty
+  `vector`. The read-back follows the write, one row per row written in
+  statement order: a row already TTL-expired, or deleted by a concurrent write
+  in between, is left out, an id written twice is returned twice as finally
+  stored, and no returned row carries sparse vectors. Migration: a caller that
+  relied on DML skipping a graph's payload-only nodes adds a predicate on what
+  only embedded nodes carry.
+
+- **BREAKING (core, WASM, REST server, Python, Tauri): a vector written into
+  a collection that stores none is one refusal, `VELES-014`, on every write
+  surface** (core, WASM, 2026-11-19). Before: a metadata collection refused a
+  vector with `VELES-014` (`VectorNotAllowed`) through the collection API but
+  with `VELES-010` (`Error::Query`, `INSERT|UPDATE on metadata-only collection
+  cannot set 'vector'`) through DML, in core and the WASM executor alike; and
+  a graph without embeddings refused one through `upsert`, `upsert_bulk` and
+  `upsert_bulk_from_raw` as a dimension mismatch against 0 (`VELES-004`,
+  "expected 0, got 2"). After: one rule, `QueryVectorTarget::check_write(len)`
+  (public), derived from `CollectionConfig::query_vector_target` as the query
+  vector check `check_len` is: a collection that stores no vector refuses a
+  written vector with `VELES-014`, one that stores vectors checks its
+  dimension (`VELES-004`). The DML binder (`VectorColumn`), every API write
+  entry point (`Collection::upsert`, `upsert_bulk`, `upsert_bulk_from_raw` on
+  a graph, `MetadataCollection::upsert`) and the WASM executor apply it; the
+  raw bulk path on a metadata collection still compares its buffer's
+  dimension with 0 (`VELES-004`). Through the
+  collection API a point with an empty vector writes no vector: each kind of
+  collection writes its points by one rule, shared by `upsert` and
+  `upsert_bulk` (`RowUniverse::of`), so a metadata collection takes such a
+  point as a payload row in bulk as one at a time, the bulk path keeping its
+  contract that a point without a payload leaves the stored one; its
+  `upsert_bulk` returns the rows it wrote, a payload or sparse vectors (it
+  returned 0). The
+  `VELES-014` message no longer calls every such collection metadata-only:
+  `Vector not allowed on '{name}': this write stores no vector` (was `Vector not
+  allowed on metadata-only collection '{name}'`). REST `/query` still answers
+  `422` for it (a caller error, as `VELES-010` was). Migration: a client that
+  matched `VELES-010` or the `cannot set 'vector'` text for a DML vector on a
+  metadata collection, or `VELES-004` for a vector written into a graph
+  without embeddings, matches `VELES-014` (TypeScript `VectorNotAllowedError`,
+  Python `ValueError`).
+
+- **BREAKING (core, REST server, Python, Tauri): every payload write keeps
+  BM25 and the histograms, and a full-text search reads every row** (core,
+  REST server, Python, Tauri, 2026-11-19). Before: a graph's node-payload
+  write — `INSERT NODE`, an `INSERT` or `UPDATE` of a row without a vector,
+  REST `PUT …/graph/nodes/{node_id}/payload`, `GraphCollection::upsert_node_payload(s)`
+  and a payload-only row of `Collection::upsert` — maintained the label,
+  range and secondary indexes but never BM25 nor the persisted histograms, so
+  `WHERE body MATCH 'x'` missed such a node, and an embedded node whose payload
+  was rewritten that way kept matching its old text and not its new one; the
+  histograms drifted. And `Collection::text_search` / `text_search_with_filter`
+  hydrated only ids storing a vector, so a payload-only node never came back
+  even when indexed — on a graph without embeddings, and on every metadata
+  collection (`MetadataCollection::text_search` answered `[]`), a full-text
+  `MATCH` answered no row. After: one routine, `Collection::apply_payload_effects`
+  (crate-private), updates the histograms and BM25 (WAL-before-apply, one
+  barrier per batch) for every write path — the vector upsert, the metadata
+  upsert, both bulk paths and the node-payload write — and the text search
+  hydrates the collection's rows as SELECT reads them (`RowScope::All`: a
+  metadata row, a graph node without an embedding with an empty `vector`).
+  The node-payload write also clears the cached statistics with the payload
+  mirror; it runs the BM25 and histogram effects only once its batch is
+  stored, so a write whose barrier fails appends no BM25 WAL frame (the
+  in-memory label, range and secondary indexes still follow what storage then
+  holds). A database written before this change keeps a graph's
+  payload-only nodes out of a BM25 snapshot, which `Collection::open` used to
+  load as it was, so they stayed unsearchable after an upgrade. The snapshot
+  format is unchanged (version 2, which an older binary still opens, for
+  every kind of collection); a graph's snapshot is trusted only through a new
+  marker written beside it, `bm25.coverage`, which an older binary ignores:
+  the length and CRC32 of the snapshot's bytes and the payload log position
+  read before the index was serialized. On open, a marker for these exact
+  bytes loads the snapshot, replays its WAL and indexes again every payload
+  written to the log since that position — a node an older binary stored
+  after a downgrade, unindexed, included; no marker (a database written
+  before this change), another snapshot's (an older binary rewrote it) or a
+  position past the log's end rebuilds the index from the payload store: the
+  WAL emptied, the snapshot rewritten, then its marker, each durable before
+  the next, so a crash in between rebuilds again. Every other collection's
+  snapshot loads as it is. Migration: a full-text query on a graph or a
+  metadata collection now returns the rows it matches; the first open of an
+  upgraded graph pays one payload scan.
+
+- **BREAKING (core, REST server, Python, Tauri): every write and read entry
+  point of a graph follows the graph's row rule** (core, REST server, Python,
+  Tauri, 2026-11-19). Before: the rule of the entry above lived in
+  `Collection::upsert` alone. `AnyCollection::upsert`'s graph arm (REST
+  `PATCH …/points/{id}/ttl` among its callers) wrote only payloads, dropping
+  every vector and every point without a payload and accepting a vector of
+  any length; `Collection::upsert_bulk` and `upsert_bulk_from_raw` (Python
+  `upsert_bulk` / `upsert_bulk_numpy` on a graph's collection view) wrote
+  a `[]` vector into the storage and HNSW index of a graph without embeddings
+  (the raw path panicked on a 0 dimension) and refused a payload-only row on a
+  graph with embeddings with `VELES-004`; `upsert_metadata` (Tauri and Python
+  `upsert_metadata` on a graph) skipped the graph's checks and overwrote its
+  vector count with its payload count; a strict schema checked the labels of
+  rows without a vector only; the sparse vectors of a row without a dense one
+  were dropped, their names never checked; and a batch dropped the vector
+  of `[P(1, v), P(1, no vector)]` where two upserts keep it. `Collection::get`
+  on a graph — the Tauri `get_points` and the Python point reads through a
+  graph's collection view — required a vector, so a payload-only node read
+  `None`. After: `AnyCollection::upsert` writes a graph through
+  `Collection::upsert`; `upsert_bulk`, `upsert_bulk_from_raw` (which copies a
+  graph's rows out of its flat buffer to build them) and `upsert_metadata` go
+  through the same checks and writes, the bulk paths keeping their contract
+  that a row without a payload (or without sparse vectors) leaves the stored
+  one — a bulk row carrying no payload for an id that stores no node creates
+  it with an empty payload, as `upsert` does, while one for a stored node
+  writes nothing and is neither counted in the returned count nor reported
+  to the observer (such a row was counted and reported, and wrote nothing for
+  a new id); every row's payload passes the node-payload checks (payload limits,
+  labels against a strict schema), with a vector or not; a row's sparse
+  vectors are stored and searchable whatever its dense vector, their names
+  checked (`VELES-017`); a batch is folded per id into the row the same
+  writes made one by one leave; and `Collection::get` on a graph reads its
+  stored nodes (`GraphCollection::get` calls it), a node without an embedding
+  with an empty `vector`. Migration: a caller that relied on a graph silently
+  dropping vectors or sparse vectors handles their refusal or their storage;
+  one that read `None` for a payload-only node through a view reads the node.
+
+- **BREAKING (core, WASM, TypeScript SDK): an ORDER BY similarity key a row
+  cannot score is a null** (core, WASM, 2026-11-19). Before: `ORDER BY
+  similarity(vector, $q)` (and a named vector) gave a row without a usable
+  vector — a graph node without an embedding, a payload without the named
+  vector, one of another length — the metric's worst score, so it sorted
+  last under `DESC` and first under `ASC`, and wrote that score back:
+  `-inf`, JSON `null`. A MATCH `ORDER BY similarity()` /
+  `similarity(alias.vector, $v)` sorted an unscored row as least similar the
+  same way. After: such a row has a null key, which every ORDER BY sorts as
+  `VELESQL_SPEC.md`'s "Value order and NULLs" sorts a `null` — after every
+  value under `ASC`, before every value under `DESC`, whatever the metric —
+  in SELECT and MATCH, core and WASM, through one rule
+  (`velesql::compare_scores`, `SelectOrderBy::directed_score`, both public);
+  it keeps the score its plan gave it, without a `vector_score`. Migration: a
+  query that wants only scored rows first under `DESC` filters them
+  (`WHERE vector NEAR $q`, a `similarity()` threshold).
+
+- **BREAKING (core): an aggregate whose WHERE holds a `NEAR` reads only the
+  rows storing a vector** (core, 2026-11-19). Before: an aggregate read every
+  row its metadata filter kept, a `NEAR` filtering none, so `SELECT COUNT(*)
+  FROM g WHERE vector NEAR $q` on a graph counted its payload-only nodes,
+  which no `NEAR` can rank. After: a `NEAR` or `NEAR_FUSED` in an aggregate's
+  WHERE (`RowScope::of_where`) reads the rows such a search can rank — on a
+  graph, the embedded nodes; on a vector collection, every row as before.
+  It still ranks and bounds none of them: an aggregate without a vector
+  `GROUP BY` reads every such row whatever its `LIMIT`, the rule recorded for
+  `NEAR_FUSED` aggregates (entry of 2026-11-15) and the WASM executor's, whose
+  collections are no graphs. A `SPARSE_NEAR` narrows nothing: a row without a
+  dense vector may carry sparse ones. Migration: none for a vector
+  collection; a graph count over `NEAR` drops its payload-only nodes.
+
+- **BREAKING (REST server): a top-level `MATCH` on `/query` is addressed by
+  the body's `collection` or `params._collection`, an explicit one winning**
+  (REST server, 2026-11-18). The rule concerns the top-level `MATCH` alone,
+  the one statement `/query` runs without a `FROM`. Before: it was refused
+  with `VELESQL_MISSING_COLLECTION` unless the body named a `collection`, even
+  when `params._collection` named one. After: it follows the rule the Tauri
+  plugin's `QueryRequest.collection` documents — the body's `collection`
+  fills `params._collection` when absent, and an explicit `_collection` wins —
+  and is refused only when neither names a collection, with the message
+  "MATCH query via /query requires `collection` in request body or
+  `_collection` in params" (conformance case `C002`). An aggregate always runs
+  on its `FROM`, which the grammar requires of every `SELECT`: the aggregate
+  path's branch for an aggregate without one, and its own
+  `VELESQL_MISSING_COLLECTION` refusal, were unreachable and are removed, and
+  `/aggregate` reads neither the body's `collection` nor `_collection`. The
+  rule is core's (`velesql::with_collection_param` /
+  `collection_target`, see the core entry below), not the server's own: an
+  explicit `_collection` that is not a non-empty string is refused with
+  `VELESQL_PARAMETER_ERROR` (`details.parameter = "_collection"`, core's
+  `VELES-038`) — an empty one read as no collection
+  (`VELESQL_MISSING_COLLECTION`) and a non-string one too. Migration: a
+  client that sends both a body `collection` and `params._collection` for a
+  top-level `MATCH` sends the one it means (the explicit `_collection` now
+  wins); one that sent an empty or non-string `_collection` drops it or sends
+  a collection name; one that sent a `collection` to `/aggregate` drops it
+  (the statement's `FROM` names the collection).
+
+- **BREAKING (core, REST, Python, TypeScript SDK): a VelesQL parameter error
+  has its own code, `VELES-038`** (core, REST server, Python, TypeScript SDK,
+  2026-11-18). Before: a `$name` the caller did not bind, or bound to a value
+  its position cannot take, failed as a plain `Error::Query` (`VELES-010`) in
+  four message shapes ("Missing parameter: $p", "Missing query parameter:
+  $p", "Missing vector parameter: $p", "Missing sparse vector parameter: $p",
+  plus the wrong-type variants), and an unbound `INSERT`/`UPDATE` value as
+  `Error::Config` (`VELES-009`), so no surface could tell a parameter the
+  caller must supply from a statement the caller must rewrite; Python
+  exported `VelesQLParameterError` but never raised it. After: core reports
+  every one of them as `Error::QueryParameter { name, reason }`
+  (`[VELES-038] Query parameter $v: not bound`) from each binding site —
+  scalar binding (`bind_value`, so WHERE, MATCH inline properties and
+  `HAVING`), dense vector parameters (SELECT and MATCH alike), sparse vector
+  parameters and DML values — a caller error that never counts toward the
+  circuit breaker. The `vector` column of an `INSERT`, `UPSERT` or `UPDATE`
+  binds through `velesql::bind_vector`, as a `NEAR` vector does, in core and
+  in WASM: a `$v` bound to a string or to an array holding a non-number was
+  refused by a private converter with `VELES-010` (core) or an uncoded message
+  (WASM), and the converters are gone (executor conformance cases R018–R021). REST answers `400` `VELES-038` on the canonical endpoints
+  (`/collections/{name}/match`); `/query`, `/aggregate` and `/query/explain`
+  answer `422` with the new `VELESQL_PARAMETER_ERROR` code and
+  `details.parameter`, in place of the endpoint's own `VELESQL_*` code.
+  Python raises `VelesQLParameterError`, now a `ValueError` subclass (it
+  derived from `Exception`), so `except ValueError` keeps catching it. The
+  TypeScript SDK adds `QueryParameterError` (a `QueryError` subclass, built
+  from `VELES-038` or `VELESQL_PARAMETER_ERROR`, keeping the wire code) and
+  the missing `AccessDeniedError` (`VELES-037`); `VELES_ERROR_CODES` lists 38
+  codes. Mobile and Tauri forward the code unchanged. The CLI exits with `5`,
+  the code of a query to fix, as for `VELES-010` (it fell to the generic `1`). Migration: match
+  `VELES-038` (or `VELESQL_PARAMETER_ERROR` on `/query`) where you matched
+  `VELES-010` or `VELES-009` for a missing or mistyped parameter; message
+  text changed.
+
+- **BREAKING (core, Python, Tauri): every row a vector scored carries its
+  `vector_score` component, and bindings read it only from there** (core,
+  Python, Tauri, WASM, mobile, 2026-11-18). Core tagged `component_scores`
+  (`vector_score`) on a plain `NEAR` and on hybrid rows only. Before: a
+  `NEAR … AND <metadata predicate>` the planner answered with its exact
+  rescan (`scan_and_score_by_vector`), a graph-anchored `NEAR` scored exactly,
+  the exact `similarity()` scan (a threshold under `NOT` / `OR`, or on a
+  named vector), `ORDER BY similarity(field, $v)` over rows no search scored,
+  MATCH rows a `similarity()` scored, and `GraphCollection::search_by_embedding`
+  returned untagged rows, so `bm25_score` in an ORDER BY formula read their
+  vector score instead of `0.0`, and the Python binding had to guess
+  (`vector_score` = the final score on any untagged row, metadata rows
+  included). After: each of those paths tags `vector_score` equal to the row's
+  similarity; the `ORDER BY similarity(field, $v)` write-back tags only a row
+  that carried no breakdown (a `NEAR` or hybrid row keeps the components of
+  the search that found it) and leaves a row the column could not score
+  (a null key, entry below) untagged; a depth-ranked MATCH row and a metadata row
+  stay untagged. Python VelesQL rows (`query`, `Database.execute_query`,
+  agent memory queries) and Tauri `HybridResult` now report `vector_score` /
+  `graph_score` only from the tagged components: a metadata, BM25-only or
+  depth-ranked row reports `None` / `null` where it used to repeat its final
+  score (`fused_score` keeps it). The WASM executor now writes the
+  `similarity(field, $v)` key back as the row score (it kept the scan's `1.0`)
+  and tags it as core does; the shared executor fixture pins the scores
+  (N034). Migration: read the final score from `fused_score` / `score`, not
+  from `vector_score`, on rows no vector scored.
+
+- **BREAKING (core, Python): `GraphCollection::len` / `is_empty` / `get` see
+  every stored node** (core, Python, mobile, 2026-11-18). Before: `len` and
+  `is_empty` read the vector store's point count and `get` required a stored
+  vector, so a payload-only node (`upsert_node_payload`, every node of a graph
+  without embeddings) was not counted and read as `None`, while
+  `all_node_ids`, `in` and scroll listed it — a graph without embeddings
+  always reported `len() == 0`. After: `len` counts every node once,
+  vector-bearing and payload-only (the ids `all_node_ids` lists), and `get`
+  returns a payload-only node with an empty `vector`. The count is core's one
+  size, which every surface of every collection reads in O(1):
+  `Collection::len`, `is_empty` and `config().point_count` read one counter
+  that every write moves by what it changed under the storage guards it holds
+  (`collection/core/size.rs`) and `Collection::open` counts from storage —
+  a vector collection's vectors, a metadata collection's rows, a graph's
+  nodes — so a graph's collection view (`Database::get_collection_view`, the
+  Tauri `is_empty`, which reported a graph of payload-only nodes empty) counts
+  its nodes too, and neither `len` nor the MATCH planner counts ids per call
+  (`len` probed the payload and vector indexes, `min(payload nodes, embedded
+  nodes)` lookups, on every call and every MATCH). The writes that set the
+  cached count from a store's length are gone with it, among them
+  `upsert_metadata` on a vector collection, which set the count to the
+  payload count. `max_vectors_per_collection` still caps the vectors a
+  collection stores, a graph's nodes without an embedding not counted. `len` is a storage count, the
+  convention a vector collection's `len` follows (its cached `point_count`):
+  a TTL-expired node the sweep has not removed yet is still counted while
+  `get` and `in` already read it as absent, so between expiry and the sweep
+  `len` can exceed the nodes `get` returns. Every size a graph reports is
+  that node count: `AnyCollection::point_count` / `is_empty` (graph arm),
+  `AnyCollection::config().point_count`, the `point_count` of
+  `GraphCollection::diagnostics` (and `Database::collection_diagnostics`),
+  `DESCRIBE COLLECTION`'s graph `point_count`, REST `GET
+  /collections/{name}`, `/sanity`, `/config`, `/diagnostics` and `/empty` on a
+  graph (they disagreed: `point_count: 0` beside `is_empty: false` on a graph
+  without embeddings), the Tauri `CollectionInfo.count`, the Python
+  `GraphCollection` `count()` / `len()` / `is_empty()` / `get()` and the
+  `count()` / `len()` / `is_empty()` / `info()['point_count']` of
+  `Database.get_collection`'s view of a graph follow (a Python node without
+  an embedding has no `vector` key). What is about vectors still reads the
+  embeddings: the diagnostics' and `/sanity`'s `has_vectors` and
+  `search_ready`, and the index health, so a graph without embeddings reports
+  no vector to search. The mobile graph store keeps reporting
+  no vector, not an empty one, for a node without an embedding. Migration:
+  code that used `len()` to count embedded nodes counts the nodes whose
+  `get` vector is non-empty.
+
+- **BREAKING (WASM, TypeScript SDK): an error core defines reaches JS with its `VELES-XXX` code, read from the error, never from its text** (WASM, TypeScript SDK, 2026-11-18). Before: `WasmDatabase.executeQuery` and `executeMatch` threw every failure as a bare string, and the collection and edge methods (`createCollection`, `deleteCollection`, `getCollection`, `attachStore`, `addEdge`, `getEdges`, `removeEdge`, `removePoints`, `edgeCount`) threw a taken name, a missing collection, a missing endpoint and a duplicate edge id as bare strings too (only an invalid name carried `VELES-034`), so a browser caller could not tell an unbound `$name` from a statement WASM does not run, and the TypeScript SDK raised every executor error as a `VelesDBError` with code `BAD_REQUEST` and recognised a missing edge endpoint by matching its message. The executor's own `$name` binding wrote its own messages (`Parameter $v is not bound`, `Vector parameter $v is not bound`, `Unsupported parameter type for HAVING: …`) with no code, and `DROP COLLECTION`, `FLUSH`, `SELECT EDGES` and `DELETE EDGE` named a missing collection in uncoded text. After: the engine behind `WasmDatabase` fails with a typed error, `ExecError::Core(velesdb_core::Error)` or `ExecError::Refused(message)`, threaded through every executor function and the collection and graph operations; a core error is kept whole where it is wrapped (a fusion failure is core's `Error::Config` "Fusion error: …", `VELES-009`, as in core; a window-function error propagates unprefixed), and the FFI boundary throws a `Core` error as a JS `Error` whose `code` is the variant's `code()`: `VELES-010` for a syntax or validation error (the `[Vnnn]` code stays in the message), `VELES-038` for a `$name` core's binder refuses (`bind_vector`, `bind_value`, `Error::unbound_parameter`, word for word), `VELES-002` for a missing collection on every statement and method that names one, `VELES-001` / `VELES-034` for a taken or invalid collection name, `VELES-004` / `VELES-005` for a DML vector of another dimension or not finite (UPDATE wrote a `[VELES-004]` string by hand), `VELES-019` / `VELES-022` for a duplicate edge id or an endpoint that is no node, `VELES-027` for a guard rail and `VELES-037` (`Error::AccessDenied`) for a read the observer denies, which threw the observer's bare message. A refusal of the executor's own — a statement or value WASM does not run — stays a message string. `SELECT EDGES` and `DELETE EDGE` on a collection with no edge yet answer no row and `0`, as core does (they refused "Graph 'x' not found"). The TypeScript SDK maps the thrown code to its typed class on the WASM backend's `query()`, `matchQuery()` and graph calls through one helper, `wasmThrowToError` (`QueryParameterError` for VELES-038, `QueryError` for VELES-010, `NodeNotFoundError` for an edge endpoint that is no node, which was `NOT_FOUND`, `CollectionExistsError` for an `attachStore` the binding refuses, …); the message match is gone. Every refusal core has a coded rule for is now core's variant with core's message, raised by calling the rule in core where core exposes it: a `NEAR` or `similarity()` on a metadata-only collection is `VELES-015` naming the collection and a query vector of another dimension `VELES-004` (`store_search::check_query_vector`, the checks of core's `Collection::search`; they were `Collection 'x' is metadata-only; NEAR queries require a vector collection` and `NEAR query dimension mismatch: …` strings), a `NEAR_FUSED` vector is checked as core checks every query vector (`velesql::QueryVectorTarget`: `VELES-015` on a collection without vectors, `VELES-004` by dimension; more vectors than a fusion takes is `VELES-009` through `fusion::validate_fused_vector_count`), an `executeMatch` query vector of another dimension is `VELES-004` (`VELES-015` on a collection without vectors), a MATCH whose `_collection` names no collection is `VELES-002` (it was `Graph 'x' is empty; no data to match`) and one that is not a non-empty string `VELES-038` (`velesql::collection_param`), the `INSERT` and `UPDATE` refusals are core's word for word (`VELES-010`, and `VELES-014` for a vector on a metadata-only collection: `velesql::bind_insert_row`, `bind_update_assignments`), an unknown `CREATE COLLECTION` storage mode is core's `VELES-010` (`velesql::resolve_storage_mode`), a JOIN without keys and an unsupported MATCH `ORDER BY` are core's `VELES-010` / `VELES-018`, a MATCH pattern without a node is core's `VELES-010` (`Pattern must have at least one node`, as core's walk refuses it), and an executor invariant is `VELES-013` (a pattern whose relationships do not link its nodes among them). A parse failure now reads as core's `impl From<ParseError> for Error` renders it (`[E001] … at position N`), no longer `VelesQL parse error at position N: … (near '…')`. What stays a plain string is what core has no rule for: a statement, clause or value core runs and WASM does not, and the WASM surface's own inputs (the params JSON, a decimal edge id, `createCollection`'s metric argument, `executeMatch` on a statement that is not a MATCH) — each raised by name through `ExecError::refused`, as `ExecError` has no conversion from a string that could turn a message into an uncoded refusal by accident. Migration: catch `QueryParameterError` / `QueryError` (or read `error.code`) where a WASM-backend `query()` failure used to be matched on `code === 'BAD_REQUEST'`, `NodeNotFoundError` (`VELES-022`) where `addEdge` was matched on `NOT_FOUND`, `SearchNotSupportedError` / `DimensionMismatchError` where a `NEAR` refusal was matched on its text; a direct binding caller reads `error.code` on the thrown `Error` where it caught a string.
+
+- **BREAKING (core): `_collection` addresses a top-level `MATCH` alone, by one rule every adapter calls** (core, REST server, Tauri, WASM, CLI, 2026-11-18). Before: the rule was copied four times and the copies disagreed — core's read gate read `_collection` for any statement without `FROM` and took an empty name as the collection `''` (`VELES-002`) and a non-string one as no target (`VELES-010`), the server read it for a top-level `MATCH` only and took an empty or non-string one as none, the Tauri plugin filled it for every statement, and the WASM executor kept its own constant and message. After: `velesdb_core::velesql` exports `COLLECTION_PARAM`, `collection_param` (the key's value: absent, or a non-empty string; anything else `Error::QueryParameter`, `VELES-038`, naming `_collection`), `collection_target` (a statement's `FROM`, else, for a top-level `MATCH`, `collection_param`) and `with_collection_param` (a request's own `collection` filling an absent key of a top-level `MATCH`); core's read gate, REST `/query`, the Tauri `query` command, the WASM `MATCH` and the CLI REPL (which fills a top-level `MATCH` with its `.use` collection through `with_collection_param`, and no other statement) all call them. Migration: an AST built by hand with an empty `FROM` and an aggregate is no longer addressed by `_collection` (`Database::execute_aggregate` refuses it as naming no collection — the grammar requires `FROM` of every `SELECT`, so no parsed statement is affected); send a `_collection` that is a non-empty string.
+
+- **Core: one DML binder for every engine** (core, WASM, 2026-11-18). `velesdb_core::velesql` exports `bind_insert_row` → `BoundInsertRow::into_point(column)` (the point an `INSERT`/`UPSERT` row writes) and `bind_update_assignments` → `BoundAssignments::apply(point, column)` (an `UPDATE`'s `SET` list, bound before any row is read, applied to a row), `column` being the collection's `velesql::VectorColumn` (the WASM executor's `QueryVectorTarget::vector_column(false)`, its collections being no graphs). Both bind each cell through one crate-private binder per cell kind (a payload cell; a `vector` cell, through `bind_vector`), and core's `Database` and the WASM executor both bind through them, so the WASM copies (`resolve_value`, `resolve_vector_cell`, `new_vector`, the id and column checks) are gone with their diverging messages — the binder refuses a row whose cells do not match its columns with `VELES-010` (`INSERT row has N values but M columns were declared`), the check the WASM executor ran on a statement built by hand, where zipping them dropped the unmatched cells, a `vector` cell among them — a subquery cell is core's `VELES-010` in WASM too (it was an uncoded string), and the WASM `UPDATE` and `DELETE` follow core's order: they refuse a WHERE holding a `similarity()`, `NEAR`, graph or full-text `MATCH` predicate first, with core's `VELES-010` through `velesql::check_dml_where` (public, moved out of `Database`; WASM bound the `SET` list first, so `UPDATE t SET x = $nope WHERE similarity(…) > 0.1` was `VELES-038`, and refused such a predicate with an uncoded string), then the `UPDATE` binds its `SET` list (an unbound `$v` on a metadata-only collection is `VELES-038`, it was a string), then refuses a vector per matched row, so a `WHERE` matching no row updates none (it refused). A `VALUES` row whose payload would name a column `id` or `vector` cannot be written: those columns are the point's own (a second `id` column overwrites the first, as in core), which the WASM executor's own row reader allowed.
+
+- **Core: `From<FusionError>` and `From<ValidationError>` for `Error`** (core, WASM, 2026-11-18). A fusion failure is `Error::Config("Fusion error: …")` (`VELES-009`) and a semantic validation failure `Error::Query` carrying its `[Vnnn]` code (`VELES-010`), through `Error::from`: core's `Fusion error` and validation `map_err` copies use it, and the WASM executor's hand-written `parse_error`, `fusion_error` and `validation_error` are gone.
+
+- **Core: `SearchResult::component_score(name)`** (core, Python, Tauri, 2026-11-18). The score a result was tagged with for one component (`vector_score`, `bm25_score`, `graph_score`, …), `None` for an untagged result or a component that did not score the row. The arithmetic `ORDER BY`'s component lookup, the Python binding's and the Tauri plugin's `HybridResult` read it instead of three copies of the search.
+
+- **Core: `velesql::resolve_metric` / `resolve_storage_mode` and `fusion::validate_fused_vector_count` are public** (core, WASM, 2026-11-18). The `CREATE COLLECTION` metric and storage-mode names, and the one-to-`MAX_FUSED_VECTORS` count of a fusion's query vectors, are each read by one function that core's DDL executor and `multi_query_search` and the WASM executor call, with core's `VELES-010` / `VELES-009` messages.
+
+- **A graph's statistics count its nodes** (core, REST server, 2026-11-18). Before: `Collection::analyze` set `row_count` from the vector store's `point_count`, so `ANALYZE g`, `POST /collections/g/analyze` and `GET /collections/g/stats` on a graph without embeddings reported `row_count: 0` while `GET /collections/g` reported its nodes, and the cost-based planner costed the graph as empty. After: a graph's row count is its stored node count (`GraphCollection::len`), with an embedding or not; a vector or metadata collection's is unchanged. The MATCH planner's statistics (`compute_match_collection_stats`, which `ANALYZE` reports as `graph_stats`) read the same count, so `graph_stats.total_nodes` and `avg_degree` agree with `row_count` (a graph without embeddings reported `total_nodes: 0`, `avg_degree: 0` beside `row_count: 2`, and the cost estimator fell back to its defaults).
+
+- **REST: `/sanity` reports core's diagnostics** (REST server, 2026-11-18). Before: `/collections/{name}/sanity` called `diagnostics()` yet set `search_ready` to "has data" and `dimension_configured` to `dimension > 0` itself, so a metadata collection holding points answered `search_ready: true` beside `/diagnostics`' `false`, with the hint to run a search. After: its `checks` are the diagnostics' `has_vectors`, `search_ready` and `dimension_configured`, the fields `/diagnostics` reports, and the hints follow search readiness: a collection without a vector dimension is pointed to VelesQL, one with a dimension and no vector to inserting vectors.
+
+- **WASM: a row a `similarity()` threshold scored carries its `vector_score` component** (WASM, 2026-11-18). Before: the browser executor tagged only `NEAR` rows, so on a `SELECT … WHERE similarity(vector, $v) > t` without `NEAR` a component the row lacks (`bm25_score`) fell back to the row's score in an `ORDER BY`, where core reads `0.0`; a `NEAR` row under a `USING FUSION` clause was tagged although its score is the fusion's. After: each scanned row records whether its score is its vector similarity (`OwnedScanRow::vector_scored`), set where the row is scored — a `NEAR` row without a fusion clause, a row the first `similarity()` leaf scored — and only such a row is tagged, as core tags it; a row the leaf could not score, a fused, sparse or metadata row carries no breakdown. Executor fixture cases N035 and N036 pin both engines.
+
+- **Core: `velesql::bind_vector` is public, the one binder of a vector `$name`** (core, WASM, 2026-11-18). It was `Collection::resolve_vector`, crate-private and behind `persistence`, so the WASM executor kept a copy with its own messages; it now binds a literal or a `$name` vector in every build, with the `VELES-038` errors of the entry above, for core's `NEAR`, `similarity()`, `ORDER BY similarity()`, MATCH and DML `vector` paths and the WASM executor alike.
+
+- **Core: shared refusal constructors and `velesql::match_threshold_keeps`**
+  (core, WASM, 2026-11-18). `Error::sparse_index_not_found(name)`,
+  `Error::join_without_key(table)` and `Error::pattern_without_node()` are
+  the one wording of those refusals, used by core's sparse, hybrid, JOIN and
+  MATCH-walk paths and the WASM executor (each was written two or three
+  times). `velesql::match_threshold_keeps(threshold,
+  score, higher_is_better)` is the one rule REST `/match` and WASM
+  `executeMatch` keep a scored row by; the WASM scoring applies core's
+  threshold validation once, when it is built.
+
+- **BREAKING (core): the never-emitted parse code `E005` is removed** (core, 2026-11-18). Before: `ParseError::missing_parameter` and `ParseErrorKind::MissingParameter` (`E005`) were public and documented in `ERROR_CODES.md`, yet no code path raised them: the parser never sees the bind parameters, and a missing or mistyped `$name` is the engine's `VELES-038`. After: both are removed and `ERROR_CODES.md` says a parameter failure has no parser code. Migration: match `Error::QueryParameter` (`VELES-038`) instead of `ParseErrorKind::MissingParameter`.
+
+- **Python: `node_id in graph` sees every stored node** (Python, 2026-11-18). Before: `GraphCollection.__contains__` asked for a stored payload, so a node stored with an embedding and no payload read as absent while `len()` counted it and `get()` returned it. After: `in` is `get`'s answer — a node with an embedding, a payload or both is in the graph, and a TTL-expired one is not (while `len()` still counts an expired node until the sweep removes it, see the `GraphCollection::len` entry). `Database.get_collection`'s view of a graph reads the same way: its `get` and `in` read the graph's nodes (`GraphCollection::get`), so a payload-only node its `len()` counts is returned and is `in` it — before, they asked the vector store, so a graph without embeddings answered `len()` 2 while `get` read `None` and `in` was `False`.
+
+- **CLI: `.graph count` reports the edges and the nodes once** (CLI, 2026-11-18). Before: the REPL printed `Stored nodes` and `Total points`, the same number twice since the graph's length counts every stored node. After: it prints `Edges` and `Nodes`, as `velesdb graph count` does.
+
+- **REST: `VELESQL_EXPLAIN_ERROR` is listed in the VelesQL contract** (docs, 2026-11-18). Before: `docs/reference/VELESQL_CONTRACT.md` omitted the code `/query/explain` answers when the read gate refuses a plan or the statement fails the planner's checks. After: it is listed beside `VELESQL_EXPLAIN_ANALYZE_ERROR`, each with the case it covers. The OpenAPI snapshot (`docs/openapi.json`, `docs/openapi.yaml`) is regenerated from the final handler annotations.
+
 - **BREAKING (REST server): a point delete reports what it removed** (REST
   server, TypeScript SDK, core, 2026-11-18).
   `DELETE /collections/{name}/points/{id}` answered `200` whether or not a point was
@@ -212,8 +990,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a predicate on one INNER join side is also pushed below the join, to that
     side only, as an optimization.
   A LEFT JOIN with a WHERE on its outer side now follows SQL: the unmatched
-  rows fail the predicate. Put a filter meant for the join side alone on the
-  base query's own columns, or test `IS NULL`.
+  rows fail the predicate. Migration: put a filter meant for the join side
+  alone on the base query's own columns, or test `IS NULL`.
 
 - **BREAKING (behavior): `UNION` / `INTERSECT` / `EXCEPT` follow SQL**
   (core, WASM, 2026-11-15). The three executors disagreed: core windowed the
@@ -236,8 +1014,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a written `LIMIT` is held to the 100 000-row ceiling, as a SELECT's is;
   - without `ORDER BY`, rows rank by score in the metric's direction, ties in
     the order met.
-  A query that relied on a first operand's `LIMIT` capping the union now caps
-  that operand only: move the `LIMIT` after the last operand. WASM refuses a
+  Migration: a query that relied on a first operand's `LIMIT` capping the
+  union now caps that operand only — move the `LIMIT` after the last operand.
+  WASM refuses a
   JOIN or an aggregation inside an operand rather than combining their rows;
   its window `ORDER BY similarity(vector, $v)` reads each row's own vector,
   from its own collection.
@@ -250,6 +1029,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unbound one refuses the query), `NULL` matches nothing, numbers compare by
   exact value and `id` is the element id. One definition
   (`velesql::inline_properties_hold`, `has_every_label`) serves core and WASM.
+  Migration: write `WHERE n.k IS NULL` for a pattern `{k: NULL}` meant to
+  match a null property, bind every `$name` a pattern uses, and filter a
+  payload field named `id` in `WHERE` rather than as `{id: …}`.
 
 - **BREAKING (behavior): a browser MATCH answers what core's MATCH answers**
   (WASM, 2026-11-15). An audit of the WASM walk against core found it
@@ -270,7 +1052,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only, `@collection` properties are seen by WHERE, the pattern, ORDER BY and
   RETURN (the node's own win), an annotation naming no collection refuses
   the MATCH, and a row carries the walk's target and core's score. The MATCH
-  conformance cases now run one query text on both engines.
+  conformance cases now run one query text on both engines. Migration: a
+  browser caller names the target with `_collection`, reads one row per
+  distinct binding of the named elements, and creates every collection an
+  annotation names.
 
 - **A `VectorFirst` MATCH returns the rows a full walk returns** (core,
   2026-11-15). The strategy the planner picks for a `similarity()` on the
@@ -309,7 +1094,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unswept annotated point adds nothing): it gates every annotated collection, as `/query`
   does, reads the annotations the same way, and orders rows through the same
   planner as `/query` (guard rails included) instead of calling the
-  collection's unplanned entry points.
+  collection's unplanned entry points. Migration: a query that relied on an
+  annotation leaving `WHERE`, `ORDER BY` or inline properties unfiltered drops
+  the predicates on the annotated collection's fields, and every annotation
+  names an existing collection.
 
 - **BREAKING (behavior): WHERE follows SQL's three-valued logic for every
   predicate** (core, 2026-11-15). The spec promised it, yet only
@@ -340,8 +1128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#2726). The command parses the whole input file first; on the first
   invalid record it aborts without creating or modifying the collection —
   previously valid records were written and bad ones silently skipped
-  while the command exited 0. Scripts that depended on partial imports
-  must pass `--continue-on-error` to restore the old shape, now with an
+  while the command exited 0. Migration: scripts that depended on partial
+  imports pass `--continue-on-error` to restore the old shape, now with an
   explicit error summary instead of silence.
 
 ### Added
@@ -518,20 +1306,315 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **VelesQL: the FROM side of a join is no longer a JOIN's alias** (core,
-  WASM, Python, 2026-11-20). `SelectStatement::from_alias` lists every alias
-  in scope — the FROM alias, then each JOIN alias — but four readers took it
-  for the FROM side alone. With an unaliased FROM and an aliased JOIN
-  (`FROM docs JOIN tags t`), core's and the WASM join executors scoped the
-  base rows under `t`, so `docs.*` read nothing; a predicate on an outer
-  join's alias (`LEFT JOIN products p … WHERE p.id IS NULL`) ran on the base
-  rows instead of the joined ones, so every row passed; and the Python
-  `ParsedStatement.table_alias` returned `t`. `table_aliases` listed each
-  JOIN alias twice. Core gains `SelectStatement::base_alias()` (the FROM's own
-  alias, `None` when only JOINs are aliased) and `base_side()` (that alias,
-  else the table), which every reader now resolves the base side by.
-  `table_alias` is the FROM alias or `None`; `table_aliases` lists each alias
-  once, FROM first, then each JOIN in order.
+- **VelesQL: a JOIN's alias is never taken for the FROM side** (core,
+  Python, 2026-11-20). `SelectStatement::from_alias` lists every alias in
+  scope — the FROM alias, then each JOIN alias — yet two readers still took
+  the whole list for the FROM side. JOIN pushdown named the base collection
+  by it, so a predicate on an outer join's alias (`LEFT JOIN products p …
+  WHERE p.id IS NULL`) ran on the base rows, where `p` is absent, and every
+  row passed; it now holds on the joined rows. The Python
+  `ParsedStatement.table_alias` read its first entry, the JOIN alias in
+  `FROM docs JOIN tags t`, and `table_aliases` listed each JOIN alias twice.
+  Core gains `velesql::base_alias` (the FROM's own alias, `None` when only
+  JOINs are aliased), which `velesql::base_side` is now built on: one
+  resolver for every reader. `table_alias` is the FROM alias or `None`;
+  `table_aliases` lists each alias once, FROM first, then each JOIN in order.
+
+- **Payload WAL: a write that fails partway through a record no longer
+  costs the records written after it** (core, 2026-11-20, #2850). A record
+  at least as large as the `BufWriter`'s buffer goes straight to the file, so
+  a `write_all` that failed midway (ENOSPC) left a fragment of it there. The
+  next record landed behind the fragment: it read back wrong until a restart,
+  and on the next open replay stopped at the fragment and truncated every
+  record after it, acknowledged ones included. Every store and tombstone
+  write — `store`, `store_batch` (and its deferred form), `delete`,
+  `delete_batch` — now goes through one append that, on failure, truncates
+  the file to the tracked WAL offset minus the bytes still buffered, so the
+  WAL is left as if the failed record never started; the store's change log
+  and index record only the records that were appended (a batch torn at its
+  second record keeps and records its first). If the truncation fails too,
+  the double fault is logged as an error and the tracked offset moves past
+  the fragment, so later records still read back until the next open.
+
+- **Core: BM25 drops a document whose new text has no indexable token, and
+  recycles a removed document's internal id once** (core, 2026-11-20).
+  `Bm25Index::add_document` returned before removing the previous version
+  when the text tokenized to nothing (`"N/A"`, `"-"`, `"7"`), so the old
+  terms kept matching a payload that no longer contained them; it now
+  removes the document, as `remove_document` does. Two concurrent removals
+  of one point each pushed the internal id they had read to the free list,
+  which then gave it to two later points and left one unsearchable; an add
+  and a removal now allocate, release and post a point's id under one hold
+  of the postings' write guard, so only the removal that takes the mapping
+  out releases it.
+
+- **Core: a failed half-open probe reopens the circuit breaker** (core,
+  2026-11-20). A request admitted before the trip that succeeded after it
+  reset the failure count while the breaker was open; the probe's failure
+  then counted as the first of a new window, and with a threshold above 1
+  the breaker stayed half-open, where every request is admitted. A failure
+  in `HalfOpen` now reopens it whatever the count.
+
+- **Core: a filtered sparse search offers its filter only the documents
+  that can take a place** (core, 2026-11-20). `sparse_search_filtered`,
+  exact under a selective filter on this branch, ran the filter on every
+  document the query scored; it now offers them best first and stops at the
+  `k`-th accepted one — no filter call below the last result.
+
+- **Core: a vector read whose index answer is short and crowded by expired
+  rows no longer returns nothing** (core, 2026-11-20). A read took an
+  answer shorter than what it asked the index for as the index running out,
+  so once an HNSW graph had seen overwrites — its walk answers short past
+  their tombstones — expired rows crowding the query made `search`,
+  `search_ids` and `SELECT * … WHERE vector NEAR $v LIMIT 10` return `[]`
+  while durable rows stood behind them (`search_with_quality` accurate
+  and the `similarity()` scan were right). After: a short answer settles the
+  read only when no dead candidate (a row without a vector, or expired) is
+  in it, or when it holds every stored vector; otherwise the read asks
+  again for twice as many and, past its bound, scans exactly
+  (`collection/search/live.rs`).
+
+- **Core: a text score reads one state of the BM25 index** (core,
+  2026-11-20). `Bm25Index::score_all` read the document count, the total
+  length and the postings under separate locks while a write changed the
+  postings before the count, so a score racing an upsert or a delete could
+  see a term in more documents than the corpus held: every idf turned
+  negative, every score fell to zero or below, and `text_search`, `MATCH`, a
+  hybrid's BM25 branch and its `LIKE` candidates returned `[]` for a stable
+  set of documents. After: a document enters or leaves the postings, the
+  documents and the corpus statistics under one hold of the postings'
+  write guard, a score reads them all under its read guard, and the
+  document frequency is held to the corpus size besides.
+
+- **Core: a filtered ranked walk answers the state its finishing hold
+  reads, a write before its first hold included** (core, 2026-11-20). The
+  walk read which ids changed only from its first hold on, and the
+  secondary indexes were updated once a write had released its guards: a
+  write landing between the prefilter bitmap and the first hold, or one
+  whose payload the walk already saw while its secondary-index update was
+  still pending, left a candidate set aside it now matched —
+  `text_search_with_filter` returned `[]` or a worse row while a fresh
+  search returned the moved one. After: the walk reads the stores' revision
+  before it builds the bitmap and offers again every set-aside candidate
+  written since; every write — `upsert`, `upsert_metadata`, both bulk
+  paths, the node-payload write, `delete`, a failed write included —
+  updates the secondary indexes under its payload write guard, beside the
+  label and range indexes, so the bitmap describes every write the revision
+  counts. A `CREATE INDEX` (and the restore of an index at open) fills the
+  new index before any reader can see it, holding writes off meanwhile: a
+  walk that built its bitmap from the index still empty set every
+  candidate aside and returned nothing.
+
+- **Core: a ranked walk always ends** (core, 2026-11-20). A walk whose
+  writer kept moving the rows it kept in and out of its filter between
+  holds released and took its guards again for as long as the writer ran:
+  a row dropped under the hold that would finish the walk always cost a
+  release, and only floods that overflowed the change logs counted toward
+  the bound on restarts. After: a dropped row is replaced under the same
+  hold, a hold whose finish a drop made fail counts toward the bound as a
+  restart does, and the candidates a write puts back cost a hold none of
+  its batch, so every hold that does not end the walk offers a batch of
+  candidates no hold offered before or sets it back.
+
+- **Core: a store's change log never keeps the size of its largest write**
+  (core, 2026-11-20). `ChangeLog::record` pushed every id of a write before
+  dropping all but the last `ChangeLog::CAPACITY`, so a write of many more
+  ids left a buffer that large in each store for the store's life. After:
+  the log forgets what the write overflows before it records it and keeps
+  only the write's last ids, in a buffer no larger than a full log needs;
+  what `changed_since` answers is unchanged.
+
+- **Core: a filtered text, sparse or hybrid search returns the best rows the
+  filter matches, however far below the best they rank** (core, 2026-11-19).
+  The filter was applied to an oversampled window of the best candidates —
+  four, then eight times `k` — so `text_search_with_filter`, a
+  `SPARSE_NEAR … AND <filter>`, `VectorCollection::hybrid_search_with_filter`
+  and a filtered `NEAR … AND MATCH` (RRF or score fusion) returned `[]` or
+  too few rows when the matching rows ranked below it. The filter is now
+  part of the ranked walk's admission (`collection/search/ranked.rs`): BM25
+  and sparse search admit a candidate only when it is a row and its payload
+  matches, until they have `k` or run out, and a hybrid search's text and
+  sparse branches admit their rows the same way (its vector branch is the
+  filtered vector search, bounded by its oversampling).
+  `sparse_search_filtered` is exact the same way. The walk pops a binary
+  heap built before any storage guard is taken, so a walk whose admission
+  refuses almost every candidate costs `O(n log n)` comparisons, never a
+  fresh partition per batch; a NaN score ranks last whatever its sign, as
+  everywhere else (`rank_scores`). The walk holds the storage read guards
+  for one batch of candidates at a time (`ranked::WALK_BATCH`), so a writer
+  waits for a batch, never for the whole walk, and it returns the exact top
+  `k` of the scored candidates admitted by one state of the stores, the one
+  its finishing hold reads: every store and delete records the ids it wrote
+  in its store's change log under its write guard, and each hold offers
+  again the candidates the writes since the last hold changed — a candidate
+  refused before a write, which the walk used to never offer again, so a
+  search raced by two writes could return a row no state of the collection
+  ranked first — while the rows an earlier batch kept are judged again
+  under the hold that finishes, for a write since or for expiry. A hold's work stays its batch plus the ids written since the last
+  one; only when more ids were written between two holds than the log
+  keeps does the walk start over, and after a bounded number of restarts it
+  finishes under one hold. A filter's prefilter bitmap from the secondary
+  indexes sets candidates aside before any guard is taken, and a write that
+  changes one offers it again. A kept row is judged once per hold: the hydration
+  no longer runs its admission again.
+
+- **Core: an expired row takes no place in a search** (core, 2026-11-19).
+  A hybrid search's BM25 and sparse branches admitted TTL-expired rows,
+  which took branch places and were dropped only at hydration —
+  `hybrid_search(q, "apple", 1)` answered the nearest row without the term
+  while a live hit existed — and a dense `search(k)` (and
+  `search_with_ef`, `search_with_quality`, a hybrid's unfiltered vector
+  branch) hydrated the index's `k` nearest and returned fewer, or none, when
+  expired rows were nearest; so did `search_with_filter` (and `NEAR … AND`
+  a filter, a filtered hybrid's vector branch, a multi-query's filtered
+  branches), `search_batch_parallel`, `search_batch_with_filters`,
+  `multi_query_search` (which cut its fused ranking to `top_k` before
+  dropping expired rows) and an anchored `NEAR`, while `search_ids` and
+  `multi_query_search_ids` returned expired ids, and every aggregate
+  (`COUNT(*)`, `SUM`, …, `GROUP BY`) counted expired rows the SELECT left
+  out. Now one admission rule skips expired rows in every ranked walk
+  (`collection/search/ranked.rs`), every vector read surface ranks live rows
+  only (`collection/search/live.rs`): it asks the index again for twice as
+  many while dead candidates leave it fewer than `k` (or, filtered, fewer
+  live candidates than its oversampling), and once that would pass the
+  largest query `LIMIT` or reach the stored vectors it scores every stored
+  vector exactly and walks them with the ranked admission, so a crowd of
+  unswept expired rows costs a bounded index walk and an exact scan, never
+  an unbounded one; and every aggregate reads its rows through the same
+  expiry rule. `len()` and `all_ids()` still count and list an expired row
+  until the sweep removes it, as documented.
+
+- **Core: an anchored `NEAR … AND MATCH … AND MATCH (…)` honours the WHERE's
+  metadata conditions** (core, 2026-11-19). The anchored hybrid fused the
+  best rows of the anchor set, then the post-filter dropped those the
+  metadata conditions refused, so a query whose matching anchors ranked
+  below the window answered `[]`. Both branches now admit the anchors by
+  the metadata filter (`Collection::hybrid_streams`), whatever the fusion
+  strategy, and `USING FUSION(strategy = 'rrf' | 'weighted', k = …)` passes
+  its `k` to the unanchored hybrid too, which ignored it.
+
+- **REST server, Python: a sparse-only search honours its filter** (server,
+  python, 2026-11-19). REST `/collections/{name}/search` with a
+  `sparse_vector`, no `vector` and a `filter` ignored the filter and
+  returned the unfiltered top-k; Python refused a caller filter on a
+  sparse-only search and post-filtered an observer scope (returning fewer
+  than `k` while matches existed). Both now run core's new
+  `VectorCollection::sparse_search_with_filter`, whose filter is part of the
+  ranked walk's admission.
+
+- **TypeScript SDK: `upsertBatch` of a document without `vector` throws
+  `VectorRequiredError`** (sdk, 2026-11-19), as `upsert` and REST do; it
+  threw a `TypeError` reading `doc.vector.length`.
+
+- **Core: a bulk upsert racing a delete of one of its ids leaves no orphan
+  payload** (core, 2026-11-19). `upsert_bulk` on a vector collection stored
+  its vectors, then its payloads, the second without the node locks a
+  delete takes: a delete landing between the two left a payload no row
+  owned, and a later payload-less `upsert_bulk` of the id brought the
+  deleted text back into search. The payload half now stores, under the
+  node locks of its ids, only the payloads of ids that still store a vector
+  (`Collection::write_payloads_where_vectors`, the rule `upsert_metadata`
+  follows too). Superseded by the rule every row write now follows, below.
+
+- **Core: an upsert racing a delete of the same id leaves the row whole or
+  gone** (core, 2026-11-20). A plain `upsert` stored its payloads, then its
+  vectors, without the node locks a delete takes, and applied its BM25
+  change after both: a delete landing between the two stores left a vector
+  with no payload — a row whose text and metadata were gone — and the
+  upsert then indexed the deleted payload's BM25 document. Every row write
+  of a vector collection — `upsert`, `upsert_bulk`, `upsert_bulk_from_raw`,
+  and the streaming drain and the DML writes that run through them — now
+  takes `text_wal` shared and the node locks of its ids, and holds them
+  across its payload store, its vector store and its BM25 change
+  (`Collection::write_rows`), as a delete holds them across its own: a
+  delete of an id lands wholly before or after a write of it. The payload
+  store comes first on every path: a crash between the two leaves a payload
+  with no vector, which no read returns, where a bulk upsert left a
+  payload-less row.
+
+- **REST server: a sparse-only search runs under a read-gate scope**
+  (server, 2026-11-20). `/collections/{name}/search` with a `sparse_vector`
+  and no `vector` refused every request an observer scoped, where the
+  Python binding AND-ed the scope into the search's filter. The server now
+  does the same: the scope, AND-ed with the request's filter, admits the
+  hits inside core's walk (`VectorCollection::sparse_search_with_filter`).
+
+- **LlamaIndex: `GraphLoader.add_node(..., vector=[])` stores a node without
+  a vector** (integrations, 2026-11-19), in the companion metadata
+  collection or a graph collection, as `vector=None` does; it was written to
+  the vector store's collection, which refused it with `VELES-016`.
+
+- **A BM25 change racing `flush_full` is no longer lost** (core,
+  2026-11-19). A write appends its BM25 changes to the BM25 WAL, then applies
+  them in memory; `flush_full` serialized the index, then truncated the WAL,
+  unordered against it. A change appended before the truncate and applied
+  after the serialization was in neither, and gone on the next open — on
+  every kind of collection, a graph included (its open re-indexes only the
+  payloads stored after the position its coverage marker records). Every
+  BM25 change now holds a new collection lock, `text_wal` (position 1a,
+  `docs/CONCURRENCY_MODEL.md`), shared across its append and its apply, and
+  `flush_full` holds it exclusively from the serialization through the
+  truncate, so a change is in the snapshot or in the WAL.
+
+- **Core: `DELETE … WHERE id = $id` binds its parameters** (core, WASM
+  conformance, 2026-11-18). Before: `DELETE FROM docs WHERE id = $id` and
+  `id IN ($a, $b)` read the ids from the unbound statement, so a bound `$id`
+  was refused with `VELES-010` "ID values must be integers" and an unbound one
+  with the same `VELES-010` instead of `VELES-038`. After: the `WHERE` is
+  bound (`velesql::bind_condition`) before the ids are read, as the WASM
+  executor already did; executor fixture cases W011, W012 and R030 pin both
+  engines. A DML `WHERE` is bound once, after its shape is checked: a vector,
+  graph or full-text predicate is refused with `VELES-010` even when one of
+  its `$name`s is unbound, as a SELECT is validated before it executes, and
+  an `UPDATE` checks its `WHERE`'s shape before it binds its `SET` list.
+
+- **Core: a full-text `MATCH` in a DML `WHERE` is refused, not dropped**
+  (core, 2026-11-18). Before: the metadata filter a DML statement selects by
+  silently dropped a `column MATCH 'text'` leaf, so `DELETE FROM t WHERE
+  category = 'a' AND body MATCH 'x'` deleted every row of category `a`
+  whatever its text. After: it is refused with `VELES-010` ("DELETE WHERE
+  supports metadata predicates only"), as a vector or graph predicate is.
+
+- **Core: a graph node written after `CREATE INDEX` is in the index** (core,
+  2026-11-18). Before: the node-payload write (`INSERT NODE`,
+  `upsert_node_payload`, `store_node_payloads`) maintained the label and range
+  indexes but not the secondary ones, so an indexed `SELECT … WHERE name =
+  'x'` missed a node written after the index was created while `COUNT(*)`
+  counted it, and an indexed JOIN missed it too. After: the write maintains
+  the secondary indexes, from what storage holds after it (a failed batch
+  included).
+
+- **Core: a `similarity()` scan reads a metadata collection's rows** (core,
+  2026-11-18). Before: the exact scan a named-vector threshold, or a
+  threshold under `OR` / `NOT`, takes listed only stored vectors, so on a
+  metadata collection `SELECT * FROM tags WHERE similarity(emb, $q) > 0.5`
+  answered no row while `COUNT(*)` with the same `WHERE` counted the
+  matches. After: it reads every row of the collection (see the graph SELECT
+  entry above).
+
+- **WASM: `UPDATE` resolves its collection before it binds** (WASM,
+  2026-11-18). Before: `UPDATE missing SET x = $nope` was `VELES-038` in WASM,
+  `VELES-002` in core. After: the collection is resolved first, as in core;
+  fixture case R031 pins both engines.
+
+- **CLI: a refused query exits 5 through `query execute` and the REPL**
+  (CLI, 2026-11-18). Before: the REPL's query paths wrapped a core error as
+  the text `Query error: …`, which `exit_code` cannot downcast, so a statement
+  the engine refuses (`VELES-010`) or an unbound `$name` (`VELES-038`) exited
+  1, not the documented 5. After: the core error stays in the error chain
+  under a `Query error` context, so the exit code reads it; the REPL and the
+  offline agent print the whole chain (`Query error: [VELES-038] …`), as
+  `main` already did. Aggregates no longer go through the REPL's own
+  `_collection` filling, which no aggregate could reach (the grammar requires
+  `FROM`).
+
+- **Core: a MATCH vector parameter is resolved as strictly as SELECT's**
+  (core, 2026-11-18). Before: MATCH `similarity(a.vec, $v)` and the
+  vector-first MATCH seed resolved `$v` through a private copy that dropped
+  every array element that was not a number (`[1.0, "x", 0.0]` scored the
+  2-element `[1.0, 0.0]`) and narrowed out-of-range numbers to infinity.
+  After: MATCH resolves through the same resolver as SELECT, and refuses such
+  a parameter with `VELES-038`.
 
 - **`velesdb-migrate` retries the failures that are transient, and only
   those** (migrate, 2026-11-17). `retry::is_retryable_error` decided by
@@ -805,8 +1888,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented `MATCH` example failed with VELES-010 unless the caller knew to
   pass `params._collection` → `QueryRequest.collection` (Rust and TypeScript)
   is passed to the engine as `params._collection` when that key is not already
-  set, the rule of the REST server's `/query`; an explicit `_collection` keeps
-  precedence and a `FROM` still decides for a `SELECT`. The guest-js example,
+  set, for a top-level `MATCH` only — core's rule
+  (`velesql::with_collection_param`), the REST server's `/query`'s; an
+  explicit `_collection` keeps precedence, one that is not a non-empty string
+  is refused with `VELES-038`, and every other statement ignores
+  `collection`. The guest-js example,
   README "Known limits" and the recipes guide are corrected.
 
 - **Tauri plugin: TypeScript result types match the wire** (Tauri plugin,

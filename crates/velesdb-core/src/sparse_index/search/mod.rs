@@ -60,12 +60,34 @@ pub fn sparse_search(
     linear_scan_search(index, query, k)
 }
 
-/// Searches the sparse inverted index with an optional post-filter.
+/// Hands `emit` every document `query` scores in the index, as `(doc_id,
+/// inner product)`, in no particular order: what [`sparse_search`] cuts to
+/// its top `k`, for a caller that decides which documents may take a place
+/// before the cut — a collection admitting only its rows
+/// (`collection/search/ranked.rs`).
+#[cfg(feature = "persistence")]
+pub(crate) fn sparse_scores(
+    index: &SparseInvertedIndex,
+    query: &SparseVector,
+    emit: impl FnMut(u64, f32),
+) {
+    if query.is_empty() || index.doc_count() == 0 {
+        return;
+    }
+    strategy::linear_scan_scores(index, query, emit);
+}
+
+/// Searches the sparse inverted index for the top-k documents `filter`
+/// admits.
 ///
-/// If `filter` is `None`, delegates to [`sparse_search`]. Otherwise,
-/// retrieves `k * 4` candidates, applies the filter, and retries with
-/// `k * 8` if fewer than `k` results survive. Returns the top-k filtered
-/// results.
+/// If `filter` is `None`, delegates to [`sparse_search`]. Otherwise the
+/// documents the query scores are offered to `filter` best first, ordered as
+/// [`sparse_search`] orders them, until it has admitted `k`: the best `k` it
+/// admits, exact however far below the best a matching document ranks, and
+/// no document below the last of them is offered. (An oversampled window of
+/// the best, four then eight times `k`, used to be filtered alone, and
+/// returned fewer than `k` when the matches ranked below it.) The scores are
+/// arranged into a heap in linear time; each document offered costs one pop.
 #[must_use]
 pub fn sparse_search_filtered(
     index: &SparseInvertedIndex,
@@ -76,27 +98,25 @@ pub fn sparse_search_filtered(
     let Some(filter) = filter else {
         return sparse_search(index, query, k);
     };
-
-    // First pass: 4x oversampling
-    let candidates = sparse_search(index, query, k.saturating_mul(4).max(k.saturating_add(10)));
-    let mut filtered: Vec<ScoredDoc> = candidates
-        .into_iter()
-        .filter(|doc| filter(doc.doc_id))
-        .collect();
-
-    if filtered.len() >= k {
-        filtered.truncate(k);
-        return filtered;
+    if k == 0 || query.is_empty() || index.doc_count() == 0 {
+        return Vec::new();
     }
-
-    // Second pass: 8x oversampling
-    let candidates = sparse_search(index, query, k.saturating_mul(8).max(k.saturating_add(20)));
-    filtered = candidates
-        .into_iter()
-        .filter(|doc| filter(doc.doc_id))
-        .collect();
-    filtered.truncate(k);
-    filtered
+    let mut scored = Vec::new();
+    strategy::linear_scan_scores(index, query, |doc_id, score| {
+        scored.push(ScoredDoc { score, doc_id });
+    });
+    // `ScoredDoc`'s order ranks: the best is the greatest, popped first.
+    let mut ranked = std::collections::BinaryHeap::from(scored);
+    let mut admitted = Vec::with_capacity(k.min(ranked.len()));
+    while admitted.len() < k {
+        let Some(doc) = ranked.pop() else {
+            break;
+        };
+        if filter(doc.doc_id) {
+            admitted.push(doc);
+        }
+    }
+    admitted
 }
 
 /// Brute-force inner product search for testing correctness.

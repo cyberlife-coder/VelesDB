@@ -33,3 +33,36 @@ fn sort_by_score_ranks_nan_after_every_number() {
         }
     }
 }
+
+/// A MATCH row a `similarity()` scored carries that score as its
+/// `vector_score` component; a row ranked by depth carries no breakdown.
+#[cfg(feature = "persistence")]
+#[test]
+fn match_rows_tag_their_similarity_as_the_vector_score() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let col = Collection::create(
+        dir.path().to_path_buf(),
+        2,
+        crate::distance::DistanceMetric::Cosine,
+    )
+    .expect("test: create");
+    col.upsert(vec![
+        crate::Point::new(1, vec![1.0, 0.0], None),
+        crate::Point::new(2, vec![0.0, 1.0], None),
+    ])
+    .expect("test: upsert");
+
+    let rows = col
+        .match_results_to_search_results(vec![scored(1, Some(0.75)), scored(2, None)])
+        .expect("test: convert");
+    assert!((rows[0].score - 0.75).abs() < f32::EPSILON);
+    assert_eq!(
+        rows[0].component_scores.as_deref(),
+        Some(&[("vector_score", 0.75_f32)][..])
+    );
+    assert!(
+        (rows[1].score - 1.0).abs() < f32::EPSILON,
+        "depth 0 ranks as 1 / (0 + 1)"
+    );
+    assert!(rows[1].component_scores.is_none());
+}

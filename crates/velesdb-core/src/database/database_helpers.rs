@@ -2,161 +2,41 @@
 use super::{Database, Error, Result};
 
 impl Database {
-    pub(super) fn resolve_dml_value(
-        value: &crate::velesql::Value,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<serde_json::Value> {
-        match value {
-            crate::velesql::Value::Integer(v) => Ok(serde_json::json!(v)),
-            crate::velesql::Value::UnsignedInteger(v) => Ok(serde_json::json!(v)),
-            crate::velesql::Value::Float(v) => Ok(serde_json::json!(v)),
-            crate::velesql::Value::String(v) => Ok(serde_json::json!(v)),
-            crate::velesql::Value::Boolean(v) => Ok(serde_json::json!(v)),
-            crate::velesql::Value::Null => Ok(serde_json::Value::Null),
-            crate::velesql::Value::Parameter(name) => params
-                .get(name)
-                .cloned()
-                .ok_or_else(|| Error::Config(format!("Missing query parameter: ${name}"))),
-            crate::velesql::Value::Temporal(expr) => Ok(serde_json::json!(expr.to_epoch_seconds())),
-            crate::velesql::Value::Subquery(_) => Err(Error::Query(
-                "Subquery values are not supported in INSERT/UPDATE".to_string(),
-            )),
-        }
-    }
-
-    pub(super) fn json_to_u64_id(value: &serde_json::Value) -> Result<u64> {
-        // Try u64 first (covers full range), fall back to i64 for negative error.
-        if let Some(u) = value.as_u64() {
-            return Ok(u);
-        }
-        value
-            .as_i64()
-            .ok_or_else(|| Error::Query("id must be an integer".to_string()))
-            .and_then(|v| u64::try_from(v).map_err(|_| Error::Query("id must be >= 0".to_string())))
-    }
-
-    pub(super) fn json_to_vector(value: &serde_json::Value) -> Result<Vec<f32>> {
-        let arr = value
-            .as_array()
-            .ok_or_else(|| Error::Query("'vector' must be an array of numbers".to_string()))?;
-        arr.iter().map(Self::json_element_to_f32).collect()
-    }
-
-    /// Converts a single JSON number to an f32, validating range and finiteness.
-    fn json_element_to_f32(v: &serde_json::Value) -> Result<f32> {
-        let f = v
-            .as_f64()
-            .ok_or_else(|| Error::Query("vector values must be numeric".to_string()))?;
-        if !f.is_finite() || f < f64::from(f32::MIN) || f > f64::from(f32::MAX) {
-            return Err(Error::Query(
-                "vector values must be finite f32-compatible numbers".to_string(),
-            ));
-        }
-        #[allow(clippy::cast_possible_truncation)]
-        // Reason: range validated above against f32::MIN..=f32::MAX.
-        let as_f32 = f as f32;
-        Ok(as_f32)
-    }
-
+    /// The metadata filter of a DML WHERE that [`crate::velesql::check_dml_where`]
+    /// accepted and whose parameters are bound (`velesql::bind_condition`):
+    /// the filter conversion would turn a placeholder into NULL, matching no
+    /// row.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Internal`] when the checked WHERE yields no filter.
     pub(super) fn build_dml_filter(
         statement: &str,
-        where_clause: Option<&crate::velesql::Condition>,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<Option<crate::Filter>> {
-        let Some(condition) = where_clause else {
-            return Ok(None);
-        };
-
-        if Self::contains_non_metadata_condition(condition) {
-            return Err(Error::Query(format!(
-                "{statement} WHERE supports metadata predicates only (no similarity/NEAR/MATCH)"
-            )));
-        }
-
-        // Resolve parameter placeholders before the filter conversion, which
-        // would otherwise silently turn them into NULL (matching no rows).
-        let resolved = crate::velesql::bind_condition(condition, params)?;
-        let filter_condition = crate::collection::Collection::extract_metadata_filter(&resolved)
-            .ok_or_else(|| {
-                Error::Query("UPDATE WHERE produced empty metadata filter".to_string())
+        bound: &crate::velesql::Condition,
+    ) -> Result<crate::Filter> {
+        let condition =
+            crate::collection::Collection::extract_metadata_filter(bound).ok_or_else(|| {
+                Error::Internal(format!("{statement} WHERE produced no metadata filter"))
             })?;
-        Ok(Some(crate::Filter::new(crate::Condition::from(
-            filter_condition,
-        ))))
+        Ok(crate::Filter::new(crate::Condition::from(condition)))
     }
 
-    fn contains_non_metadata_condition(condition: &crate::velesql::Condition) -> bool {
-        match condition {
-            crate::velesql::Condition::Similarity(_)
-            | crate::velesql::Condition::VectorSearch(_)
-            | crate::velesql::Condition::VectorFusedSearch(_)
-            | crate::velesql::Condition::SparseVectorSearch(_)
-            | crate::velesql::Condition::GraphMatch(_) => true,
-            crate::velesql::Condition::And(left, right)
-            | crate::velesql::Condition::Or(left, right) => {
-                Self::contains_non_metadata_condition(left)
-                    || Self::contains_non_metadata_condition(right)
-            }
-            crate::velesql::Condition::Group(inner) | crate::velesql::Condition::Not(inner) => {
-                Self::contains_non_metadata_condition(inner)
-            }
-            _ => false,
-        }
-    }
-
-    pub(super) fn matches_dml_filter(point: &crate::Point, filter: Option<&crate::Filter>) -> bool {
-        match filter {
-            Some(filter) => Self::point_matches_filter(point, filter),
-            None => true,
-        }
-    }
-
-    /// The joined collection's points the pushed-down `filters` keep. Each
-    /// condition's field names are stripped of table prefixes (e.g.,
-    /// `inventory.price` → `price`) before evaluation against point payloads.
+    /// The joined collection's rows the pushed-down `filters` keep
+    /// (`Collection::rows_where`, the rows a SELECT of that collection reads,
+    /// a graph's payload-only nodes included). A text `MATCH` among them is
+    /// that collection's BM25 hits (`Collection::bind_row_text_matches`), and
+    /// each condition's field names are stripped of table prefixes (e.g.,
+    /// `inventory.price` → `price`) before evaluation against the row
+    /// payloads.
     pub(super) fn filtered_join_points(
         collection: &crate::collection::Collection,
         filters: &[crate::velesql::Condition],
     ) -> Vec<crate::Point> {
-        let combined = Self::combine_filter_conditions(filters);
+        let combined =
+            collection.bind_row_text_matches(&Self::combine_filter_conditions(filters), None);
         let stripped = Self::strip_table_prefix_from_condition(combined);
         let filter = crate::Filter::new(crate::Condition::from(stripped));
-        let ids = Self::join_candidate_ids(collection, &filter);
-        collection
-            .get(&ids)
-            .into_iter()
-            .flatten()
-            .filter(|p| Self::point_matches_filter(p, &filter))
-            .collect()
-    }
-
-    /// Enumerates the join-side candidate IDs to feed into the post-filter.
-    ///
-    /// When the pushed-down `filter` references secondary-indexed fields,
-    /// `build_prefilter_bitmap` resolves it to a Roaring bitmap of candidate IDs,
-    /// avoiding the O(N) `all_point_ids()` scan. The bitmap is a guaranteed SUPERSET of
-    /// the matches — `point_matches_filter` re-checks every returned point, so
-    /// results are identical to the scan path. The superset guarantee holds
-    /// because `build_prefilter_bitmap` returns `None` (forcing the
-    /// `all_point_ids()` fallback) for any predicate it cannot resolve completely: `!=` / `NOT IN`
-    /// (whose matches include field-absent points the index does not store) and
-    /// any field carrying an ID above `u32::MAX` (unrepresentable in the bitmap).
-    /// Falls back to `all_point_ids()` — every point, with or without a
-    /// payload — whenever no index can resolve the predicate.
-    fn join_candidate_ids(
-        collection: &crate::collection::Collection,
-        filter: &crate::Filter,
-    ) -> Vec<u64> {
-        match collection.build_prefilter_bitmap(filter) {
-            Some(bitmap) => bitmap.iter().map(u64::from).collect(),
-            None => collection.all_point_ids(),
-        }
-    }
-
-    /// Evaluates a filter against a point: a `VelesQL` `id` column reads its
-    /// id, as in every clause.
-    fn point_matches_filter(point: &crate::Point, filter: &crate::Filter) -> bool {
-        filter.matches_point(point.id, point.payload.as_ref())
+        collection.rows_where(Some(&filter))
     }
 
     /// Combines multiple `velesql::Condition`s into a single AND tree.
@@ -257,14 +137,12 @@ impl Database {
             .map_or_else(|| column.to_string(), |(_, col)| col.to_string())
     }
 
-    /// Fetches every live point of `collection` for JOIN-side materialization.
-    ///
-    /// Goes through `Collection::get`, so lazily-expired TTL points are
-    /// already excluded from the result.
+    /// Every row of `collection` for JOIN-side materialization: the rows a
+    /// SELECT of it reads (`Collection::rows_where`), lazily-expired TTL
+    /// points excluded.
     pub(super) fn fetch_join_points(
         collection: &crate::collection::Collection,
     ) -> Vec<crate::Point> {
-        let ids = collection.all_point_ids();
-        collection.get(&ids).into_iter().flatten().collect()
+        collection.rows_where(None)
     }
 }

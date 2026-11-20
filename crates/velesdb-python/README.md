@@ -223,12 +223,13 @@ wheel covers Python 3.9 and later):
 
 The typed collection exceptions (`DimensionMismatchError`, `CollectionNotFoundError`,
 `CollectionExistsError`, `EdgeExistsError`, `DatabaseLockedError`) derive from
-`velesdb.VelesDBError`. The VelesQL parse exceptions (`VelesQLSyntaxError`,
-`VelesQLParameterError`) do not — they derive from `Exception` directly, so a
-catch-all needs `except (velesdb.VelesDBError, velesdb.VelesQLSyntaxError,
-velesdb.VelesQLParameterError)` or plain `except Exception`. No call raises
-`VelesQLParameterError` today: an unbound or mistyped `$name` parameter raises
-`ValueError` (`[VELES-010]`).
+`velesdb.VelesDBError`. The VelesQL exceptions do not: `VelesQLSyntaxError`
+derives from `Exception` directly, and `VelesQLParameterError` — raised for a
+`$name` parameter that is unbound or bound to a value its position cannot take
+(`[VELES-038]`) — derives from `ValueError`, the class every other query error
+(`[VELES-010]`) raises, so `except ValueError` catches both. A catch-all needs
+`except (velesdb.VelesDBError, velesdb.VelesQLSyntaxError, ValueError)` or
+plain `except Exception`.
 
 ---
 

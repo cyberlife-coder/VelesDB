@@ -12,7 +12,6 @@
 //! exhausted, or the farthest seed already fails the seeding leaf — every
 //! node beyond it is farther still, so none of them can start a row.
 
-use super::where_eval::resolve_query_vector;
 use super::{MatchResult, MatchSources, RowOrder, StartNodes};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
@@ -45,11 +44,11 @@ impl Collection {
                     "VectorFirst requires a seeding similarity() condition and a LIMIT".to_string(),
                 )
             })?;
-        let query_vector = resolve_query_vector(&seed.vector, params)?;
+        let query_vector = crate::velesql::bind_vector(&seed.vector, params)?;
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         // Metric snapshot (config, rank 1) before the walk takes any guard.
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
-        let total = self.len();
+        let total = self.vector_count();
 
         let mut wanted = top_k.max(limit).max(1);
         loop {

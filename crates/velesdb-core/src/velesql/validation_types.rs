@@ -154,6 +154,11 @@ pub enum ValidationErrorKind {
     /// threshold that is not a number (`HAVING COUNT(*) > 'many'`), which no
     /// aggregate can compare with.
     InvalidHaving,
+    /// An aggregation (scalar aggregates or `GROUP BY`) is an operand of a
+    /// compound (`UNION`, `INTERSECT`, `EXCEPT`): its rows are not points,
+    /// and the aggregate engine runs one SELECT, so it would answer for the
+    /// first operand alone.
+    CompoundAggregation,
 }
 
 impl ValidationErrorKind {
@@ -179,6 +184,7 @@ impl ValidationErrorKind {
             Self::OrderByNotInResult => "V016",
             Self::DuplicateOutputColumn => "V017",
             Self::InvalidHaving => "V018",
+            Self::CompoundAggregation => "V019",
         }
     }
 
@@ -211,6 +217,7 @@ impl ValidationErrorKind {
             Self::OrderByNotInResult => "ORDER BY names no column of the grouped rows",
             Self::DuplicateOutputColumn => "Two output columns share a name",
             Self::InvalidHaving => "Invalid HAVING clause",
+            Self::CompoundAggregation => "An aggregation cannot be an operand of a compound query",
         }
     }
 }

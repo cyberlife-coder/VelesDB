@@ -4,6 +4,8 @@
 //! nearest neighbor (ANN) search and full-text search.
 
 mod bm25;
+#[cfg(test)]
+mod bm25_consistency_tests;
 #[cfg(feature = "persistence")]
 pub(crate) mod bm25_persistence;
 #[cfg(feature = "persistence")]

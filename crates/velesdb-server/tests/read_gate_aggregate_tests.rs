@@ -473,3 +473,64 @@ async fn stream_traverse_honours_the_read_gate() {
         "{status}: {body}"
     );
 }
+
+fn result_ids(body: &Value) -> Vec<u64> {
+    body["results"]
+        .as_array()
+        .expect("test: results")
+        .iter()
+        .filter_map(|r| r["id"].as_str()?.parse().ok())
+        .collect()
+}
+
+/// GIVEN `items` scoped to `cat = 'a'`, rows 1..=5 holding a sparse vector,
+/// the `b` rows (4, 5) the heaviest
+/// WHEN a sparse-only `/search` is sent, with and without a filter of its own
+/// THEN only scoped rows come back, best first, the request's filter
+/// narrowing them further — the scope AND-ed into core's filtered walk, as
+/// the Python binding does, where the server refused the search.
+#[tokio::test]
+async fn a_sparse_only_search_returns_only_the_scoped_rows() {
+    let (_dir, app, observer) = setup().await;
+    let points: Vec<Value> = [
+        (1, "a", 1.0),
+        (2, "a", 2.0),
+        (3, "a", 3.0),
+        (4, "b", 9.0),
+        (5, "b", 8.0),
+    ]
+    .iter()
+    .map(|&(id, cat, weight)| {
+        json!({"id": id, "vector": [1.0, 0.0, 0.0, 0.0],
+                   "payload": {"cat": cat, "amount": 1, "rank": id},
+                   "sparse_vectors": {"": {"indices": [3], "values": [weight]}}})
+    })
+    .collect();
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/collections/items/points",
+        Some(json!({ "points": points })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    observer.set(Rule::ScopeToA);
+
+    let search = |filter: Option<Value>| {
+        let mut body = json!({"sparse_vector": {"indices": [3], "values": [1.0]}, "top_k": 10});
+        if let Some(filter) = filter {
+            body["filter"] = filter;
+        }
+        send(&app, "POST", "/collections/items/search", Some(body))
+    };
+    let (status, body) = search(None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(result_ids(&body), [3, 2, 1], "{body}");
+
+    let (status, body) = search(Some(
+        json!({"condition": {"type": "eq", "field": "rank", "value": 2}}),
+    ))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(result_ids(&body), [2], "{body}");
+}

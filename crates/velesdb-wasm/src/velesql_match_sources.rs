@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use velesdb_core::velesql::{MatchClause, NodePattern};
 
 use crate::database::{DatabaseInner, SharedStore};
+use crate::exec_error::ExecError;
 
 /// One annotated collection: its store and the row of each of its ids.
 struct Annotated {
@@ -44,7 +45,7 @@ impl Annotations {
     ///
     /// Names an annotation that names no collection: a MATCH cannot read
     /// properties from it.
-    pub(crate) fn resolve(db: &DatabaseInner, clause: &MatchClause) -> Result<Self, String> {
+    pub(crate) fn resolve(db: &DatabaseInner, clause: &MatchClause) -> Result<Self, ExecError> {
         let mut annotations = Self::default();
         for node in clause.patterns.iter().flat_map(|p| p.nodes.iter()) {
             let Some(name) = node.collection.as_deref() else {
@@ -60,9 +61,7 @@ impl Annotations {
             if annotations.collections.iter().any(|(n, _)| n == name) {
                 continue;
             }
-            let store = db
-                .get_shared_store(name)
-                .map_err(|_| format!("[VELES-002] Collection '{name}' not found"))?;
+            let store = db.get_shared_store(name)?;
             let rows = store
                 .borrow()
                 .ids

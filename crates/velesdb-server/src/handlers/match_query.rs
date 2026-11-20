@@ -31,7 +31,12 @@ pub struct MatchQueryRequest {
     /// Query vector for similarity scoring (EPIC-058 US-007).
     #[serde(default)]
     pub vector: Option<Vec<f32>>,
-    /// Similarity threshold (0.0 to 1.0, default 0.0).
+    /// Score threshold for `vector`, in the collection metric's direction: a
+    /// row is kept when its score is at least this under a similarity metric
+    /// (`cosine`, `dot`, `jaccard`), at most this under a distance metric
+    /// (`euclidean`, `hamming`). Any finite number, sent with `vector`
+    /// (without one no row is scored, and it is refused); omitted, every
+    /// scored row is kept.
     #[serde(default)]
     pub threshold: Option<f32>,
 }
@@ -96,8 +101,11 @@ pub struct MatchQueryMeta {
 /// `VELES-XXX` code, and the status follows its variant:
 /// - `404 NOT_FOUND` (`VELES-002`) — collection not found
 /// - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
-///   invalid threshold, an unbound query parameter, or an `ORDER BY` MATCH
-///   cannot sort by (`V015`, refused before traversal as on `/query`)
+///   a threshold that is not finite or comes without `vector`, or an
+///   `ORDER BY` MATCH cannot sort by (`V015`, refused before traversal as
+///   on `/query`)
+/// - `400 BAD_REQUEST` (`VELES-038`) — a `$name` parameter that is unbound,
+///   or bound to a value its position cannot take
 /// - otherwise: `404 NOT_FOUND` for a missing point, edge or node;
 ///   `409 CONFLICT` for a collection or edge that already exists;
 ///   `400 BAD_REQUEST` for other invalid input and for a depth, cardinality
@@ -113,7 +121,7 @@ pub struct MatchQueryMeta {
     request_body = MatchQueryRequest,
     responses(
         (status = 200, description = "Match query results", body = MatchQueryResponse),
-        (status = 400, description = "Parse error or invalid query", body = ErrorResponse),
+        (status = 400, description = "Parse error or invalid query (VELES-010), or a `$name` parameter unbound or of the wrong type (VELES-038)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse),
         (status = 429, description = "The client's rate limit", body = ErrorResponse),
@@ -156,18 +164,11 @@ fn run_match(
     }
 
     let match_clause = parse_match_clause(&request.query)?;
-    validate_threshold(request.threshold)?;
+    let scoring = velesdb_core::MatchScoring::new(request.vector.as_deref(), request.threshold)?;
 
     // Core gates the read (CORE-2) — the target and every `@collection` the
     // pattern names, each a graph-traversal read allowed unscoped — before
     // anything is traversed, then runs the MATCH as `/query` runs it.
-    let scoring = request
-        .vector
-        .as_deref()
-        .map(|vector| velesdb_core::MatchScoring {
-            vector,
-            threshold: request.threshold.unwrap_or(0.0),
-        });
     let rows = state
         .db
         .match_query(collection_name, &match_clause, &request.params, scoring)?;
@@ -212,18 +213,6 @@ fn parse_match_clause(query_str: &str) -> Result<velesdb_core::velesql::MatchCla
                 .to_string(),
         )
     })
-}
-
-/// Validate that threshold (if provided) is in [0.0, 1.0].
-fn validate_threshold(threshold: Option<f32>) -> Result<(), Error> {
-    if let Some(t) = threshold {
-        if !(0.0..=1.0).contains(&t) {
-            return Err(Error::Query(format!(
-                "Invalid threshold: {t}. Must be between 0.0 and 1.0"
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Whether `name` is a collection MATCH can target: a vector or a graph

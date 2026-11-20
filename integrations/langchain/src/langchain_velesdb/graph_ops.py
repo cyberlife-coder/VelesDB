@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 from langchain_core.documents import Document
 
 from velesdb_common.graph_ops_base import GraphOpsBase
-from langchain_velesdb._common import payload_to_doc_parts
+from langchain_velesdb._common import query_row_to_doc
 from langchain_velesdb.security import validate_query
 
 
@@ -38,7 +38,11 @@ class GraphOpsMixin(GraphOpsBase):
             **kwargs: Additional arguments.
 
         Returns:
-            List of Documents matching the query.
+            List of Documents matching the query. An aggregate (``COUNT``,
+            ``SUM``, ``AVG``, ``MIN``, ``MAX`` or ``GROUP BY``) returns one
+            Document per row of values — one without ``GROUP BY``, one per
+            group with it — whose ``metadata`` is the row and whose
+            ``page_content`` lists it as ``column: value`` lines.
 
         Raises:
             SecurityError: If query fails validation.
@@ -49,11 +53,7 @@ class GraphOpsMixin(GraphOpsBase):
             raise ValueError("Collection not initialized. Add documents first.")
 
         results = self._collection.query(query_str, params)
-        documents: List[Document] = []
-        for result in results:
-            text, metadata = payload_to_doc_parts(result)
-            documents.append(Document(page_content=text, metadata=metadata))
-        return documents
+        return [query_row_to_doc(result) for result in results]
 
     def match_query(
         self,

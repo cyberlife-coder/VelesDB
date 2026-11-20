@@ -208,6 +208,16 @@ impl Point {
 /// (at most 2-3 components: vector, text, sparse).
 pub type ComponentScores = smallvec::SmallVec<[(&'static str, f32); 4]>;
 
+/// The score `scores` records for component `name`, if any: the lookup
+/// behind [`SearchResult::component_score`] and the arithmetic `ORDER BY`'s
+/// component variables.
+pub(crate) fn component_score_in(scores: &[(&'static str, f32)], name: &str) -> Option<f32> {
+    scores
+        .iter()
+        .find(|(component, _)| *component == name)
+        .map(|(_, score)| *score)
+}
+
 /// A search result containing a point and its similarity score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -227,6 +237,15 @@ pub struct SearchResult {
 }
 
 impl SearchResult {
+    /// The score the engine tagged this result with for component `name`
+    /// (`vector_score`, `bm25_score`, `graph_score`, …), `None` when it
+    /// recorded none — an untagged result, or a row that component did not
+    /// score (a BM25-only row has no vector score).
+    #[must_use]
+    pub fn component_score(&self, name: &str) -> Option<f32> {
+        component_score_in(self.component_scores.as_deref()?, name)
+    }
+
     /// Creates a new search result with no component score breakdown.
     #[must_use]
     pub fn new(point: Point, score: f32) -> Self {

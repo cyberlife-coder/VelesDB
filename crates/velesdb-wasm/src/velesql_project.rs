@@ -4,7 +4,7 @@
 //! alias`, `SELECT *`, and window functions behave identically to the REST
 //! surface — instead of always emitting `id + score + full payload`:
 //!
-//! - [`to_search_results`] adapts the WASM `OwnedScanRow` triples into core
+//! - [`to_search_results`] adapts the WASM `OwnedScanRow`s into core
 //!   [`SearchResult`] values (the type the window evaluator and the projection
 //!   logic consume).
 //! - [`inject_window_functions`] runs core's
@@ -26,18 +26,31 @@ use velesdb_core::velesql::{
     Column, SelectColumns, SelectStatement, SimilarityScoreExpr, WindowFunction,
 };
 
+use crate::exec_error::ExecError;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_scan::OwnedScanRow;
 
 type JsonMap = serde_json::Map<String, serde_json::Value>;
 
-/// Adapts scanned `(id, score, payload)` triples into core [`SearchResult`]s.
+/// Adapts scanned rows into core [`SearchResult`]s.
 ///
-/// The vector is left empty: the WASM finalize path has already scored every
-/// row, and neither projection nor window evaluation reads `point.vector`.
+/// A vector-scored row carries its score as its `vector_score` component, as
+/// core tags it (`tag_vector_component_scores`): `vector_score` then reads it
+/// and a component it lacks (`bm25_score`) reads 0.0. Any other row carries no
+/// breakdown. The vector is left empty: the WASM finalize path has already
+/// scored every row, and neither projection nor window evaluation reads
+/// `point.vector`.
 pub(crate) fn to_search_results(rows: Vec<OwnedScanRow>) -> Vec<SearchResult> {
     rows.into_iter()
-        .map(|(id, score, payload)| SearchResult::new(Point::new(id, Vec::new(), payload), score))
+        .map(|row| {
+            let point = Point::new(row.id, Vec::new(), row.payload);
+            if row.vector_scored {
+                let components = std::iter::once(("vector_score", row.score)).collect();
+                SearchResult::with_component_scores(point, row.score, components)
+            } else {
+                SearchResult::new(point, row.score)
+            }
+        })
         .collect()
 }
 
@@ -46,12 +59,14 @@ pub(crate) fn to_search_results(rows: Vec<OwnedScanRow>) -> Vec<SearchResult> {
 pub(crate) fn inject_window_functions(
     stmt: &SelectStatement,
     results: &mut [SearchResult],
-) -> Result<(), String> {
+) -> Result<(), ExecError> {
     let Some(window_functions) = extract_window_functions(&stmt.columns) else {
         return Ok(());
     };
-    velesdb_core::velesql::window_evaluator::evaluate(results, window_functions)
-        .map_err(|e| format!("Window function evaluation failed: {e}"))
+    Ok(velesdb_core::velesql::window_evaluator::evaluate(
+        results,
+        window_functions,
+    )?)
 }
 
 /// Returns the window functions in a `SELECT` list, if any (mirrors core's
@@ -70,7 +85,7 @@ fn extract_window_functions(columns: &SelectColumns) -> Option<&[WindowFunction]
 pub(crate) fn project(
     stmt: &SelectStatement,
     results: &[SearchResult],
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     results
         .iter()
         .map(|result| {

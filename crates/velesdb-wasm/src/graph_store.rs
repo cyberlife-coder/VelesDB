@@ -15,6 +15,7 @@
 //!
 //! Contention is not a concern because WASM is single-threaded.
 
+use crate::exec_error::ExecError;
 use std::collections::HashMap;
 
 /// A single directed edge in the in-memory graph.
@@ -122,17 +123,16 @@ impl WasmGraphStore {
         target: u64,
         label: String,
         payload: Option<serde_json::Value>,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, ExecError> {
         // Delegate to core's canonical edge-id derivation so the same
         // logical edge gets the same id across every VelesDB engine.
         let id = explicit_id.unwrap_or_else(|| velesdb_core::hash_edge_id(source, target, &label));
-        let label = velesdb_core::velesql::EdgeQuery::normalized_label(&label)
-            .map_err(|e| e.to_string())?;
+        let label = velesdb_core::velesql::EdgeQuery::normalized_label(&label)?;
+        // Edge ids are unique: an edge without one takes the id derived from
+        // its source, label and target, so the same edge inserted twice is
+        // refused as a duplicate.
         if self.edge(id).is_some() {
-            return Err(format!(
-                "Edge id {id} already exists; edge ids must be unique (an edge without \
-                 an id takes the one derived from its source, label and target)"
-            ));
+            return Err(velesdb_core::Error::EdgeExists(id).into());
         }
         self.edges.push(WasmEdge {
             id,

@@ -32,7 +32,7 @@ impl Collection {
         index_name: &str,
     ) -> Result<Vec<SearchResult>> {
         crate::validation::validate_sparse_vector_is_finite(sparse_query)?;
-        let candidate_k = k.saturating_mul(2).max(k.saturating_add(10));
+        let candidate_k = crate::fusion::dense_sparse_candidate_k(k);
 
         let (dense_results, sparse_results) = self.execute_both_branches(
             dense_vector,

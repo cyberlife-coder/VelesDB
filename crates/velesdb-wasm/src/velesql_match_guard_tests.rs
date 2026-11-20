@@ -53,11 +53,13 @@ const BOW_TIE: &str = "MATCH (a:A)-[:R]->(h:H)-[:R]->(c:C) RETURN a, c";
 
 fn run(db: &mut DatabaseInner, sql: &str) -> Result<Vec<serde_json::Value>, String> {
     let query = Parser::parse(sql).expect("test: parse");
-    execute_match(db, &query, &Params::new()).map(|rows| {
-        rows.iter()
-            .map(|row| serde_json::from_str(row.data_json_ref()).expect("test: row json"))
-            .collect()
-    })
+    execute_match(db, &query, &Params::new())
+        .map_err(|e| e.to_string())
+        .map(|rows| {
+            rows.iter()
+                .map(|row| serde_json::from_str(row.data_json_ref()).expect("test: row json"))
+                .collect()
+        })
 }
 
 /// 317² = 100 489 rows: past the bound, so the walk is refused with the
@@ -112,4 +114,28 @@ fn limit_without_order_by_returns_the_first_rows_of_the_full_walk() {
 
     assert_eq!(all.len(), 16);
     assert_eq!(limited, all[..5].to_vec());
+}
+
+/// A pattern the parser never builds is an invariant breach, not one of the
+/// executor's own refusals: no node answers core's error for it (VELES-010),
+/// relationships that do not link the nodes an internal one (VELES-013).
+#[test]
+fn a_malformed_pattern_answers_a_core_error() {
+    use velesdb_core::velesql::GraphPattern;
+    let empty = GraphPattern {
+        name: None,
+        nodes: Vec::new(),
+        relationships: Vec::new(),
+    };
+    let err = super::validate_pattern(&empty).expect_err("test: no node");
+    assert_eq!(err.code(), Some("VELES-010"));
+    let mut unlinked = Parser::parse("MATCH (a)-[:R]->(b) RETURN a")
+        .expect("test: parse")
+        .match_clause
+        .expect("test: match")
+        .patterns
+        .remove(0);
+    unlinked.relationships.clear();
+    let err = super::validate_pattern(&unlinked).expect_err("test: unlinked");
+    assert_eq!(err.code(), Some("VELES-013"));
 }

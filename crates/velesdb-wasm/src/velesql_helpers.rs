@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use velesdb_core::velesql::Condition;
 
+use crate::exec_error::ExecError;
 use crate::store_state::StoreState;
 use crate::velesql_value::Params;
 use crate::velesql_where;
@@ -32,7 +33,7 @@ pub(crate) fn collect_matching_indices(
     store: &Rc<RefCell<StoreState>>,
     where_clause: Option<&Condition>,
     params: &Params,
-) -> Result<Vec<usize>, String> {
+) -> Result<Vec<usize>, ExecError> {
     let borrowed = store.borrow();
     let filter = where_clause
         .map(|cond| velesql_where::WhereFilter::compile(cond, params))

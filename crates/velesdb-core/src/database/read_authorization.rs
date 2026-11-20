@@ -68,7 +68,11 @@ impl<'q> AuthorizedQuery<'q> {
         &self.query
     }
 
-    /// The collection the statement reads first (see [`read_target`]).
+    /// The collection the statement reads first
+    /// ([`crate::velesql::collection_target`]: its `FROM`, else a top-level
+    /// MATCH's `_collection`), else none — and a statement with none is
+    /// refused by its executor before anything is read
+    /// ([`Database::resolve_read_target`]).
     pub(super) fn target(&self) -> Option<&'q str> {
         self.target
     }
@@ -78,21 +82,6 @@ impl<'q> AuthorizedQuery<'q> {
     #[cfg(test)]
     pub(super) fn into_query(self) -> Cow<'q, Query> {
         self.query
-    }
-}
-
-/// The collection a statement reads first: its `FROM`, else the `_collection`
-/// parameter (how the REPL, the SDKs and the server's `/query` address a
-/// `MATCH` or an aggregate), else none — and a statement with none is refused
-/// by its executor before anything is read
-/// ([`Database::resolve_read_target`]).
-pub(super) fn read_target<'q>(query: &'q Query, params: &'q Params) -> Option<&'q str> {
-    if !query.select.from.is_empty() {
-        return Some(&query.select.from);
-    }
-    match params.get("_collection") {
-        Some(serde_json::Value::String(name)) => Some(name),
-        _ => None,
     }
 }
 
@@ -261,15 +250,12 @@ impl Database {
         params: &'q Params,
         decisions: &GateDecisions,
     ) -> Result<AuthorizedQuery<'q>> {
-        let target = read_target(query, params);
+        let target = crate::velesql::collection_target(query, params)?;
         let admitted = |query| AuthorizedQuery { query, target };
         if self.observer.is_none() {
             return Ok(admitted(Cow::Borrowed(query))); // zero-overhead fast path
         }
-        if let Some(DmlStatement::SelectEdges(stmt)) = &query.dml {
-            let graph = QueryOperationKind::GraphTraversal;
-            self.require_unscoped(&stmt.collection, graph, "SELECT EDGES", decisions)?;
-        }
+        self.authorize_select_edges(query, decisions)?;
         if let Some(intro) = &query.introspection {
             self.authorize_introspection(intro, params, decisions)?;
         }
@@ -365,14 +351,11 @@ impl Database {
         params: &Params,
         decisions: &GateDecisions,
     ) -> Result<()> {
-        if let Some(DmlStatement::SelectEdges(stmt)) = &query.dml {
-            let graph = QueryOperationKind::GraphTraversal;
-            self.require_unscoped(&stmt.collection, graph, "SELECT EDGES", decisions)?;
-        }
+        self.authorize_select_edges(query, decisions)?;
         if !Self::is_read_path(query) {
             return Ok(());
         }
-        let target = read_target(query, params);
+        let target = crate::velesql::collection_target(query, params)?;
         if query.is_match_query() {
             return self.authorize_match(query, target, decisions);
         }
@@ -385,17 +368,39 @@ impl Database {
             )?;
         }
         self.authorize_joins(&query.select, decisions)?;
-        if let Some(compound) = query.compound.as_ref() {
-            for (_, operand) in &compound.operations {
-                self.authorize_joins(operand, decisions)?;
-                let operation = derive_select_operation_kind(operand);
-                self.require_unscoped(
-                    &operand.from,
-                    operation,
-                    "a set-operation operand",
-                    decisions,
-                )?;
-            }
+        self.authorize_compound_operands_unscoped(query, decisions)
+    }
+
+    /// A `SELECT EDGES` traverses its collection, with no row filter a scope
+    /// could join: it must be allowed unscoped.
+    fn authorize_select_edges(&self, query: &Query, decisions: &GateDecisions) -> Result<()> {
+        if let Some(DmlStatement::SelectEdges(stmt)) = &query.dml {
+            let graph = QueryOperationKind::GraphTraversal;
+            self.require_unscoped(&stmt.collection, graph, "SELECT EDGES", decisions)?;
+        }
+        Ok(())
+    }
+
+    /// Each set-operation operand of a plan-only statement — its joins and
+    /// its own collection — allowed unscoped
+    /// ([`Self::authorize_unscoped_statement`]).
+    fn authorize_compound_operands_unscoped(
+        &self,
+        query: &Query,
+        decisions: &GateDecisions,
+    ) -> Result<()> {
+        let Some(compound) = query.compound.as_ref() else {
+            return Ok(());
+        };
+        for (_, operand) in &compound.operations {
+            self.authorize_joins(operand, decisions)?;
+            let operation = derive_select_operation_kind(operand);
+            self.require_unscoped(
+                &operand.from,
+                operation,
+                "a set-operation operand",
+                decisions,
+            )?;
         }
         Ok(())
     }

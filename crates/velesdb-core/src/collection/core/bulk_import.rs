@@ -4,12 +4,10 @@
 //! These methods accept flat contiguous slices (zero-copy from numpy / FFI)
 //! instead of `Point` structs, avoiding per-row `Vec<f32>` allocation.
 
+use crate::collection::search::query::row_universe::RowUniverse;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
-use crate::storage::VectorStorage;
 use crate::validation::{validate_dimension_match, validate_vector_is_finite};
-
-use std::collections::HashMap;
 
 impl Collection {
     /// Bulk insert from contiguous flat slices (zero-copy from numpy / FFI).
@@ -30,6 +28,10 @@ impl Collection {
     /// - Returns [`crate::error::Error::InvalidVector`] if any vector component is NaN or infinite
     ///   (same gate as the `Point` path — a stored NaN corrupts HNSW ordering persistently).
     /// - Returns [`crate::error::Error::DimensionMismatch`] if `dimension` does not match the collection.
+    ///
+    /// A graph writes the rows by the graph rule, as [`Self::upsert_bulk`]
+    /// does — which takes points, so a graph's rows are copied out of the
+    /// flat buffer once, and handed to the graph write by value.
     pub fn upsert_bulk_from_raw(
         &self,
         vectors: &[f32],
@@ -39,12 +41,17 @@ impl Collection {
     ) -> Result<usize> {
         // LOCK ORDER: config(1, read) → store_vectors_and_payloads (see its
         //   doc: the storage locks, then the indexes derived from payloads) →
-        //   HNSW index (internal) → vector_storage(2, read) → config(1, write).
+        //   HNSW index (internal).
         let n = ids.len();
         if n == 0 {
             return Ok(0);
         }
 
+        validate_raw_shape(vectors, ids, dimension, payloads)?;
+        if self.row_universe() == RowUniverse::StoredNodes {
+            // The rows the flat buffer holds, handed over by value.
+            return self.upsert_bulk_graph_rows(raw_points(vectors, ids, dimension, payloads));
+        }
         // Validate inputs and enforce the runtime ingest limits (parity item E)
         // BEFORE any state mutation, so the caps are not bypassable on this
         // zero-copy path (the dominant Python/REST bulk upsert surface).
@@ -72,48 +79,10 @@ impl Collection {
         self.store_vectors_and_payloads(&vector_refs, &payload_entries)?;
 
         let inserted = self.bulk_index_or_defer(&vector_refs);
-        // Two statements so the guards never overlap: the one-liner form
-        // evaluates the RHS first, holding vector_storage (rank 2) while
-        // acquiring config (rank 1) — a decreed-order inversion.
-        let point_count = self.storage.vector_storage.read().len();
-        self.storage.config.write().point_count = point_count;
-
         self.invalidate_caches_and_bump_generation();
 
         self.report_upsert(inserted);
         Ok(inserted)
-    }
-
-    /// Incremental histogram maintenance for a bulk upsert's payload entries.
-    ///
-    /// Decrements old values and increments new values in a single atomic
-    /// read/modify/write cycle (Bug #49). Bug #47: only the last occurrence
-    /// per ID is counted for new payloads to match last-writer-wins storage
-    /// semantics. Shared by `upsert_bulk` and `upsert_bulk_from_raw`, whose
-    /// entries leave out the points without a payload: those keep theirs.
-    /// Bug #46: `old_payloads` holds the pre-batch payload of each id's first
-    /// entry only, so an old value is decremented exactly once.
-    ///
-    /// A batch without payloads changes no histogram, and returns before
-    /// reading the statistics file.
-    pub(super) fn apply_histogram_replace_for_entries(
-        &self,
-        entries: &[(u64, &serde_json::Value)],
-        old_payloads: &[Option<serde_json::Value>],
-    ) {
-        if entries.is_empty() {
-            return;
-        }
-        let mut last: HashMap<u64, usize> = HashMap::with_capacity(entries.len());
-        for (i, &(id, _)) in entries.iter().enumerate() {
-            last.insert(id, i);
-        }
-        let new_payloads: Vec<Option<serde_json::Value>> = entries
-            .iter()
-            .enumerate()
-            .map(|(i, &(id, payload))| (last.get(&id) == Some(&i)).then(|| payload.clone()))
-            .collect();
-        self.update_histograms_replace(old_payloads, &new_payloads);
     }
 
     /// Enforces the runtime ingest limits (parity item E) for the raw bulk
@@ -142,7 +111,8 @@ impl Collection {
         Ok(())
     }
 
-    /// Validates raw bulk-insert inputs before any state mutation.
+    /// Validates raw bulk-insert inputs before any state mutation, once
+    /// [`validate_raw_shape`] accepted their lengths.
     fn validate_raw_inputs(
         &self,
         vectors: &[f32],
@@ -150,26 +120,6 @@ impl Collection {
         dimension: usize,
         payloads: Option<&[Option<serde_json::Value>]>,
     ) -> Result<()> {
-        let n = ids.len();
-        let expected_len = n.checked_mul(dimension).ok_or_else(|| {
-            Error::InvalidVector(format!(
-                "overflow computing {n} * {dimension} for flat vector length"
-            ))
-        })?;
-        if vectors.len() != expected_len {
-            return Err(Error::InvalidVector(format!(
-                "flat vectors length {} != ids.len() ({n}) * dimension ({dimension}) = {expected_len}",
-                vectors.len()
-            )));
-        }
-        if let Some(ps) = payloads {
-            if ps.len() != n {
-                return Err(Error::InvalidVector(format!(
-                    "payloads length ({}) must match ids length ({n})",
-                    ps.len()
-                )));
-            }
-        }
         let collection_dim = self.storage.config.read().dimension;
         validate_dimension_match(collection_dim, dimension)?;
         self.enforce_raw_upsert_limits(ids, payloads)?;
@@ -185,53 +135,58 @@ impl Collection {
         }
         Ok(())
     }
+}
 
-    /// Batch-updates secondary indexes from bulk payload entries.
-    ///
-    /// For each entry, **removes the prior indexed value and inserts the new
-    /// one** (via [`update_secondary_indexes_on_upsert`]) so an overwrite of an
-    /// already-indexed point does not leave a stale entry in the old key's
-    /// bucket. Without the removal the same id would sit in both its old and
-    /// new key buckets, inflating `Σ buckets` above `point_count` so the
-    /// ordered-index coverage check declines the fast path — and a restart that
-    /// rebuilds from the final stored payload (backfill) would then diverge from
-    /// the live tree (EPIC-081 phase 3d restore equivalence). A repeated id
-    /// replaces its previous entry's value, not the pre-batch one, through
-    /// [`Self::payload_changes`].
-    ///
-    /// Skips entirely when no secondary indexes exist (fast path for bulk
-    /// loading before `create_index`).
-    ///
-    /// [`update_secondary_indexes_on_upsert`]: Self::update_secondary_indexes_on_upsert
-    pub(super) fn update_secondary_indexes_for_entries(
-        &self,
-        entries: &[(u64, &serde_json::Value)],
-        old_payloads: &[Option<serde_json::Value>],
-    ) {
-        if self.query.secondary_indexes.read().is_empty() {
-            return;
-        }
-        let writes = entries.iter().map(|&(id, payload)| (id, Some(payload)));
-        for (id, old, new) in Self::payload_changes(writes, old_payloads) {
-            self.update_secondary_indexes_on_upsert(id, old, new);
+/// Refuses flat inputs whose lengths disagree: `vectors` must hold
+/// `ids.len()` rows of `dimension`, and `payloads`, when given, one entry
+/// per id.
+fn validate_raw_shape(
+    vectors: &[f32],
+    ids: &[u64],
+    dimension: usize,
+    payloads: Option<&[Option<serde_json::Value>]>,
+) -> Result<()> {
+    let n = ids.len();
+    let expected_len = n.checked_mul(dimension).ok_or_else(|| {
+        Error::InvalidVector(format!(
+            "overflow computing {n} * {dimension} for flat vector length"
+        ))
+    })?;
+    if vectors.len() != expected_len {
+        return Err(Error::InvalidVector(format!(
+            "flat vectors length {} != ids.len() ({n}) * dimension ({dimension}) = {expected_len}",
+            vectors.len()
+        )));
+    }
+    if let Some(ps) = payloads {
+        if ps.len() != n {
+            return Err(Error::InvalidVector(format!(
+                "payloads length ({}) must match ids length ({n})",
+                ps.len()
+            )));
         }
     }
+    Ok(())
+}
 
-    /// Updates the BM25 text index from bulk payload entries (WAL-then-apply),
-    /// through the same classification as every other write path
-    /// (`classify_text_mutations` in `crud_indexing.rs`, whose doc holds the
-    /// truth table). A bulk point without a payload is not an entry, keeps its
-    /// payload, and keeps its document.
-    ///
-    /// Issue #389: the mutations are appended to the BM25 WAL before they are
-    /// applied in memory, so a crash between the two replays them on the next
-    /// open; a WAL error propagates with the in-memory index untouched.
-    pub(super) fn update_text_index_for_entries(
-        &self,
-        entries: &[(u64, &serde_json::Value)],
-        old_payloads: &[Option<serde_json::Value>],
-    ) -> Result<()> {
-        let writes = entries.iter().map(|&(id, payload)| (id, Some(payload)));
-        self.apply_text_changes(&Self::payload_changes(writes, old_payloads))
-    }
+/// The points flat inputs of matching lengths ([`validate_raw_shape`])
+/// describe: row `i` of `vectors` — empty when `dimension` is 0 — with
+/// payload `i`, if any.
+fn raw_points(
+    vectors: &[f32],
+    ids: &[u64],
+    dimension: usize,
+    payloads: Option<&[Option<serde_json::Value>]>,
+) -> Vec<crate::point::Point> {
+    ids.iter()
+        .enumerate()
+        .map(|(i, &id)| {
+            let vector = vectors
+                .get(i * dimension..(i + 1) * dimension)
+                .map(<[f32]>::to_vec)
+                .unwrap_or_default();
+            let payload = payloads.and_then(|ps| ps.get(i).cloned().flatten());
+            crate::point::Point::new(id, vector, payload)
+        })
+        .collect()
 }

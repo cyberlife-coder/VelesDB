@@ -2926,6 +2926,37 @@ async fn test_collection_sanity_reports_empty_collection() {
     assert_eq!(json["is_empty"], true);
 }
 
+/// A metadata collection holding points has data but no vector to search:
+/// `/sanity` reads its readiness from core's diagnostics, as
+/// `/diagnostics` does, so the two agree (`search_ready: false`) and the
+/// hints follow search readiness, not the bare presence of rows.
+#[tokio::test]
+async fn test_collection_sanity_of_a_metadata_collection_agrees_with_diagnostics() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    let created = json!({ "name": "meta", "collection_type": "metadata_only" });
+    let (status, body) = common::call_json(&app, "POST", "/collections", &created).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let insert = json!({ "query": "INSERT INTO meta (id, title) VALUES (1, 'a'), (2, 'b')" });
+    let (status, body) = common::call_json(&app, "POST", "/query", &insert).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (_, sanity) =
+        common::call_json(&app, "GET", "/collections/meta/sanity", &Value::Null).await;
+    let (_, diagnostics) =
+        common::call_json(&app, "GET", "/collections/meta/diagnostics", &Value::Null).await;
+
+    for field in ["has_vectors", "search_ready", "dimension_configured"] {
+        assert_eq!(
+            sanity["checks"][field], diagnostics[field],
+            "{field}: sanity {sanity} vs diagnostics {diagnostics}"
+        );
+    }
+    assert_eq!(sanity["checks"]["search_ready"], json!(false), "{sanity}");
+    let hints = sanity["hints"].to_string();
+    assert!(!hints.contains("Run a search"), "{hints}");
+}
+
 #[tokio::test]
 async fn test_collection_sanity_includes_diagnostics_counters() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -6755,4 +6786,73 @@ async fn test_relate_points_allocates_after_u64_max_edge_id() {
             .all(|id| *id != json!(u64::MAX.to_string()) && *id != json!(u64::MAX)),
         "allocation must not reuse the client-chosen u64::MAX id: {allocated:?}"
     );
+}
+
+/// A sparse-only `/search` admits its hits by the request's `filter`: the
+/// best matching hits come back however far below the best they rank. The
+/// filter used to be ignored on this path, returning the unfiltered top-k.
+#[tokio::test]
+async fn test_sparse_only_search_honours_the_filter() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "sparse_filter", "dimension": 2, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    // 1..=4 are category `a` with the heaviest weights; 5 and 6 category `b`.
+    let points: Vec<Value> = (1..=6u64)
+        .map(|id| {
+            #[allow(clippy::cast_precision_loss)]
+            let weight = 10.0 - id as f64;
+            let cat = if id <= 4 { "a" } else { "b" };
+            json!({"id": id, "vector": [1.0, 0.0], "payload": {"cat": cat},
+                   "sparse_vectors": {"": {"indices": [3], "values": [weight]}}})
+        })
+        .collect();
+    let response = app
+        .clone()
+        .oneshot(post(
+            "/collections/sparse_filter/points",
+            &json!({ "points": points }),
+        ))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(post(
+            "/collections/sparse_filter/search",
+            &json!({
+                "sparse_vector": {"indices": [3], "values": [1.0]},
+                "top_k": 2,
+                "filter": {"condition": {"type": "eq", "field": "cat", "value": "b"}}
+            }),
+        ))
+        .await
+        .expect("Request failed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body: Value = serde_json::from_slice(&body).expect("json");
+    let ids: Vec<u64> = body["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .filter_map(|r| r["id"].as_str()?.parse().ok())
+        .collect();
+    assert_eq!(ids, [5, 6], "{body}");
 }

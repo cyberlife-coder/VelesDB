@@ -414,20 +414,30 @@ impl VectorCollection {
     ) -> Result<Vec<SearchResult>> {
         crate::validation::validate_sparse_vector_is_finite(query)?;
         let k = self.capped_k(k);
-        let indexes = self.inner.query.sparse_indexes.read();
-        let index = indexes.get(index_name).ok_or_else(|| {
-            crate::error::Error::Config(format!(
-                "Sparse index '{}' not found",
-                if index_name.is_empty() {
-                    "<default>"
-                } else {
-                    index_name
-                }
-            ))
-        })?;
-        let results = crate::index::sparse::sparse_search(index, query, k);
-        drop(indexes);
-        Ok(self.inner.resolve_sparse_results(&results, k))
+        self.inner.sparse_hits(index_name, query, k, None, None)
+    }
+
+    /// Performs sparse-only search on the named index with metadata
+    /// filtering: the best `k` hits whose payload `filter` matches, however
+    /// far below the best of the collection they rank — the filter is part
+    /// of the walk's admission, as for
+    /// [`text_search_with_filter`](Self::text_search_with_filter).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named sparse index does not exist, or
+    /// [`crate::error::Error::InvalidVector`] if a query weight is not finite.
+    pub fn sparse_search_with_filter(
+        &self,
+        query: &crate::index::sparse::SparseVector,
+        k: usize,
+        index_name: &str,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        crate::validation::validate_sparse_vector_is_finite(query)?;
+        let k = self.capped_k(k);
+        self.inner
+            .sparse_hits(index_name, query, k, Some(filter), None)
     }
 
     /// Performs hybrid dense+sparse search with RRF fusion.
@@ -501,16 +511,20 @@ impl VectorCollection {
         Ok(results)
     }
 
-    /// Executes a MATCH query with vector similarity filtering.
+    /// Executes a MATCH query with vector similarity filtering: a row is kept
+    /// when its score is on `threshold`'s side under the collection's metric
+    /// (at least it for a similarity, at most it for a distance); `None`
+    /// keeps every scored row.
     ///
     /// # Errors
     ///
-    /// - Returns an error if the match clause is invalid or the query dimension mismatches.
+    /// - Returns an error if the match clause is invalid, the threshold is
+    ///   not finite, or the query dimension mismatches.
     pub fn execute_match_with_similarity(
         &self,
         match_clause: &crate::velesql::MatchClause,
         query_vector: &[f32],
-        threshold: f32,
+        threshold: Option<f32>,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> crate::error::Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
         let mut results = self.inner.execute_match_with_similarity(

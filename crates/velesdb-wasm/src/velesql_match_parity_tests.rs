@@ -125,7 +125,7 @@ fn a_parameter_in_an_inline_property_takes_the_callers_value() {
     assert_eq!(result.row_count(), 1);
     let missing = execute(&mut db, "MATCH (x {n: $which}) RETURN x", ON_G)
         .expect_err("test: unbound parameter");
-    assert!(missing.contains("$which"), "{missing}");
+    assert!(missing.to_string().contains("$which"), "{missing}");
 }
 
 /// `pricing` (metadata): 2 -> price 5, 3 -> price 50. The annotation adds
@@ -175,7 +175,7 @@ fn an_annotation_naming_no_collection_is_refused() {
     let mut db = DatabaseInner::new();
     graph(&mut db);
     let err = execute(&mut db, "MATCH (x@nowhere) RETURN x", ON_G).expect_err("test: refused");
-    assert!(err.contains("nowhere"), "{err}");
+    assert!(err.to_string().contains("nowhere"), "{err}");
 }
 
 /// A bare WHERE column reads the target's OWN payload, as core reads it

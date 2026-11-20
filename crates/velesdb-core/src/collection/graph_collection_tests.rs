@@ -1132,3 +1132,220 @@ fn a_node_id_above_u32_max_follows_its_payload_in_the_range_index() {
     assert_eq!(col.get_node_payload(big).unwrap(), None);
     assert_older_than(&col.inner, 10, &[2]);
 }
+
+// ---------------------------------------------------------------------------
+// len / is_empty / get count and read every stored node
+// ---------------------------------------------------------------------------
+
+/// A graph without embeddings stores every node as a payload: `len`,
+/// `is_empty` and `get` see them all, as `all_node_ids` lists them.
+#[test]
+fn test_len_is_empty_and_get_see_the_nodes_of_a_graph_without_embeddings() {
+    let (_dir, col) = make_test_collection(None);
+    assert_eq!(col.len(), 0);
+    assert!(col.is_empty());
+
+    col.upsert_node_payload(10, &serde_json::json!({"name": "Alice"}))
+        .unwrap();
+    col.upsert_node_payload(20, &serde_json::json!({"name": "Bob"}))
+        .unwrap();
+    assert_eq!(col.len(), 2);
+    assert!(!col.is_empty());
+    assert_eq!(col.len(), col.all_node_ids().len());
+
+    let got = col.get(&[10, 30, 20]);
+    let alice = got[0].as_ref().expect("a payload-only node is read");
+    assert_eq!(alice.id, 10);
+    assert!(alice.vector.is_empty(), "no embedding: an empty vector");
+    assert_eq!(alice.payload, Some(serde_json::json!({"name": "Alice"})));
+    assert!(got[1].is_none(), "an id naming no node reads None");
+    assert_eq!(got[2].as_ref().map(|p| p.id), Some(20));
+
+    col.delete(&[10]).unwrap();
+    assert_eq!(col.len(), 1);
+    assert!(col.get(&[10])[0].is_none());
+    col.delete(&[20]).unwrap();
+    assert!(col.is_empty());
+}
+
+/// In a graph with embeddings a node may carry a vector, a payload or both:
+/// each is counted once, and `get` returns each with what it stores.
+#[test]
+fn test_len_counts_each_node_of_a_mixed_graph_once() {
+    let (_dir, col) = make_test_collection(Some(2));
+    // Vector and payload.
+    col.upsert_node(1, &serde_json::json!({"k": 1}), Some(vec![1.0, 0.0]))
+        .unwrap();
+    // Payload only.
+    col.upsert_node_payload(2, &serde_json::json!({"k": 2}))
+        .unwrap();
+    // Vector only (no payload): reachable through the inner store.
+    col.inner
+        .upsert(vec![Point::new(3, vec![0.0, 1.0], None)])
+        .unwrap();
+
+    assert_eq!(col.len(), 3, "no node is counted twice");
+    assert!(!col.is_empty());
+    assert_eq!(col.len(), col.all_node_ids().len());
+
+    let got = col.get(&[1, 2, 3, 4]);
+    let both = got[0].as_ref().expect("node 1");
+    assert_eq!(both.vector, vec![1.0, 0.0]);
+    assert_eq!(both.payload, Some(serde_json::json!({"k": 1})));
+    let payload_only = got[1].as_ref().expect("node 2");
+    assert!(payload_only.vector.is_empty());
+    assert_eq!(payload_only.payload, Some(serde_json::json!({"k": 2})));
+    let vector_only = got[2].as_ref().expect("node 3");
+    assert_eq!(vector_only.vector, vec![0.0, 1.0]);
+    assert_eq!(vector_only.payload, None);
+    assert!(got[3].is_none());
+
+    // A graph whose only node is payload-only is not empty.
+    let (_dir2, payload_graph) = make_test_collection(Some(2));
+    payload_graph
+        .upsert_node_payload(7, &serde_json::json!({}))
+        .unwrap();
+    assert!(!payload_graph.is_empty());
+    assert_eq!(payload_graph.len(), 1);
+}
+
+/// `AnyCollection`'s graph arm reports the same node count.
+#[test]
+fn test_any_collection_counts_the_nodes_of_a_graph() {
+    let (_dir, col) = make_test_collection(None);
+    col.upsert_node_payload(10, &serde_json::json!({})).unwrap();
+    let any = crate::collection::AnyCollection::Graph(col.clone());
+    assert_eq!(any.point_count(), 1);
+    assert!(!any.is_empty());
+    assert_eq!(any.get(&[10])[0].as_ref().map(|p| p.id), Some(10));
+}
+
+/// Every size a graph reports is its node count: `AnyCollection::config`'s
+/// `point_count` and the diagnostics' `point_count` agree with `len`. Both
+/// used to read the vector store, so a graph without embeddings holding a
+/// node reported `point_count: 0` beside `is_empty() == false`. What is about
+/// vectors stays about vectors: such a graph has none to search.
+#[test]
+fn test_every_size_a_payload_only_graph_reports_is_its_node_count() {
+    let (_dir, col) = make_test_collection(None);
+    col.upsert_node_payload(10, &serde_json::json!({})).unwrap();
+    col.upsert_node_payload(20, &serde_json::json!({})).unwrap();
+    let any = crate::collection::AnyCollection::Graph(col.clone());
+    assert_eq!(any.config().point_count, 2);
+
+    for diag in [col.diagnostics(), any.diagnostics()] {
+        assert_eq!(diag.point_count, 2);
+        assert!(!diag.has_vectors, "no node carries an embedding");
+        assert!(!diag.search_ready);
+        assert_eq!(diag.index_health, crate::collection::IndexHealth::Empty);
+    }
+}
+
+/// In a graph with embeddings the node count includes the payload-only
+/// nodes, while `has_vectors` and the index health follow the embeddings.
+#[test]
+fn test_a_mixed_graph_reports_its_nodes_and_its_embeddings_apart() {
+    let (_dir, col) = make_test_collection(Some(2));
+    col.upsert_node(1, &serde_json::json!({}), Some(vec![1.0, 0.0]))
+        .unwrap();
+    col.upsert_node_payload(2, &serde_json::json!({})).unwrap();
+    let any = crate::collection::AnyCollection::Graph(col.clone());
+    assert_eq!(any.config().point_count, 2);
+    let diag = col.diagnostics();
+    assert_eq!(diag.point_count, 2);
+    assert!(diag.has_vectors);
+    assert!(diag.search_ready);
+    assert_eq!(diag.index_health, crate::collection::IndexHealth::Healthy);
+}
+
+/// An embedding search tags each row's score as its `vector_score`, as a
+/// vector collection's search does.
+#[test]
+fn test_search_by_embedding_tags_the_vector_score() {
+    let (_dir, col) = make_test_collection(Some(2));
+    col.upsert_node(1, &serde_json::json!({}), Some(vec![1.0, 0.0]))
+        .unwrap();
+    col.upsert_node(2, &serde_json::json!({}), Some(vec![0.6, 0.8]))
+        .unwrap();
+    let rows = col.search_by_embedding(&[1.0, 0.0], 2).unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in &rows {
+        assert_eq!(
+            row.component_scores.as_deref(),
+            Some(&[("vector_score", row.score)][..])
+        );
+    }
+}
+
+/// `len` is a storage count, a vector collection's convention: a node whose
+/// TTL has passed is counted until the sweep removes it, while `get` already
+/// hides it — in a graph as in a vector collection (`Collection::len` reads
+/// the cached `point_count`, `Collection::get` filters expired points).
+#[test]
+fn test_len_counts_an_expired_unswept_node_that_get_hides() {
+    let (_dir, graph) = make_test_collection(None);
+    let expired = serde_json::Value::Object(serde_json::Map::from_iter([(
+        crate::collection::expiry::EXPIRES_AT_KEY.to_string(),
+        serde_json::json!(1),
+    )]));
+    graph.upsert_node_payload(1, &expired).unwrap();
+    graph
+        .upsert_node_payload(2, &serde_json::json!({ "live": true }))
+        .unwrap();
+
+    assert_eq!(graph.len(), 2);
+    assert!(graph.get(&[1])[0].is_none());
+    assert!(graph.get(&[2])[0].is_some());
+
+    let vectors = tempdir().unwrap();
+    let collection =
+        Collection::create(vectors.path().to_path_buf(), 2, DistanceMetric::Cosine).unwrap();
+    collection
+        .upsert(vec![crate::point::Point::new(
+            1,
+            vec![1.0, 0.0],
+            Some(expired),
+        )])
+        .unwrap();
+    assert_eq!(collection.len(), 1);
+    assert!(collection.get(&[1])[0].is_none());
+}
+
+/// A graph without embeddings refuses a search as every other entry point
+/// refuses a query vector on a collection that stores none (`VELES-015`),
+/// and a wrong dimension as `VELES-004`; it used to answer `VELES-014`, the
+/// code of a vector *write*.
+#[test]
+fn test_search_on_a_graph_without_embeddings_is_refused_with_veles_015() {
+    let (_dir, plain) = make_test_collection(None);
+    for refused in [
+        plain.search(&[1.0, 0.0], 1),
+        plain.search_by_embedding(&[1.0, 0.0], 1),
+    ] {
+        assert_eq!(refused.expect_err("no embeddings").code(), "VELES-015");
+    }
+    let (_dir, embedded) = make_test_collection(Some(2));
+    let wrong = embedded.search(&[1.0, 0.0, 0.0], 1);
+    assert_eq!(wrong.expect_err("wrong dimension").code(), "VELES-004");
+}
+
+/// A vector written to a graph without embeddings is refused as a metadata
+/// collection refuses it (`VELES-014`), on every write entry point; it was
+/// refused as a dimension mismatch against 0 (`VELES-004`).
+#[test]
+fn test_a_vector_written_to_a_graph_without_embeddings_is_refused_with_veles_014() {
+    let (_dir, plain) = make_test_collection(None);
+    let point = || crate::Point::new(5, vec![1.0, 0.0], None);
+    let inner = &plain.inner;
+    let refusals = [
+        inner.upsert([point()]),
+        inner.upsert_bulk(&[point()]).map(|_| ()),
+        inner
+            .upsert_bulk_from_raw(&[1.0, 0.0], &[5], 2, None)
+            .map(|_| ()),
+    ];
+    for refused in refusals {
+        assert_eq!(refused.expect_err("no embeddings").code(), "VELES-014");
+    }
+    assert_eq!(plain.len(), 0, "a refused write commits nothing");
+}

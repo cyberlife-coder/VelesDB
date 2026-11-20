@@ -24,9 +24,10 @@
 //! and is acceptable because (a) the window is very small, and (b) a
 //! resurrected vector is preferable to a silently lost one.
 
+use crate::collection::search::query::row_universe::RowUniverse;
 use crate::index::HnswIndex;
 use crate::lock_audit::RwLock;
-use crate::storage::{MmapStorage, PayloadStorage, VectorStorage};
+use crate::storage::{MmapStorage, VectorStorage};
 use std::sync::Arc;
 
 /// Detects vectors in storage that are missing from the HNSW index and
@@ -168,17 +169,19 @@ fn validate_schema_version(config: &CollectionConfig) -> Result<()> {
 }
 
 /// Reconciles `point_count` from the actual storage (config.json may be
-/// stale if the previous process exited without calling `save_config`).
+/// stale if the previous process exited without calling `save_config`): the
+/// collection's rows ([`RowUniverse::count`]), which the writes keep exact
+/// from here on.
+///
+/// LOCK ORDER: vector_storage(2) → payload_storage(3).
 pub(super) fn reconcile_point_count(
     config: &CollectionConfig,
     vector_storage: &Arc<RwLock<MmapStorage>>,
     payload_storage: &Arc<RwLock<LogPayloadStorage>>,
 ) -> usize {
-    if config.metadata_only {
-        payload_storage.read().ids().len()
-    } else {
-        vector_storage.read().len()
-    }
+    let vectors = vector_storage.read();
+    let payloads = payload_storage.read();
+    RowUniverse::of(config).count(&vectors, &payloads)
 }
 
 /// Runs the 4-pass crash reconciliation between vector storage and HNSW:

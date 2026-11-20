@@ -252,24 +252,62 @@ fn create_metadata_collection_and_upsert_metadata() {
     .expect("upsert_metadata into metadata collection");
     assert_eq!(written, 1);
 
-    // The success path: metadata-only points (no vector) into a vector
-    // collection exercises the `coll.upsert_metadata` branch.
+    // On a vector collection `coll.upsert_metadata` replaces the payload of
+    // a stored point, and refuses an id that stores no vector: a payload
+    // there would be no row of it.
     seed_vector_collection(&app, "docs");
-    let m_point2: MetadataPointInput = serde_json::from_value(serde_json::json!({
-        "id": 99,
-        "payload": {"name": "bob"},
-    }))
-    .expect("deserialize metadata point");
-    let n = run(upsert_metadata(
+    let metadata_point = |id: u64| -> MetadataPointInput {
+        serde_json::from_value(serde_json::json!({"id": id, "payload": {"name": "bob"}}))
+            .expect("deserialize metadata point")
+    };
+    let upsert_into_docs = |id: u64| {
+        run(upsert_metadata(
+            handle(&app),
+            st(&app),
+            UpsertMetadataRequest {
+                collection: "docs".to_string(),
+                points: vec![metadata_point(id)],
+            },
+        ))
+    };
+    let n = upsert_into_docs(1).expect("upsert_metadata of a stored point");
+    assert_eq!(n, 1);
+    let refused = upsert_into_docs(99).expect_err("an id without a vector");
+    assert_eq!(refused.code, "VELES-016");
+
+    // A metadata write stores no vector: one sent with it is refused, on a
+    // metadata collection as on a vector one, never dropped without a word.
+    for collection in ["meta", "docs"] {
+        let with_vector: MetadataPointInput = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "vector": [1.0, 0.0, 0.0, 0.0],
+            "payload": {"name": "carol"},
+        }))
+        .expect("deserialize metadata point with a vector");
+        let refused = run(upsert_metadata(
+            handle(&app),
+            st(&app),
+            UpsertMetadataRequest {
+                collection: collection.to_string(),
+                points: vec![with_vector],
+            },
+        ))
+        .expect_err("a metadata point with a vector");
+        assert_eq!(refused.code, "VELES-014", "{collection}");
+    }
+
+    // So does `upsert` of a point without one: every row of a vector
+    // collection stores a vector.
+    let refused = run(upsert(
         handle(&app),
         st(&app),
-        UpsertMetadataRequest {
+        UpsertRequest {
             collection: "docs".to_string(),
-            points: vec![m_point2],
+            points: vec![point(9, vec![], serde_json::json!({"name": "bob"}))],
         },
     ))
-    .expect("upsert_metadata into vector collection");
-    assert_eq!(n, 1);
+    .expect_err("a point without a vector");
+    assert_eq!(refused.code, "VELES-016");
 }
 
 // ===========================================================================
@@ -784,6 +822,87 @@ fn stream_insert_refuses_a_wrong_dimension_with_cores_code() {
 // ===========================================================================
 // Knowledge graph commands
 // ===========================================================================
+
+/// `is_empty` and `get_collection` on a graph of payload-only nodes answer
+/// core's one size: every stored node. `is_empty` read the vector view, whose
+/// size counted embeddings only, and reported such a graph empty.
+#[test]
+fn is_empty_and_the_count_see_a_graph_s_payload_only_nodes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    run(create_graph_collection(
+        handle(&app),
+        st(&app),
+        CreateGraphCollectionRequest {
+            name: "kg".to_string(),
+            dimension: Some(2),
+            metric: "cosine".to_string(),
+            graph_schema: None,
+        },
+    ))
+    .expect("create_graph_collection");
+    assert!(run(is_empty(handle(&app), st(&app), "kg".to_string())).expect("is_empty"));
+    st(&app)
+        .with_db(|db| {
+            db.get_graph_collection("kg")
+                .expect("kg collection")
+                .upsert_node_payload(1, &serde_json::json!({"name": "x"}))
+                .expect("payload-only node");
+            Ok(())
+        })
+        .expect("seed graph node");
+
+    assert!(!run(is_empty(handle(&app), st(&app), "kg".to_string())).expect("is_empty"));
+    let info = run(get_collection(handle(&app), st(&app), "kg".to_string())).expect("get");
+    assert_eq!(info.count, 1);
+}
+
+/// `get_points` on a graph reads its rows as core's `Collection::get` does:
+/// a node without an embedding comes back with an empty vector. The view
+/// it reads through needed a vector, so a payload-only node read `None`.
+#[test]
+fn get_points_reads_a_graph_node_without_an_embedding() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    run(create_graph_collection(
+        handle(&app),
+        st(&app),
+        CreateGraphCollectionRequest {
+            name: "kge".to_string(),
+            dimension: Some(2),
+            metric: "cosine".to_string(),
+            graph_schema: None,
+        },
+    ))
+    .expect("create_graph_collection");
+    st(&app)
+        .with_db(|db| {
+            let graph = db.get_graph_collection("kge").expect("kge collection");
+            graph
+                .upsert_node_payload(1, &serde_json::json!({"name": "x"}))
+                .expect("payload-only node");
+            graph
+                .upsert_node(2, &serde_json::json!({"name": "y"}), Some(vec![1.0, 0.0]))
+                .expect("embedded node");
+            Ok(())
+        })
+        .expect("seed graph nodes");
+
+    let fetched = run(get_points(
+        handle(&app),
+        st(&app),
+        GetPointsRequest {
+            collection: "kge".to_string(),
+            ids: vec![1, 2, 3],
+        },
+    ))
+    .expect("get_points");
+    let vectors: Vec<Option<Vec<f32>>> = fetched
+        .into_iter()
+        .map(|point| point.map(|p| p.vector))
+        .collect();
+    assert_eq!(vectors, vec![Some(vec![]), Some(vec![1.0, 0.0]), None]);
+}
 
 #[test]
 fn graph_create_add_edges_traverse_degree() {

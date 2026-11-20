@@ -12,7 +12,6 @@ impl Collection {
         guards: Option<&super::match_exec::MatchStorageGuards<'_>>,
     ) -> Result<HashSet<u64>> {
         let anchor_alias = Self::resolve_anchor_alias(predicate, from_aliases)?;
-        let clause = Self::build_anchor_match_clause(predicate);
 
         // Anchor evaluation needs the full unordered match set (it collects bound
         // ids into a set), so use the raw primitive rather than the ORDER BY/LIMIT
@@ -22,8 +21,12 @@ impl Collection {
         // a nested read acquisition on the same thread deadlocks once a writer
         // queues (parking_lot task-fair semantics).
         let matches = match guards {
-            Some(g) => self.execute_match_with_guards(&clause, params, None, g)?,
-            None => self.execute_match_with_context(&clause, params, None)?,
+            Some(g) => self.execute_match_with_guards(predicate, params, g)?,
+            None => self.execute_match_with_context(
+                &Self::build_anchor_match_clause(predicate),
+                params,
+                None,
+            )?,
         };
         let mut ids = HashSet::with_capacity(matches.len());
         for m in matches {
@@ -119,7 +122,7 @@ impl Collection {
     }
 
     /// Builds a `MatchClause` that returns all bindings for anchor evaluation.
-    fn build_anchor_match_clause(
+    pub(in crate::collection::search::query) fn build_anchor_match_clause(
         predicate: &crate::velesql::GraphMatchPredicate,
     ) -> crate::velesql::MatchClause {
         crate::velesql::MatchClause {
@@ -240,8 +243,8 @@ impl Collection {
         execution_limit: usize,
         skip_metadata_prefilter_for_graph_or: bool,
     ) -> Result<Vec<SearchResult>> {
-        if let crate::velesql::Condition::Match(ref m) = cond {
-            return self.text_search(&m.query, execution_limit);
+        if let Some(text_query) = Self::extract_match_query(cond) {
+            return self.text_search_where(&text_query, cond, execution_limit);
         }
         let empty_filter =
             || crate::filter::Filter::new(crate::filter::Condition::And { conditions: vec![] });
@@ -252,6 +255,30 @@ impl Collection {
             return Ok(self.execute_scan_query(&empty_filter(), execution_limit, None));
         };
         Ok(self.dispatch_metadata_filter(cond, &metadata_cond, execution_limit))
+    }
+
+    /// The text `MATCH` conjunct of `cond` ranks the rows by BM25, and the
+    /// rest of `cond` is their admission filter: the best `limit` rows that
+    /// hold both, however far below the best a matching row ranks
+    /// ([`Self::text_search_with_filter`]). `validate_vector_predicates`
+    /// refuses every other place a `MATCH` may sit (under `OR` / `NOT`, a
+    /// second one), so the one [`Self::extract_match_query`] finds — under
+    /// `AND` and groups — is the query's only one. A graph predicate left in
+    /// the rest reads TRUE here and is decided after the fetch, as on the
+    /// other metadata paths.
+    fn text_search_where(
+        &self,
+        text_query: &str,
+        cond: &crate::velesql::Condition,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        match Self::extract_metadata_filter(cond) {
+            Some(rest) => {
+                let filter = crate::filter::Filter::new(crate::filter::Condition::from(rest));
+                self.text_search_with_filter(text_query, limit, &filter)
+            }
+            None => self.text_search(text_query, limit),
+        }
     }
 
     /// Resolves a metadata filter by probing bitmap → indexed → BM25 → scan paths.
@@ -500,11 +527,9 @@ impl Collection {
             return None;
         }
 
-        // Use BM25 text index to find candidates (over-fetch 10× for post-filter headroom).
-        let text_results = self
-            .storage
-            .text_index
-            .search(word, limit.saturating_mul(10));
+        // Use BM25 text index to find candidates among the rows (over-fetch
+        // 10× for post-filter headroom).
+        let text_results = self.bm25_rows(word, limit.saturating_mul(10), self.row_universe());
         if text_results.is_empty() {
             return None;
         }
@@ -636,7 +661,7 @@ impl Collection {
         let (_, sim_vector, sim_op, sim_threshold) = sim;
         let ranking_vector = search_vector.unwrap_or(sim_vector);
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
-        let total = self.len();
+        let total = self.vector_count();
         let mut k = execution_limit
             .saturating_mul(10 * similarity_conditions.len().max(1))
             .clamp(1, total.max(1));

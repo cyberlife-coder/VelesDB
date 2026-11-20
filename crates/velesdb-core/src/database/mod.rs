@@ -69,9 +69,13 @@ mod hnsw_config_wiring_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod metrics_wiring_tests;
 #[cfg(all(test, feature = "persistence"))]
+mod query_compound_aggregate_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod query_engine_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod query_join_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod query_qualifier_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod stats_tests;
 #[cfg(all(test, feature = "persistence"))]

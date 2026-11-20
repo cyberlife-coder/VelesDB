@@ -128,6 +128,10 @@ for start in range(0, len(all_vectors), CHUNK):
 - Payloads are large and arrive as Python dicts — payload conversion dominates.
   Consider `upsert_bulk_from_json` (pre-serialized payloads) or batch payload-free
   inserts followed by a separate payload update step.
+- The collection is a graph: its rows are written by the graph rule (an
+  embedding checked against the graph, labels against a strict schema, a row
+  without a vector kept out of the vector store), which takes points, so core
+  copies each row out of the flat buffer.
 
 ---
 

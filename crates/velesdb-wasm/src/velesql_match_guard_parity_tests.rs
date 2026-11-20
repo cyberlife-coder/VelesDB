@@ -93,16 +93,18 @@ type Ends = Vec<(u64, u64)>;
 
 fn wasm_run(db: &mut DatabaseInner, sql: &str) -> Result<Ends, String> {
     let query = Parser::parse(sql).expect("test: parse");
-    execute_match(db, &query, &Params::new()).map(|rows| {
-        rows.iter()
-            .map(|row| {
-                let data: serde_json::Value =
-                    serde_json::from_str(row.data_json_ref()).expect("test: row json");
-                let id = |alias: &str| data[alias]["id"].as_u64().expect("test: alias id");
-                (id("a"), id("c"))
-            })
-            .collect()
-    })
+    execute_match(db, &query, &Params::new())
+        .map_err(|e| e.to_string())
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    let data: serde_json::Value =
+                        serde_json::from_str(row.data_json_ref()).expect("test: row json");
+                    let id = |alias: &str| data[alias]["id"].as_u64().expect("test: alias id");
+                    (id("a"), id("c"))
+                })
+                .collect()
+        })
 }
 
 fn core_run(db: &Database, sql: &str) -> Result<Ends, String> {

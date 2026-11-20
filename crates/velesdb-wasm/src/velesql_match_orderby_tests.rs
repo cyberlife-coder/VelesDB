@@ -138,7 +138,9 @@ fn reject_err(expr: OrderByExpr) -> String {
         expr,
         descending: false,
     }];
-    order_and_limit(&mut c, Some(&ob), None, &order(true)).expect_err("test: must be rejected")
+    order_and_limit(&mut c, Some(&ob), None, &order(true))
+        .expect_err("test: must be rejected")
+        .to_string()
 }
 
 #[test]
@@ -175,15 +177,20 @@ fn test_order_by_similarity_desc_is_most_similar_first() {
     assert_eq!(ids(&distances), vec![2, 3, 1]);
 }
 
+/// An unscored row is a null key, which every ORDER BY sorts last under
+/// `ASC` and first under `DESC` (core's `velesql::compare_scores`): it
+/// sorted as least similar, last under `DESC`.
 #[test]
-fn test_order_by_similarity_puts_unscored_rows_last() {
-    let ob = vec![OrderByItem {
-        expr: OrderByExpr::SimilarityBare,
-        descending: true,
-    }];
-    let mut c = vec![cand(1, serde_json::json!({})), scored(2, 0.5)];
-    order_and_limit(&mut c, Some(&ob), None, &order(true)).expect("test: order");
-    assert_eq!(ids(&c), vec![2, 1]);
+fn test_order_by_similarity_reads_an_unscored_row_as_a_null_key() {
+    for (descending, expected) in [(true, vec![1, 2]), (false, vec![2, 1])] {
+        let ob = vec![OrderByItem {
+            expr: OrderByExpr::SimilarityBare,
+            descending,
+        }];
+        let mut c = vec![cand(1, serde_json::json!({})), scored(2, 0.5)];
+        order_and_limit(&mut c, Some(&ob), None, &order(true)).expect("test: order");
+        assert_eq!(ids(&c), expected, "descending: {descending}");
+    }
 }
 
 #[test]

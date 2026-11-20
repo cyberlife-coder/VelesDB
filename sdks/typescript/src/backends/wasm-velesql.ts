@@ -20,10 +20,9 @@
  * @packageDocumentation
  */
 
-import { parseVelesError } from '../errors';
 import { VelesDBError } from '../types';
 import type { QueryResponse } from '../types';
-import { describeWasmThrow, paramsJson, tryRead } from './wasm-helpers';
+import { describeWasmThrow, paramsJson, wasmThrowToError } from './wasm-helpers';
 import { WasmGraph } from './wasm-graph';
 import type {
   WasmModule,
@@ -32,9 +31,6 @@ import type {
   WasmVelesQLDatabase,
   WasmVelesQLParser,
 } from './wasm-types';
-
-/** A core error code, as velesdb-wasm sets it on the `Error` it throws. */
-const VELES_CODE = /^VELES-\d{3}$/;
 
 /**
  * Whether the executor takes the statement: a `SELECT` the parser does not
@@ -76,11 +72,7 @@ export class WasmVelesQL {
     try {
       this.db.attachStore!(name, store);
     } catch (error) {
-      const message = describeWasmThrow(error);
-      const code = tryRead(() => (error as { code?: unknown }).code).value;
-      throw typeof code === 'string' && VELES_CODE.test(code)
-        ? parseVelesError(code, message)
-        : new VelesDBError(message, 'BAD_REQUEST');
+      throw wasmThrowToError(error);
     }
   }
 
@@ -102,8 +94,11 @@ export class WasmVelesQL {
   /**
    * Run `queryString` against `collection` when it is the executor's — a
    * read-only, non-aggregate `SELECT` — shaped as REST's `/query`; `null`
-   * when the statement belongs to another path. Invalid VelesQL, a `FROM`
-   * naming another collection and executor errors are `BAD_REQUEST`.
+   * when the statement belongs to another path. Invalid VelesQL and a `FROM`
+   * naming another collection are `BAD_REQUEST`; an executor error keeps the
+   * core code it carries as its typed error (VELES-038, a `$name` unbound or
+   * of the wrong type, is a `QueryParameterError`), one without is
+   * `BAD_REQUEST`.
    */
   trySelect(
     collection: string,
@@ -159,7 +154,7 @@ export class WasmVelesQL {
     try {
       result = this.db.executeQuery(queryString, paramsJson(params) ?? null);
     } catch (error) {
-      throw new VelesDBError(describeWasmThrow(error), 'BAD_REQUEST');
+      throw wasmThrowToError(error);
     }
     try {
       return {

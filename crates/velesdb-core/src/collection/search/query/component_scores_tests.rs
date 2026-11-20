@@ -390,3 +390,208 @@ fn test_order_by_arithmetic_uses_component_scores() {
     );
     assert_eq!(results[1].point.id, 2);
 }
+
+// ============================================================================
+// F. Every vector-scored VelesQL path tags `vector_score`
+// ============================================================================
+
+/// Builds a 4-dim cosine collection whose points split across two categories.
+#[cfg(feature = "persistence")]
+fn scored_collection(dir: &tempfile::TempDir) -> crate::collection::types::Collection {
+    use crate::collection::types::Collection;
+    use crate::distance::DistanceMetric;
+
+    let col = Collection::create(
+        std::path::PathBuf::from(dir.path()),
+        4,
+        DistanceMetric::Cosine,
+    )
+    .expect("create");
+    let points: Vec<Point> = (0..8_u64)
+        .map(|i| Point {
+            id: i + 1,
+            vector: vec![1.0, i as f32 * 0.1, 0.0, 0.0],
+            payload: Some(serde_json::json!({
+                "category": if i % 2 == 0 { "a" } else { "b" }
+            })),
+            sparse_vectors: None,
+        })
+        .collect();
+    col.upsert(points).expect("upsert");
+    col
+}
+
+/// Runs `sql` with `$v` bound and asserts every row carries a
+/// `vector_score` component equal to the row's similarity.
+#[cfg(feature = "persistence")]
+fn assert_rows_tag_vector_score(sql: &str) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let col = scored_collection(&dir);
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]));
+
+    let rows = col.execute_query_str(sql, &params).expect("query");
+    assert!(!rows.is_empty(), "{sql}: the query must return rows");
+    for row in &rows {
+        let components = row
+            .component_scores
+            .as_deref()
+            .unwrap_or_else(|| panic!("{sql}: row {} carries no component scores", row.point.id));
+        let vector_score = components
+            .iter()
+            .find(|(name, _)| *name == "vector_score")
+            .map_or_else(
+                || panic!("{sql}: row {} has no vector_score", row.point.id),
+                |(_, score)| *score,
+            );
+        assert!(
+            (vector_score - row.score).abs() < 1e-6,
+            "{sql}: row {} vector_score {vector_score} != similarity {}",
+            row.point.id,
+            row.score
+        );
+    }
+}
+
+/// Positive control: the plain `NEAR` path already tags its rows.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_plain_near_rows_tag_vector_score() {
+    assert_rows_tag_vector_score("SELECT * FROM c WHERE vector NEAR $v LIMIT 5");
+}
+
+/// A `NEAR` combined with a metadata predicate tags its rows like a plain `NEAR`.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_filtered_near_rows_tag_vector_score() {
+    assert_rows_tag_vector_score("SELECT * FROM c WHERE vector NEAR $v AND category = 'a' LIMIT 5");
+}
+
+/// `ORDER BY similarity(vector, $v)` scores every row against `$v`: the
+/// score is the vector component, so the row is tagged with it.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_order_by_similarity_rows_tag_vector_score() {
+    assert_rows_tag_vector_score("SELECT * FROM c ORDER BY similarity(vector, $v) DESC LIMIT 5");
+}
+
+/// The same with a metadata predicate restricting the scanned rows.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_filtered_order_by_similarity_rows_tag_vector_score() {
+    assert_rows_tag_vector_score(
+        "SELECT * FROM c WHERE category = 'b' ORDER BY similarity(vector, $v) DESC LIMIT 5",
+    );
+}
+
+/// A `similarity()` threshold scores each row against `$v` too.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_similarity_threshold_rows_tag_vector_score() {
+    assert_rows_tag_vector_score("SELECT * FROM c WHERE similarity(vector, $v) > 0.5 LIMIT 5");
+}
+
+/// A `NEAR` ordered by similarity keeps its tag through the re-sort.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_near_order_by_similarity_rows_tag_vector_score() {
+    assert_rows_tag_vector_score(
+        "SELECT * FROM c WHERE vector NEAR $v AND category = 'a' \
+         ORDER BY similarity(vector, $v) DESC LIMIT 5",
+    );
+}
+
+/// The exact `similarity()` scan (a threshold under `OR`) tags each row its
+/// ranking leaf scored.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_similarity_scan_rows_tag_vector_score() {
+    assert_rows_tag_vector_score(
+        "SELECT * FROM c WHERE similarity(vector, $v) > 0.5 OR category = 'a' LIMIT 5",
+    );
+}
+
+/// Runs `sql` with `$v` and `$w` bound over [`scored_collection`].
+#[cfg(feature = "persistence")]
+fn run(sql: &str) -> Vec<SearchResult> {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let col = scored_collection(&dir);
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]));
+    params.insert("w".to_string(), serde_json::json!([0.0, 1.0, 0.0, 0.0]));
+    let rows = col.execute_query_str(sql, &params).expect("query");
+    assert!(!rows.is_empty(), "{sql}: the query must return rows");
+    rows
+}
+
+/// Negative control: a row no vector scored carries no breakdown, so a
+/// surface reports no `vector_score` for it.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_metadata_rows_carry_no_component_scores() {
+    for sql in [
+        "SELECT * FROM c WHERE category = 'a' LIMIT 5",
+        // The scan's ranking leaf reads a named vector no point has.
+        "SELECT * FROM c WHERE similarity(alt, $v) > 0.5 OR category = 'a' LIMIT 5",
+        // The ORDER BY reads a named vector no point has: the worst key.
+        "SELECT * FROM c WHERE category = 'a' ORDER BY similarity(alt, $v) DESC LIMIT 5",
+    ] {
+        for row in run(sql) {
+            assert!(
+                row.component_scores.is_none(),
+                "{sql}: row {} must carry no component scores, got {:?}",
+                row.point.id,
+                row.component_scores
+            );
+        }
+    }
+}
+
+/// A `NEAR` row ordered by its similarity to ANOTHER vector keeps the
+/// breakdown of the search that found it: `vector_score` stays its `NEAR`
+/// score while the row's score becomes the ORDER BY similarity.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_near_rows_ordered_by_another_vector_keep_their_near_breakdown() {
+    let near: std::collections::HashMap<u64, f32> =
+        run("SELECT * FROM c WHERE vector NEAR $v LIMIT 8")
+            .into_iter()
+            .map(|r| (r.point.id, r.score))
+            .collect();
+    let rows =
+        run("SELECT * FROM c WHERE vector NEAR $v ORDER BY similarity(vector, $w) DESC LIMIT 8");
+    let mut differs = false;
+    for row in &rows {
+        let components = row
+            .component_scores
+            .as_deref()
+            .expect("a NEAR row is tagged");
+        assert_eq!(components.len(), 1, "row {}: {components:?}", row.point.id);
+        let (name, vector_score) = components[0];
+        assert_eq!(name, "vector_score");
+        assert!((vector_score - near[&row.point.id]).abs() < 1e-6);
+        differs |= (vector_score - row.score).abs() > 1e-3;
+    }
+    assert!(differs, "the fixture must tell the two vectors apart");
+}
+
+/// The exact graph-anchored `NEAR` scoring (a few anchors) tags its rows.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_anchored_near_rows_tag_vector_score() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let col = scored_collection(&dir);
+    let anchors: std::collections::HashSet<u64> = [2, 4, 6].into_iter().collect();
+    let rows = col
+        .search_near_with_anchor_ids(&[1.0, 0.0, 0.0, 0.0], &anchors, None, 3)
+        .expect("anchored search");
+    assert_eq!(rows.len(), 3);
+    for row in &rows {
+        assert_eq!(
+            row.component_scores.as_deref(),
+            Some(&[("vector_score", row.score)][..]),
+            "row {}",
+            row.point.id
+        );
+    }
+}

@@ -50,13 +50,14 @@ impl VectorCollection {
     }
 
     /// Returns all point IDs — every point, with or without a payload, in
-    /// ascending order.
+    /// ascending order. A vector collection's points are its vectors: a
+    /// payload stored without a vector (an edge endpoint's) is not listed.
     #[must_use]
     pub fn all_ids(&self) -> Vec<u64> {
         self.inner.all_ids()
     }
 
-    /// Returns every point ID (vector- or payload-backed) in ascending order.
+    /// Returns every point ID in ascending order.
     ///
     /// The same set [`all_ids`](Self::all_ids) returns: the complete,
     /// deterministic set to iterate for export/sampling.

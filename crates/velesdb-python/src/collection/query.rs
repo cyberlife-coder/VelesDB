@@ -4,6 +4,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use velesdb_core::QueryOperationKind;
 
@@ -348,15 +349,62 @@ fn run_velesql_read(
     py.detach(move || execute(&parsed, &rust_params).map_err(core_err))
 }
 
-/// Execute a read-only VelesQL query and convert results to multimodel dicts.
+/// Executes a read-only VelesQL query on the collection `name` of `db` (its
+/// FROM retargeted there, the read gate keyed on it) and converts what it
+/// returns ([`run_parsed_on_db`]).
 pub(crate) fn run_velesql_select(
     py: Python<'_>,
     query_str: &str,
     params: Option<HashMap<String, Py<PyAny>>>,
-    execute: impl VelesqlReadExecutor,
+    db: &Arc<velesdb_core::Database>,
+    name: &str,
 ) -> PyResult<Vec<Py<PyAny>>> {
-    let results = run_velesql_read(py, query_str, params, execute)?;
+    let parsed = retarget_to_collection(&parse_read_only_velesql(query_str)?, name).into_owned();
+    run_parsed_on_db(py, parsed, params, db)
+}
+
+/// Runs `parsed` on `db` off the GIL and converts what it returns, routed as
+/// every surface routes a statement — REST `/query`, Tauri, the CLI: an
+/// aggregate (scalar aggregates or `GROUP BY`, but a vector `GROUP BY`,
+/// which a search runs —
+/// [`SelectStatement::is_aggregation_query`](velesdb_core::velesql::SelectStatement::is_aggregation_query))
+/// through `Database::execute_aggregate`, its rows returned as dicts: the
+/// one object of an aggregate without `GROUP BY`, each group of one with
+/// it. Every other statement through `Database::execute_query`, as
+/// multimodel dicts.
+pub(crate) fn run_parsed_on_db(
+    py: Python<'_>,
+    parsed: velesdb_core::velesql::Query,
+    params: Option<HashMap<String, Py<PyAny>>>,
+    db: &Arc<velesdb_core::Database>,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let rust_params = convert_params(py, params)?;
+    let db = Arc::clone(db);
+    if !parsed.is_match_query() && parsed.select.is_aggregation_query() {
+        let aggregate = py
+            .detach(move || db.execute_aggregate(&parsed, &rust_params))
+            .map_err(core_err)?;
+        return aggregate_rows_to_python(py, aggregate);
+    }
+    let results = py
+        .detach(move || db.execute_query(&parsed, &rust_params))
+        .map_err(core_err)?;
     crate::collection_helpers::search_results_to_multimodel_dicts(py, results)
+}
+
+/// An aggregate's rows, from the JSON `Database::execute_aggregate` returns:
+/// the groups of a `GROUP BY` (an array), else its one object.
+fn aggregate_rows_to_python(
+    py: Python<'_>,
+    aggregate: serde_json::Value,
+) -> PyResult<Vec<Py<PyAny>>> {
+    match aggregate {
+        serde_json::Value::Array(groups) => groups
+            .iter()
+            .map(|group| json_to_python(py, group))
+            .collect(),
+        one => Ok(vec![json_to_python(py, &one)?]),
+    }
 }
 
 /// Execute a read-only VelesQL query and return only IDs and scores.
@@ -403,27 +451,13 @@ where
         .collect()
 }
 
-/// Refuses a `match_query` threshold that is not finite: NaN passes no
-/// comparison, so it used to drop every row without a word.
-pub(crate) fn validate_match_threshold(threshold: Option<f32>) -> PyResult<Option<f32>> {
-    match threshold {
-        Some(t) if !t.is_finite() => Err(PyValueError::new_err(format!(
-            "threshold must be a finite number, got {t}"
-        ))),
-        other => Ok(other),
-    }
-}
-
 /// Runs the bare MATCH `clause` on `collection` through `db`, as REST
 /// `/match` does — the read gate on the target and every `@collection`, the
 /// annotated nodes' properties, `search.max_results` and the observer's
 /// `on_query` — scoring the rows against `query_vector` when one is given.
-///
-/// Core keeps a scored row whose score is at least the threshold under a
-/// similarity metric and at most it under a distance metric
-/// ([`velesdb_core::MatchScoring`]). An omitted `threshold` is therefore the
-/// bound every score passes in the collection metric's direction, not `0.0`,
-/// which under a distance kept only exact duplicates of the query.
+/// The threshold follows core's one rule ([`velesdb_core::MatchScoring::new`]):
+/// omitted, every scored row is kept; it must be finite and come with a
+/// vector.
 pub(crate) fn run_match_on(
     db: &velesdb_core::Database,
     collection: &str,
@@ -434,24 +468,8 @@ pub(crate) fn run_match_on(
 ) -> velesdb_core::error::Result<
     Vec<velesdb_core::collection::search::query::match_exec::MatchResult>,
 > {
-    let scoring = query_vector.map(|vector| velesdb_core::MatchScoring {
-        vector,
-        threshold: threshold.unwrap_or_else(|| no_threshold(db, collection)),
-    });
+    let scoring = velesdb_core::MatchScoring::new(query_vector, threshold)?;
     db.match_query(collection, clause, params, scoring)
-}
-
-/// The threshold every score passes under `collection`'s metric. A missing
-/// collection takes either: `match_query` refuses it before scoring.
-fn no_threshold(db: &velesdb_core::Database, collection: &str) -> f32 {
-    let higher_is_better = db
-        .get_any_collection(collection)
-        .is_none_or(|c| c.config().metric.higher_is_better());
-    if higher_is_better {
-        f32::NEG_INFINITY
-    } else {
-        f32::INFINITY
-    }
 }
 
 #[pymethods]
@@ -464,7 +482,10 @@ impl Collection {
     ///
     /// Returns:
     ///     List of query results with node_id, vector_score, graph_score,
-    ///     fused_score, bindings (payload), and column_data
+    ///     fused_score, bindings (payload), and column_data. An aggregate
+    ///     (``COUNT``, ``SUM``, ``AVG``, ``MIN``, ``MAX``, or a ``GROUP BY``)
+    ///     returns its rows instead, as ``Database.execute_query`` does: one
+    ///     dict of its values without ``GROUP BY``, one per group with it.
     ///
     /// Raises:
     ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
@@ -491,10 +512,7 @@ impl Collection {
         // The query is retargeted to this collection first: the leaf always
         // executed against itself (FROM was nominal — adapters rely on it),
         // and the retarget keys the gate on the collection actually read.
-        run_velesql_select(py, query_str, params, |q, p| {
-            self.db
-                .execute_query(&retarget_to_collection(q, &self.name), p)
-        })
+        run_velesql_select(py, query_str, params, &self.db, &self.name)
     }
 
     /// Execute a MATCH graph traversal query.
@@ -512,7 +530,8 @@ impl Collection {
     ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
     ///
     /// Raises:
-    ///     ValueError: If ``threshold`` is NaN or infinite.
+    ///     ValueError: If ``threshold`` is NaN or infinite, or given without
+    ///         ``vector`` (no row is scored).
     #[pyo3(signature = (query_str, params = None, vector = None, threshold = None))]
     fn match_query(
         &self,
@@ -524,7 +543,6 @@ impl Collection {
     ) -> PyResult<Vec<Py<PyAny>>> {
         // Through the owning database (`run_match_on`); a read-gate scope is
         // refused, since a MATCH row carries no payload to narrow.
-        let threshold = validate_match_threshold(threshold)?;
         let db = &self.db;
         let name = &self.name;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {

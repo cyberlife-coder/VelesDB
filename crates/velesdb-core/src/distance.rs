@@ -179,6 +179,28 @@ impl DistanceMetric {
         }
     }
 
+    /// [`calculate`](Self::calculate) when `a` and `b` can be compared: the
+    /// same length, not empty. `None` otherwise, where `calculate` would
+    /// panic.
+    ///
+    /// The one guard a score read from a row goes through, in core's
+    /// executor and the WASM one alike: a row hydrated without a vector (a
+    /// payload-only graph node, a metadata row) carries an empty one, and a
+    /// payload's named vector can have any length, so neither may reach a
+    /// kernel's length assertion.
+    ///
+    /// ```
+    /// use velesdb_core::DistanceMetric;
+    ///
+    /// assert_eq!(DistanceMetric::Cosine.checked_calculate(&[], &[1.0, 0.0]), None);
+    /// assert!(DistanceMetric::Cosine.checked_calculate(&[1.0, 0.0], &[1.0, 0.0]).is_some());
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn checked_calculate(self, a: &[f32], b: &[f32]) -> Option<f32> {
+        (a.len() == b.len() && !a.is_empty()).then(|| self.calculate(a, b))
+    }
+
     /// Returns whether higher values indicate more similarity.
     #[must_use]
     pub const fn higher_is_better(&self) -> bool {
@@ -336,6 +358,38 @@ pub fn rank_scores(a: f32, b: f32, higher_is_better: bool) -> std::cmp::Ordering
         // `false < true`: the NaN side compares greater, i.e. later.
         (a_nan, b_nan) => a_nan.cmp(&b_nan),
     }
+}
+
+/// A higher-is-better score as an integer whose order is [`rank_scores`]'s
+/// (`higher_is_better`), the better greater: a NaN least whatever its sign
+/// bit, and `-0.0` equal to `0.0` — by the bit pattern of IEEE 754's total
+/// order. One integer comparison per pair, for a heap that compares often
+/// (`collection/search/ranked.rs`, the sparse search's top-k).
+#[must_use]
+pub(crate) fn score_order_key(score: f32) -> u32 {
+    if score.is_nan() {
+        return 0;
+    }
+    let bits = if score == 0.0 { 0.0_f32 } else { score }.to_bits();
+    // Negative: every bit flipped, so a larger magnitude is lower; no number
+    // maps to 0, the all-ones pattern flipping to it being a NaN.
+    if bits >> 31 == 1 {
+        !bits
+    } else {
+        bits | 0x8000_0000
+    }
+}
+
+/// A hit's place in a ranking, as one integer: the greatest ranks first. The
+/// high half orders the score, the better greater ([`score_order_key`]: a
+/// NaN least whatever its sign bit, `-0.0` equal to `0.0`); the low half
+/// orders a tie by id, the lower greater — the tie order of a fused ranking
+/// (`crate::fusion::sort_fused_results`). The one rule a text, sparse or
+/// ranked walk orders its hits by, so a cut at any depth keeps the ids
+/// fusion would put first.
+#[cfg(feature = "persistence")]
+pub(crate) fn hit_rank_key(score: f32, id: u64) -> u128 {
+    (u128::from(score_order_key(score)) << 64) | u128::from(u64::MAX - id)
 }
 
 impl FromStr for DistanceMetric {

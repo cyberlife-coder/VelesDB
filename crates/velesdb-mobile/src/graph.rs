@@ -185,6 +185,8 @@ impl MobileGraphStore {
                 .flatten()
                 .next()
                 .map(|point| point.vector)
+                // A payload-only node reads back with an empty vector.
+                .filter(|vector| !vector.is_empty())
         } else {
             None
         };

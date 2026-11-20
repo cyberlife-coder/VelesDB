@@ -4,36 +4,15 @@
 //! from complex WHERE clause condition trees.
 
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::velesql::Condition;
 
-/// Converts a JSON number to f32, rejecting out-of-range finite values.
-///
-/// - Finite values within f32 range are truncated.
-/// - Non-finite values (NaN, Inf) pass through as f32.
-/// - Finite values outside f32 range or non-numeric values produce an error.
-fn json_value_to_f32(v: &serde_json::Value, param_name: &str) -> Result<f32> {
-    v.as_f64().and_then(f64_to_f32).ok_or_else(|| {
-        Error::Query(format!(
-            "Invalid vector parameter ${param_name}: value out of f32 range or not a number"
-        ))
-    })
-}
-
-/// Narrows an f64 to f32, returning `None` for finite values outside f32 range.
-#[allow(clippy::cast_possible_truncation)]
-fn f64_to_f32(f: f64) -> Option<f32> {
-    if !f.is_finite() {
-        return Some(f as f32);
-    }
-    if f >= f64::from(f32::MIN) && f <= f64::from(f32::MAX) {
-        return Some(f as f32);
-    }
-    None
-}
-
 impl Collection {
-    /// Helper to extract MATCH query from any nested condition.
+    /// The text of a WHERE's `MATCH`, found under `AND` and groups: the only
+    /// place a validated query holds one, and only one
+    /// ([`crate::velesql::validate_vector_predicates`] refuses a `MATCH`
+    /// under `OR` / `NOT`, a second one, and one beside a ranking no
+    /// executor fuses with text).
     pub(crate) fn extract_match_query(condition: &Condition) -> Option<String> {
         match condition {
             Condition::Match(m) => Some(m.query.clone()),
@@ -55,7 +34,7 @@ impl Collection {
     /// negated vector leaf takes the full-scan path
     /// (`has_similarity_under_not`) before the dispatch that reads this.
     ///
-    /// Delegates to [`resolve_vector`](Self::resolve_vector) for parameter
+    /// Delegates to [`bind_vector`](crate::velesql::bind_vector) for parameter
     /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
     pub(crate) fn extract_vector_search(
         condition: &Condition,
@@ -63,7 +42,7 @@ impl Collection {
     ) -> Result<Option<Vec<f32>>> {
         match condition {
             Condition::VectorSearch(vs) => {
-                let vec = Self::resolve_vector(&vs.vector, params)?;
+                let vec = crate::velesql::bind_vector(&vs.vector, params)?;
                 Ok(Some(vec))
             }
             Condition::And(left, right) | Condition::Or(left, right) => {
@@ -82,7 +61,7 @@ impl Collection {
     /// [`multi_query_search`](Self::multi_query_search). Walks `AND` and
     /// groups only — a `NEAR_FUSED` under `OR`/`NOT` is refused first by
     /// [`validate_similarity_query_structure`](Self::validate_similarity_query_structure)
-    /// — and reuses [`resolve_vector`](Self::resolve_vector) for each `VectorExpr`.
+    /// — and reuses [`bind_vector`](crate::velesql::bind_vector) for each `VectorExpr`.
     pub(crate) fn extract_fused_vectors(
         condition: &Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
@@ -92,7 +71,7 @@ impl Collection {
                 let vectors = vfs
                     .vectors
                     .iter()
-                    .map(|v| Self::resolve_vector(v, params))
+                    .map(|v| crate::velesql::bind_vector(v, params))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Some((vectors, vfs.fusion.clone())))
             }
@@ -110,7 +89,7 @@ impl Collection {
     /// Extract ALL similarity conditions from WHERE clause (EPIC-044 US-001).
     /// Returns Vec of (field, vector, operator, threshold) for cascade filtering.
     ///
-    /// Delegates to [`resolve_vector`](Self::resolve_vector) for parameter
+    /// Delegates to [`bind_vector`](crate::velesql::bind_vector) for parameter
     /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
     #[allow(clippy::type_complexity)]
     pub(crate) fn extract_all_similarity_conditions(
@@ -119,7 +98,7 @@ impl Collection {
     ) -> Result<Vec<(String, Vec<f32>, crate::velesql::CompareOp, f64)>> {
         match condition {
             Condition::Similarity(sim) => {
-                let vec = Self::resolve_vector(&sim.vector, params)?;
+                let vec = crate::velesql::bind_vector(&sim.vector, params)?;
                 Ok(vec![(sim.field.clone(), vec, sim.operator, sim.threshold)])
             }
             // AND/OR: collect from both sides (AND=cascade, OR=validation only)
@@ -141,9 +120,12 @@ impl Collection {
     /// only the metadata filter parts (e.g., `category = 'tech'`).
     pub(crate) fn extract_metadata_filter(condition: &Condition) -> Option<Condition> {
         match condition {
-            // Remove vector/sparse/graph search conditions — they are handled
-            // separately by the query executor and must not be pushed down as
-            // payload filters.
+            // Remove vector/sparse/graph/text search conditions — they are
+            // handled separately by the query executor and must not be pushed
+            // down as payload filters. A text `MATCH` is the BM25 ranking the
+            // dispatch routes the query to, this filter its admission
+            // (`text_search_where`); `validate_vector_predicates` refuses every
+            // shape where dropping it here would lose it.
             Condition::Similarity(_)
             | Condition::VectorSearch(_)
             | Condition::VectorFusedSearch(_)
@@ -221,48 +203,6 @@ impl Collection {
         }
     }
 
-    /// Resolve a vector expression to actual vector values.
-    ///
-    /// This is the single source of truth for converting `VectorExpr`
-    /// parameters (JSON arrays) to `Vec<f32>`. Both `extract_vector_search`
-    /// and `extract_all_similarity_conditions` delegate here.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The parameter is missing
-    /// - The parameter is not an array
-    /// - Any value is not a number or is outside f32 representable range
-    pub(crate) fn resolve_vector(
-        vector: &crate::velesql::VectorExpr,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<Vec<f32>> {
-        use crate::velesql::VectorExpr;
-
-        match vector {
-            VectorExpr::Literal(v) => Ok(v.clone()),
-            VectorExpr::Parameter(name) => Self::resolve_vector_parameter(name, params),
-        }
-    }
-
-    /// Resolves a named vector parameter from the query params map.
-    fn resolve_vector_parameter(
-        name: &str,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<Vec<f32>> {
-        let val = params
-            .get(name)
-            .ok_or_else(|| Error::Query(format!("Missing query parameter: ${name}")))?;
-        let serde_json::Value::Array(arr) = val else {
-            return Err(Error::Query(format!(
-                "Invalid vector parameter ${name}: expected array"
-            )));
-        };
-        arr.iter()
-            .map(|v| json_value_to_f32(v, name))
-            .collect::<Result<Vec<f32>>>()
-    }
-
     /// Compute the metric score between two vectors using the collection's configured metric.
     ///
     /// **Note:** This returns the raw metric score, not a normalized similarity.
@@ -282,11 +222,8 @@ impl Collection {
     /// `similarity() < threshold` filter as the best candidate. Callers must
     /// skip the candidate on `None`, not substitute a score.
     pub(crate) fn compute_metric_score(&self, a: &[f32], b: &[f32]) -> Option<f32> {
-        if a.len() != b.len() || a.is_empty() {
-            return None;
-        }
         let metric = self.storage.config.read().metric;
-        Some(metric.calculate(a, b))
+        metric.checked_calculate(a, b)
     }
 }
 

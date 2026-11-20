@@ -326,7 +326,7 @@ impl GraphStore for WasmStore {
         inner
             .graph
             .insert_edge(Some(id), from, to, relation.to_string(), None)
-            .map_err(MemoryError::InvalidRelation)
+            .map_err(|e| MemoryError::InvalidRelation(e.to_string()))
     }
 
     fn relations(&self, id: u64) -> Result<Vec<MemoryEdge>, MemoryError> {

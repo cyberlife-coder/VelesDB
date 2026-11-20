@@ -155,6 +155,24 @@ fn graph_node_with_embedding_reports_once() {
     assert_single_upsert(&spy, "kg", 1);
 }
 
+/// A graph's bulk row carrying nothing is reported only where it writes:
+/// a new id, which it creates; a stored one keeps what it has.
+#[test]
+fn a_graph_bulk_row_carrying_nothing_is_reported_only_where_it_writes() {
+    let (_dir, db, spy) = open_db();
+    db.create_graph_collection("kg", GraphSchema::schemaless())
+        .expect("test: create kg");
+    db.get_graph_collection("kg")
+        .expect("test: kg")
+        .upsert_node_payload(2, &json!({"name": "b"}))
+        .expect("test: stored node");
+    spy.reset();
+    let view = db.get_collection_view("kg").expect("test: view");
+    view.upsert_bulk(&[Point::new(1, vec![], None), Point::new(2, vec![], None)])
+        .expect("test: upsert_bulk");
+    assert_single_upsert(&spy, "kg", 1);
+}
+
 #[test]
 fn velesql_insert_and_update_are_not_double_counted() {
     let (_dir, db, spy) = open_db();

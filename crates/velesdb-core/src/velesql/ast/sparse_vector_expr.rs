@@ -17,8 +17,9 @@ impl SparseVectorExpr {
     ///
     /// # Errors
     ///
-    /// Returns an error if the bind parameter is missing or has the wrong
-    /// type, or [`Error::InvalidVector`] for a weight that is not finite.
+    /// Returns [`Error::QueryParameter`] if the bind parameter is missing or
+    /// has the wrong shape, or [`Error::InvalidVector`] for a weight that is
+    /// not finite.
     pub fn resolve(
         &self,
         params: &std::collections::HashMap<String, serde_json::Value>,
@@ -38,14 +39,15 @@ impl SparseVectorExpr {
         match self {
             Self::Literal(sv) => Ok(sv.clone()),
             Self::Parameter(name) => {
-                let val = params.get(name).ok_or_else(|| {
-                    Error::Query(format!("Missing sparse vector parameter: ${name}"))
-                })?;
+                let val = params
+                    .get(name)
+                    .ok_or_else(|| Error::unbound_parameter(name))?;
                 let obj = val.as_object().ok_or_else(|| {
-                    Error::Query(format!(
-                        "Invalid sparse vector parameter ${name}: expected object with \
-                         indices/values or {{index: weight}} map"
-                    ))
+                    Error::invalid_parameter(
+                        name,
+                        "expected a sparse vector: {\"indices\": [...], \"values\": [...]} \
+                         or an {index: weight} map",
+                    )
                 })?;
 
                 // Try structured format first: {"indices": [...], "values": [...]}
@@ -68,20 +70,15 @@ fn try_parse_structured_sparse(
     let (Some(indices_val), Some(values_val)) = (obj.get("indices"), obj.get("values")) else {
         return Ok(None);
     };
-    let indices: Vec<u32> = serde_json::from_value(indices_val.clone()).map_err(|e| {
-        Error::Query(format!(
-            "Invalid sparse vector parameter ${name}.indices: {e}"
-        ))
-    })?;
-    let values: Vec<f32> = serde_json::from_value(values_val.clone()).map_err(|e| {
-        Error::Query(format!(
-            "Invalid sparse vector parameter ${name}.values: {e}"
-        ))
-    })?;
+    let indices: Vec<u32> = serde_json::from_value(indices_val.clone())
+        .map_err(|e| Error::invalid_parameter(name, format!("indices: {e}")))?;
+    let values: Vec<f32> = serde_json::from_value(values_val.clone())
+        .map_err(|e| Error::invalid_parameter(name, format!("values: {e}")))?;
     if indices.len() != values.len() {
-        return Err(Error::Query(format!(
-            "Sparse vector parameter ${name}: indices and values must have equal length"
-        )));
+        return Err(Error::invalid_parameter(
+            name,
+            "indices and values must have equal length",
+        ));
     }
     Ok(Some(SparseVector::new(
         indices.into_iter().zip(values).collect(),
@@ -96,15 +93,11 @@ fn parse_shorthand_sparse(
     let mut pairs = Vec::with_capacity(obj.len());
     for (k, v) in obj {
         let idx: u32 = k.parse().map_err(|_| {
-            Error::Query(format!(
-                "Invalid sparse vector parameter ${name}: key '{k}' is not a valid u32 index"
-            ))
+            Error::invalid_parameter(name, format!("key '{k}' is not a valid u32 index"))
         })?;
         #[allow(clippy::cast_possible_truncation)]
         let weight = v.as_f64().ok_or_else(|| {
-            Error::Query(format!(
-                "Invalid sparse vector parameter ${name}: value for key '{k}' is not a number"
-            ))
+            Error::invalid_parameter(name, format!("value for key '{k}' is not a number"))
         })? as f32;
         pairs.push((idx, weight));
     }

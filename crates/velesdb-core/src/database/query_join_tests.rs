@@ -337,3 +337,93 @@ fn an_outer_join_alias_predicate_holds_on_the_joined_rows() {
     let ids: Vec<u64> = rows.iter().map(|r| r.point.id).collect();
     assert_eq!(ids, [12], "only the `nice` row has no product");
 }
+
+// =========================================================================
+// A text MATCH in a JOIN: the side its qualifier names
+// =========================================================================
+
+/// `docs` (texts ranking "apple apple apple" (6) above "apple pie" (1) above
+/// "Apple banana smoothie" (3)) and `tags`, one row per doc id.
+fn seed_text_join_fixtures(db: &Database) {
+    db.create_collection("docs", 2, DistanceMetric::Cosine)
+        .unwrap();
+    db.create_collection("tags", 2, DistanceMetric::Cosine)
+        .unwrap();
+    let texts = [
+        (1, "apple pie"),
+        (2, "banana bread"),
+        (3, "Apple banana smoothie"),
+        (4, "pineapple juice"),
+        (5, "cherry tart"),
+        (6, "apple apple apple"),
+    ];
+    #[allow(clippy::cast_precision_loss)]
+    let docs = texts.iter().map(|&(id, content)| {
+        Point::new(
+            id,
+            vec![1.0, id as f32],
+            Some(serde_json::json!({"content": content})),
+        )
+    });
+    db.resolve_collection("docs").unwrap().upsert(docs).unwrap();
+    let tags =
+        (1..=6).map(|id| Point::new(id, vec![1.0, 0.0], Some(serde_json::json!({"tag": id}))));
+    db.resolve_collection("tags").unwrap().upsert(tags).unwrap();
+}
+
+fn result_ids(results: &[crate::SearchResult]) -> Vec<u64> {
+    results.iter().map(|r| r.point.id).collect()
+}
+
+/// The AND-required MATCH ranks the base rows by BM25 however its column is
+/// written — unqualified, or qualified by the base side's name, the table's
+/// or its alias — as it does without a JOIN.
+#[test]
+fn a_base_side_match_ranks_the_joined_rows_however_it_is_qualified() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_text_join_fixtures(&db);
+
+    for sql in [
+        "SELECT * FROM docs JOIN tags ON docs.id = tags.id WHERE content MATCH 'apple' LIMIT 2",
+        "SELECT * FROM docs JOIN tags ON docs.id = tags.id WHERE docs.content MATCH 'apple' LIMIT 2",
+        "SELECT * FROM docs AS d JOIN tags AS t ON d.id = t.id WHERE d.content MATCH 'apple' LIMIT 2",
+    ] {
+        let rows = run_sql(&db, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        assert_eq!(result_ids(&rows), [6, 1], "{sql}");
+    }
+}
+
+/// A qualifier naming no side of the JOIN — the table name of an aliased
+/// FROM — is refused: no text index answers it, and the base's must not.
+#[test]
+fn a_match_qualified_by_no_side_of_the_join_is_refused() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_text_join_fixtures(&db);
+
+    for sql in [
+        "SELECT * FROM docs AS d JOIN tags AS t ON d.id = t.id WHERE docs.content MATCH 'apple' LIMIT 2",
+        "SELECT * FROM docs AS d JOIN tags AS t ON d.id = t.id \
+         WHERE nowhere.content MATCH 'apple' OR t.tag = 2 LIMIT 2",
+    ] {
+        let err = run_sql(&db, sql).expect_err(sql);
+        assert!(err.to_string().contains("names no side"), "{sql}: {err}");
+    }
+}
+
+/// A MATCH on a joined side tests that side's hits for the joined row.
+#[test]
+fn a_joined_side_match_tests_that_sides_hits() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_text_join_fixtures(&db);
+
+    let rows = run_sql(
+        &db,
+        "SELECT * FROM tags AS t JOIN docs AS d ON t.id = d.id WHERE d.content MATCH 'apple' \
+         ORDER BY id LIMIT 10",
+    )
+    .unwrap();
+    assert_eq!(result_ids(&rows), [1, 3, 6]);
+}

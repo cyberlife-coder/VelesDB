@@ -98,3 +98,25 @@ fn test_get_stats_invalidated_after_upsert() {
         "get_stats should recompute after upsert invalidates the cache"
     );
 }
+
+/// A graph's rows are its nodes: a graph without embeddings holds three
+/// payload-only nodes and no vector, and ANALYZE counts the three, as `len`
+/// and `GET /collections/{name}` do — the planner costs a graph by them.
+#[test]
+fn test_analyze_counts_a_graph_s_nodes_with_or_without_an_embedding() {
+    let temp_dir = TempDir::new().unwrap();
+    let db = crate::Database::open(temp_dir.path()).unwrap();
+    db.create_graph_collection("g", crate::collection::GraphSchema::schemaless())
+        .unwrap();
+    let graph = db.get_graph_collection("g").unwrap();
+    for id in 1..=3 {
+        graph
+            .upsert_node_payload(id, &serde_json::json!({ "n": id }))
+            .unwrap();
+    }
+    assert_eq!(graph.len(), 3);
+
+    let stats = db.analyze_collection("g").unwrap();
+
+    assert_eq!(stats.row_count, 3);
+}

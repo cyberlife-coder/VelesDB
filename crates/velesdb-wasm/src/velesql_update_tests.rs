@@ -55,7 +55,7 @@ fn test_update_on_id_column_is_rejected() {
     let stmt = parse_update("UPDATE docs SET id = 99 WHERE id = 1");
     let err = execute(&db, &stmt, &parse_params(None).expect("test: p"));
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("'id'"));
+    assert!(err.expect_err("test: err").to_string().contains("'id'"));
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn a_vector_that_is_not_an_array_is_refused() {
     let stmt = parse_update("UPDATE vecs SET vector = 'x' WHERE id = 1");
     let err = execute(&db, &stmt, &parse_params(None).expect("test: p"));
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("'vector'"));
+    assert!(err.expect_err("test: err").to_string().contains("'vector'"));
 }
 
 #[test]
@@ -139,6 +139,15 @@ fn set_vector_replaces_the_embedding() {
 fn set_vector_is_refused_on_a_metadata_collection_and_at_another_dimension() {
     let mut db = DatabaseInner::new();
     db.create_metadata_collection("m").expect("test: create m");
+    db.create_collection("vecs", 2, "cosine")
+        .expect("test: create vecs");
+    for sql in [
+        "INSERT INTO m (id, k) VALUES (1, 'x')",
+        "INSERT INTO vecs (id, vector) VALUES (1, $v)",
+    ] {
+        crate::velesql_exec::execute(&mut db, sql, Some(r#"{"v": [1.0, 0.0]}"#))
+            .expect("test: row 1");
+    }
     let err = execute(
         &db,
         &parse_update("UPDATE m SET vector = $v WHERE id = 1"),
@@ -146,17 +155,16 @@ fn set_vector_is_refused_on_a_metadata_collection_and_at_another_dimension() {
     )
     .expect_err("test: metadata-only");
     assert!(
-        err.contains("metadata-only collection cannot set 'vector'"),
+        err.to_string()
+            .contains("[VELES-014] Vector not allowed on 'm': this write stores no vector"),
         "{err}"
     );
 
-    db.create_collection("vecs", 2, "cosine")
-        .expect("test: create vecs");
     let err = execute(
         &db,
         &parse_update("UPDATE vecs SET vector = $v WHERE id = 1"),
         &parse_params(Some(r#"{"v": [1.0, 0.0, 0.0]}"#)).expect("test: p"),
     )
     .expect_err("test: dimension");
-    assert!(err.contains("dimension mismatch"), "{err}");
+    assert!(err.to_string().contains("dimension mismatch"), "{err}");
 }

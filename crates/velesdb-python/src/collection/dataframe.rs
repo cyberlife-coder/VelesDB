@@ -85,8 +85,8 @@ impl Collection {
         let points: Vec<std::collections::HashMap<String, Py<PyAny>>> = points_list.extract()?;
 
         // Delegate to the appropriate upsert path based on collection type.
-        // parse_point_dicts requires a vector field, so metadata-only collections
-        // must use a separate path that constructs Point::metadata_only(id, payload).
+        // Metadata-only collections take their own path, which refuses a row
+        // without a payload, and construct Point::metadata_only(id, payload).
         if metadata_only {
             let mut core_points = Vec::with_capacity(points.len());
             for (index, point_dict) in points.iter().enumerate() {

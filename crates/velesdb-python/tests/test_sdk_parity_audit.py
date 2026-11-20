@@ -131,18 +131,27 @@ def test_hybrid_sparse_filter_prefilters_before_fusion(tmp_path):
     assert {r["id"] for r in results} == {2, 3, 4}
 
 
-def test_hybrid_sparse_filter_sparse_only_still_rejected(tmp_path):
-    """Sparse-only + caller filter keeps its loud error (no such core leaf)."""
+def test_sparse_only_filter_admits_matches_ranked_below_the_best(tmp_path):
+    """Sparse-only + caller filter: core admits the hits by the filter, so
+    the best matching hits come back however far below the best they rank."""
     db = velesdb.Database(str(tmp_path))
     col = db.create_collection("sparse_only", dimension=4, metric="cosine")
     col.upsert(
-        [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "sparse_vector": {0: 1.0}}]
+        [
+            {
+                "id": i,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "sparse_vector": {0: 10.0 - i},
+                "payload": {"keep": i > 3},
+            }
+            for i in range(1, 7)
+        ]
     )
     filt = {"condition": {"type": "eq", "field": "keep", "value": True}}
-    with pytest.raises(ValueError, match="sparse-only"):
-        col.search_request(
-            velesdb.SearchOptions(sparse_vector={0: 1.0}, k=1, filter=filt)
-        )
+    results = col.search_request(
+        velesdb.SearchOptions(sparse_vector={0: 1.0}, k=2, filter=filt)
+    )
+    assert [r["id"] for r in results] == [4, 5]
 
 
 # ---------------------------------------------------------------------------
@@ -367,18 +376,34 @@ def test_velesql_query_rows_report_the_component_scores_core_tagged(temp_db):
         assert row["component_scores"] == pytest.approx(expected[row["id"]])
         assert row["vector_score"] == pytest.approx(expected[row["id"]]["vector_score"])
 
-    # A filtered NEAR comes back without a component breakdown; its score is
-    # still the vector score, as core's ORDER BY reads it.
-    dense_rows = col.query(
-        "SELECT * FROM mm_scores WHERE vector NEAR $v LIMIT 5",
-        params={"v": [1.0, 0.0, 0.0, 0.0]},
-    ) + col.query(
-        "SELECT * FROM mm_scores WHERE vector NEAR $v AND text = 'deep learning' LIMIT 5",
-        params={"v": [1.0, 0.0, 0.0, 0.0]},
+    # Every row a vector scored carries its `vector_score` component — a
+    # NEAR, filtered or not, and an ORDER BY similarity(vector, $v) — so the
+    # binding reads it from the breakdown, never from the final score.
+    dense_rows = (
+        col.query(
+            "SELECT * FROM mm_scores WHERE vector NEAR $v LIMIT 5",
+            params={"v": [1.0, 0.0, 0.0, 0.0]},
+        )
+        + col.query(
+            "SELECT * FROM mm_scores WHERE vector NEAR $v AND text = 'deep learning' LIMIT 5",
+            params={"v": [1.0, 0.0, 0.0, 0.0]},
+        )
+        + col.query(
+            "SELECT * FROM mm_scores WHERE text = 'deep learning' "
+            "ORDER BY similarity(vector, $v) DESC LIMIT 5",
+            params={"v": [1.0, 0.0, 0.0, 0.0]},
+        )
     )
-    assert len(dense_rows) == 4
+    assert len(dense_rows) == 5
     for row in dense_rows:
+        assert row["component_scores"] == {"vector_score": pytest.approx(row["score"])}
         assert row["vector_score"] == pytest.approx(row["score"])
+
+    # A row no vector scored has no vector score.
+    metadata_rows = col.query("SELECT * FROM mm_scores WHERE text = 'deep learning' LIMIT 5")
+    assert len(metadata_rows) == 1
+    assert metadata_rows[0]["vector_score"] is None
+    assert "component_scores" not in metadata_rows[0]
 
 
 @pytest.mark.parametrize("weight", [float("nan"), float("inf"), float("-inf")])

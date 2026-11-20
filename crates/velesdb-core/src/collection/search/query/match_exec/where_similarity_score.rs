@@ -9,7 +9,7 @@
 //! same score VectorFirst rows get: the similarity of the node the first
 //! similarity leaf targets.
 
-use super::where_eval::{resolve_query_vector, resolve_target_id};
+use super::where_eval::resolve_target_id;
 use super::{MatchResult, MatchStorageGuards};
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -41,7 +41,7 @@ impl Collection {
         else {
             return Ok(());
         };
-        let query_vector = resolve_query_vector(&sim.vector, params)?;
+        let query_vector = crate::velesql::bind_vector(&sim.vector, params)?;
         if query_vector.is_empty() {
             return Ok(());
         }
@@ -50,10 +50,9 @@ impl Collection {
             let Some(node_vector) = guards.vector_guard.retrieve(target)? else {
                 continue;
             };
-            if node_vector.len() != query_vector.len() {
+            let Some(score) = guards.metric.checked_calculate(&node_vector, &query_vector) else {
                 continue;
-            }
-            let score = guards.metric.calculate(&node_vector, &query_vector);
+            };
             row.score = Some(score);
             row.projected = self.project_properties_with_score(
                 &row.bindings,

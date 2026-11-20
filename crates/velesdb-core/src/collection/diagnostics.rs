@@ -26,30 +26,34 @@ pub enum IndexHealth {
 /// and [`Database::collection_diagnostics()`](crate::Database::collection_diagnostics).
 #[derive(Debug, Clone)]
 pub struct CollectionDiagnostics {
-    /// Whether the collection contains at least one vector/point.
+    /// Whether the collection contains at least one vector: a metadata
+    /// collection's points count, a graph's nodes without an embedding do
+    /// not.
     pub has_vectors: bool,
     /// Whether the collection is ready to serve search queries.
     pub search_ready: bool,
     /// Whether a valid dimension is configured (> 0 for vector collections).
     pub dimension_configured: bool,
-    /// Total number of points in the collection.
+    /// Total number of points in the collection; for a graph, every stored
+    /// node ([`GraphCollection::len`]).
     pub point_count: usize,
     /// Health status of the primary search index.
     pub index_health: IndexHealth,
 }
 
 impl CollectionDiagnostics {
-    /// Builds diagnostics from a `Collection` instance.
+    /// Builds diagnostics from a `Collection` instance: `point_count` is its
+    /// size ([`Collection::len`]) — a graph's payload-only nodes included —
+    /// while what is about the search index reads the vectors alone.
     pub(crate) fn from_collection(coll: &Collection) -> Self {
-        let config = coll.config();
-        let point_count = config.point_count;
-        let has_vectors = point_count > 0;
-        let dimension_configured = config.dimension > 0;
+        let point_count = coll.len();
+        let has_vectors = coll.vector_count() > 0;
+        let dimension_configured = coll.config().dimension > 0;
         let search_ready = has_vectors && dimension_configured;
-        let index_health = if point_count == 0 {
-            IndexHealth::Empty
-        } else {
+        let index_health = if has_vectors {
             IndexHealth::Healthy
+        } else {
+            IndexHealth::Empty
         };
 
         Self {
@@ -88,7 +92,9 @@ impl VectorCollection {
 }
 
 impl GraphCollection {
-    /// Returns diagnostic information about this collection.
+    /// Returns diagnostic information about this collection: `point_count`
+    /// is [`len`](Self::len), every stored node; `has_vectors`,
+    /// `search_ready` and `index_health` read the node embeddings.
     #[must_use]
     pub fn diagnostics(&self) -> CollectionDiagnostics {
         CollectionDiagnostics::from_collection(&self.inner)

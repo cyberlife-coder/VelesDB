@@ -224,12 +224,23 @@ def test_table_alias_names_the_from_side_and_aliases_list_each_once(
     assert parsed.table_aliases == table_aliases
 
 
-def test_an_unbound_parameter_raises_value_error(temp_db):
-    """A ``$name`` with no binding raises ValueError (VELES-010) — the
-    behaviour the stub documents for ``VelesQLParameterError``'s place."""
+def test_a_parameter_error_raises_velesql_parameter_error(temp_db):
+    """A ``$name`` with no binding, or bound to a value its position cannot
+    take, raises ``VelesQLParameterError`` (VELES-038) — a ``ValueError``,
+    so an existing ``except ValueError`` still catches it."""
+    from velesdb import VelesQLParameterError
+
+    assert issubclass(VelesQLParameterError, ValueError)
     col = temp_db.create_collection("unbound_param", dimension=4)
     col.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"n": 1}}])
-    with pytest.raises(ValueError, match=r"VELES-010.*\$v"):
+    with pytest.raises(VelesQLParameterError, match=r"VELES-038.*\$v"):
         col.query("SELECT * FROM unbound_param WHERE vector NEAR $v LIMIT 5")
-    with pytest.raises(ValueError, match=r"VELES-010.*\$n"):
+    with pytest.raises(VelesQLParameterError, match=r"VELES-038.*\$v"):
+        col.query(
+            "SELECT * FROM unbound_param WHERE vector NEAR $v LIMIT 5",
+            params={"v": "not a vector"},
+        )
+    with pytest.raises(VelesQLParameterError, match=r"VELES-038.*\$n"):
+        temp_db.execute_query("SELECT * FROM unbound_param WHERE n = $n LIMIT 5")
+    with pytest.raises(ValueError, match=r"VELES-038.*\$n"):
         temp_db.execute_query("SELECT * FROM unbound_param WHERE n = $n LIMIT 5")

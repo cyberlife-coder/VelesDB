@@ -52,9 +52,7 @@ pub struct SelectStatement {
     pub columns: SelectColumns,
     /// Collection name (FROM clause).
     pub from: String,
-    /// Aliases visible in scope (BUG-8 fix): the FROM alias, if any, then
-    /// each JOIN alias in order. Its first entry is a JOIN's alias when the
-    /// FROM table has none — read the base side with [`Self::base_alias`].
+    /// Aliases visible in scope: FROM alias + JOIN aliases (BUG-8 fix).
     #[serde(default)]
     pub from_alias: Vec<String>,
     /// JOIN clauses (EPIC-031 US-004).
@@ -252,6 +250,28 @@ impl SelectOrderBy {
         }
     }
 
+    /// Orders two rows' scores under this item: two scores as
+    /// [`Self::directed`] orders them, and a `None` score — a row the item
+    /// cannot score, such as a row without a vector under
+    /// `similarity(vector, $q)` — as a null value, which every ORDER BY sorts
+    /// after every value under `ASC` and before every value under `DESC`
+    /// ([`compare_scores`](crate::velesql::compare_scores); `VELESQL_SPEC.md`,
+    /// "Value order and NULLs"), whatever the metric.
+    #[must_use]
+    pub fn directed_score(
+        &self,
+        a: Option<f32>,
+        b: Option<f32>,
+        higher_is_better: bool,
+    ) -> std::cmp::Ordering {
+        match (a, b) {
+            (Some(a), Some(b)) => self.directed(a.total_cmp(&b), higher_is_better),
+            // A null follows the keyword, not the metric.
+            _ if self.descending => crate::velesql::compare_scores(a, b).reverse(),
+            _ => crate::velesql::compare_scores(a, b),
+        }
+    }
+
     /// Returns a `(column_name, direction)` pair for display.
     #[must_use]
     pub fn to_display_pair(&self) -> (String, String) {
@@ -394,30 +414,6 @@ impl SelectStatement {
             .collect()
     }
 
-    /// The FROM table's own alias, `None` when only JOINs are aliased.
-    ///
-    /// `from_alias` holds the FROM alias first, then one entry per aliased
-    /// JOIN (the order the parser's `dispatch_join_clause` appends them in),
-    /// so the FROM has an alias exactly when the list is longer than the
-    /// JOIN aliases. Read by position, not by name: a JOIN reusing the FROM
-    /// alias leaves the base alias in place.
-    #[must_use]
-    pub fn base_alias(&self) -> Option<&str> {
-        let join_aliases = self.joins.iter().filter(|j| j.alias.is_some()).count();
-        self.from_alias
-            .first()
-            .filter(|_| self.from_alias.len() > join_aliases)
-            .map(String::as_str)
-    }
-
-    /// The name the FROM side's rows are read under in a join — its alias,
-    /// else its table ([`crate::velesql::side_alias`]). The single base-side
-    /// resolver core's join executor and the WASM one scope base rows by.
-    #[must_use]
-    pub fn base_side(&self) -> &str {
-        crate::velesql::side_alias(self.base_alias(), &self.from)
-    }
-
     /// Returns an empty `SelectStatement` with all fields at their defaults.
     ///
     /// Used by [`crate::velesql::Query::new_dml`],
@@ -490,7 +486,3 @@ impl SelectStatement {
                 .is_some_and(Condition::has_vector_search)
     }
 }
-
-#[cfg(test)]
-#[path = "select_tests.rs"]
-mod tests;

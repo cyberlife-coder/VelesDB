@@ -6,6 +6,27 @@
 /// The most query vectors one fusion accepts.
 pub const MAX_FUSED_VECTORS: usize = 10;
 
+/// Refuses a fusion of `count` query vectors that is not between one and
+/// [`MAX_FUSED_VECTORS`].
+///
+/// # Errors
+///
+/// [`Error::Config`](crate::Error::Config) (`VELES-009`) for no vector, or
+/// more than [`MAX_FUSED_VECTORS`].
+pub fn validate_fused_vector_count(count: usize) -> crate::error::Result<()> {
+    if count == 0 {
+        return Err(crate::Error::Config(
+            "multi_query_search requires at least one vector".into(),
+        ));
+    }
+    if count > MAX_FUSED_VECTORS {
+        return Err(crate::Error::Config(format!(
+            "multi_query_search supports at most {MAX_FUSED_VECTORS} vectors, got {count}"
+        )));
+    }
+    Ok(())
+}
+
 /// How many of a branch's best points enter the fusion when `top_k` fused
 /// results are wanted: a branch is overfetched, so a point ranked just past
 /// `top_k` by one query vector but near the top by another still counts.
@@ -25,13 +46,17 @@ pub fn branch_depth(top_k: usize) -> usize {
 ///
 /// Both the dense and the sparse branch can independently miss the globally
 /// optimal result; fetching more candidates from each compensates for the
-/// blind spots of the other. Doubling is the conservative end:
-/// `sparse_search_filtered` oversamples further for payload-filter
-/// selectivity, so this depth works at the fusion level, not the per-branch
-/// one. Every engine
+/// blind spots of the other. Doubling is the conservative end, and a filter
+/// does not deepen it: each branch admits only the rows the filter matches
+/// (core's sparse branch, `Collection::ranked_rows`), so this depth works at
+/// the fusion level, not as a filter's headroom. Every engine
 /// running the hybrid search reads its depth here — core's query pipeline
 /// and the WASM executor alike.
 #[must_use]
 pub fn dense_sparse_candidate_k(limit: usize) -> usize {
     limit.saturating_mul(2).max(limit.saturating_add(10))
 }
+
+#[cfg(test)]
+#[path = "branches_tests.rs"]
+mod tests;

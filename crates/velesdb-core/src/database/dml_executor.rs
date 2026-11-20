@@ -46,20 +46,33 @@ impl Database {
     ) -> Result<Vec<SearchResult>> {
         self.check_dml_mutation("DELETE", &stmt.table)?;
         let collection = self.resolve_writable_collection(&stmt.table)?;
-        // `id = N` / `id IN (...)` name the points to remove, whatever they
-        // carry (a graph node without a vector included). Any other WHERE
-        // removes the rows it selects, as UPDATE selects them.
-        let ids = if let Some(named) = point_ids_named(&stmt.where_clause) {
-            named?
-        } else {
-            let filter = Self::build_dml_filter("DELETE", Some(&stmt.where_clause), params)?;
-            Self::matching_points(&collection, filter.as_ref())
-                .iter()
-                .map(|point| point.id)
-                .collect()
-        };
+        // The shape first, then the parameters, bound once: `id = $id` names
+        // a point once `$id` is bound, and an unbound `$name` refuses the
+        // statement (VELES-038) before any row is read.
+        crate::velesql::check_dml_where("DELETE", Some(&stmt.where_clause))?;
+        let where_clause = crate::velesql::bind_condition(&stmt.where_clause, params)?;
+        let ids = Self::delete_target_ids(&collection, &where_clause)?;
         collection.delete(&ids)?;
         Ok(Vec::new())
+    }
+
+    /// The ids a DELETE with the bound `where_clause` removes: those
+    /// `id = N` / `id IN (...)` name, whatever they carry (a graph node
+    /// without a vector included); for any other WHERE, the rows it selects,
+    /// as UPDATE selects them (`Collection::rows_where`).
+    fn delete_target_ids(
+        collection: &crate::collection::Collection,
+        where_clause: &crate::velesql::Condition,
+    ) -> Result<Vec<u64>> {
+        if let Some(named) = point_ids_named(where_clause) {
+            return named;
+        }
+        let filter = Self::build_dml_filter("DELETE", where_clause)?;
+        Ok(collection
+            .rows_where(Some(&filter))
+            .iter()
+            .map(|point| point.id)
+            .collect())
     }
 
     /// Executes a DELETE EDGE statement.

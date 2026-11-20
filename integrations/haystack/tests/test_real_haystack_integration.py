@@ -336,6 +336,34 @@ def test_is_metadata_only_false_for_vector_collection_via_real_velesdb(tmp_path)
     assert store.is_metadata_only() is False
 
 
+@pytest.mark.parametrize("embedding", [None, []])
+@pytest.mark.parametrize("write", ["write_documents", "stream_insert", "write_documents_streaming"])
+def test_a_document_without_an_embedding_is_refused_up_front_via_real_velesdb(
+    tmp_path, embedding, write
+) -> None:
+    """Every row of a vector collection stores a vector: a document without
+    an embedding is refused before anything is written, the error naming
+    it — never logged as "stored" while core refuses the whole batch."""
+    store = _store(tmp_path)
+    docs = _docs() + [Document(id="no-vector", content="text only", embedding=embedding)]
+
+    with pytest.raises(ValueError, match="no-vector"):
+        getattr(store, write)(docs)
+
+    assert store.count_documents() == 0
+
+
+def test_a_metadata_only_collection_takes_documents_without_an_embedding(tmp_path) -> None:
+    store = _store(tmp_path)
+    store._get_db().create_metadata_collection("real_test")
+
+    written = store.write_documents([Document(id="m-1", content="text only")])
+
+    assert written == 1
+    assert store.is_metadata_only() is True
+    assert [d.id for d in store.filter_documents()] == ["m-1"]
+
+
 # ---------------------------------------------------------------------------
 # Pipeline integration — exercises the @component decorator contract
 # ---------------------------------------------------------------------------

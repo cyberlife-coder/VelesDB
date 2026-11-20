@@ -66,15 +66,20 @@ impl ParseError {
     }
 
     /// Creates a missing parameter error.
+    ///
+    /// Kept for source compatibility only: no query produces it, because
+    /// the parser never sees the parameters. An unbound `$name` is an
+    /// execution error, [`crate::Error::QueryParameter`] (`VELES-038`).
     #[must_use]
+    #[deprecated(
+        since = "8.2.0",
+        note = "never produced: an unbound parameter is `Error::QueryParameter` (VELES-038)"
+    )]
     pub fn missing_parameter(param: impl Into<String>) -> Self {
         let p = param.into();
-        Self::new(
-            ParseErrorKind::MissingParameter,
-            0,
-            p.clone(),
-            format!("Missing parameter '${p}'"),
-        )
+        #[allow(deprecated)]
+        let kind = ParseErrorKind::MissingParameter;
+        Self::new(kind, 0, p.clone(), format!("Missing parameter '${p}'"))
     }
 }
 
@@ -93,6 +98,10 @@ impl fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 /// Kind of parse error.
+///
+/// A `$name` the caller did not bind, or bound to a value its position cannot
+/// take, is not a parse error — the parser never sees the parameters — but
+/// an execution error, [`crate::Error::QueryParameter`] (`VELES-038`).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseErrorKind {
@@ -107,6 +116,13 @@ pub enum ParseErrorKind {
     /// Vector dimension mismatch (E004).
     DimensionMismatch,
     /// Missing parameter (E005).
+    ///
+    /// No query produces it: see [`ParseError::missing_parameter`]. It stays
+    /// so the variants keep their discriminants.
+    #[deprecated(
+        since = "8.2.0",
+        note = "never produced: an unbound parameter is `Error::QueryParameter` (VELES-038)"
+    )]
     MissingParameter,
     /// Type mismatch (E006).
     TypeMismatch,
@@ -123,6 +139,7 @@ impl ParseErrorKind {
             Self::UnknownColumn => "E002",
             Self::CollectionNotFound => "E003",
             Self::DimensionMismatch => "E004",
+            #[allow(deprecated)]
             Self::MissingParameter => "E005",
             Self::TypeMismatch => "E006",
             Self::ComplexityLimit => "E007",

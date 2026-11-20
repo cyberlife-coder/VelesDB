@@ -97,7 +97,7 @@ fn test_insert_edge_with_duplicate_explicit_id_returns_error() {
     assert!(err.is_err(), "duplicate explicit id must be rejected");
     let msg = err.expect_err("test: err");
     assert!(
-        msg.contains("already exists") && msg.contains('1'),
+        msg.to_string().contains("already exists") && msg.to_string().contains('1'),
         "error should mention existing id, got: {msg}"
     );
     // Store unchanged: only the first edge should exist.
@@ -162,7 +162,7 @@ fn test_reinserting_a_derived_id_edge_is_refused_untouched() {
             Some(serde_json::json!({"w": 2})),
         )
         .expect_err("the derived id is taken");
-    assert!(err.contains("already exists"), "{err}");
+    assert!(err.to_string().contains("already exists"), "{err}");
     assert_eq!(g.edges().len(), 1, "one logical edge, one stored edge");
     assert_eq!(g.edges()[0].payload, Some(serde_json::json!({"w": 1})));
     assert!(g.delete_edge_by_id(first));

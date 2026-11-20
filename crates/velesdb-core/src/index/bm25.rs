@@ -126,6 +126,14 @@ pub struct Bm25Index {
     /// → `free_doc_ids` → `next_doc_id` → `doc_count` →
     /// `total_doc_length`. No path takes a lower-positioned lock while
     /// holding a higher-positioned one.
+    ///
+    /// A document enters or leaves the postings, `documents` and the corpus
+    /// statistics (`doc_count`, `total_doc_length`) under one hold of the
+    /// `inverted_index` and `documents` write guards ([`CorpusStats`]), so a
+    /// score — every read under the `inverted_index` read guard — weighs the
+    /// postings by the corpus that holds them. A point's internal doc id is
+    /// allocated and released under that same write guard, so an add and a
+    /// removal of one point never interleave.
     term_dict: RwLock<TermDict>,
     /// Inverted index: term id -> adaptive posting list (auto-promotes to Roaring)
     inverted_index: RwLock<FxHashMap<TermId, PostingList>>,
@@ -187,9 +195,14 @@ impl Bm25Index {
     /// * `id` - Unique point identifier
     /// * `text` - Document text to index
     ///
+    /// Text with no indexable token (`"N/A"`, `"-"`, `"7"`) replaces the
+    /// previous version with nothing: the point leaves the index, as on
+    /// [`Self::remove_document`]. Returning without removing it kept the old
+    /// terms searchable under a payload that no longer held them.
     pub fn add_document(&self, id: u64, text: &str) {
         let tokens = Self::tokenize(text);
         if tokens.is_empty() {
+            self.remove_document(id);
             return;
         }
 
@@ -200,52 +213,29 @@ impl Bm25Index {
         #[allow(clippy::cast_possible_truncation)]
         let doc_length = tokens.len() as u32;
 
-        // Create document (move term_freqs, avoid clone)
         let doc = Document {
             term_freqs,
             length: doc_length,
         };
 
-        // Remove previous version of this point from BM25 postings/doc stats
-        // while keeping the same internal doc-id mapping for stable updates.
-        self.remove_document_internal(id, false);
-
-        // Resolve internal BM25 doc ID (u32) for RoaringBitmap-backed postings.
+        // The previous version leaves and this one enters under one hold of
+        // the postings, with the statistics a score weighs them by
+        // ([`Self::score_candidates`]) and the internal doc id it is posted
+        // under: a removal of the point, which takes the same guard first,
+        // cannot release that id in between.
+        let mut postings = self.inverted_index.write();
+        let mut docs = self.documents.write();
+        // A point already indexed keeps its id, so an update is stable.
         let Some(id_u32) = self.get_or_allocate_doc_id(id) else {
             return;
         };
-
-        // Update inverted index with adaptive PostingList.
-        // PostingList auto-promotes to Roaring when cardinality exceeds
-        // threshold. `TermId` is `Copy`, so `entry()` allocates nothing.
-        {
-            let mut inv_idx = self.inverted_index.write();
-            for term_id in doc.term_freqs.keys() {
-                inv_idx
-                    .entry(*term_id)
-                    .or_insert_with(PostingList::new)
-                    .insert(id_u32);
-            }
+        let old = docs.insert(id, doc);
+        CorpusStats::write(self).replace(old.as_ref().map(|old| old.length), Some(doc_length));
+        if let Some(old) = &old {
+            unpost(&mut postings, old, id_u32);
         }
-
-        // Store document
-        {
-            let mut docs = self.documents.write();
-            // If document exists, remove old length from total
-            if let Some(old_doc) = docs.get(&id) {
-                let mut total = self.total_doc_length.write();
-                *total = total.saturating_sub(u64::from(old_doc.length));
-            } else {
-                let mut count = self.doc_count.write();
-                *count += 1;
-            }
-            docs.insert(id, doc);
-        }
-
-        // Update total document length
-        {
-            let mut total = self.total_doc_length.write();
-            *total += u64::from(doc_length);
+        if let Some(new) = docs.get(&id) {
+            post(&mut postings, new, id_u32);
         }
     }
 
@@ -283,7 +273,29 @@ impl Bm25Index {
     /// `true` if the document was found and removed.
     ///
     pub fn remove_document(&self, id: u64) -> bool {
-        self.remove_document_internal(id, true)
+        // The document leaves the postings, the statistics and its id mapping
+        // under one hold of the postings, as `add_document` puts it in: two
+        // removals of one point are serialized, and only the one that takes
+        // the mapping out recycles the id — once. Each used to push the id it
+        // had read before the other released it, so the free list handed it
+        // to two later points and left one unsearchable.
+        let mut postings = self.inverted_index.write();
+        let removed = self.documents.write().remove(&id);
+        let released = self.release_doc_id(id);
+        if let (Some(doc), Some(doc_id)) = (&removed, released) {
+            CorpusStats::write(self).replace(Some(doc.length), None);
+            unpost(&mut postings, doc, doc_id);
+        }
+        removed.is_some()
+    }
+
+    /// Takes `point_id`'s internal doc id out of both mappings and onto the
+    /// free list; the id, or `None` when the point has none.
+    fn release_doc_id(&self, point_id: u64) -> Option<u32> {
+        let released = self.point_to_doc.write().remove(&point_id)?;
+        self.doc_to_point.write().remove(&released);
+        self.free_doc_ids.write().push(released);
+        Some(released)
     }
 
     /// Searches the index for documents matching the query.
@@ -295,16 +307,21 @@ impl Bm25Index {
     ///
     /// # Returns
     ///
-    /// Vector of (`document_id`, score) tuples, sorted by score descending.
-    #[allow(clippy::cast_precision_loss)]
+    /// Vector of (`document_id`, score) tuples, sorted by score descending,
+    /// a tie by ascending id.
     pub fn search(&self, query: &str, k: usize) -> Vec<(u64, f32)> {
+        let mut scores = self.score_all(query);
+        Self::top_k_sort(&mut scores, k);
+        scores
+    }
+
+    /// Every document matching `query` with its score, in no particular
+    /// order: what [`Self::search`] cuts to its top `k`, for a caller that
+    /// decides which documents may take a place before the cut — a
+    /// collection admitting only its rows (`collection/search/ranked.rs`).
+    pub(crate) fn score_all(&self, query: &str) -> Vec<(u64, f32)> {
         let query_terms = Self::tokenize(query);
         if query_terms.is_empty() {
-            return Vec::new();
-        }
-
-        let doc_count = *self.doc_count.read();
-        if doc_count == 0 {
             return Vec::new();
         }
 
@@ -323,30 +340,34 @@ impl Bm25Index {
         if query_ids.is_empty() {
             return Vec::new();
         }
+        #[cfg(test)]
+        terms_resolved();
 
-        let total_length = *self.total_doc_length.read();
-        let avgdl = total_length as f32 / doc_count as f32;
-
-        let mut scores = self.score_candidates(&query_ids, doc_count, avgdl);
-        Self::top_k_sort(&mut scores, k);
-        scores
+        self.score_candidates(&query_ids)
     }
 
-    /// Scores all candidate documents for the given query term ids.
+    /// Scores all candidate documents for the given query term ids, from one
+    /// state of the index: the postings, the documents and the corpus
+    /// statistics are all read under the postings' read guard, which every
+    /// change to any of them holds for writing ([`CorpusStats`]).
+    ///
+    /// LOCK ORDER: `inverted_index` → `documents` → `doc_to_point` →
+    /// `doc_count` → `total_doc_length`, all read.
     #[allow(clippy::cast_precision_loss)]
-    fn score_candidates(
-        &self,
-        query_ids: &[TermId],
-        doc_count: usize,
-        avgdl: f32,
-    ) -> Vec<(u64, f32)> {
+    fn score_candidates(&self, query_ids: &[TermId]) -> Vec<(u64, f32)> {
         let k1 = self.params.k1;
         let b = self.params.b;
 
         let inv_idx = self.inverted_index.read();
         let docs = self.documents.read();
         let doc_to_point = self.doc_to_point.read();
+        let doc_count = *self.doc_count.read();
+        let total_length = *self.total_doc_length.read();
+        if doc_count == 0 {
+            return Vec::new();
+        }
         let n = doc_count as f32;
+        let avgdl = total_length as f32 / n;
 
         let idf_cache = Self::build_idf_cache(query_ids, &inv_idx, n);
         let candidate_union = Self::build_candidate_union(query_ids, &inv_idx);
@@ -380,7 +401,11 @@ impl Bm25Index {
                 let idf_val = if df == 0 {
                     0.0
                 } else {
-                    let df_f = df as f32;
+                    // Never more documents than the corpus holds: the
+                    // statistics are read with the postings
+                    // (`score_candidates`), so this only guards the formula,
+                    // whose idf would turn negative past `n`.
+                    let df_f = (df as f32).min(n);
                     ((n - df_f + 0.5) / (df_f + 0.5) + 1.0).ln()
                 };
                 (id, idf_val)
@@ -402,9 +427,11 @@ impl Bm25Index {
         candidate_union
     }
 
-    /// Partial sort + truncate for top-k results (descending by score).
+    /// Partial sort + truncate for top-k results: descending by score, a tie
+    /// by ascending id and a NaN last ([`crate::distance::hit_rank_key`]).
     fn top_k_sort(scores: &mut Vec<(u64, f32)>, k: usize) {
-        super::top_k_partial_sort(scores, k, |a, b| b.1.total_cmp(&a.1));
+        let rank = |&(id, score): &(u64, f32)| crate::distance::hit_rank_key(score, id);
+        super::top_k_partial_sort(scores, k, |a, b| rank(b).cmp(&rank(a)));
     }
 
     /// Fast BM25 scoring with pre-computed IDF cache.
@@ -459,7 +486,9 @@ impl Bm25Index {
         self.inverted_index.read().len()
     }
 
-    /// Gets existing internal doc-id or allocates a new one.
+    /// Gets existing internal doc-id or allocates a new one. Called under
+    /// the postings' write guard, as every release of an id is
+    /// ([`Self::release_doc_id`]).
     fn get_or_allocate_doc_id(&self, point_id: u64) -> Option<u32> {
         let mut map = self.point_to_doc.write();
         if let Some(existing) = map.get(&point_id).copied() {
@@ -486,52 +515,93 @@ impl Bm25Index {
         self.doc_to_point.write().insert(allocated, point_id);
         Some(allocated)
     }
+}
 
-    /// Removes a point from BM25 internals.
-    /// If `release_mapping` is true, the internal doc-id is recycled.
-    fn remove_document_internal(&self, point_id: u64, release_mapping: bool) -> bool {
-        let Some(doc_id_u32) = self.point_to_doc.read().get(&point_id).copied() else {
-            return false;
-        };
+/// Adds the internal doc id `doc_id` to the postings of `doc`'s terms.
+/// `PostingList` auto-promotes to Roaring when its cardinality exceeds its
+/// threshold; `TermId` is `Copy`, so `entry()` allocates nothing.
+fn post(postings: &mut FxHashMap<TermId, PostingList>, doc: &Document, doc_id: u32) {
+    for term_id in doc.term_freqs.keys() {
+        postings
+            .entry(*term_id)
+            .or_insert_with(PostingList::new)
+            .insert(doc_id);
+    }
+}
 
-        let doc = {
-            let mut docs = self.documents.write();
-            docs.remove(&point_id)
-        };
-
-        let mut removed = false;
-        if let Some(doc) = doc {
-            {
-                let mut inv_idx = self.inverted_index.write();
-                for term in doc.term_freqs.keys() {
-                    if let Some(posting_list) = inv_idx.get_mut(term) {
-                        posting_list.remove(doc_id_u32);
-                        if posting_list.is_empty() {
-                            inv_idx.remove(term);
-                        }
-                    }
-                }
+/// Removes the internal doc id `doc_id` from the postings of `doc`'s terms,
+/// and a term's postings once empty.
+fn unpost(postings: &mut FxHashMap<TermId, PostingList>, doc: &Document, doc_id: u32) {
+    for term in doc.term_freqs.keys() {
+        if let Some(posting_list) = postings.get_mut(term) {
+            posting_list.remove(doc_id);
+            if posting_list.is_empty() {
+                postings.remove(term);
             }
-
-            {
-                let mut count = self.doc_count.write();
-                *count = count.saturating_sub(1);
-            }
-            {
-                let mut total = self.total_doc_length.write();
-                *total = total.saturating_sub(u64::from(doc.length));
-            }
-
-            removed = true;
         }
+    }
+}
 
-        if release_mapping {
-            self.point_to_doc.write().remove(&point_id);
-            self.doc_to_point.write().remove(&doc_id_u32);
-            self.free_doc_ids.write().push(doc_id_u32);
+/// The corpus statistics a score weighs a term by — how many documents the
+/// index holds and their total length — held for writing. Every change to
+/// them is made under the postings' write guard, with the postings and the
+/// documents it describes, so a score — which takes the postings' read
+/// guard before anything else — reads one state: a term is never counted in
+/// more documents than the corpus holds (which made its idf negative and
+/// dropped every hit).
+///
+/// LOCK ORDER: `doc_count` → `total_doc_length`, the last two of the
+/// index's own order, taken under `inverted_index`.
+struct CorpusStats<'a> {
+    count: parking_lot::RwLockWriteGuard<'a, usize>,
+    total_length: parking_lot::RwLockWriteGuard<'a, u64>,
+}
+
+impl<'a> CorpusStats<'a> {
+    fn write(index: &'a Bm25Index) -> Self {
+        let count = index.doc_count.write();
+        let total_length = index.total_doc_length.write();
+        Self {
+            count,
+            total_length,
         }
+    }
 
-        removed
+    /// The corpus's document of length `old`, if any, replaced by one of
+    /// length `new`, if any.
+    fn replace(&mut self, old: Option<u32>, new: Option<u32>) {
+        if let Some(old) = old {
+            *self.count = self.count.saturating_sub(1);
+            *self.total_length = self.total_length.saturating_sub(u64::from(old));
+        }
+        if let Some(new) = new {
+            *self.count += 1;
+            *self.total_length += u64::from(new);
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Run once, the next time a score on this thread has resolved its
+    /// query's terms ([`on_terms_resolved`]).
+    static ON_TERMS_RESOLVED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `hook` once, the next time [`Bm25Index::score_all`] on this thread
+/// has resolved its query's terms, before it reads the postings and the
+/// statistics it scores them by: where a write landing between two of those
+/// reads would tear them.
+#[cfg(test)]
+pub(super) fn on_terms_resolved(hook: impl FnOnce() + 'static) {
+    ON_TERMS_RESOLVED.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn terms_resolved() {
+    if let Some(hook) = ON_TERMS_RESOLVED.with(|slot| slot.borrow_mut().take()) {
+        hook();
     }
 }
 
@@ -615,7 +685,7 @@ impl Bm25Index {
     /// Silently skips documents missing from `point_to_doc`. Such a
     /// mismatch would indicate a corrupt snapshot and is logged
     /// rather than raised, matching the existing BM25
-    /// `remove_document_internal` tolerance for unknown ids.
+    /// `remove_document` tolerance for unknown ids.
     ///
     /// [`Error::IndexCorrupted`]: crate::Error::IndexCorrupted
     pub(crate) fn from_snapshot(mut snapshot: Bm25Snapshot) -> crate::Result<Self> {

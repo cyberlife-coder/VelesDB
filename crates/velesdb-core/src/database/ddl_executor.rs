@@ -70,8 +70,8 @@ impl Database {
         name: &str,
         params: &crate::velesql::VectorCollectionParams,
     ) -> Result<Vec<SearchResult>> {
-        let metric = resolve_metric(&params.metric)?;
-        let storage = resolve_storage_mode(params.storage.as_deref())?;
+        let metric = crate::velesql::resolve_metric(&params.metric)?;
+        let storage = crate::velesql::resolve_storage_mode(params.storage.as_deref())?;
 
         if params.m.is_some() || params.ef_construction.is_some() {
             self.create_vector_collection_with_hnsw(
@@ -98,7 +98,7 @@ impl Database {
 
         if let Some(dim) = params.dimension {
             let metric_str = params.metric.as_deref().unwrap_or("cosine");
-            let metric = resolve_metric(metric_str)?;
+            let metric = crate::velesql::resolve_metric(metric_str)?;
             self.create_graph_collection_with_embeddings(name, schema, dim, metric)?;
         } else {
             self.create_graph_collection(name, schema)?;
@@ -173,9 +173,10 @@ impl Database {
 
     /// Executes a TRUNCATE statement.
     ///
-    /// Retrieves all point IDs and deletes them, returning a payload
-    /// with the count of deleted points. Returns success with
-    /// `deleted_count: 0` if the collection is already empty.
+    /// Deletes every id the collection stores, returning a payload with the
+    /// count of rows deleted ([`Collection::delete_counted`](crate::collection::Collection::delete_counted)).
+    /// Returns success with `deleted_count: 0` if the collection is already
+    /// empty.
     ///
     /// # Errors
     ///
@@ -187,11 +188,15 @@ impl Database {
         }
         // Vector/legacy + metadata.
         let collection = self.resolve_writable_collection(&stmt.collection)?;
-        let ids = collection.all_point_ids();
-        let count = ids.len();
-        if !ids.is_empty() {
-            collection.delete(&ids)?;
-        }
+        // Every stored id, so nothing is left behind, but only the rows
+        // count: what a vector collection stores for an id without a vector
+        // is no row of it.
+        let ids = collection.stored_ids();
+        let count = if ids.is_empty() {
+            0
+        } else {
+            collection.delete_counted(&ids)?
+        };
         let payload = serde_json::json!({"deleted_count": count});
         let result = SearchResult::new(crate::Point::metadata_only(0, payload), 0.0);
         Ok(vec![result])
@@ -297,38 +302,6 @@ fn ddl_operation_info(ddl: &DdlStatement) -> (&str, String) {
         DdlStatement::Truncate(stmt) => ("TRUNCATE", stmt.collection.clone()),
         DdlStatement::AlterCollection(stmt) => ("ALTER", stmt.collection.clone()),
     }
-}
-
-/// Resolves a metric name string to a `DistanceMetric` enum.
-///
-/// # Errors
-///
-/// Returns a query error if the metric name is unrecognized.
-fn resolve_metric(s: &str) -> Result<crate::DistanceMetric> {
-    crate::DistanceMetric::parse_alias(s).ok_or_else(|| {
-        Error::Query(format!(
-            "Unknown metric '{s}'. Use: {}",
-            crate::distance::METRIC_ALIAS_LIST
-        ))
-    })
-}
-
-/// Resolves an optional storage mode string to a `StorageMode` enum.
-///
-/// Defaults to `StorageMode::Full` when `None` is provided.
-///
-/// # Errors
-///
-/// Returns a query error if the storage mode name is unrecognized.
-fn resolve_storage_mode(s: Option<&str>) -> Result<crate::StorageMode> {
-    let Some(name) = s else {
-        return Ok(crate::StorageMode::default());
-    };
-    crate::StorageMode::parse_alias(name).ok_or_else(|| {
-        Error::Query(format!(
-            "Unknown storage mode '{name}'. Use: full, sq8, binary, pq, rabitq"
-        ))
-    })
 }
 
 /// Maps a `VelesQL` type name string to a `ValueType`.

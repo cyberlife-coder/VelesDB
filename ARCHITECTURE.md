@@ -159,7 +159,7 @@ A VelesDB database is **a directory**: `velesdb.lock`, the exclusive process loc
 
 Secondary indexes have no file of their own: they live in memory and are rebuilt at open from the definitions in `config.json`.
 
-Recovery on restart replays `vectors.wal` into the vector store, `payloads.log` past `payloads.snapshot`, `bm25.wal` over `bm25.snapshot` (BM25 is rebuilt from the payloads only when no snapshot exists) and the sparse WALs over their snapshots, reconciles the HNSW graph against the store, and last replays `edges.wal` over `edge_store.bin`: see [CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md#recovery-architecture).
+Recovery on restart replays `vectors.wal` into the vector store, `payloads.log` past `payloads.snapshot`, `bm25.wal` over `bm25.snapshot` (BM25 is rebuilt from the payloads only when no snapshot exists, or when no `bm25.coverage` marker vouches for a graph's snapshot — an older binary left out its nodes without an embedding; a vouched graph snapshot is caught up on the payloads stored since the marker's position) and the sparse WALs over their snapshots, reconciles the HNSW graph against the store, and last replays `edges.wal` over `edge_store.bin`: see [CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md#recovery-architecture).
 
 For the byte-level layout and serialization format, see [`docs/STORAGE_FORMAT.md`](docs/STORAGE_FORMAT.md).
 

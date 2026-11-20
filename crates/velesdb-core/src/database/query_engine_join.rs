@@ -40,6 +40,12 @@ impl Database {
         let base_collection = self.resolve_collection(&query.select.from)?;
         let joins = query.select.joins.clone();
         let (analysis, post_join_filters) = Self::prepare_join_pushdown(&mut query, params)?;
+        let post_join_filters = self.bind_post_join_text_matches(
+            &base_collection,
+            &query.select,
+            &joins,
+            post_join_filters,
+        )?;
         let row_budget = Self::join_row_budget(budget_select, &post_join_filters);
         // A RIGHT or FULL join tells an unmatched joined point only against
         // every base row, so it reads them all at once.
@@ -93,18 +99,8 @@ impl Database {
         plan: &JoinPlan<'_>,
     ) -> Result<Vec<SearchResult>> {
         let select = plan.select;
-        let from_alias = select.base_side();
-        let mut results: Vec<SearchResult> = base
-            .into_iter()
-            .map(|mut r| {
-                r.point.payload = Some(crate::velesql::scope_base(
-                    r.point.payload.take(),
-                    from_alias,
-                    r.point.id,
-                ));
-                r
-            })
-            .collect();
+        let from_alias = crate::velesql::base_side(select);
+        let mut results = scope_base_rows(base, from_alias);
         let mut prior_aliases = vec![from_alias];
         let mut after_outer_join = false;
         for join in plan.joins {
@@ -145,8 +141,10 @@ impl Database {
         Ok(results)
     }
 
-    /// Resolves WHERE parameters, runs pushdown analysis, and strips from the
-    /// base query every predicate the joined rows answer
+    /// Resolves which side each text `MATCH` reads
+    /// ([`Self::resolve_join_text_matches`]) and the WHERE parameters, runs
+    /// pushdown analysis, and strips from the base query every predicate the
+    /// joined rows answer
     /// ([`PushdownAnalysis::joined_row_filters`]).
     ///
     /// [`PushdownAnalysis::joined_row_filters`]: crate::collection::search::query::pushdown::PushdownAnalysis::joined_row_filters
@@ -161,6 +159,7 @@ impl Database {
         crate::collection::search::query::pushdown::PushdownAnalysis,
         Vec<crate::velesql::Condition>,
     )> {
+        Self::resolve_join_text_matches(&mut single_query.select)?;
         if let Some(cond) = single_query.select.where_clause.take() {
             single_query.select.where_clause = Some(crate::velesql::bind_condition(&cond, params)?);
         }
@@ -173,16 +172,22 @@ impl Database {
         // point matches, so the whole WHERE holds on the joined rows there.
         let resolved_where = single_query.select.where_clause.clone();
         let outer = keeps_unmatched_side_rows(&single_query.select.joins);
+        let base = crate::velesql::base_side(&single_query.select).to_string();
         single_query.select.joins.clear();
         if outer {
             single_query.select.where_clause = None;
             return Ok((analysis, resolved_where.into_iter().collect()));
         }
         let joined_row_filters = analysis.joined_row_filters();
-        if !joined_row_filters.is_empty() {
-            single_query.select.where_clause =
-                Self::strip_pushed_conditions(resolved_where.as_ref(), &joined_row_filters);
-        }
+        let base_where = if joined_row_filters.is_empty() {
+            resolved_where
+        } else {
+            Self::strip_pushed_conditions(resolved_where.as_ref(), &joined_row_filters)
+        };
+        // What stays on the base query reads the base rows, before any join:
+        // a column the FROM side's name qualifies is theirs.
+        single_query.select.where_clause =
+            base_where.map(|condition| crate::velesql::resolve_base_qualifiers(&condition, &base));
         Ok((analysis, joined_row_filters))
     }
 
@@ -249,6 +254,22 @@ pub(super) struct JoinStep<'a> {
     /// Whether an earlier join of the chain was RIGHT or FULL: its rows for
     /// unmatched points carry the joined point's id, not a base id.
     pub(super) after_outer_join: bool,
+}
+
+/// The base rows of a JOIN, each one's payload scoped under the FROM side's
+/// name `alias` (`velesql::scope_base`).
+fn scope_base_rows(base: Vec<SearchResult>, alias: &str) -> Vec<SearchResult> {
+    base.into_iter()
+        .map(|mut row| {
+            let id = row.point.id;
+            row.point.payload = Some(crate::velesql::scope_base(
+                row.point.payload.take(),
+                alias,
+                id,
+            ));
+            row
+        })
+        .collect()
 }
 
 /// Whether any of `joins` is RIGHT or FULL: one that adds rows for the joined

@@ -506,3 +506,32 @@ fn jaccard_calculate_stays_in_its_declared_range_on_negative_weights() {
     // a non-positive ratio on a positive-vs-negative pair.
     assert!((raw - low).abs() < f32::EPSILON);
 }
+
+#[test]
+fn checked_calculate_refuses_vectors_it_cannot_compare() {
+    for metric in [
+        DistanceMetric::Cosine,
+        DistanceMetric::Euclidean,
+        DistanceMetric::DotProduct,
+        DistanceMetric::Hamming,
+        DistanceMetric::Jaccard,
+    ] {
+        assert_eq!(
+            metric.checked_calculate(&[], &[1.0, 0.0]),
+            None,
+            "{metric:?}"
+        );
+        assert_eq!(
+            metric.checked_calculate(&[1.0], &[1.0, 0.0]),
+            None,
+            "{metric:?}"
+        );
+        assert_eq!(metric.checked_calculate(&[], &[]), None, "{metric:?}");
+        let (a, b) = ([1.0, 0.0], [0.0, 1.0]);
+        assert_eq!(
+            metric.checked_calculate(&a, &b),
+            Some(metric.calculate(&a, &b)),
+            "{metric:?}"
+        );
+    }
+}

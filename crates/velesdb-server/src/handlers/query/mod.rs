@@ -70,7 +70,7 @@ fn is_ast_routed_dml(parsed: &Query) -> bool {
         (status = 500, description = "An engine fault during execution (storage, I/O, internal)", body = crate::types::VelesqlErrorResponse),
         (status = 503, description = "The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement", body = crate::types::VelesqlErrorResponse),
         (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
-        (status = 422, description = "Query validation/execution error", body = crate::types::VelesqlErrorResponse),
+        (status = 422, description = "Query validation/execution error, or a `$name` parameter unbound or of the wrong type (`VELESQL_PARAMETER_ERROR`)", body = crate::types::VelesqlErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
@@ -114,7 +114,14 @@ fn dispatch_parsed_query(
         return execute_mutation_query(state, parsed, &req.params, start);
     }
 
-    let collection_name = match resolve_collection_name(parsed, req) {
+    // The body's `collection` fills `_collection` for a top-level MATCH when
+    // the caller set none: core's one rule, shared with the Tauri plugin.
+    let params = velesdb_core::velesql::with_collection_param(
+        parsed,
+        &req.params,
+        req.collection.as_deref(),
+    );
+    let collection_name = match resolve_collection_name(parsed, &params) {
         Ok(name) => name,
         Err(resp) => {
             state.operational_metrics.inc_errors();
@@ -124,10 +131,10 @@ fn dispatch_parsed_query(
 
     // BUG-1 FIX: Detect aggregation queries and route to execute_aggregate
     if parsed.select.is_aggregation_query() {
-        return execute_aggregation_query(state, &collection_name, parsed, &req.params, start);
+        return execute_aggregation_query(state, &collection_name, parsed, &params, start);
     }
 
-    let results = match execute_standard_query(state, parsed, &collection_name, req) {
+    let results = match execute_standard_query(state, parsed, &params) {
         Ok(r) => r,
         Err(resp) => {
             state.operational_metrics.inc_errors();
@@ -168,54 +175,47 @@ fn execute_mutation_query(
     }
 }
 
-/// Determine the target collection from the parsed query and request body.
+/// The collection `parsed` reads, by core's rule
+/// ([`velesdb_core::velesql::collection_target`]): its `FROM`, else, for a
+/// top-level `MATCH`, the `_collection` of `params` (filled from the body's
+/// `collection` when the caller set none). A `_collection` that is no
+/// collection name is core's parameter error (`VELESQL_PARAMETER_ERROR`); a
+/// top-level `MATCH` naming none is refused; a write on this path (`INSERT
+/// INTO`, `UPSERT`, `UPDATE`) names its table in the statement and resolves
+/// to no name here.
 #[allow(clippy::result_large_err)]
 fn resolve_collection_name(
     parsed: &Query,
-    req: &QueryRequest,
+    params: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<String, axum::response::Response> {
-    if parsed.is_match_query() {
-        req.collection
-            .as_ref()
-            .filter(|name| !name.is_empty())
-            .cloned()
-            .ok_or_else(|| {
-                velesql_error(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "VELESQL_MISSING_COLLECTION",
-                    "MATCH query via /query requires `collection` in request body",
-                    "Add `collection` to the /query JSON body or use /collections/{name}/match",
-                    Some(serde_json::json!({
-                        "field": "collection",
-                        "endpoint": "/query",
-                        "query_type": "MATCH"
-                    })),
-                )
-            })
-    } else {
-        Ok(parsed.select.from.clone())
+    match velesdb_core::velesql::collection_target(parsed, params) {
+        Ok(Some(name)) => return Ok(name.to_string()),
+        Ok(None) if !parsed.is_match_query() => return Ok(String::new()),
+        Ok(None) => {}
+        Err(e) => return Err(velesql_execution_error(&e, "VELESQL_PARAMETER_ERROR", "")),
     }
+    Err(velesql_error(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "VELESQL_MISSING_COLLECTION",
+        "MATCH query via /query requires `collection` in request body or `_collection` in params",
+        "Add `collection` to the /query JSON body or use /collections/{name}/match",
+        Some(serde_json::json!({
+            "field": "collection",
+            "endpoint": "/query",
+            "query_type": "MATCH"
+        })),
+    ))
 }
 
-/// Execute a standard (non-aggregation) query, dispatching MATCH vs SELECT.
+/// Execute a standard (non-aggregation) query, a MATCH or a SELECT, with the
+/// parameters its `collection` filled (`velesql::with_collection_param`).
 #[allow(clippy::result_large_err)]
 fn execute_standard_query(
     state: &Arc<AppState>,
     parsed: &Query,
-    collection_name: &str,
-    req: &QueryRequest,
+    params: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<Vec<velesdb_core::SearchResult>, axum::response::Response> {
-    let execute_result = if parsed.is_match_query() {
-        let mut params = req.params.clone();
-        params
-            .entry("_collection".to_string())
-            .or_insert_with(|| serde_json::json!(collection_name));
-        state.db.execute_query(parsed, &params)
-    } else {
-        state.db.execute_query(parsed, &req.params)
-    };
-
-    execute_result.map_err(|e| match e {
+    state.db.execute_query(parsed, params).map_err(|e| match e {
         velesdb_core::Error::CollectionNotFound(name) => velesql_collection_not_found(&name),
         other => velesql_execution_error(
             &other,

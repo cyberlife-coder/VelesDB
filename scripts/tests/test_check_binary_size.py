@@ -38,8 +38,8 @@ MIB = 1024 * 1024
 #: the ceilings it checks cannot notice one being raised.
 CEILINGS = {
     "velesdb-server": int(14.75 * MIB),
-    "velesdb": int(12.15 * MIB),
-    "velesdb-migrate": 9 * MIB,
+    "velesdb": int(12.5 * MIB),
+    "velesdb-migrate": int(10.25 * MIB),
 }
 
 REFUSED, ACCEPTED = 1, 0

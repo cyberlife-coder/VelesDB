@@ -70,7 +70,7 @@
             }
           },
           "422": {
-            "description": "Aggregation validation/execution error",
+            "description": "Aggregation validation/execution error, or a `$name` parameter unbound or of the wrong type (`VELESQL_PARAMETER_ERROR`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1850,7 +1850,7 @@
           "graph"
         ],
         "summary": "Execute a MATCH query on a collection.",
-        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nWhen the query fails with a core error, the JSON body carries its\n`VELES-XXX` code, and the status follows its variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, an unbound query parameter, or an `ORDER BY` MATCH\n  cannot sort by (`V015`, refused before traversal as on `/query`)\n- otherwise: `404 NOT_FOUND` for a missing point, edge or node;\n  `409 CONFLICT` for a collection or edge that already exists;\n  `400 BAD_REQUEST` for other invalid input and for a depth, cardinality\n  or capacity ceiling the query crossed; `429 TOO_MANY_REQUESTS` for the\n  rate limit; `503 SERVICE_UNAVAILABLE` for a locked database, an open\n  circuit breaker, the memory budget or a timeout under the server's\n  limit; `500 INTERNAL_SERVER_ERROR` for anything else",
+        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nWhen the query fails with a core error, the JSON body carries its\n`VELES-XXX` code, and the status follows its variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  a threshold that is not finite or comes without `vector`, or an\n  `ORDER BY` MATCH cannot sort by (`V015`, refused before traversal as\n  on `/query`)\n- `400 BAD_REQUEST` (`VELES-038`) — a `$name` parameter that is unbound,\n  or bound to a value its position cannot take\n- otherwise: `404 NOT_FOUND` for a missing point, edge or node;\n  `409 CONFLICT` for a collection or edge that already exists;\n  `400 BAD_REQUEST` for other invalid input and for a depth, cardinality\n  or capacity ceiling the query crossed; `429 TOO_MANY_REQUESTS` for the\n  rate limit; `503 SERVICE_UNAVAILABLE` for a locked database, an open\n  circuit breaker, the memory budget or a timeout under the server's\n  limit; `500 INTERNAL_SERVER_ERROR` for anything else",
         "operationId": "match_query",
         "parameters": [
           {
@@ -1885,7 +1885,7 @@
             }
           },
           "400": {
-            "description": "Parse error or invalid query",
+            "description": "Parse error or invalid query (VELES-010), or a `$name` parameter unbound or of the wrong type (VELES-038)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3866,7 +3866,7 @@
             }
           },
           "422": {
-            "description": "Query validation/execution error",
+            "description": "Query validation/execution error, or a `$name` parameter unbound or of the wrong type (`VELESQL_PARAMETER_ERROR`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3948,7 +3948,7 @@
             }
           },
           "422": {
-            "description": "Query validation/execution error",
+            "description": "Query validation/execution error, or a `$name` parameter unbound or of the wrong type (`VELESQL_PARAMETER_ERROR`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5518,7 +5518,7 @@
               "null"
             ],
             "format": "float",
-            "description": "Similarity threshold (0.0 to 1.0, default 0.0)."
+            "description": "Score threshold for `vector`, in the collection metric's direction: a\nrow is kept when its score is at least this under a similarity metric\n(`cosine`, `dot`, `jaccard`), at most this under a distance metric\n(`euclidean`, `hamming`). Any finite number, sent with `vector`\n(without one no row is scored, and it is refused); omitted, every\nscored row is kept."
           },
           "vector": {
             "type": [
@@ -5969,7 +5969,7 @@
               "string",
               "null"
             ],
-            "description": "Optional collection name (required for top-level MATCH queries via `/query`)."
+            "description": "Collection a statement without `FROM` (a top-level MATCH) runs on:\npassed as `params._collection` unless `params` already sets\n`_collection`, which wins. A statement with a `FROM` reads its `FROM`."
           },
           "params": {
             "type": "object",

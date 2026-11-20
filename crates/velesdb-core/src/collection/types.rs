@@ -178,8 +178,15 @@ impl Default for RuntimeLimits {
 // Acquiring in any other order risks deadlock under concurrent access.
 //
 // Canonical order (acquire lower numbers first):
-//   1. config
+//   1. config            (taken with no other collection lock held; every
+//                          unit test checks it — `lock_audit::ConfigLock`)
+//   1a. text_wal         (BM25 WAL append + apply vs the BM25 snapshot;
+//                          see below)
 //   1b. payload_mirror   (held while acquiring 2 and 3 during the lazy build)
+//   1c. node_locks       (a graph's writes that may change its nodes, and a
+//                          vector collection's row writes, payload write to
+//                          its rows and deletes; held while acquiring 2 or 3
+//                          — collection/core/size.rs)
 //   2. vector_storage
 //   3. payload_storage
 //   3b. edge_wal_lock    (see below — sometimes nested inside 3, sometimes
@@ -227,6 +234,20 @@ impl Default for RuntimeLimits {
 //     `payload_storage` write guard by the time it reaches the cascade).
 // Neither path ever acquires `payload_storage` while already holding
 // `edge_wal_lock` — the order stays acyclic.
+//
+// `text_wal` (1a) is taken shared by every BM25 change, across its WAL
+// append and its in-memory apply, always with no collection lock held
+// (`Collection::text_wal_shared` checks it in every unit test): by a write's
+// payload effects once its storage guards are released; by a vector
+// collection's row write and by a delete before their node locks and storage
+// guards (1c, 2, 3, 4, 7), which they then take under it and release before
+// they release `text_wal` (`Collection::write_rows`). `flush_full` takes it
+// exclusively, holding no other collection lock, across the BM25 snapshot
+// and the WAL truncate; a graph's flush reads the payload log position it
+// records beforehand, under `payload_storage` (3) alone. So a write waiting
+// for that snapshot holds no guard a reader or another writer waits on.
+// Nothing else is taken while it is held but what a row write or a delete
+// takes after it and the BM25 index's own locks.
 
 /// Vector + payload storage, quantization caches and the columnar mirror.
 ///
@@ -245,8 +266,10 @@ pub(crate) struct StorageState {
 
     /// Collection configuration.
     ///
-    /// Lock order position: **1**.
-    pub(super) config: Arc<RwLock<CollectionConfig>>,
+    /// Lock order position: **1** — taken with no other collection lock
+    /// held, which [`ConfigLock`](crate::lock_audit::ConfigLock) checks in
+    /// every unit test.
+    pub(super) config: Arc<crate::lock_audit::ConfigLock<CollectionConfig>>,
 
     /// Vector storage (on-disk, memory-mapped).
     ///
@@ -258,11 +281,43 @@ pub(crate) struct StorageState {
     /// Lock order position: **3**.
     pub(super) payload_storage: Arc<RwLock<LogPayloadStorage>>,
 
+    /// A graph's node locks: what keeps its size exact while its payload
+    /// writes and vector writes run beside each other
+    /// (`collection/core/size.rs`). Taken before either store's guard.
+    ///
+    /// Lock order position: **1c**.
+    pub(super) node_locks: Arc<crate::collection::core::NodeLocks>,
+
+    /// Which ids `vector_storage` and `payload_storage` hold, readable
+    /// without their guards: what a graph's write reads of the store it does
+    /// not write, under its node locks (`collection/core/size.rs`).
+    pub(super) held_vector_ids: crate::storage::HeldVectorIds,
+    pub(super) held_payload_ids: crate::storage::HeldPayloadIds,
+
+    /// The collection's size — what `len`, `is_empty` and
+    /// `config().point_count` read — kept exact by every write under the
+    /// storage guards it holds (`collection/core/size.rs`). Lock-free: it
+    /// takes no lock-order position, and the in-memory
+    /// `CollectionConfig::point_count` is not maintained beside it.
+    pub(super) size: Arc<std::sync::atomic::AtomicUsize>,
+
     /// HNSW index for fast approximate nearest neighbor search.
     pub(super) index: Arc<HnswIndex>,
 
     /// BM25 index for full-text search.
     pub(super) text_index: Arc<Bm25Index>,
+
+    /// Orders BM25 changes against the BM25 snapshot: a write holds it
+    /// shared from appending its changes to the BM25 WAL through applying
+    /// them in memory, and `flush_full` holds it exclusively from
+    /// serializing the index through truncating the WAL, so no change is in
+    /// neither — appended before the truncate but applied after the
+    /// snapshot (`Collection::flush_bm25_index`). A delete takes it before
+    /// its node locks and storage guards, so it never waits for a snapshot
+    /// holding them.
+    ///
+    /// Lock order position: **1a**.
+    pub(super) text_wal: Arc<RwLock<()>>,
 
     /// PQ quantized vectors cache (for ProductQuantization storage mode).
     ///
@@ -687,7 +742,8 @@ impl Collection {
     ///
     /// # Cap is a conservative pre-count
     ///
-    /// `max_vectors_per_collection` is checked as `len() + points.len()`,
+    /// `max_vectors_per_collection` is checked as the stored count
+    /// ([`Self::enforce_vector_count`]) `+ points.len()`,
     /// treating every incoming point as net-new. Because upsert dedups by id,
     /// re-supplying ids already present (a pure in-place update) does **not**
     /// grow the stored count, yet still counts toward the projection here.
@@ -718,7 +774,9 @@ impl Collection {
         Ok(())
     }
 
-    /// Projects the post-batch collection size against the vector cap.
+    /// Projects the post-batch collection size against the vector cap: the
+    /// vectors it stores — a metadata collection's rows, which store none —
+    /// so a graph's nodes without an embedding do not count against it.
     ///
     /// Shared by the `Point`-based [`Self::enforce_upsert_limits`] and the
     /// slice-based raw bulk path so both apply the identical conservative
@@ -728,7 +786,14 @@ impl Collection {
         incoming: usize,
         cap: usize,
     ) -> crate::error::Result<()> {
-        let projected = self.len().saturating_add(incoming);
+        let rows = self.row_universe();
+        let current =
+            if rows == crate::collection::search::query::row_universe::RowUniverse::Payloads {
+                self.len()
+            } else {
+                self.vector_count()
+            };
+        let projected = current.saturating_add(incoming);
         if projected > cap {
             return Err(crate::error::Error::GuardRail {
                 kind: crate::error::GuardRailKind::Capacity,

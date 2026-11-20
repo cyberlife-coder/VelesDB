@@ -57,6 +57,7 @@ import {
   buildWasmContext,
   buildCollectionInfo,
   describeWasmThrow,
+  requireVectorOfDimension,
 } from './wasm-helpers';
 
 // VelesQL executor over the attached stores
@@ -325,12 +326,7 @@ export class WasmBackend implements IVelesDBBackend {
       ? doc.vector
       : new Float32Array(doc.vector);
 
-    if (vector.length !== collection.config.dimension) {
-      throw new VelesDBError(
-        `Vector dimension mismatch: expected ${collection.config.dimension}, got ${vector.length}`,
-        'DIMENSION_MISMATCH'
-      );
-    }
+    requireVectorOfDimension(collectionName, vector.length, collection.config.dimension ?? 0);
 
     this.replacePoints(collection, [doc], () => {
       if (doc.payload) {
@@ -347,12 +343,13 @@ export class WasmBackend implements IVelesDBBackend {
     if (!collection) { throw new NotFoundError(`Collection '${collectionName}'`); }
 
     for (const doc of docs) {
-      if (doc.vector.length !== collection.config.dimension) {
-        throw new VelesDBError(
-          `Vector dimension mismatch for doc ${doc.id}: expected ${collection.config.dimension}, got ${doc.vector.length}`,
-          'DIMENSION_MISMATCH'
-        );
-      }
+      // An omitted vector is an empty one, refused as REST refuses it.
+      requireVectorOfDimension(
+        collectionName,
+        doc.vector?.length ?? 0,
+        collection.config.dimension ?? 0,
+        `Vector dimension mismatch for doc ${doc.id}`,
+      );
     }
     // Every id is checked before any point is written.
     const ids = docs.map((doc) => toPointId(doc.id));

@@ -86,13 +86,27 @@ pub(crate) fn velesql_execution_status(error: &velesdb_core::Error) -> StatusCod
 }
 
 /// Build the VelesQL error response for a statement that failed during
-/// execution, keeping the endpoint's `VELESQL_*` `code` and taking the status
-/// from [`velesql_execution_status`].
+/// execution, taking the status from [`velesql_execution_status`] and keeping
+/// the endpoint's `VELESQL_*` `code` — except for a `$name` the caller did
+/// not bind, or bound to a value its position cannot take
+/// ([`velesdb_core::Error::QueryParameter`], `VELES-038`): every endpoint
+/// answers that one `VELESQL_PARAMETER_ERROR`, naming the parameter in
+/// `details`, so a client tells it from a fault in the statement without
+/// reading the message.
 pub(crate) fn velesql_execution_error(
     error: &velesdb_core::Error,
     code: &str,
     hint: &str,
 ) -> axum::response::Response {
+    if let velesdb_core::Error::QueryParameter { name, .. } = error {
+        return velesql_error(
+            velesql_execution_status(error),
+            "VELESQL_PARAMETER_ERROR",
+            &error.to_string(),
+            "Bind every `$name` the statement references in `params`, with a value its position takes",
+            Some(serde_json::json!({ "parameter": name })),
+        );
+    }
     velesql_error(
         velesql_execution_status(error),
         code,

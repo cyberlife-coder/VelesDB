@@ -50,7 +50,7 @@ apart.
 | `get_guardrails` | Read the current guardrail limits |
 | `scroll_collection` | Paginate through a collection |
 | `upsert` | Insert or update vectors with payloads |
-| `upsert_metadata` | Insert or update metadata-only points |
+| `upsert_metadata` | Insert or update metadata-only points; on a vector collection, replace the payloads of stored points (an id without a vector is refused, `VELES-016`; a point sent with a `vector` is refused, `VELES-014`) |
 | `get_points` | Retrieve points by IDs |
 | `delete_points` | Delete points by IDs |
 
@@ -301,6 +301,7 @@ string matching.
 | `VELES-011` | I/O error |
 | `VELES-012` | Payload could not be (de)serialized |
 | `VELES-018` | A graph command aimed at a vector or metadata collection |
+| `VELES-038` | A VelesQL `$name` parameter unbound in `params`, or bound to a value its position cannot take |
 | `TASK_JOIN` | The plugin's blocking task panicked or was cancelled (`recoverable: false`); the one code core has no equivalent for |
 
 Every other `VELES-###` code is forwarded verbatim from velesdb-core.

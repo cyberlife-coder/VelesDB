@@ -26,7 +26,7 @@
       },
       "expected_status": 422,
       "expected_error_code": "VELESQL_MISSING_COLLECTION",
-      "expected_error_message": "MATCH query via /query requires `collection` in request body",
+      "expected_error_message": "MATCH query via /query requires `collection` in request body or `_collection` in params",
       "expected_error_hint": "Add `collection` to the /query JSON body or use /collections/{name}/match",
       "expected_error_details": { "field": "collection", "endpoint": "/query", "query_type": "MATCH" }
     },

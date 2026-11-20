@@ -128,6 +128,29 @@ fn test_mirror_stays_in_sync_after_upsert_and_delete() {
     assert!(old.is_empty());
 }
 
+/// A bulk point without a payload keeps the payload stored for its id: the
+/// mirror must keep answering that payload, which an incremental mirror
+/// upsert — it reads the missing payload as an empty row — would erase.
+#[test]
+fn test_mirror_keeps_the_payload_a_payload_less_bulk_point_leaves() {
+    let (_dir, col) = setup_collection();
+    col.build_payload_mirror();
+    let query = "SELECT * FROM c WHERE category = 'cat1' AND price = 4 LIMIT 10";
+    assert_eq!(query_ids(&col, query), vec![4]);
+
+    let mut without_payload = make_point(4);
+    without_payload.payload = None;
+    col.upsert_bulk(&[without_payload, make_point(7)])
+        .expect("bulk upsert");
+
+    let stored = col.get(&[4]).into_iter().flatten().next().expect("point 4");
+    assert_eq!(
+        stored.payload.as_ref().map(|p| p["price"].clone()),
+        Some(serde_json::json!(4))
+    );
+    assert_eq!(query_ids(&col, query), vec![4]);
+}
+
 /// Returns `(row_count, deleted_row_count)` of the mirror's `ColumnStore`.
 #[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn mirror_store_counts(col: &Collection) -> (usize, usize) {

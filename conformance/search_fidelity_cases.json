@@ -63,14 +63,14 @@
       "vector_weight": 0.5,
       "rrf_k": 10,
       "expect_ids": [1, 2, 4, 6],
-      "expect_scores": [0.095454544, 0.09166667, 0.08712122, 0.03846154],
+      "expect_scores": [0.095454544, 0.095454544, 0.083333336, 0.03846154],
       "surface_expect": {
         "wasm": {
           "expect_ids": [2, 1, 4, 6],
           "expect_scores": [1.0, 0.99694186, 0.8904344, 0.27607882]
         }
       },
-      "note": "BM25+dense RRF with rrf_k=10, weight 0.5 — REST takes the same rrf_k through HybridSearchRequestWithRrf"
+      "note": "BM25+dense RRF with rrf_k=10, weight 0.5 — REST takes the same rrf_k through HybridSearchRequestWithRrf; the three \"rust\" hits tie in BM25 and rank by ascending id"
     }
   ],
   "expected_divergences": [

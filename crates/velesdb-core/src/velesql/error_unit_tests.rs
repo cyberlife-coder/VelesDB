@@ -31,13 +31,6 @@ fn test_parse_error_unknown_column() {
 }
 
 #[test]
-fn test_parse_error_missing_parameter() {
-    let err = ParseError::missing_parameter("vector");
-    assert_eq!(err.kind, ParseErrorKind::MissingParameter);
-    assert!(err.message.contains("$vector"));
-}
-
-#[test]
 fn test_parse_error_display() {
     let err = ParseError::syntax(10, "bad", "Syntax error");
     let display = format!("{err}");
@@ -53,7 +46,6 @@ fn test_parse_error_kind_codes() {
     assert_eq!(ParseErrorKind::UnknownColumn.code(), "E002");
     assert_eq!(ParseErrorKind::CollectionNotFound.code(), "E003");
     assert_eq!(ParseErrorKind::DimensionMismatch.code(), "E004");
-    assert_eq!(ParseErrorKind::MissingParameter.code(), "E005");
     assert_eq!(ParseErrorKind::TypeMismatch.code(), "E006");
 }
 

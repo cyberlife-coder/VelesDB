@@ -462,8 +462,9 @@ WASM**, plus more scalar cases the CLI runs too:
   aggregate or a bare name (R005–R009, V015), a `GROUP BY` ordered by an
   aggregate the SELECT does not list (R010, V016), output columns sharing
   a name, an aggregate named `score` in a vector `GROUP BY` included
-  (R011–R013, V017), and a HAVING with a non-numeric threshold or without
-  `GROUP BY` (R014–R015, V018).
+  (R011–R013, V017), a HAVING with a non-numeric threshold or without
+  `GROUP BY` (R014–R015, V018), and an aggregation as an operand of a
+  compound (R032, V019).
 - `null_order_cases` O001–O003: a plain SELECT whose ORDER BY key is missing
   on a row, which sorts last under `ASC` and first under `DESC` (O001–O002),
   and WHERE / ORDER BY `id` reading the point id over the `tickets`

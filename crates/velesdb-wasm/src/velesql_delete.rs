@@ -7,6 +7,7 @@
 use velesdb_core::velesql::DeleteStatement;
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::velesql_helpers::collect_matching_indices;
 use crate::velesql_value::Params;
 
@@ -15,8 +16,10 @@ pub(crate) fn execute(
     db: &DatabaseInner,
     stmt: &DeleteStatement,
     params: &Params,
-) -> Result<u32, String> {
+) -> Result<u32, ExecError> {
     let store = db.get_shared_store(&stmt.table)?;
+    // Core's order: the WHERE's shape before any `$name` is bound.
+    velesdb_core::velesql::check_dml_where("DELETE", Some(&stmt.where_clause))?;
     let to_remove = collect_matching_indices(&store, Some(&stmt.where_clause), params)?;
     let ids: Vec<u64> = {
         let borrowed = store.borrow();

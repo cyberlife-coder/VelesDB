@@ -25,6 +25,7 @@ use velesdb_core::velesql::distinct_evaluator::apply_distinct;
 use velesdb_core::velesql::{Condition, DistinctMode, Query, SelectStatement, VectorSearch};
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::observer::WasmQueryOperationKind;
 use crate::vector_ops;
 use crate::velesql_aggregate;
@@ -34,7 +35,7 @@ use crate::velesql_project;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_scan::OwnedScanRow;
 use crate::velesql_similarity::{self, SimilarityEvaluator};
-use crate::velesql_value::{resolve_vector, Params};
+use crate::velesql_value::Params;
 use crate::velesql_where;
 
 /// Executes a SELECT query and returns its row set.
@@ -42,23 +43,40 @@ pub(crate) fn execute(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     // Read-path gate (audit F-5.4, #1392): consulted before any store access.
     // Placed ahead of the JOIN early-return below so joined SELECTs are gated
     // too. Set-operation operands re-enter here via `velesql_setops::run_select`,
     // so each operand is gated with its own source collection.
-    check_select_access(db, &query.select)?;
+    check_select(db, &query.select, params)?;
 
     if !query.let_bindings.is_empty() {
-        return Err("LET bindings are not supported in WASM".to_string());
+        return Err(ExecError::refused("LET bindings are not supported in WASM"));
     }
     if !query.select.joins.is_empty() {
         let rows = crate::velesql_join::joined_rows(db, &query.select, params)?;
         return finalize(db, &query.select, rows, params);
     }
 
-    let rows = scan(db, &query.select, params)?;
-    finalize(db, &query.select, rows, params)
+    let select = with_base_columns(&query.select);
+    let rows = scan(db, &select, params)?;
+    finalize(db, &select, rows, params)
+}
+
+/// `select`, a single-table SELECT, with every WHERE column its FROM side's
+/// name qualifies written as the row's own, as core reads it
+/// ([`velesdb_core::velesql::resolve_base_qualifiers`]): `d.cat` in
+/// `FROM docs d` is the row's `cat`.
+fn with_base_columns(select: &SelectStatement) -> std::borrow::Cow<'_, SelectStatement> {
+    let Some(condition) = select.where_clause.as_ref() else {
+        return std::borrow::Cow::Borrowed(select);
+    };
+    let base = velesdb_core::velesql::base_side(select);
+    let mut resolved = select.clone();
+    resolved.where_clause = Some(velesdb_core::velesql::resolve_base_qualifiers(
+        condition, base,
+    ));
+    std::borrow::Cow::Owned(resolved)
 }
 
 /// Runs a compound operand: the rows its SELECT keeps, windowed by its own
@@ -73,21 +91,20 @@ pub(crate) fn execute_operand(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
-) -> Result<Vec<SearchResult>, String> {
-    check_select_access(db, &query.select)?;
+) -> Result<Vec<SearchResult>, ExecError> {
+    check_select(db, &query.select, params)?;
     if !query.let_bindings.is_empty() {
-        return Err("LET bindings are not supported in WASM".to_string());
+        return Err(ExecError::refused("LET bindings are not supported in WASM"));
     }
     if !query.select.joins.is_empty()
         || velesql_aggregate::needs_aggregation_pipeline(&query.select)
     {
-        return Err(
+        return Err(ExecError::refused(
             "a JOIN or an aggregation in a UNION / INTERSECT / EXCEPT operand is not \
-             supported in WASM"
-                .to_string(),
-        );
+             supported in WASM",
+        ));
     }
-    let rows = scan(db, &query.select, params)?;
+    let rows = scan(db, &with_base_columns(&query.select), params)?;
     let store = db.get_shared_store(&query.select.from)?;
     let borrowed = store.borrow();
     let mut rows = window_plain(&query.select, rows, &order_context(&borrowed, params))?;
@@ -124,7 +141,10 @@ fn order_context<'a>(
 }
 
 /// Whether the metric of `stmt`'s collection ranks higher scores first.
-pub(crate) fn metric_direction(db: &DatabaseInner, stmt: &SelectStatement) -> Result<bool, String> {
+pub(crate) fn metric_direction(
+    db: &DatabaseInner,
+    stmt: &SelectStatement,
+) -> Result<bool, ExecError> {
     Ok(db
         .get_shared_store(&stmt.from)?
         .borrow()
@@ -139,9 +159,9 @@ fn scan(
     db: &mut DatabaseInner,
     stmt: &SelectStatement,
     params: &Params,
-) -> Result<Vec<OwnedScanRow>, String> {
+) -> Result<Vec<OwnedScanRow>, ExecError> {
     if let Some(cond) = stmt.where_clause.as_ref() {
-        velesdb_core::velesql::validate_vector_predicates(cond).map_err(|e| e.to_string())?;
+        velesdb_core::velesql::validate_vector_predicates(cond)?;
     }
     if let Some(vfs) = crate::velesql_fused::find_fused_search(stmt.where_clause.as_ref()) {
         crate::velesql_fused::execute_fused_search(db, stmt, vfs, params)
@@ -163,7 +183,7 @@ fn scan(
 /// WHERE makes it a vector search — the kind `WasmCollectionHandle.search`
 /// asks with — so a policy refusing vector search is not bypassed through
 /// VelesQL.
-fn check_select_access(db: &DatabaseInner, select: &SelectStatement) -> Result<(), String> {
+fn check_select_access(db: &DatabaseInner, select: &SelectStatement) -> Result<(), ExecError> {
     let kind = if select
         .where_clause
         .as_ref()
@@ -180,6 +200,32 @@ fn check_select_access(db: &DatabaseInner, select: &SelectStatement) -> Result<(
     Ok(())
 }
 
+/// The checks a SELECT passes before any store is read: the read gate
+/// ([`check_select_access`]), then its query vectors ([`check_query_vectors`]).
+fn check_select(
+    db: &DatabaseInner,
+    select: &SelectStatement,
+    params: &Params,
+) -> Result<(), ExecError> {
+    check_select_access(db, select)?;
+    check_query_vectors(db, select, params)
+}
+
+/// Refuses a SELECT whose query vectors its collection cannot score, before
+/// any row is read: core's rule
+/// ([`velesdb_core::velesql::QueryVectorTarget::check_select`]), so the
+/// refusal does not depend on which scan runs, the operator, or the leaf's
+/// place in the WHERE.
+fn check_query_vectors(
+    db: &DatabaseInner,
+    stmt: &SelectStatement,
+    params: &Params,
+) -> Result<(), ExecError> {
+    let dimension = db.get_shared_store(&stmt.from)?.borrow().dimension;
+    crate::store_search::query_vector_target(&stmt.from, dimension).check_select(stmt, params)?;
+    Ok(())
+}
+
 // --- Plain scan ----------------------------------------------------------
 
 /// Runs a non-vector SELECT (optionally with a similarity() threshold in
@@ -190,13 +236,15 @@ fn check_select_access(db: &DatabaseInner, select: &SelectStatement) -> Result<(
 /// core's `dispatch_similarity_query` returns them; a row that leaf cannot
 /// score comes last. Otherwise rows keep insertion order.
 ///
-/// A row no vector predicate scored carries
-/// [`velesdb_core::velesql::METADATA_MATCH_SCORE`], as in core.
+/// A row the threshold scored carries that similarity as its vector
+/// component; a row no vector predicate scored carries
+/// [`velesdb_core::velesql::METADATA_MATCH_SCORE`] and no component, as in
+/// core's `similarity()` scan.
 fn execute_plain(
     db: &DatabaseInner,
     stmt: &SelectStatement,
     params: &Params,
-) -> Result<Vec<OwnedScanRow>, String> {
+) -> Result<Vec<OwnedScanRow>, ExecError> {
     let filters = WhereFilters::build(db, stmt, params, None)?;
     let store = db.get_shared_store(&stmt.from)?;
     let borrowed = store.borrow();
@@ -223,11 +271,17 @@ fn execute_plain(
     }
     Ok(out
         .into_iter()
-        .map(|(id, score, payload)| {
-            let score = score.unwrap_or(velesdb_core::velesql::METADATA_MATCH_SCORE);
-            (id, score, payload)
-        })
+        .map(|(id, score, payload)| plain_row(id, score, payload))
         .collect())
+}
+
+/// A plain-scan row: scored by the `similarity()` threshold that scored it,
+/// else a metadata match ([`velesdb_core::velesql::METADATA_MATCH_SCORE`]).
+fn plain_row(id: u64, score: Option<f32>, payload: Option<serde_json::Value>) -> OwnedScanRow {
+    match score {
+        Some(score) => OwnedScanRow::vector_scored(id, score, payload),
+        None => OwnedScanRow::new(id, velesdb_core::velesql::METADATA_MATCH_SCORE, payload),
+    }
 }
 
 /// Stable sort of rows in the metric's direction (best first), the rows
@@ -284,7 +338,7 @@ impl WhereFilters {
         stmt: &SelectStatement,
         params: &Params,
         pre_stripped_base: Option<Option<Condition>>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ExecError> {
         let base = match pre_stripped_base {
             Some(already_stripped) => already_stripped,
             None => stmt.where_clause.clone(),
@@ -306,7 +360,7 @@ impl WhereFilters {
         idx: usize,
         _store: &crate::store_state::StoreState,
         params: &Params,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ExecError> {
         let Some(cond) = self.normalized.as_ref() else {
             return Ok(true);
         };
@@ -331,7 +385,7 @@ pub(crate) fn eligible_ids(
     stmt: &SelectStatement,
     store: &crate::store_state::StoreState,
     params: &Params,
-) -> Result<Option<std::collections::HashSet<u64>>, String> {
+) -> Result<Option<std::collections::HashSet<u64>>, ExecError> {
     let residual = strip_vector_search(stmt.where_clause.as_ref());
     if residual.is_none() {
         return Ok(None);
@@ -354,12 +408,10 @@ fn execute_vector_search(
     stmt: &SelectStatement,
     vector_search: &VectorSearch,
     params: &Params,
-) -> Result<Vec<OwnedScanRow>, String> {
+) -> Result<Vec<OwnedScanRow>, ExecError> {
     let store = db.get_shared_store(&stmt.from)?;
     let borrowed = store.borrow();
-    validate_vector_collection(&borrowed, &stmt.from)?;
-
-    let query_vec = resolve_query_vector(vector_search, &borrowed, params)?;
+    let query_vec = resolve_query_vector(vector_search, params)?;
     let mut scored = score_all(&query_vec, &borrowed);
 
     let residual_without_vector = strip_vector_search(stmt.where_clause.as_ref());
@@ -386,8 +438,10 @@ fn execute_vector_search(
     // verbatim, leaking rows that fail the WHERE predicate (the synthetic
     // payload branch scored them 1.0). `collect_vector_rows` re-applies
     // `filters.passes()`, so WHERE-failing rows are dropped — matching core's
-    // hard-filter semantics.
-    collect_vector_rows(&scored, &borrowed, &filters, params)
+    // hard-filter semantics. A NEAR row's score is its vector similarity; a
+    // fused row's is the fusion's, which core does not tag.
+    let vector_scored = stmt.fusion_clause.is_none();
+    collect_vector_rows(&scored, &borrowed, &filters, params, vector_scored)
 }
 
 /// Rejects weight-sensitive fusion strategies (`weighted` / `weighted_rrf` /
@@ -398,46 +452,31 @@ fn execute_vector_search(
 /// branch and are left as a (now hard-filtered) no-op for demo parity (#9a).
 fn reject_single_branch_weighted_fusion(
     clause: &velesdb_core::velesql::FusionClause,
-) -> Result<(), String> {
+) -> Result<(), ExecError> {
     use velesdb_core::velesql::FusionStrategyType;
     match clause.strategy {
         FusionStrategyType::Weighted
         | FusionStrategyType::WeightedRrf
-        | FusionStrategyType::Rsf => Err(
+        | FusionStrategyType::Rsf => Err(ExecError::refused(
             "USING FUSION(strategy='weighted'|'weighted_rrf'|'rsf') requires two scored \
              branches; a single-vector NEAR has none in WASM (no BM25/graph scoring). Use a \
-             metadata filter without FUSION, or 'rrf'."
-                .to_string(),
-        ),
+             metadata filter without FUSION, or 'rrf'.",
+        )),
         _ => Ok(()),
     }
 }
 
-pub(crate) fn validate_vector_collection(
-    store: &crate::store_state::StoreState,
-    name: &str,
-) -> Result<(), String> {
-    if store.dimension == 0 {
-        return Err(format!(
-            "Collection '{name}' is metadata-only; NEAR queries require a vector collection"
-        ));
-    }
-    Ok(())
-}
-
+/// The `NEAR` query vector, bound, with only finite components as core's
+/// search requires. Its dimension is not checked again: [`check_select`],
+/// which [`execute`] and [`execute_operand`] — the only callers of the scans
+/// reaching here — run before any row is read, refused one the collection
+/// cannot score.
 pub(crate) fn resolve_query_vector(
     vs: &VectorSearch,
-    store: &crate::store_state::StoreState,
     params: &Params,
-) -> Result<Vec<f32>, String> {
-    let q = resolve_vector(&vs.vector, params)?;
-    if q.len() != store.dimension {
-        return Err(format!(
-            "NEAR query dimension mismatch: expected {}, got {}",
-            store.dimension,
-            q.len()
-        ));
-    }
+) -> Result<Vec<f32>, ExecError> {
+    let q = velesdb_core::velesql::bind_vector(&vs.vector, params)?;
+    velesdb_core::validation::validate_vector_is_finite(&q)?;
     Ok(q)
 }
 
@@ -462,7 +501,7 @@ fn apply_fusion(
     store: &crate::store_state::StoreState,
     residual: Option<&Condition>,
     params: &Params,
-) -> Result<Vec<(u64, f32)>, String> {
+) -> Result<Vec<(u64, f32)>, ExecError> {
     let rrf_branch = scored.to_vec();
     let payload_branch = fusion_branch_from_residual(store, residual, params)?;
     // The vector branch carries the metric's scores (distances for
@@ -496,7 +535,7 @@ fn build_id_to_idx(store: &crate::store_state::StoreState) -> HashMap<u64, usize
 pub(crate) fn collect_vector_rows_unfiltered(
     scored: &[(u64, f32)],
     store: &crate::store_state::StoreState,
-) -> Result<Vec<OwnedScanRow>, String> {
+) -> Result<Vec<OwnedScanRow>, ExecError> {
     // Finding F10: hash-map lookup, O(1) per row, O(n) build cost paid
     // once. Previous `store.ids.iter().position(...)` was O(n) per row,
     // i.e. O(n^2) overall — catastrophic on 10k+ row collections.
@@ -512,17 +551,20 @@ pub(crate) fn collect_vector_rows_unfiltered(
             continue;
         };
         let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
-        out.push((id, score, payload.cloned()));
+        out.push(OwnedScanRow::new(id, score, payload.cloned()));
     }
     Ok(out)
 }
 
+/// The scored rows `filters` keeps, each `vector_scored` when its score is
+/// its vector similarity.
 fn collect_vector_rows(
     scored: &[(u64, f32)],
     store: &crate::store_state::StoreState,
     filters: &WhereFilters,
     params: &Params,
-) -> Result<Vec<OwnedScanRow>, String> {
+    vector_scored: bool,
+) -> Result<Vec<OwnedScanRow>, ExecError> {
     // Finding F10: same O(n) → O(1) lookup as
     // `collect_vector_rows_unfiltered` but on the filtered path. The
     // map is built once before the loop, so the overall cost is O(n)
@@ -536,14 +578,17 @@ fn collect_vector_rows(
         // row. We propagate an explicit error rather than `.expect()`
         // (Devin Review Finding N) to avoid a panic in production paths
         // if some future refactor breaks the invariant.
-        let idx = *id_to_idx
-            .get(&id)
-            .ok_or_else(|| format!("internal: compute_scores yielded unknown id {id}"))?;
+        let idx = *id_to_idx.get(&id).ok_or_else(|| {
+            velesdb_core::Error::Internal(format!("compute_scores yielded unknown id {id}"))
+        })?;
         let payload = store.payloads.get(idx).and_then(|p| p.as_ref());
         if !filters.passes(id, payload, idx, store, params)? {
             continue;
         }
-        out.push((id, score, payload.cloned()));
+        out.push(OwnedScanRow {
+            vector_scored,
+            ..OwnedScanRow::new(id, score, payload.cloned())
+        });
     }
     Ok(out)
 }
@@ -552,7 +597,7 @@ fn fusion_branch_from_residual(
     store: &crate::store_state::StoreState,
     cond: Option<&Condition>,
     params: &Params,
-) -> Result<Vec<(u64, f32)>, String> {
+) -> Result<Vec<(u64, f32)>, ExecError> {
     let Some(cond) = cond else {
         return Ok(Vec::new());
     };
@@ -577,7 +622,7 @@ fn finalize(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
     params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     let store = db.get_shared_store(&stmt.from)?;
     let borrowed = store.borrow();
     if velesql_aggregate::needs_aggregation_pipeline(stmt) {
@@ -592,10 +637,10 @@ fn finalize_aggregated(
     rows: Vec<OwnedScanRow>,
     params: &Params,
     higher_is_better: bool,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     let scanned: Vec<_> = rows
         .iter()
-        .map(|(id, score, p)| (*id, *score, p.as_ref()))
+        .map(|row| (row.id, row.score, row.payload.as_ref()))
         .collect();
     let out = velesql_aggregate::apply(stmt, &scanned, params, higher_is_better)?;
     // A vector GROUP BY is a search, which core caps at the SELECT default
@@ -620,22 +665,8 @@ fn window_plain(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
     order: &velesql_orderby::OrderContext<'_>,
-) -> Result<Vec<SearchResult>, String> {
+) -> Result<Vec<SearchResult>, ExecError> {
     let mut results = velesql_project::to_search_results(rows);
-    let where_clause = stmt.where_clause.as_ref();
-    if find_vector_search(where_clause).is_some()
-        && crate::velesql_fused::find_fused_search(where_clause).is_none()
-        && crate::velesql_sparse::find_sparse_search(where_clause).is_none()
-    {
-        // A NEAR row's score is its vector component, as core tags its
-        // search results (`tag_vector_component_scores`): `vector_score` then
-        // reads it and `bm25_score` reads 0.0. A fused or hybrid row's score
-        // is the fusion's, which core does not tag.
-        for result in &mut results {
-            result.component_scores =
-                Some(std::iter::once(("vector_score", result.score)).collect());
-        }
-    }
     if stmt.distinct == DistinctMode::All {
         results = apply_distinct(results, &stmt.columns);
     }

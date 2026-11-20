@@ -407,7 +407,10 @@ fn test_invalid_sql_returns_parse_error() {
     let mut db = db_with_metadata();
     let err = execute(&mut db, "NOT VALID SQL", None);
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("parse error"));
+    assert!(err
+        .expect_err("test: err")
+        .to_string()
+        .contains("at position"));
 }
 
 #[test]
@@ -417,6 +420,7 @@ fn test_select_nonexistent_collection_errors() {
     assert!(err.is_err());
     assert!(err
         .expect_err("test: err")
+        .to_string()
         .contains("Collection 'ghost' not found"));
 }
 
@@ -425,7 +429,10 @@ fn test_invalid_params_json_errors() {
     let mut db = db_with_metadata();
     let err = execute(&mut db, "SELECT * FROM docs LIMIT 5", Some("not-json"));
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("Invalid params JSON"));
+    assert!(err
+        .expect_err("test: err")
+        .to_string()
+        .contains("Invalid params JSON"));
 }
 
 #[test]
@@ -437,7 +444,11 @@ fn test_insert_vector_collection_without_vector_errors() {
         None,
     );
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("vector"));
+    // Core's refusal of a row without a vector on a vector collection.
+    assert!(err
+        .expect_err("test: err")
+        .to_string()
+        .contains("VELES-016"));
 }
 
 #[test]
@@ -449,7 +460,10 @@ fn test_insert_vector_dimension_mismatch_errors() {
         Some(r#"{"v": [1.0, 0.0]}"#),
     );
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("dimension mismatch"));
+    assert!(err
+        .expect_err("test: err")
+        .to_string()
+        .contains("dimension mismatch"));
 }
 
 #[test]
@@ -460,8 +474,7 @@ fn test_near_on_metadata_collection_errors() {
         "SELECT * FROM docs WHERE vector NEAR $q LIMIT 5",
         Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
     );
-    assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("metadata-only"));
+    assert_eq!(err.expect_err("test: err").code(), Some("VELES-015"));
 }
 
 #[test]
@@ -474,7 +487,7 @@ fn test_match_query_on_empty_graph_returns_empty() {
     match r {
         Ok(res) => assert_eq!(res.row_count(), 0),
         Err(e) => assert!(
-            e.contains("empty") || e.contains("not found"),
+            e.to_string().contains("empty") || e.to_string().contains("not found"),
             "unexpected error: {e}"
         ),
     }
@@ -485,7 +498,7 @@ fn test_train_quantizer_is_rejected() {
     let mut db = db_with_vectors();
     let err = execute(&mut db, "TRAIN QUANTIZER ON vecs WITH (type = 'sq8')", None);
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("TRAIN"));
+    assert!(err.expect_err("test: err").to_string().contains("TRAIN"));
 }
 
 #[test]
@@ -526,7 +539,7 @@ fn test_update_id_column_is_rejected() {
     let mut db = db_with_metadata();
     let err = execute(&mut db, "UPDATE docs SET id = 99 WHERE id = 1", None);
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("'id'"));
+    assert!(err.expect_err("test: err").to_string().contains("'id'"));
 }
 
 #[test]
@@ -539,7 +552,7 @@ fn test_unbound_param_errors() {
         Some("{}"),
     );
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("$missing"));
+    assert!(err.expect_err("test: err").to_string().contains("$missing"));
 }
 
 // =========================================================================

@@ -331,15 +331,20 @@ fn params() -> Params {
     ])
 }
 
-/// Asserts that an extractor refused the query for the parameter `$absent`.
+/// Asserts that an extractor refused the query for the parameter `$absent`
+/// with a parameter error (`VELES-038`), not a generic query error.
 fn assert_missing_parameter<T: std::fmt::Debug>(result: crate::error::Result<T>) {
-    let error = result.expect_err("test: the parameter is missing");
+    assert_parameter_error(result, "absent");
+}
+
+/// Asserts that `result` is a parameter error (`VELES-038`) naming `$name`.
+fn assert_parameter_error<T: std::fmt::Debug>(result: crate::error::Result<T>, name: &str) {
+    let error = result.expect_err("test: the parameter cannot be bound");
     assert!(
-        error
-            .to_string()
-            .contains("Missing query parameter: $absent"),
+        matches!(&error, crate::error::Error::QueryParameter { name: n, .. } if n == name),
         "{error}"
     );
+    assert_eq!(error.code(), "VELES-038", "{error}");
 }
 
 fn vector_search_on(param: &str) -> Condition {

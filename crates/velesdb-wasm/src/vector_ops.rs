@@ -11,7 +11,10 @@ use velesdb_core::DistanceMetric;
 
 /// Compute similarity scores for all vectors against a query.
 ///
-/// Returns `(id, score)` pairs in storage order.
+/// Returns `(id, score)` pairs in storage order: none when `query` cannot be
+/// compared with the stored vectors (another length, or a store holding
+/// none — `DistanceMetric::checked_calculate`), which the callers' query
+/// checks refuse first.
 pub fn compute_scores(
     query: &[f32],
     ids: &[u64],
@@ -21,7 +24,12 @@ pub fn compute_scores(
 ) -> Vec<(u64, f32)> {
     ids.iter()
         .enumerate()
-        .map(|(idx, &id)| (id, metric.calculate(query, vector_at(data, idx, dimension))))
+        .filter_map(|(idx, &id)| {
+            Some((
+                id,
+                metric.checked_calculate(query, vector_at(data, idx, dimension))?,
+            ))
+        })
         .collect()
 }
 
@@ -51,7 +59,7 @@ where
             if !predicate(id, payload) {
                 return None;
             }
-            let score = metric.calculate(query, vector_at(data, idx, dimension));
+            let score = metric.checked_calculate(query, vector_at(data, idx, dimension))?;
             Some((id, score, payload))
         })
         .collect()

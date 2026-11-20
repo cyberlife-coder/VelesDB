@@ -10,7 +10,7 @@
 //! - `maximum` / `average` / `rsf` -> score-level fusion of the raw vector
 //!   similarity and BM25 score streams via [`FusionStrategy`].
 
-use crate::collection::search::pending::PendingRestriction;
+use crate::collection::search::text::{anchored_depth, rrf_depth, HybridQuery};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::fusion::FusionStrategy;
@@ -23,7 +23,8 @@ type ScoreStream = Vec<(u64, f32)>;
 impl Collection {
     /// Routes a dense-NEAR + text-MATCH hybrid through the requested fusion
     /// strategy (#6). Falls back to plain weighted RRF when no FUSION clause
-    /// is present or the strategy is `rrf`.
+    /// is present or the strategy is `rrf`. Each branch admits its rows by
+    /// `filter` ([`Collection::hybrid_streams`]).
     pub(crate) fn hybrid_search_with_clause(
         &self,
         vector_query: &[f32],
@@ -32,35 +33,27 @@ impl Collection {
         fusion: Option<&FusionClause>,
         filter: Option<&crate::filter::Filter>,
     ) -> Result<Vec<SearchResult>> {
-        let Some(fc) = fusion else {
-            return self.hybrid_search_default(vector_query, text_query, k, None, filter);
+        let query = |depth| HybridQuery {
+            vector: vector_query,
+            text: text_query,
+            depth,
+            filter,
+            anchors: None,
         };
-        match fc.strategy {
-            FusionStrategyType::Rrf => {
-                let vw = fc.vector_weight.map(cast_weight);
-                self.hybrid_search_default(vector_query, text_query, k, vw, filter)
-            }
-            FusionStrategyType::Weighted => {
-                let vw = normalized_vector_weight(fc);
-                self.hybrid_search_default(vector_query, text_query, k, Some(vw), filter)
-            }
-            FusionStrategyType::Maximum
-            | FusionStrategyType::Average
-            | FusionStrategyType::Rsf
-            | FusionStrategyType::WeightedRrf => {
-                let strategy = score_fusion_strategy(fc);
-                self.hybrid_search_score_fused(vector_query, text_query, k, &strategy, filter)
-            }
-        }
+        self.hybrid_by_clause(
+            &query(rrf_depth(k)),
+            &query(crate::fusion::dense_sparse_candidate_k(k)),
+            k,
+            fusion,
+        )
     }
 
     /// Routes an anchored dense-NEAR + text-MATCH hybrid (graph anchor set)
     /// through the requested fusion strategy (#6, anchored path).
     ///
-    /// The anchor-restricted candidate set is identical for every strategy
-    /// (both branches are confined to `anchor_ids`); only the score/rank
-    /// fusion of the two streams changes. Falls back to the existing
-    /// anchored RRF when no FUSION clause is present or the strategy is `rrf`.
+    /// Both branches rank only the anchors `filter` matches
+    /// ([`Collection::hybrid_streams`]), whatever the strategy: only the
+    /// score/rank fusion of the two streams changes.
     ///
     /// # Errors
     ///
@@ -72,95 +65,69 @@ impl Collection {
         k: usize,
         fusion: Option<&FusionClause>,
         anchor_ids: &std::collections::HashSet<u64>,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Result<Vec<SearchResult>> {
+        let query = HybridQuery {
+            vector: vector_query,
+            text: text_query,
+            depth: anchored_depth(k),
+            filter,
+            anchors: Some(anchor_ids),
+        };
+        self.hybrid_by_clause(&query, &query, k, fusion)
+    }
+
+    /// Fuses a hybrid's branches by `fusion`: weighted RRF over `ranked`
+    /// (no clause, `rrf`, `weighted`), score-level fusion over `scored`
+    /// (`maximum`, `average`, `rsf`, `weighted_rrf`) — the two differ only by
+    /// how deep each branch ranks.
+    fn hybrid_by_clause(
+        &self,
+        ranked: &HybridQuery<'_>,
+        scored: &HybridQuery<'_>,
+        k: usize,
+        fusion: Option<&FusionClause>,
     ) -> Result<Vec<SearchResult>> {
         let Some(fc) = fusion else {
-            return self.hybrid_search_with_anchors(
-                vector_query,
-                text_query,
-                k,
-                None,
-                None,
-                anchor_ids,
-            );
+            return self.hybrid_rrf(ranked, k, None, None);
         };
         match fc.strategy {
             FusionStrategyType::Rrf => {
-                let vw = fc.vector_weight.map(cast_weight);
-                self.hybrid_search_with_anchors(vector_query, text_query, k, vw, fc.k, anchor_ids)
+                self.hybrid_rrf(ranked, k, fc.vector_weight.map(cast_weight), fc.k)
             }
             FusionStrategyType::Weighted => {
-                let vw = normalized_vector_weight(fc);
-                self.hybrid_search_with_anchors(
-                    vector_query,
-                    text_query,
-                    k,
-                    Some(vw),
-                    fc.k,
-                    anchor_ids,
-                )
+                self.hybrid_rrf(ranked, k, Some(normalized_vector_weight(fc)), fc.k)
             }
             FusionStrategyType::Maximum
             | FusionStrategyType::Average
             | FusionStrategyType::Rsf
             | FusionStrategyType::WeightedRrf => {
-                let strategy = score_fusion_strategy(fc);
-                self.anchored_hybrid_score_fused(vector_query, text_query, k, &strategy, anchor_ids)
+                self.hybrid_search_score_fused(scored, k, &score_fusion_strategy(fc))
             }
         }
     }
 
-    /// Score-level fusion of the anchor-restricted vector and BM25 streams.
-    fn anchored_hybrid_score_fused(
-        &self,
-        vector_query: &[f32],
-        text_query: &str,
-        k: usize,
-        strategy: &FusionStrategy,
-        anchor_ids: &std::collections::HashSet<u64>,
-    ) -> Result<Vec<SearchResult>> {
-        let overfetch_k = k.saturating_mul(4).max(k + 10);
-        let (vector_scored, text_stream) =
-            self.anchored_hybrid_streams(vector_query, text_query, anchor_ids, overfetch_k)?;
-        let vector_stream: ScoreStream = vector_scored.iter().map(|sr| (sr.id, sr.score)).collect();
-        let direction = self.storage.config.read().metric.score_direction();
-        let fused = fuse_streams(strategy, vector_stream, direction, text_stream)?;
-        Ok(self.resolve_fused_results(&fused, k))
-    }
-
-    /// Plain weighted-RRF hybrid, honoring an optional metadata filter.
-    fn hybrid_search_default(
-        &self,
-        vector_query: &[f32],
-        text_query: &str,
-        k: usize,
-        vector_weight: Option<f32>,
-        filter: Option<&crate::filter::Filter>,
-    ) -> Result<Vec<SearchResult>> {
-        match filter {
-            Some(f) => {
-                self.hybrid_search_with_filter(vector_query, text_query, k, vector_weight, f, None)
-            }
-            None => self.hybrid_search(vector_query, text_query, k, vector_weight, None),
-        }
-    }
-
-    /// Fuses the raw vector-similarity and BM25 score streams via `strategy`,
-    /// then applies the optional metadata filter post-fusion.
+    /// Fuses the raw vector-similarity and BM25 score streams of `query` via
+    /// `strategy`. Each stream admits only the rows the query's filter
+    /// matches, among its anchors ([`Collection::hybrid_streams`]); the fused
+    /// rows are judged by the filter once more as they are hydrated, a
+    /// payload having possibly changed since.
     fn hybrid_search_score_fused(
         &self,
-        vector_query: &[f32],
-        text_query: &str,
+        query: &HybridQuery<'_>,
         k: usize,
         strategy: &FusionStrategy,
-        filter: Option<&crate::filter::Filter>,
     ) -> Result<Vec<SearchResult>> {
-        let candidate_k = k.saturating_mul(2).max(k + 10);
-        let restriction = PendingRestriction::NONE.post_filtered_if(filter.is_some());
-        let (vector_stream, text_stream) =
-            self.hybrid_score_streams(vector_query, text_query, candidate_k, restriction)?;
-        let direction = self.storage.config.read().metric.score_direction();
-        let fused = fuse_streams(strategy, vector_stream, direction, text_stream)?;
-        Ok(match filter {
+        let metric = self.query_vector_metric(query.vector)?;
+        let (vector_scored, text_stream) = self.hybrid_streams(query, metric)?;
+        let vector_stream: ScoreStream = vector_scored.iter().map(|sr| (sr.id, sr.score)).collect();
+        let fused = fuse_streams(
+            strategy,
+            vector_stream,
+            metric.score_direction(),
+            text_stream,
+        )?;
+        Ok(match query.filter {
             Some(filter) => self.resolve_fused_matching(&fused, filter, k),
             None => self.resolve_fused_results(&fused, k),
         })
@@ -182,38 +149,11 @@ impl Collection {
             fused.iter().copied(),
             k,
             crate::collection::expiry::now_unix_secs(),
+            crate::collection::search::query::row_universe::RowUniverse::Vectors,
             &*vector_storage,
             &*payload_storage,
             |id, payload| filter.matches_point(id, payload),
         )
-    }
-
-    /// Builds the `(id, score)` vector-similarity and BM25 streams used by
-    /// score-level fusion.
-    fn hybrid_score_streams(
-        &self,
-        vector_query: &[f32],
-        text_query: &str,
-        candidate_k: usize,
-        restriction: PendingRestriction<'_>,
-    ) -> Result<(ScoreStream, ScoreStream)> {
-        let metric = {
-            let config = self.storage.config.read();
-            crate::validation::validate_dimension_match(config.dimension, vector_query.len())?;
-            config.metric
-        };
-        // Not `search`, which pins `Balanced` and ignores `[search]` (#2430).
-        let vec_res =
-            self.search_merging_pending(vector_query, candidate_k, metric, restriction, |n| {
-                self.storage.index.search_with_quality(
-                    vector_query,
-                    n,
-                    self.runtime_search_quality(),
-                )
-            })?;
-        let vector_stream: Vec<(u64, f32)> = vec_res.iter().map(|sr| (sr.id, sr.score)).collect();
-        let text_stream = self.storage.text_index.search(text_query, candidate_k);
-        Ok((vector_stream, text_stream))
     }
 }
 
@@ -245,7 +185,7 @@ fn fuse_streams(
     ];
     strategy
         .fuse_with_directions(vec![vector_stream, text_stream], &directions)
-        .map_err(|e| Error::Config(format!("Fusion error: {e}")))
+        .map_err(Error::from)
 }
 
 /// Normalizes `vector_weight` against `graph_weight` so the BM25 branch weight

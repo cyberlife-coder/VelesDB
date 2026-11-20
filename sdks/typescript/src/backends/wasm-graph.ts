@@ -15,7 +15,7 @@
  * @packageDocumentation
  */
 
-import { NotFoundError, VelesDBError } from '../types';
+import { NotFoundError } from '../types';
 import type {
   AddEdgeRequest,
   GetEdgesOptions,
@@ -25,7 +25,7 @@ import type {
   MatchQueryResponse,
   MatchQueryResultItem,
 } from '../types';
-import { describeWasmThrow, exactGraphId, paramsJson } from './wasm-helpers';
+import { exactGraphId, paramsJson, wasmThrowToError } from './wasm-helpers';
 import type { WasmModule, WasmVelesQLDatabase } from './wasm-types';
 
 /** The binding methods a `WasmGraph` drives, all present. */
@@ -33,19 +33,17 @@ type GraphDatabase = Required<
   Pick<WasmVelesQLDatabase, 'addEdge' | 'getEdges' | 'removeEdge' | 'edgeCount' | 'executeMatch'>
 >;
 
-/** A binding error naming a node that does not exist: REST's 404 (VELES-022). */
-const NODE_NOT_FOUND = /^Node \d+ not found/;
-
-/** Run a binding call, turning what it throws into the SDK's error codes. */
+/**
+ * Run a binding call, turning what it throws into the SDK's typed error: the
+ * binding throws core's error with its `code` (VELES-022 for an endpoint that
+ * is no node, VELES-002 for a missing collection), read by
+ * {@link wasmThrowToError}, never matched on the message.
+ */
 function call<T>(run: () => T): T {
   try {
     return run();
   } catch (error) {
-    const message = describeWasmThrow(error);
-    if (NODE_NOT_FOUND.test(message)) {
-      throw new VelesDBError(message, 'NOT_FOUND');
-    }
-    throw new VelesDBError(message, 'BAD_REQUEST');
+    throw wasmThrowToError(error);
   }
 }
 

@@ -4,6 +4,7 @@
 //! ascending-ID iteration with optional payload filtering.
 
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
+use crate::collection::search::query::row_universe::RowUniverse;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::filter::Filter;
@@ -32,6 +33,7 @@ impl Collection {
     /// - `filter`: Optional payload filter. Points not matching are skipped.
     ///
     /// Points are returned in ascending ID order for deterministic iteration.
+    /// The points are the collection's rows ([`Collection::all_point_ids`]).
     ///
     /// # Errors
     ///
@@ -48,8 +50,9 @@ impl Collection {
             ));
         }
 
-        // all_point_ids() returns IDs pre-sorted via BTreeSet (see crud_read_delete.rs).
-        // Binary search via partition_point is O(log N) per batch.
+        // The collection's rows, ascending (`all_point_ids`): a vector
+        // collection's payload without a vector is no row, and is not
+        // listed. Binary search via partition_point is O(log N) per batch.
         let ids = self.all_point_ids();
 
         let start = match cursor {
@@ -74,9 +77,7 @@ impl Collection {
         batch_size: usize,
         filter: Option<&Filter>,
     ) -> Vec<Point> {
-        let config = self.storage.config.read();
-        let is_metadata_only = config.metadata_only;
-        drop(config);
+        let is_metadata_only = self.row_universe() == RowUniverse::Payloads;
 
         // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
         // reversed here, an ABBA risk with Collection::search's canonical

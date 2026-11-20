@@ -372,8 +372,10 @@ impl Collection {
     ///
     /// The standard `try_anchored_fetch` skips this shape (text MATCH shapes
     /// keep their own fusion pipeline). This path bridges the gap: it computes
-    /// graph anchor IDs and runs hybrid RRF fusion restricted to those IDs,
-    /// so relevant anchors outside the global top-K are not silently missed.
+    /// graph anchor IDs and fuses the hybrid's branches over the anchors the
+    /// WHERE's metadata conditions match — both admit their rows by both
+    /// ([`Collection::hybrid_streams`]) — so a matching anchor ranked below
+    /// the best of the collection, or of the anchor set, is still fused.
     ///
     /// Returns `Ok(None)` when the shape does not apply or anchors are
     /// unavailable (falls through to the regular dispatch).
@@ -408,14 +410,17 @@ impl Collection {
 
         // Route through the strategy-honoring helper so maximum/average/rsf/
         // weighted are applied to the anchor-restricted streams (#6, anchored).
-        // The anchor set constrains both branches identically, so only the
-        // fusion of the two score streams changes; rrf/unset stays byte-identical.
+        // The anchors and the metadata conditions constrain both branches
+        // identically, so only the fusion of the two score streams changes.
+        let filter = Self::extract_metadata_filter(cond)
+            .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
         let results = self.hybrid_search_with_anchors_clause(
             vector,
             &text_query,
             limit,
             stmt.fusion_clause.as_ref(),
             &anchor_ids,
+            filter.as_ref(),
         )?;
         Ok(Some(results))
     }
@@ -443,8 +448,10 @@ impl Collection {
         let Some(ref cond) = stmt.where_clause else {
             return pushdown::PushdownAnalysis::default();
         };
-        let graph_vars: std::collections::HashSet<String> =
-            stmt.base_alias().map(str::to_owned).into_iter().collect();
+        let graph_vars: std::collections::HashSet<String> = crate::velesql::base_alias(stmt)
+            .map(str::to_owned)
+            .into_iter()
+            .collect();
         let join_tables = pushdown::extract_join_tables(&stmt.joins);
         let analysis = pushdown::analyze_for_pushdown(cond, &graph_vars, &join_tables);
         tracing::debug!(

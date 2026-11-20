@@ -667,7 +667,7 @@ impl PyGraphCollection {
     ///     List of result dicts with keys: id, score, payload
     ///
     /// Raises:
-    ///     ValueError: If the collection has no embeddings (``VELES-014``)
+    ///     ValueError: If the collection has no embeddings (``VELES-015``)
     ///         or the query's dimension is not the collection's.
     ///     PermissionError: If the read gate denies the read.
     ///
@@ -746,14 +746,13 @@ impl PyGraphCollection {
         py.detach(|| self.inner.flush_full().map_err(core_err))
     }
 
-    /// Returns the number of nodes stored with an embedding vector (through
-    /// ``upsert_node(..., vector=...)``): core's ``GraphCollection::len``, the
-    /// count of points in vector storage. A payload-only node is not counted —
-    /// in a graph without embeddings that is every node, so this is 0 there;
-    /// ``all_node_ids()`` lists payload nodes.
+    /// Returns the number of nodes stored in the graph: every node once,
+    /// whether it carries an embedding, a payload (``upsert_node_payload``,
+    /// or any node of a graph without embeddings) or both — the ids
+    /// ``all_node_ids()`` lists.
     ///
     /// Returns:
-    ///     int: Point count
+    ///     int: Node count
     ///
     /// Raises:
     ///     PermissionError: If the read gate denies the read.
@@ -763,12 +762,11 @@ impl PyGraphCollection {
         Ok(self.inner.len())
     }
 
-    /// Returns the number of nodes stored with an embedding vector, through the
-    /// same read gate as ``__len__`` (see there: payload-only nodes are not
-    /// counted).
+    /// Returns the number of nodes stored in the graph, through the same read
+    /// gate as ``__len__`` (see there).
     ///
     /// Returns:
-    ///     int: Point count
+    ///     int: Node count
     ///
     /// Raises:
     ///     PermissionError: If the read gate denies the read.
@@ -778,8 +776,7 @@ impl PyGraphCollection {
         Ok(self.inner.len())
     }
 
-    /// Check if the graph collection has no node stored with an embedding
-    /// vector (``count() == 0``): a graph holding only payload nodes is empty.
+    /// Check if the graph collection stores no node at all (``count() == 0``).
     ///
     /// Returns:
     ///     bool: True if empty
@@ -792,16 +789,16 @@ impl PyGraphCollection {
         Ok(self.inner.is_empty())
     }
 
-    /// Get the nodes stored with an embedding vector, by id.
+    /// Get stored nodes by id.
     ///
-    /// A payload-only node reads as ``None``, as a missing one does; read its
-    /// properties with ``get_node_payload``.
+    /// Every stored node is returned, payload-only ones included; a node
+    /// without an embedding has no ``vector`` key.
     ///
     /// Args:
-    ///     ids: List of point IDs to retrieve
+    ///     ids: List of node IDs to retrieve
     ///
     /// Returns:
-    ///     List of point dicts (or None for missing and payload-only IDs)
+    ///     List of node dicts (or None for missing IDs)
     #[pyo3(signature = (ids))]
     fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<Py<PyAny>>>> {
         self.authorize("get")?;
@@ -849,17 +846,25 @@ impl PyGraphCollection {
     ///     node_id: The node ID to look up
     ///
     /// Returns:
-    ///     bool: True if a node with that ID has a stored payload
+    ///     bool: True if the graph stores a node with that ID — with an
+    ///     embedding, a payload or both, the nodes ``len`` counts and
+    ///     ``get`` reads
     ///
     /// Note: signature must omit ``py: Python<'_>`` so PyO3 installs this
-    /// as the ``sq_contains`` slot. Uses ``get_node_payload`` because
-    /// graph nodes are payload-addressed (not vector-addressed like
-    /// :py:class:`Collection`).
+    /// as the ``sq_contains`` slot.
     fn __contains__(&self, node_id: u64) -> PyResult<bool> {
         // Membership reveals node existence, so it is a gated read (same
-        // rationale as Collection.__contains__).
+        // rationale as Collection.__contains__). It is `get`'s answer, so a
+        // node `get` reads is `in` the graph and one it hides (expired) is
+        // not.
         self.authorize("__contains__")?;
-        Ok(matches!(self.inner.get_node_payload(node_id), Ok(Some(_))))
+        Ok(self
+            .inner
+            .get(&[node_id])
+            .into_iter()
+            .next()
+            .flatten()
+            .is_some())
     }
 
     /// Graceful shutdown: full durability flush including WAL serialization.

@@ -38,6 +38,17 @@ if TYPE_CHECKING:
     from llamaindex_velesdb.vectorstore import VelesDBVectorStore
 
 
+#: Suffix of the metadata collection that holds, beside the vector store's
+#: collection, the graph nodes a loader without a graph collection stores
+#: without a vector (see ``GraphLoader``).
+NODE_COLLECTION_SUFFIX = "_graph_nodes"
+
+
+def node_collection_name(collection_name: str) -> str:
+    """The companion metadata collection of the vector store collection ``collection_name``."""
+    return f"{collection_name}{NODE_COLLECTION_SUFFIX}"
+
+
 def _generate_id(name: str, entity_type: str) -> int:
     """Generate a deterministic ID from entity name and type.
 
@@ -205,8 +216,12 @@ class GraphLoader:
     When ``graph_collection_name`` names an existing graph collection in the
     vector store's database, nodes and edges are written directly to that
     persistent ``PyGraphCollection`` via the native Python bindings (no REST
-    server needed). Otherwise, nodes go to the vector store's collection and
-    edges to an in-memory graph store.
+    server needed). Otherwise edges go to an in-memory graph store, a node
+    with a vector to the vector store's collection, and a node without one —
+    every node ``load_from_nodes`` loads — to the metadata collection beside
+    it, ``node_collection_name(vector_store.collection_name)``, created on
+    first use: a vector collection's rows are its vectors, and core refuses a
+    payload without one there (``VELES-016``).
 
     Args:
         vector_store: VelesDBVectorStore instance.
@@ -230,6 +245,7 @@ class GraphLoader:
         self._vector_store = vector_store
         self._default_dimension = 384
         self._edges: List[Dict[str, Any]] = []
+        self._node_collection: Optional[Any] = None
 
         # Prefer native graph collection when a name is provided.
         self._native_graph: Optional[Any] = None
@@ -256,15 +272,19 @@ class GraphLoader:
         """Add a node to the graph.
 
         With a native graph collection the node is upserted into it, next to
-        the edges; otherwise it is stored in the vector store's collection.
+        the edges. Otherwise a node with a vector is stored in the vector
+        store's collection and one without in its companion metadata
+        collection (see the class docstring). A failed write raises.
 
         Args:
             node_id: Unique node ID.
             label: Node label (type, e.g., "PERSON", "DOCUMENT").
             metadata: Optional node properties.
-            vector: Optional embedding vector for the node. A native graph
-                collection created without embeddings stores the node
-                without it.
+            vector: Optional embedding vector for the node. An empty one is
+                no vector: the node is stored as one without (core refuses
+                an empty vector where it requires one, ``VELES-016``). A
+                native graph collection created without embeddings stores
+                the node without it.
 
         Example:
             >>> loader.add_node(
@@ -274,23 +294,44 @@ class GraphLoader:
             ... )
         """
         payload = {"label": label, **(metadata or {})}
+        vector = vector or None
         if self._native_graph is not None:
             self._add_native_node(node_id, label, payload, vector)
             return
 
-        collection = self._get_collection(dimension=len(vector) if vector else None)
+        if vector is None:
+            self._nodes_without_vector().upsert_metadata([{
+                "id": node_id,
+                "payload": payload,
+            }])
+            return
 
-        if vector is not None:
-            collection.upsert([{
-                "id": node_id,
-                "vector": vector,
-                "payload": payload,
-            }])
-        else:
-            collection.upsert_metadata([{
-                "id": node_id,
-                "payload": payload,
-            }])
+        self._get_collection(dimension=len(vector)).upsert([{
+            "id": node_id,
+            "vector": vector,
+            "payload": payload,
+        }])
+
+    def _nodes_without_vector(self) -> Any:
+        """The companion metadata collection, got or created on first use.
+
+        Raises:
+            ValueError: The vector store exposes no database to hold it.
+        """
+        if self._node_collection is None:
+            db = _store_database(self._vector_store)
+            if db is None:
+                raise ValueError(
+                    "Vector store exposes no database; cannot store graph nodes "
+                    "without a vector."
+                )
+            name = node_collection_name(self._vector_store.collection_name)
+            # `is None`, not `or`: an empty collection is falsy (`len() == 0`).
+            collection = db.get_collection(name)
+            if collection is None:
+                collection = db.create_metadata_collection(name)
+            self._node_collection = collection
+        return self._node_collection
 
     def _add_native_node(
         self,
@@ -411,9 +452,11 @@ class GraphLoader:
         graph collection its id is the node's VelesDB point id,
         ``stable_hash_id(node.node_id)`` — the id ``VelesDBVectorStore`` stores
         it under and ``GraphRetriever`` expands from — so the graph is
-        reachable from vector search results. Without one, nodes share the
-        vector store's collection, where that id would overwrite the stored
-        node, so they keep ``stable_hash_id(f"{node_label}:{node.node_id}")``.
+        reachable from vector search results. Without one, nodes go to the
+        vector store's companion metadata collection (see the class
+        docstring) under ``stable_hash_id(f"{node_label}:{node.node_id}")``.
+        A node that fails to write raises: the call stops there, with the
+        nodes before it written.
 
         With ``extract_relations=True``, every entry of a loaded node's
         ``relationships`` (``SOURCE``, ``PREVIOUS``, ``NEXT``, ``PARENT``,
@@ -460,17 +503,17 @@ class GraphLoader:
     def _load_graph_nodes(
         self, nodes: List[Any], node_label: str
     ) -> List[Tuple[Any, int]]:
-        """Add each node to the graph; return ``(node, graph id)`` for those added."""
+        """Add each node to the graph; return ``(node, graph id)`` for each.
+
+        A failed write raises: a node silently left out would leave the
+        relationships to it skipped and the counts wrong.
+        """
         loaded: List[Tuple[Any, int]] = []
         for node in nodes:
             node_id = self._graph_node_id(node.node_id, node_label)
             metadata = _extract_graph_metadata(node)
-
-            try:
-                self.add_node(node_id=node_id, label=node_label, metadata=metadata)
-                loaded.append((node, node_id))
-            except Exception as e:
-                logger.warning(f"Failed to add node {node.node_id}: {e}")
+            self.add_node(node_id=node_id, label=node_label, metadata=metadata)
+            loaded.append((node, node_id))
         return loaded
 
     def _resolve_target(self, target: str, graph_ids: Dict[str, int]) -> Optional[int]:

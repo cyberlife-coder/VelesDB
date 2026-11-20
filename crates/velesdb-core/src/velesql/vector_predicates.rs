@@ -10,6 +10,7 @@
 use crate::error::{Error, Result};
 
 use super::condition_tree::{any_subtree, count_matching_leaves, is_vector_leaf};
+use super::text_match::{and_required_text_matches, ranking_near};
 use super::Condition;
 
 /// The column naming a point's own vector: `similarity(vector, $v)`.
@@ -23,9 +24,13 @@ pub const METADATA_MATCH_SCORE: f32 = 1.0;
 ///
 /// - several `similarity()` under one `OR` (it would take a union of vector
 ///   searches); several under `AND` filter in cascade and are accepted;
-/// - more than one `SPARSE_NEAR` (a query runs one sparse branch);
+/// - more than one `SPARSE_NEAR` (a query runs one sparse branch), or one
+///   under `NOT` (it would rank the rows it negates);
 /// - a `NEAR_FUSED` that is not the only vector predicate, or that sits
-///   under `OR` / `NOT` (the fusion executor would not reach it).
+///   under `OR` / `NOT` (the fusion executor would not reach it);
+/// - a text `MATCH` that would rank beside a ranking no executor fuses it
+///   with — a `SPARSE_NEAR`, a `NEAR_FUSED`, a `NEAR` beside a
+///   `similarity()` threshold — or a second one that would rank.
 ///
 /// # Errors
 ///
@@ -40,8 +45,9 @@ pub fn validate_vector_predicates(condition: &Condition) -> Result<()> {
                 .to_string(),
         ));
     }
-    reject_more_than_one_sparse_search(condition)?;
-    reject_unexecutable_fused_search(condition)
+    reject_unexecutable_sparse_search(condition)?;
+    reject_unexecutable_fused_search(condition)?;
+    reject_unexecutable_text_match(condition)
 }
 
 /// The vector the payload holds under `field`, for a named-vector
@@ -108,13 +114,75 @@ fn reject_unexecutable_fused_search(condition: &Condition) -> Result<()> {
 
 /// Rejects a condition with more than one `SPARSE_NEAR`: a query runs a
 /// single sparse branch, so a second one would be dropped without a word.
-fn reject_more_than_one_sparse_search(condition: &Condition) -> Result<()> {
-    let sparse_count =
-        count_matching_leaves(condition, |c| matches!(c, Condition::SparseVectorSearch(_)));
+/// And one under `NOT`: the sparse search would rank the very rows the
+/// negation excludes — a dense `NEAR` under `NOT` reads TRUE and takes the
+/// full scan, selecting none — so the negation would be dropped instead.
+fn reject_unexecutable_sparse_search(condition: &Condition) -> Result<()> {
+    let sparse_count = count_matching_leaves(condition, is_sparse_search);
     if sparse_count > 1 {
         return Err(Error::Query(format!(
             "the query has {sparse_count} SPARSE_NEAR clauses, and a query runs one \
              sparse search; run one query per sparse vector and fuse the results"
+        )));
+    }
+    if any_subtree(
+        condition,
+        &|c| matches!(c, Condition::Not(inner) if count_matching_leaves(inner, is_sparse_search) > 0),
+    ) {
+        return Err(Error::Query(
+            "a SPARSE_NEAR cannot appear under NOT: it ranks the rows it matches; \
+             negate the metadata conditions beside it instead"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+const fn is_sparse_search(condition: &Condition) -> bool {
+    matches!(condition, Condition::SparseVectorSearch(_))
+}
+
+/// Rejects a text `MATCH` that would rank beside a ranking no executor
+/// fuses it with (`super::text_match`).
+///
+/// A `MATCH` the WHERE AND-requires ranks the rows: alone, by BM25; beside a
+/// dense `NEAR`, as the text branch of a hybrid search. Every other `MATCH` —
+/// under `OR` or `NOT`, or beside a `similarity()` threshold, which ranks no
+/// rows — is a membership test any executor evaluates. Refused:
+///
+/// - an AND-required `MATCH` beside a `SPARSE_NEAR` or a `NEAR_FUSED`, whose
+///   executors fuse no text branch, or beside a `NEAR` and a `similarity()`
+///   threshold, which no hybrid search runs;
+/// - two AND-required `MATCH` where one would rank (no `similarity()`
+///   threshold beside them): a query runs one text search.
+fn reject_unexecutable_text_match(condition: &Condition) -> Result<()> {
+    let mut ranked = Vec::new();
+    and_required_text_matches(condition, &mut ranked);
+    if ranked.is_empty() {
+        return Ok(());
+    }
+    let holds = |leaf: fn(&Condition) -> bool| count_matching_leaves(condition, leaf) > 0;
+    let similarity = holds(|c| matches!(c, Condition::Similarity(_)));
+    if holds(|c| {
+        matches!(
+            c,
+            Condition::SparseVectorSearch(_) | Condition::VectorFusedSearch(_)
+        )
+    }) || (similarity && ranking_near(condition))
+    {
+        return Err(Error::Query(
+            "a text MATCH AND-ed with the WHERE is fused with its ranking, and only a \
+             vector NEAR without a similarity() threshold is fused with text, not \
+             SPARSE_NEAR or NEAR_FUSED; run the text search as its own query, or test \
+             the MATCH under OR / NOT"
+                .to_string(),
+        ));
+    }
+    if ranked.len() > 1 && !similarity {
+        return Err(Error::Query(format!(
+            "the query ANDs {} text MATCH clauses, and a query ranks by one text search; \
+             combine the terms in one MATCH, or run one query per MATCH",
+            ranked.len()
         )));
     }
     Ok(())

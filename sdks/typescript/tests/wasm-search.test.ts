@@ -136,7 +136,7 @@ describe('wasmSearch — validation + dense happy path', () => {
     );
   });
 
-  it('throws DIMENSION_MISMATCH when query length != collection.dimension', async () => {
+  it('throws core\'s VELES-004 when query length != collection.dimension', async () => {
     const ctx = buildCtx('docs', buildStore(), { dimension: 3 });
     await expect(wasmSearch(ctx, 'docs', [0.1, 0.2])).rejects.toThrow(
       VelesDBError
@@ -1256,7 +1256,7 @@ describe("WASM search — a search's inputs are validated before any early retur
     const outcome = await settle(call(ctx));
 
     expect(outcome).toBeInstanceOf(VelesDBError);
-    expect((outcome as VelesDBError).code).toBe('DIMENSION_MISMATCH');
+    expect((outcome as VelesDBError).code).toBe('VELES-004');
     expect(bindingCallCount(store)).toBe(0);
   });
 
@@ -1270,7 +1270,7 @@ describe("WASM search — a search's inputs are validated before any early retur
     const outcome = await settle(wasmMultiQuerySearch(ctx, 'docs', vectors as number[][]));
 
     expect(outcome).toBeInstanceOf(VelesDBError);
-    expect((outcome as VelesDBError).code).toBe('DIMENSION_MISMATCH');
+    expect((outcome as VelesDBError).code).toBe('VELES-004');
     expect(bindingCallCount(store)).toBe(0);
   });
 
@@ -1282,7 +1282,7 @@ describe("WASM search — a search's inputs are validated before any early retur
       wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2] }, { vector: [0.1] }])
     );
 
-    expect((outcome as VelesDBError).code).toBe('DIMENSION_MISMATCH');
+    expect((outcome as VelesDBError).code).toBe('VELES-004');
     expect(bindingCallCount(store)).toBe(0);
   });
 
