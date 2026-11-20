@@ -518,6 +518,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **REST server: the per-IP rate limit refills at the configured rate**
+  (REST server, 2026-11-20). `[server] rate_limit = N` is documented as `N`
+  requests per second per IP, but the limiter was built with
+  `per_second(N)`, which in `tower_governor` 0.8 is the *interval* in seconds
+  after which one request is given back. A client that spent its burst of `N`
+  was then allowed one request every `N` seconds: at the default of 100, one
+  every 100 seconds, with `429` in between. The interval is now `1 / N`
+  seconds, so `N` requests per second are sustained and an emptied bucket is
+  full a second later. Deployments that sized `rate_limit` around the old
+  behaviour admit far more traffic after this fix; lower the value if the
+  throttle was load-bearing.
+
+- **REST server: the NDJSON stream route holds a bounded line** (REST server,
+  2026-11-20). `POST /collections/{name}/points/stream` has no body limit
+  because it reads line by line, but it buffered an unfinished line without
+  bound and rescanned the whole buffer on every chunk: a body that never sent
+  a newline was held in memory whole, at quadratic cost. One line is now
+  bounded by `[server] max_body_size`; a longer line is dropped, counted in
+  `malformed`, and the stream carries on at the next line. Only newly received
+  bytes are scanned for a newline.
+
 - **Core: `LruCache`'s O(1) claim has a deterministic guard** (core, tests,
   2026-11-19). #2860 made every operation O(1) and #2854 moved per-size cost
   to the `LruCache-Baseline` benchmark, which CI does not gate, so an O(n)
