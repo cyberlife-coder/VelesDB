@@ -4,8 +4,10 @@
 //! Approximate intersection via bitwise AND + `popcount` runs in ~8 CPU cycles
 //! vs ~1000+ cycles for `HashSet` intersection on 30 trigrams.
 //!
-//! False positive rate: ~4% at 30 trigrams (`(1 - e^(-2·30/256))^2`),
-//! acceptable for ranking; exact verification follows for final results.
+//! False positive rate: ~4% at 30 trigrams (`(1 - e^(-2·30/256))^2`).
+//! [`TrigramFingerprint::approx_jaccard`] corrects for it with the exact set
+//! sizes; LIKE ranking (`TrigramIndex::search_like_ranked`) needs no
+//! fingerprint, since a candidate's Jaccard is exact from counts alone.
 
 #![allow(clippy::cast_possible_truncation)] // Bloom positions are always < 256
 #![allow(clippy::cast_precision_loss)] // Precision loss acceptable for Jaccard scoring
@@ -52,6 +54,20 @@ const fn fmix32(mut h: u32) -> u32 {
     h ^= h >> 13;
     h = h.wrapping_mul(0xC2B2_AE35);
     h ^ (h >> 16)
+}
+
+/// Width of the fingerprint in bits.
+const BITS: u32 = 256;
+
+/// Bits set per inserted trigram (`k`).
+const HASHES_PER_TRIGRAM: f64 = 2.0;
+
+/// Expected number of distinct trigrams behind `set_bits` set bits:
+/// `-(m/k) ln(1 - X/m)`. Infinite for a saturated fingerprint.
+#[inline]
+fn estimated_cardinality(set_bits: u32) -> f64 {
+    let m = f64::from(BITS);
+    -(m / HASHES_PER_TRIGRAM) * (1.0 - f64::from(set_bits) / m).ln()
 }
 
 /// Set a single bit in the 4-word bitmap at the given position (0..255).
@@ -143,27 +159,54 @@ impl TrigramFingerprint {
             + (self.bits[3] & other.bits[3]).count_ones()
     }
 
-    /// Approximate Jaccard similarity using bloom-filter Jaccard estimator.
+    /// Approximate Jaccard similarity of the two trigram sets.
     ///
-    /// Computes `popcount(A AND B) / popcount(A OR B)` (Broder 1997).
-    /// This estimates set Jaccard directly from the bit-level Jaccard of
-    /// the bloom filters, without needing exact trigram counts.
+    /// `self_count` and `other_count` are the exact sizes of the sets the
+    /// fingerprints were built from. Only their intersection is estimated,
+    /// from bit counts:
     ///
-    /// The `_self_count` and `_other_count` parameters are reserved for
-    /// future bias-correction and kept for API stability.
+    /// 1. After `n` trigrams set `k = 2` bits each in `m = 256`, a bit is
+    ///    still clear with probability `e^(-kn/m)`, so `X` set bits stand
+    ///    for `n̂(X) = -(m/k) ln(1 - X/m)` distinct trigrams.
+    /// 2. The OR of two fingerprints is the fingerprint of the union, so
+    ///    `n̂(A OR B)` estimates `|A ∪ B|`. It is rescaled by
+    ///    `(|A| + |B|) / (n̂(A) + n̂(B))`, which cancels the per-fingerprint
+    ///    error the exact counts reveal (identical fingerprints score 1.0).
+    /// 3. `|A ∩ B| = |A| + |B| - |A ∪ B|`, clamped to `[0, min(|A|, |B|)]`.
     ///
-    /// Returns 0.0 when both fingerprints are empty.
+    /// The plain bit ratio `|A AND B| / |A OR B|` overestimates by ~0.1 on
+    /// average: two trigrams of one set sharing a bit shrink `A OR B` but not
+    /// the shared bits. This estimator is unbiased on average.
+    ///
+    /// A saturated union (all 256 bits set, past ~700 distinct trigrams)
+    /// carries no cardinality signal; the bit ratio is returned instead.
+    ///
+    /// Returns 0.0 when either set is empty.
     #[must_use]
-    pub fn approx_jaccard(&self, other: &Self, _self_count: usize, _other_count: usize) -> f32 {
-        let and_pop = self.approx_intersection_count(other);
-        let or_pop = self.union_popcount(other);
-        if or_pop == 0 {
+    pub fn approx_jaccard(&self, other: &Self, self_count: usize, other_count: usize) -> f32 {
+        if self_count == 0 || other_count == 0 || self.is_empty() || other.is_empty() {
             return 0.0;
         }
-        and_pop as f32 / or_pop as f32
+        let union_bits = self.union_popcount(other);
+        if union_bits >= BITS {
+            return self.approx_intersection_count(other) as f32 / union_bits as f32;
+        }
+
+        let (a, b) = (self_count as f64, other_count as f64);
+        let estimated_counts =
+            estimated_cardinality(self.popcount()) + estimated_cardinality(other.popcount());
+        let union = estimated_cardinality(union_bits) * (a + b) / estimated_counts;
+        let intersection = (a + b - union).clamp(0.0, a.min(b));
+        (intersection / (a + b - intersection)) as f32
     }
 
-    /// Popcount of `self OR other` (used for bloom Jaccard denominator).
+    /// Number of set bits.
+    #[inline]
+    fn popcount(&self) -> u32 {
+        self.bits.iter().map(|word| word.count_ones()).sum()
+    }
+
+    /// Popcount of `self OR other`: the bit count of the union's fingerprint.
     #[inline]
     fn union_popcount(&self, other: &Self) -> u32 {
         (self.bits[0] | other.bits[0]).count_ones()

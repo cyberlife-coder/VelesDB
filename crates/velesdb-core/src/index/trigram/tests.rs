@@ -2,6 +2,7 @@
 //!
 //! Tests written BEFORE implementation following craftsman workflow.
 
+use super::index::extract_trigrams_for_pattern;
 use super::*;
 
 // ========== Trigram Extraction Tests ==========
@@ -296,6 +297,41 @@ fn test_trigram_score_jaccard_no_match() {
 
     // No overlap should have score 0
     assert!(score < 0.1, "Score should be < 0.1, got {score}");
+}
+
+#[test]
+fn test_search_like_ranked_scores_are_exact_jaccard() {
+    // A candidate holds every trigram of the pattern, so its Jaccard is
+    // exactly |pattern trigrams| / |doc trigrams|: ranking needs no estimate.
+    // This test is the live guard of that invariant (`candidate_jaccard`).
+    let mut index = TrigramIndex::new();
+    index.insert(1, "matching").expect("test: insert");
+    index
+        .insert(2, "matching document number 0")
+        .expect("test: insert");
+    index
+        .insert(
+            3,
+            "matching 1000 lorem ipsum dolor sit amet consectetur adipiscing elit sed do \
+             eiusmod tempor incididunt ut labore et dolore magna aliqua",
+        )
+        .expect("test: insert");
+    index
+        .insert(4, "matching patterns in compilers")
+        .expect("test: insert");
+
+    let pattern = "matching";
+    let query_trigrams = extract_trigrams_for_pattern(pattern);
+    let results = index.search_like_ranked(pattern, 0.0);
+
+    assert_eq!(results.len(), 4, "every doc starts with the pattern");
+    for (id, score) in results {
+        let exact = index.score_jaccard(id, &query_trigrams);
+        assert!(
+            (score - exact).abs() < f32::EPSILON,
+            "doc {id}: ranked score {score} must equal the exact Jaccard {exact}"
+        );
+    }
 }
 
 // ========== Stats Tests ==========

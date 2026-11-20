@@ -291,10 +291,13 @@ impl TrigramIndex {
     /// Uses bitwise AND + popcount on 256-bit fingerprints (~8 cycles)
     /// instead of `HashSet` intersection (~30-50 cycles per lookup).
     ///
-    /// The estimate is the bit-level Jaccard of the two fingerprints
-    /// ([`TrigramFingerprint::approx_jaccard`]); it reads no trigram count.
-    /// It tracks the exact [`Self::score_jaccard`] within ~0.1 on short and
-    /// long documents, typically slightly above it.
+    /// The estimate is [`TrigramFingerprint::approx_jaccard`]: the
+    /// intersection is estimated from the fingerprints' bit counts and
+    /// combined with the exact trigram counts. It is unbiased on average and
+    /// tracks the exact [`Self::score_jaccard`] within ~0.1 per pair.
+    ///
+    /// For a candidate of a LIKE pattern, [`Self::search_like_ranked`] needs
+    /// no estimate at all: it scores the exact Jaccard from the counts.
     ///
     /// Returns 0.0 if the document is not in the index, or if either the
     /// document or the query has no trigram.
@@ -331,8 +334,9 @@ impl TrigramIndex {
     /// Returns a vector of (`doc_id`, score) tuples sorted by score descending.
     /// Documents with score below threshold are filtered out.
     ///
-    /// Uses [`TrigramFingerprint`] bloom filters for fast approximate Jaccard
-    /// scoring during the ranking pass.
+    /// Scores are exact Jaccard similarities, computed in O(1) per candidate:
+    /// a candidate holds every trigram of the pattern, so the intersection is
+    /// the pattern's trigram set and the union the document's.
     ///
     /// # Arguments
     ///
@@ -342,8 +346,8 @@ impl TrigramIndex {
     /// # Performance
     ///
     /// Threshold pruning reduces result set size and post-processing overhead.
-    /// Fingerprint-based scoring replaces per-document `HashSet` intersection
-    /// with ~8-cycle bitwise AND + popcount.
+    /// Scoring reads one trigram count per candidate: no set intersection and
+    /// no fingerprint.
     #[must_use]
     pub fn search_like_ranked(&self, pattern: &str, threshold: f32) -> Vec<(u64, f32)> {
         // Empty pattern returns all docs with score 0
@@ -363,17 +367,12 @@ impl TrigramIndex {
             return Vec::new();
         }
 
-        // Build query fingerprint once for the whole scoring pass.
-        let query_fp = TrigramFingerprint::from_trigram_set(&query_trigrams);
         let query_count = query_trigrams.len();
-
-        // Score candidates using fast fingerprint-based Jaccard.
         let mut results: Vec<(u64, f32)> = candidates
             .iter()
             .map(|id| {
                 let doc_id = u64::from(id);
-                let score = self.score_jaccard_fast(doc_id, &query_fp, query_count);
-                (doc_id, score)
+                (doc_id, self.candidate_jaccard(doc_id, query_count))
             })
             .filter(|(_, score)| *score >= threshold)
             .collect();
@@ -382,6 +381,21 @@ impl TrigramIndex {
         results.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
 
         results
+    }
+
+    /// Exact Jaccard of a document against a pattern it is a candidate for.
+    ///
+    /// `intersect_trigram_bitmaps` keeps only documents holding every
+    /// trigram of the pattern, so `|D ∩ Q| = |Q|` and `|D ∪ Q| = |D|`. The
+    /// invariant is guarded by `test_search_like_ranked_scores_are_exact_jaccard`,
+    /// which checks every ranked score against [`Self::score_jaccard`].
+    fn candidate_jaccard(&self, doc_id: u64, query_count: usize) -> f32 {
+        match self.doc_trigrams.get(&doc_id) {
+            Some(doc_trigrams) if !doc_trigrams.is_empty() => {
+                query_count as f32 / doc_trigrams.len() as f32
+            }
+            _ => 0.0,
+        }
     }
 
     /// Get index statistics.
