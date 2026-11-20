@@ -689,7 +689,10 @@ the full value; every other route accepts up to the smaller of this value and
 2 MiB (2 097 152 bytes), the limit they have always had — the setting can
 lower it, not raise it. `POST /collections/{name}/points/stream` reads its
 NDJSON body line by line without buffering it, and no body limit applies to
-it.
+it; the value bounds one line instead. A line longer than `max_body_size` is
+dropped and counted in the response's `malformed` field, and the stream
+carries on at the next line (2026-11-20; before, a body with no newline was
+buffered whole).
 
 **`cors_enabled` / `cors_origins`.** By default no origin is listed and the
 server sends no CORS header, so only pages it serves itself (same origin) can
@@ -984,6 +987,8 @@ VelesDB Server includes per-IP rate limiting backed by a token-bucket algorithm 
 - **Disable**: Set to `0` to disable rate limiting entirely
 
 ### Behavior
+
+The limiter is a token bucket per IP: with `rate_limit = N` a client may send `N` requests at once, and is given one request back every `1/N` seconds. A client that keeps to `N` requests per second is never refused, and an emptied bucket is full again one second later. (Until 2026-11-20 a request came back only every `N` seconds; see the CHANGELOG.)
 
 When a client exceeds the limit, the server responds with HTTP `429 Too Many Requests` and includes rate-limit headers:
 
