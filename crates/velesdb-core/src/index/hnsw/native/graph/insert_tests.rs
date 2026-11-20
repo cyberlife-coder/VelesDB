@@ -138,3 +138,62 @@ fn test_growth_past_the_floor_stays_within_an_eighth() {
         );
     }
 }
+
+/// A pseudo-random 64-d vector, the same for the same `seed`.
+fn seeded_vector(seed: u64) -> Vec<f32> {
+    let mut state = super::super::xorshift64(seed.wrapping_add(1).wrapping_mul(0x9E37_79B9));
+    (0..64)
+        .map(|_| {
+            state = super::super::xorshift64(state);
+            let unit = f32::from(u16::try_from(state % 10_000).expect("below 10 000")) / 10_000.0;
+            unit - 0.5
+        })
+        .collect()
+}
+
+/// A search racing an insert never stops at the node being inserted.
+///
+/// An insert links its node layer by layer. Published from the top layer
+/// down, a node drawn to layer 1 or above was reachable there — and, being
+/// the exact match, the greedy descent's pick — while it still had no layer-0
+/// neighbour: a layer-0 walk started from it returned that one node and
+/// nothing else, so a search for `k = 10` over a thousand nodes returned 1.
+/// Every searcher here queries the vector being inserted, which puts the
+/// descent on the new node whenever the window is open.
+#[test]
+fn test_a_search_racing_an_insert_never_stops_at_the_node_being_linked() {
+    const PREFILL: u64 = 1_000;
+    const INSERTS: u64 = 400;
+    const K: usize = 10;
+    let hnsw = graph(PREFILL as usize + INSERTS as usize);
+    for seed in 0..PREFILL {
+        hnsw.insert(&seeded_vector(seed)).expect("prefill insert");
+    }
+    let inserting = parking_lot::Mutex::new(seeded_vector(PREFILL));
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let short = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..3 {
+            scope.spawn(|| {
+                while !done.load(Ordering::Acquire) {
+                    let query = inserting.lock().clone();
+                    if hnsw.search(&query, K, 64).len() < K {
+                        short.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            });
+        }
+        for seed in PREFILL..PREFILL + INSERTS {
+            let vector = seeded_vector(seed);
+            inserting.lock().clone_from(&vector);
+            hnsw.insert(&vector).expect("insert");
+        }
+        done.store(true, Ordering::Release);
+    });
+    assert_eq!(
+        short.load(Ordering::Relaxed),
+        0,
+        "searches returned fewer than {K} of {} nodes",
+        PREFILL + INSERTS
+    );
+}
