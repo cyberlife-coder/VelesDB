@@ -6,7 +6,7 @@ as the vector backend in any Haystack 2.x indexing or retrieval pipeline.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from haystack import default_from_dict, default_to_dict
 from haystack.dataclasses import Document
@@ -474,17 +474,32 @@ def _resolve_survivors_for_policy(
     return documents
 
 
-def _flush_stream_batches(collection: Any, points: List[dict], batch_size: int) -> None:
-    """Send *points* to *collection* in batches via the streaming channel.
+def _row_writer(collection: Any, *, streaming: bool) -> Callable[[List[dict]], Any]:
+    """The binding call that stores *collection*'s rows.
+
+    A metadata-only collection stores payload rows, which the vector write
+    paths do not take: its rows go through ``upsert_metadata`` whichever
+    method wrote them. A vector collection's rows go through
+    ``stream_insert`` when *streaming*, else ``upsert``.
+    """
+    if collection.is_metadata_only():
+        return collection.upsert_metadata
+    return collection.stream_insert if streaming else collection.upsert
+
+
+def _flush_stream_batches(
+    write: Callable[[List[dict]], Any], points: List[dict], batch_size: int
+) -> None:
+    """Send *points* in batches of *batch_size* through *write*.
 
     Mirrors ``langchain_velesdb.point_builder.flush_stream_batches`` and
     ``llamaindex_velesdb.node_builder.flush_in_batches`` — kept local (rather
     than imported cross-package) so this MIT-licensed integration does not
     take on a dependency on the sibling LangChain/LlamaIndex distributions.
-    Only calls the ``velesdb`` binding's ``stream_insert``; no core logic.
+    Only calls the ``velesdb`` binding; no core logic.
     """
     for start in range(0, len(points), batch_size):
-        collection.stream_insert(points[start : start + batch_size])
+        write(points[start : start + batch_size])
 
 
 class VelesDBDocumentStore(CollectionAdminMixin):
@@ -650,7 +665,7 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         points = _documents_to_points(
             survivors, sparse_by_id, vectors_required=not col.is_metadata_only()
         )
-        result = col.upsert(points)
+        result = _row_writer(col, streaming=False)(points)
         return result if isinstance(result, int) else len(points)
 
     def stream_insert(
@@ -661,7 +676,8 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         """Insert *documents* via VelesDB's streaming ingestion channel.
 
         Sends every point through ``Collection.stream_insert`` in a single
-        call. Unlike :meth:`write_documents`, this bypasses the
+        call (a metadata-only collection's rows go through
+        ``upsert_metadata``, see :func:`_row_writer`). Unlike :meth:`write_documents`, this bypasses the
         ``DuplicatePolicy`` checks (streaming is an append-only bulk-loading
         path) — pre-dedupe on the caller side if that matters. For very
         large batches where the bounded streaming channel's backpressure
@@ -691,7 +707,7 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         points = _documents_to_points(
             documents, sparse_by_id, vectors_required=not col.is_metadata_only()
         )
-        col.stream_insert(points)
+        _row_writer(col, streaming=True)(points)
         return len(points)
 
     def write_documents_streaming(
@@ -738,7 +754,7 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         points = _documents_to_points(
             survivors, sparse_by_id, vectors_required=not col.is_metadata_only()
         )
-        _flush_stream_batches(col, points, batch_size)
+        _flush_stream_batches(_row_writer(col, streaming=True), points, batch_size)
         return len(points)
 
     def delete_documents(
