@@ -291,13 +291,19 @@ impl TrigramIndex {
     /// Uses bitwise AND + popcount on 256-bit fingerprints (~8 cycles)
     /// instead of `HashSet` intersection (~30-50 cycles per lookup).
     ///
-    /// Returns 0.0 if the document is not in the index.
+    /// The estimate is the bit-level Jaccard of the two fingerprints
+    /// ([`TrigramFingerprint::approx_jaccard`]); it reads no trigram count.
+    /// It tracks the exact [`Self::score_jaccard`] within ~0.1 on short and
+    /// long documents, typically slightly above it.
+    ///
+    /// Returns 0.0 if the document is not in the index, or if either the
+    /// document or the query has no trigram.
     ///
     /// # Arguments
     ///
     /// * `doc_id` - Document to score
     /// * `query_fp` - Precomputed fingerprint of the query trigrams
-    /// * `query_count` - Exact trigram count of the query (for Jaccard denominator)
+    /// * `query_count` - Exact trigram count of the query; `0` scores 0.0
     #[must_use]
     pub fn score_jaccard_fast(
         &self,

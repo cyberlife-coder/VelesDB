@@ -4,8 +4,8 @@
 //! Approximate intersection via bitwise AND + `popcount` runs in ~8 CPU cycles
 //! vs ~1000+ cycles for `HashSet` intersection on 30 trigrams.
 //!
-//! False positive rate: ~1% at 30 trigrams (acceptable for ranking;
-//! exact verification follows for final results).
+//! False positive rate: ~4% at 30 trigrams (`(1 - e^(-2·30/256))^2`),
+//! acceptable for ranking; exact verification follows for final results.
 
 #![allow(clippy::cast_possible_truncation)] // Bloom positions are always < 256
 #![allow(clippy::cast_precision_loss)] // Precision loss acceptable for Jaccard scoring
@@ -14,7 +14,7 @@ use std::collections::HashSet;
 
 /// A 256-bit bloom filter for fast approximate trigram intersection.
 ///
-/// Each trigram maps to 2 bit positions via multiplicative hashing.
+/// Each trigram maps to 2 bit positions of one well-mixed 32-bit hash.
 /// Intersection is computed as `(self AND other).popcount()` — four
 /// `AND` + four `POPCNT` instructions (~8 cycles on modern x86).
 ///
@@ -23,21 +23,35 @@ use std::collections::HashSet;
 /// This is a **lossy** representation. `approx_intersection_count` may
 /// overcount (false positives from hash collisions), but never undercounts.
 /// Use exact `score_jaccard` on `TrigramIndex` when precision matters.
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
 pub struct TrigramFingerprint {
     bits: [u64; 4],
 }
 
 /// Compute two independent bit positions for a 3-byte trigram.
 ///
-/// Uses multiplicative hashing with distinct constants to spread
-/// trigrams across the 256-bit space with minimal clustering.
+/// The packed trigram goes through the `MurmurHash3` 32-bit finalizer
+/// (`fmix32`), whose full avalanche makes every output bit depend on every
+/// input byte; the two positions are two disjoint bytes of that hash.
+///
+/// Reducing the raw product `v * C` modulo 256 instead — as this function
+/// once did — keeps its low byte, which depends on `trigram[0]` alone: every
+/// trigram sharing a first byte then set the same two bits, and
+/// `approx_jaccard` overestimated long documents several-fold.
 #[inline]
 fn trigram_hash(trigram: [u8; 3]) -> (usize, usize) {
-    let v = u32::from(trigram[0]) | (u32::from(trigram[1]) << 8) | (u32::from(trigram[2]) << 16);
-    let h1 = v.wrapping_mul(0x9E37_79B9) as usize % 256;
-    let h2 = v.wrapping_mul(0x517C_C1B7).wrapping_add(0x6A09_E667) as usize % 256;
-    (h1, h2)
+    let h = fmix32(u32::from_le_bytes([trigram[0], trigram[1], trigram[2], 0]));
+    ((h & 0xFF) as usize, ((h >> 8) & 0xFF) as usize)
+}
+
+/// `MurmurHash3` 32-bit finalizer: a bijective mixer with full avalanche.
+#[inline]
+const fn fmix32(mut h: u32) -> u32 {
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85EB_CA6B);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0xC2B2_AE35);
+    h ^ (h >> 16)
 }
 
 /// Set a single bit in the 4-word bitmap at the given position (0..255).
