@@ -531,6 +531,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   double fault is logged as an error and the tracked offset moves past the
   fragment, so later records still read back until the next open.
 
+- **Core: LIKE ranking scores the exact Jaccard; the fingerprint estimate is
+  unbiased** (core, 2026-11-20). `TrigramIndex::search_like_ranked` scored
+  candidates with the fingerprint estimate, although a candidate holds every
+  trigram of the pattern: its Jaccard is exactly `|pattern trigrams| / |doc
+  trigrams|`, now read in O(1) from the counts, with no fingerprint built per
+  query (the document `matching` scored 0.889 for the pattern `matching`, for
+  an exact Jaccard of 0.8).
+  `TrigramFingerprint::approx_jaccard`, still behind `score_jaccard_fast` for
+  arbitrary pairs, divided shared bits by union bits, which overestimates by
+  about 0.1 on average since two trigrams of one set can share a bit. It now
+  estimates only the intersection from bit counts (`-(m/k) ln(1 - X/m)`,
+  rescaled by the exact set sizes its reserved parameters already received)
+  and is unbiased: over 600 generated pairs its mean error is -0.002 (it was
+  +0.086) and its mean absolute error 0.016. A saturated fingerprint falls
+  back to the bit ratio. No signature changes.
+
 - **Core: trigram fingerprints hash every byte of the trigram** (core,
   2026-11-19). `TrigramFingerprint` placed each trigram at `v * C % 256`,
   the low byte of the product, which depends on the trigram's first byte
