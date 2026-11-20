@@ -8,7 +8,9 @@
 //!
 //! Validates `LruCache` complexity-sensitive behavior. Timing assertions in
 //! the suite are `#[ignore]`d (manual runs); per-size cost is measured by the
-//! `LruCache-Baseline` group of `benches/concurrency_benchmark.rs`.
+//! `LruCache-Baseline` group of `benches/concurrency_benchmark.rs`. The O(1)
+//! claim itself is guarded without a clock: `LruList`'s slab counts its node
+//! accesses in test builds, and that count must not grow with the size.
 //!
 //! # Implementation Notes
 //!
@@ -186,4 +188,34 @@ fn test_get_moves_key_to_mru_at_every_size() {
         assert!(cache.peek(&0).is_some(), "size={size}: MRU key evicted");
         assert!(cache.peek(&1).is_none(), "size={size}: LRU key survived");
     }
+}
+
+/// Every recency operation touches a constant number of list nodes.
+///
+/// The deterministic counterpart of the per-size benchmark: the count comes
+/// from the node slab's accessors, not from a clock, so load cannot move it,
+/// and an O(n) move-to-back, eviction or removal makes it grow with the size.
+#[test]
+fn test_recency_operations_touch_constant_nodes() {
+    let touches_at = |size: u64| {
+        let cache: LruCache<u64, u64> = LruCache::new(size as usize);
+        (0..size).for_each(|i| cache.insert(i, i));
+        [
+            cache.nodes_touched_by(|c| {
+                let _ = c.get(&0); // LRU front -> MRU back
+            }),
+            cache.nodes_touched_by(|c| c.insert(size, size)), // evicts LRU
+            cache.nodes_touched_by(|c| c.insert(size / 2, 0)), // update + promote
+            cache.nodes_touched_by(|c| c.remove(&(size / 3))), // middle node
+        ]
+    };
+
+    let small = touches_at(100);
+    let large = touches_at(10_000);
+
+    assert!(
+        small.iter().all(|&t| t > 0),
+        "node accessors not instrumented: {small:?}"
+    );
+    assert_eq!(small, large, "node touches grow with cache size");
 }

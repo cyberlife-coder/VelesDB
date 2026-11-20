@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::ops::{Index, IndexMut};
 
 /// The "no node" link.
 const NIL: usize = usize::MAX;
@@ -23,12 +24,75 @@ struct Node<K, V> {
     next: usize,
 }
 
+/// The node slab: a `Vec` whose element accesses test builds count, the
+/// structural probe of the O(1) guards in `lru_optimization_tests`. Every
+/// node read or write goes through `Index`/`IndexMut`, so a walk over the
+/// list would show up in the count as surely as in the running time.
+struct Slab<T> {
+    nodes: Vec<T>,
+    #[cfg(test)]
+    accesses: std::sync::atomic::AtomicU64,
+}
+
+impl<T> Slab<T> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            nodes: Vec::with_capacity(capacity),
+            #[cfg(test)]
+            accesses: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    fn push(&mut self, node: T) {
+        self.touch();
+        self.nodes.push(node);
+    }
+
+    fn swap_remove(&mut self, slot: usize) -> T {
+        self.touch();
+        self.nodes.swap_remove(slot)
+    }
+
+    fn clear(&mut self) {
+        self.nodes.clear();
+    }
+
+    /// Counts one node access in test builds; compiles to nothing otherwise.
+    #[inline]
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn touch(&self) {
+        #[cfg(test)]
+        self.accesses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl<T> Index<usize> for Slab<T> {
+    type Output = T;
+
+    fn index(&self, slot: usize) -> &T {
+        self.touch();
+        &self.nodes[slot]
+    }
+}
+
+impl<T> IndexMut<usize> for Slab<T> {
+    fn index_mut(&mut self, slot: usize) -> &mut T {
+        self.touch();
+        &mut self.nodes[slot]
+    }
+}
+
 /// Fixed-capacity map that keeps its entries in recency order.
 pub(super) struct LruList<K, V> {
     capacity: usize,
     index: HashMap<K, usize>,
     /// Dense: every slot holds a linked node.
-    slots: Vec<Node<K, V>>,
+    slots: Slab<Node<K, V>>,
     /// Least recently used node, or `NIL` when empty.
     head: usize,
     /// Most recently used node, or `NIL` when empty.
@@ -40,7 +104,7 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
         Self {
             capacity,
             index: HashMap::with_capacity(capacity),
-            slots: Vec::with_capacity(capacity),
+            slots: Slab::with_capacity(capacity),
             head: NIL,
             tail: NIL,
         }
@@ -106,6 +170,14 @@ impl<K: Hash + Eq + Clone, V> LruList<K, V> {
         self.slots.clear();
         self.head = NIL;
         self.tail = NIL;
+    }
+
+    /// Node accesses so far: the structural complexity probe.
+    #[cfg(test)]
+    pub(super) fn nodes_touched(&self) -> u64 {
+        self.slots
+            .accesses
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Keys from least to most recently used.

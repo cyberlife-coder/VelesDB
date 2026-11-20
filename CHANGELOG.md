@@ -533,6 +533,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents for a given threshold. Fingerprints are built in memory on
   insert and never persisted: no migration.
 
+- **Core: `LruCache`'s O(1) claim has a deterministic guard** (core, tests,
+  2026-11-19). #2860 made every operation O(1) and #2854 moved per-size cost
+  to the `LruCache-Baseline` benchmark, which CI does not gate, so an O(n)
+  regression could merge unseen. `LruList`'s slab now counts its node accesses
+  in test builds (a plain `Vec` otherwise, no logic change), and
+  `test_recency_operations_touch_constant_nodes` requires the count for `get`,
+  evicting insert, overwrite and `remove` to be the same at 100 and at 10 000
+  entries: no clock, so load cannot move it, and a move-to-back that walks the
+  list fails it.
+
 - **Core: the unreachable-snapshot test holds when run as root** (core,
   tests, 2026-11-19). `an_unreachable_snapshot_is_an_error_not_a_missing_one`
   (#2325) built its unreachable path with a `chmod 000` directory, which
@@ -1802,6 +1812,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   threads to 675K, 649K, 673K and 697K, and no longer degrades with the
   thread count; L1 hits are unchanged. `velesdb-core` no longer depends on
   `indexmap`.
+
+- **Core: `LockFreeLruCache` L1 hits scale with threads** (core,
+  2026-11-19). Every L1 hit incremented one shared `AtomicU64`, whose cache
+  line bounced between cores: L1 hit throughput fell from 27M ops/s on one
+  thread to 10–12M at 2 to 8. The hit counter is now striped over
+  cache-line-padded stripes, one per thread round-robin, summed on read so
+  the count stays exact. On the `LockFreeLruCache-Concurrent` benchmark,
+  `l1_hit_read` goes from 26.8M, 11.6M, 10.2M and 12.0M ops/s at 1, 2, 4
+  and 8 threads to 25.9M, 23.0M, 26.2M and 27.0M.
 
 ## [8.2.0] - 2026-11-09
 

@@ -115,6 +115,11 @@ fn test_lru_cache_with_zero_capacity_holds_nothing() {
 
     assert!(cache.is_empty(), "a zero-capacity cache must stay empty");
     assert_eq!(cache.peek(&1), None);
+    assert_eq!(
+        cache.stats().evictions,
+        0,
+        "nothing was stored, so nothing was evicted"
+    );
 }
 
 #[test]
