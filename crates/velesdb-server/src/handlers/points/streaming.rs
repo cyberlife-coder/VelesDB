@@ -2,7 +2,7 @@
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -15,6 +15,7 @@ use crate::types::{EnableStreamingRequest, ErrorResponse, StreamInsertRequest};
 use crate::AppState;
 use velesdb_core::{BackpressureError, Point, VectorCollection};
 
+use super::ndjson_lines::{LineSplitter, NdjsonLineLimit};
 use crate::handlers::content_type::{Ndjson, RequireContentType};
 use crate::handlers::helpers::{
     auto_core_error_response, error_response, get_vector_collection_or_404,
@@ -132,6 +133,7 @@ pub async fn stream_upsert_points(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     _content_type: RequireContentType<Ndjson>,
+    line_limit: Option<Extension<NdjsonLineLimit>>,
     body: Body,
 ) -> impl IntoResponse {
     let collection = match get_vector_collection_or_404(&state, &name) {
@@ -139,7 +141,13 @@ pub async fn stream_upsert_points(
         Err(resp) => return resp,
     };
 
-    let stats = process_ndjson_stream(&collection, body).await;
+    // The router always sets the limit; a router assembled without it gets
+    // the default body size rather than an unbounded line.
+    let max_line_bytes = line_limit.map_or(
+        crate::routes::DEFAULT_MAX_BODY_SIZE,
+        |Extension(NdjsonLineLimit(max_line_bytes))| max_line_bytes,
+    );
+    let stats = process_ndjson_stream(&collection, body, max_line_bytes).await;
 
     Json(serde_json::json!({
         "message": "Stream processed",
@@ -159,9 +167,16 @@ fn extract_id_hint(line: &str) -> Option<u64> {
 }
 
 /// Read an NDJSON body stream, batching points and flushing periodically.
-async fn process_ndjson_stream(collection: &VectorCollection, body: Body) -> StreamUpsertStats {
+///
+/// A line longer than `max_line_bytes` is dropped and counted as malformed;
+/// the stream carries on at the next line.
+async fn process_ndjson_stream(
+    collection: &VectorCollection,
+    body: Body,
+    max_line_bytes: usize,
+) -> StreamUpsertStats {
     let mut stream = body.into_data_stream();
-    let mut buffer = Vec::<u8>::new();
+    let mut lines = LineSplitter::new(max_line_bytes);
     let mut batch = Vec::with_capacity(STREAM_BATCH_SIZE);
     let mut stats = StreamUpsertStats::default();
     let mut last_flush = Instant::now();
@@ -169,8 +184,10 @@ async fn process_ndjson_stream(collection: &VectorCollection, body: Body) -> Str
     while let Some(chunk_result) = stream.next().await {
         match chunk_result {
             Ok(chunk) => {
-                buffer.extend_from_slice(&chunk);
-                process_buffer_lines(&mut buffer, &mut batch, &mut stats);
+                let oversized = lines.push(&chunk, |line| {
+                    parse_line_bytes(line, &mut batch, &mut stats);
+                });
+                record_oversized_lines(oversized, max_line_bytes, &mut stats);
                 if should_flush(&batch, last_flush) {
                     flush_point_batch(collection, &mut batch, &mut stats).await;
                     last_flush = Instant::now();
@@ -183,28 +200,33 @@ async fn process_ndjson_stream(collection: &VectorCollection, body: Body) -> Str
         }
     }
 
-    // Drain any remaining incomplete line in the buffer.
-    if !buffer.is_empty() {
-        let line = String::from_utf8_lossy(&buffer);
-        let id_hint = extract_id_hint(line.trim());
-        parse_ndjson_line(line.trim(), &mut batch, &mut stats, id_hint);
-    }
+    // A final line sent without a trailing newline.
+    parse_line_bytes(&lines.finish(), &mut batch, &mut stats);
 
     flush_point_batch(collection, &mut batch, &mut stats).await;
     stats
 }
 
-/// Extract complete lines from the byte buffer and parse them as NDJSON points.
-fn process_buffer_lines(
-    buffer: &mut Vec<u8>,
-    batch: &mut Vec<Point>,
-    stats: &mut StreamUpsertStats,
-) {
-    while let Some(newline_pos) = buffer.iter().position(|byte| *byte == b'\n') {
-        let line_bytes: Vec<u8> = buffer.drain(..=newline_pos).collect();
-        let line = String::from_utf8_lossy(&line_bytes);
-        let id_hint = extract_id_hint(line.trim());
-        parse_ndjson_line(line.trim(), batch, stats, id_hint);
+/// Parses one complete NDJSON line, given as the bytes between two newlines.
+fn parse_line_bytes(line_bytes: &[u8], batch: &mut Vec<Point>, stats: &mut StreamUpsertStats) {
+    let line = String::from_utf8_lossy(line_bytes);
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    let id_hint = extract_id_hint(line);
+    parse_ndjson_line(line, batch, stats, id_hint);
+}
+
+/// Counts lines dropped for exceeding the line ceiling as malformed.
+fn record_oversized_lines(oversized: usize, max_line_bytes: usize, stats: &mut StreamUpsertStats) {
+    if oversized > 0 {
+        stats.malformed += oversized;
+        tracing::warn!(
+            oversized,
+            max_line_bytes,
+            "Skipping NDJSON line longer than the line limit"
+        );
     }
 }
 

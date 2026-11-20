@@ -542,6 +542,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     every request is admitted. A failure in `HalfOpen` now reopens it
     whatever the count.
 
+- **`velesdb-migrate` retries the failures that are transient, and only
+  those** (migrate, 2026-11-17). `retry::is_retryable_error` decided by
+  searching the error's text for `500`, `timeout`, `temporary` and similar
+  words. A source body is part of that text, so a `400` whose body quoted
+  `500` was retried three times, and so was an extraction error mentioning
+  dimension `1500`. Meanwhile a `reqwest` connect or timeout failure, whose
+  text reads `error sending request for url (...)`, was never retried.
+  Elasticsearch's request failures and Redis's dropped connections were
+  stringified before the check and were not retried either. The decision now
+  reads types: a non-2xx response becomes the new `Error::SourceStatus` with
+  its numeric status (408, 429, 500, 502, 503 and 504 retry), plus
+  `reqwest`'s timeout/connect/request predicates, transient
+  `io::ErrorKind`s, and `RateLimit`. Status errors print the same text as
+  before. Elasticsearch request failures now print as `HTTP error: ...` (the
+  `reqwest` error itself). `velesdb_migrate::Error` is not
+  `#[non_exhaustive]`, so a downstream exhaustive `match` on it needs a
+  `SourceStatus` arm; a non-2xx response that used to arrive as
+  `SourceConnection(String)` arrives as `SourceStatus`. Weaviate GraphQL
+  errors, which arrive inside an HTTP 200 as free text with no status, are
+  no longer retried: only their wording could have marked them transient.
+  A dropped or refused Redis connection is replaced before the error is
+  returned, so the retry runs on a fresh connection instead of the dead
+  `MultiplexedConnection`, which does not reconnect by itself.
+  Pinned by `retry_tests.rs`,
+  `test_pipeline_qdrant_400_quoting_500_is_not_retried`, which made four
+  scroll calls before the fix and makes one now, and
+  `test_a_retry_after_a_dropped_connection_uses_a_fresh_one`.
+
+- **REST server: the per-IP rate limit refills at the configured rate**
+  (REST server, 2026-11-20). `[server] rate_limit = N` is documented as `N`
+  requests per second per IP, but the limiter was built with
+  `per_second(N)`, which in `tower_governor` 0.8 is the *interval* in seconds
+  after which one request is given back. A client that spent its burst of `N`
+  was then allowed one request every `N` seconds: at the default of 100, one
+  every 100 seconds, with `429` in between. The interval is now `1 / N`
+  seconds, so `N` requests per second are sustained and an emptied bucket is
+  full a second later. Deployments that sized `rate_limit` around the old
+  behaviour admit far more traffic after this fix; lower the value if the
+  throttle was load-bearing.
+
+- **REST server: the NDJSON stream route holds a bounded line** (REST server,
+  2026-11-20). `POST /collections/{name}/points/stream` has no body limit
+  because it reads line by line, but it buffered an unfinished line without
+  bound and rescanned the whole buffer on every chunk: a body that never sent
+  a newline was held in memory whole, at quadratic cost. One line is now
+  bounded by `[server] max_body_size`; a longer line is dropped, counted in
+  `malformed`, and the stream carries on at the next line. Only newly received
+  bytes are scanned for a newline.
+
+- **Core: the query-cache collision counter test holds under a parallel run**
+  (core, tests, 2026-11-20).
+  `test_query_cache_forced_hash_collision_feeds_the_collision_counter`
+  asserted an exact delta on `velesdb_cache_collision_fallback_total`, a
+  process-wide counter that
+  `test_query_cache_collision_safe_with_forced_hash_collision` also bumps with
+  the same forced hasher, so a parallel run read 2 instead of 1 (58 failures
+  in 300 runs at 16 threads). `QueryCache`'s collision branch now also feeds,
+  in test builds, a per-cache counter; the test asserts that counter exactly
+  and only checks that the global metric advanced (0 failures in 300 runs, 0
+  in 200 under CPU load).
+
+- **Core: LIKE ranking scores the exact Jaccard; the fingerprint estimate is
+  unbiased** (core, 2026-11-20). `TrigramIndex::search_like_ranked` scored
+  candidates with the fingerprint estimate, although a candidate holds every
+  trigram of the pattern: its Jaccard is exactly `|pattern trigrams| / |doc
+  trigrams|`, now read in O(1) from the counts, with no fingerprint built per
+  query (the document `matching` scored 0.889 for the pattern `matching`, for
+  an exact Jaccard of 0.8).
+  `TrigramFingerprint::approx_jaccard`, still behind `score_jaccard_fast` for
+  arbitrary pairs, divided shared bits by union bits, which overestimates by
+  about 0.1 on average since two trigrams of one set can share a bit. It now
+  estimates only the intersection from bit counts (`-(m/k) ln(1 - X/m)`,
+  rescaled by the exact set sizes its reserved parameters already received)
+  and is unbiased: over 600 generated pairs its mean error is -0.002 (it was
+  +0.086) and its mean absolute error 0.016. A saturated fingerprint falls
+  back to the bit ratio. No signature changes.
+
 - **Core: trigram fingerprints hash every byte of the trigram** (core,
   2026-11-19). `TrigramFingerprint` placed each trigram at `v * C % 256`,
   the low byte of the product, which depends on the trigram's first byte

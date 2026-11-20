@@ -108,56 +108,65 @@ fn rand_jitter() -> f64 {
 }
 
 /// Determines if an error is retryable.
+///
+/// Decided on the error's type and the status, timeout or I/O kind it
+/// carries — never on its message, which embeds source-controlled response
+/// bodies: a `400` whose body happens to quote `500` is not a server error.
+/// Errors that carry no transient signal (configuration, authentication,
+/// schema, parse failures) are never retried.
 pub fn is_retryable_error(error: &Error) -> bool {
-    // Check struct-level variants first to avoid the string allocation.
-    if matches!(error, Error::RateLimit(_)) {
-        return true;
+    match error {
+        Error::RateLimit(_) => true,
+        Error::SourceStatus { status, .. } => is_retryable_status(*status),
+        Error::Http(e) => is_retryable_http(e),
+        Error::Io(e) => is_transient_io(e.kind()),
+        _ => false,
     }
-    if matches!(error, Error::Io(_)) {
-        return true;
-    }
+}
 
-    // Fall back to message inspection — allocate the lowercase string once.
-    let error_msg = error.to_string().to_lowercase();
+/// Request timeout, too many requests, and the server-side statuses that
+/// signal a temporary condition. `501 Not Implemented` and the other 5xx
+/// codes describe a permanent answer and are not retried.
+fn is_retryable_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
+}
 
-    if matches!(error, Error::Http(_)) {
-        return error_msg.contains("timeout")
-            || error_msg.contains("connection")
-            || error_msg.contains("reset");
-    }
+/// A request that timed out or never reached the server, or a response
+/// whose status is itself retryable.
+fn is_retryable_http(error: &reqwest::Error) -> bool {
+    error.is_timeout()
+        || error.is_connect()
+        || error.is_request()
+        || error
+            .status()
+            .is_some_and(|status| is_retryable_status(status.as_u16()))
+}
 
-    let is_rate_limit = error_msg.contains("429")
-        || error_msg.contains("rate limit")
-        || error_msg.contains("too many requests");
-
-    let is_transient = error_msg.contains("timeout")
-        || error_msg.contains("connection refused")
-        || error_msg.contains("connection reset")
-        || error_msg.contains("temporary");
-
-    let is_server_error = error_msg.contains("500")
-        || error_msg.contains("502")
-        || error_msg.contains("503")
-        || error_msg.contains("504")
-        || error_msg.contains("internal server error")
-        || error_msg.contains("bad gateway")
-        || error_msg.contains("service unavailable");
-
-    is_rate_limit || is_transient || is_server_error
+fn is_transient_io(kind: std::io::ErrorKind) -> bool {
+    use std::io::ErrorKind;
+    matches!(
+        kind,
+        ErrorKind::TimedOut
+            | ErrorKind::Interrupted
+            | ErrorKind::WouldBlock
+            | ErrorKind::ConnectionRefused
+            | ErrorKind::ConnectionReset
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::NotConnected
+            | ErrorKind::BrokenPipe
+    )
 }
 
 /// Executes an async operation with retry logic.
 ///
-/// # Arguments
+/// The operation runs once, then up to `config.max_retries` more times while
+/// it fails with an error [`is_retryable_error`] accepts, sleeping
+/// [`RetryConfig::delay_for_attempt`] before each retry.
 ///
-/// * `config` - Retry configuration
-/// * `operation_name` - Name for logging purposes
-/// * `operation` - The async operation to execute
+/// # Errors
 ///
-/// # Returns
-///
-/// The result of the operation, or the last error if all retries failed.
-#[allow(clippy::cognitive_complexity)] // Reason: Retry logic with backoff requires tracking multiple states
+/// Returns the first non-retryable error, or the last error once the retries
+/// are exhausted.
 pub async fn with_retry<F, Fut, T>(
     config: &RetryConfig,
     operation_name: &str,
@@ -167,45 +176,27 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    let mut last_error: Option<Error> = None;
-    let max_attempts = config.max_retries + 1;
-
-    for attempt in 0..max_attempts {
-        if attempt > 0 {
-            let delay = config.delay_for_attempt(attempt);
-            debug!(
-                "{}: Retry attempt {}/{} after {:?}",
-                operation_name, attempt, config.max_retries, delay
-            );
-            sleep(delay).await;
-        }
-
+    let mut retries = 0;
+    loop {
         match operation().await {
             Ok(result) => {
-                if attempt > 0 {
-                    debug!("{}: Succeeded after {} retries", operation_name, attempt);
+                if retries > 0 {
+                    debug!("{operation_name}: succeeded after {retries} retries");
                 }
                 return Ok(result);
             }
-            Err(e) => {
-                if is_retryable_error(&e) && attempt < config.max_retries {
-                    warn!(
-                        "{}: Retryable error (attempt {}/{}): {}",
-                        operation_name,
-                        attempt + 1,
-                        max_attempts,
-                        e
-                    );
-                    last_error = Some(e);
-                } else {
-                    // Non-retryable error or last attempt
-                    return Err(e);
-                }
+            Err(e) if retries < config.max_retries && is_retryable_error(&e) => {
+                retries += 1;
+                let delay = config.delay_for_attempt(retries);
+                warn!(
+                    "{operation_name}: retryable error, retry {retries}/{} in {delay:?}: {e}",
+                    config.max_retries
+                );
+                sleep(delay).await;
             }
+            Err(e) => return Err(e),
         }
     }
-
-    Err(last_error.unwrap_or_else(|| Error::Extraction("All retry attempts failed".to_string())))
 }
 
 #[cfg(test)]

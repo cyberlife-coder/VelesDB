@@ -8,8 +8,10 @@ use std::sync::Arc;
 use axum::{
     extract::DefaultBodyLimit,
     routing::{delete, get, patch, post},
-    Router,
+    Extension, Router,
 };
+
+use crate::handlers::points::NdjsonLineLimit;
 
 use crate::{
     add_edge, add_edges_batch, aggregate, analyze_collection, batch_search, bulk_delete_points,
@@ -85,15 +87,18 @@ fn core_routes(max_body_size: usize) -> Router<Arc<AppState>> {
 }
 
 /// Point-upload routes. `[server] max_body_size` in full applies to the
-/// batch upload routes only. The NDJSON stream route reads its body
-/// incrementally and never buffers it whole, so no body limit applies to it.
+/// batch upload routes as a body limit. The NDJSON stream route reads its
+/// body incrementally and never buffers it whole, so no body limit applies to
+/// it; what it does hold is one unfinished line, and `max_body_size` bounds
+/// that instead ([`NdjsonLineLimit`], enforced by the handler's line
+/// splitter).
 fn upload_routes(max_body_size: usize) -> Router<Arc<AppState>> {
     Router::new()
         .route("/collections/{name}/points", post(upsert_points))
         .route("/collections/{name}/points/raw", post(upsert_points_raw))
         .route(
             "/collections/{name}/points/stream",
-            post(stream_upsert_points),
+            post(stream_upsert_points).layer(Extension(NdjsonLineLimit(max_body_size))),
         )
         .layer(DefaultBodyLimit::max(max_body_size))
 }

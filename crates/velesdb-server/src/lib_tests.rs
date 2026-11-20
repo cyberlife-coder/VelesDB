@@ -715,3 +715,65 @@ async fn test_every_body_route_refuses_preflight_free_content_types() {
         accepted.join("\n  ")
     );
 }
+
+/// `POST path` with `body` and `content_type` through `router`.
+async fn post_body(
+    router: &axum::Router,
+    path: &str,
+    content_type: &str,
+    body: axum::body::Body,
+) -> axum::http::Response<axum::body::Body> {
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", content_type)
+        .body(body)
+        .expect("test: build request");
+    tower::ServiceExt::oneshot(router.clone(), req)
+        .await
+        .expect("test: send request")
+}
+
+/// The NDJSON stream route has no body limit, so `[server] max_body_size`
+/// bounds one line instead: a line longer than it is dropped and counted as
+/// malformed, and the lines around it are still inserted. This pins the
+/// response contract; that the line is not held in memory is pinned by
+/// `ndjson_lines_tests`, the response being the same either way.
+#[tokio::test]
+async fn test_stream_route_drops_a_line_longer_than_max_body_size() {
+    const MAX_BODY_SIZE: usize = 1024;
+    let (state, _dir) = create_conformance_state();
+    let router = crate::routes::api_routes_with_body_limit(MAX_BODY_SIZE).with_state(state);
+
+    let created = post_body(
+        &router,
+        "/collections",
+        "application/json",
+        axum::body::Body::from(r#"{"name":"lines","dimension":2,"metric":"cosine"}"#),
+    )
+    .await;
+    assert_eq!(created.status(), axum::http::StatusCode::CREATED);
+
+    // The oversized line arrives in chunks, none of which holds its newline.
+    let mut chunks = vec![b"{\"id\":1,\"vector\":[1.0,0.0]}\n".to_vec()];
+    chunks.extend(std::iter::repeat_n(vec![b'a'; 512], 64));
+    chunks.push(b"\n{\"id\":2,\"vector\":[0.0,1.0]}\n".to_vec());
+    let body = axum::body::Body::from_stream(futures::stream::iter(
+        chunks.into_iter().map(Ok::<_, std::io::Error>),
+    ));
+
+    let response = post_body(
+        &router,
+        "/collections/lines/points/stream",
+        "application/x-ndjson",
+        body,
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("test: read response body");
+    let report: Value = serde_json::from_slice(&bytes).expect("test: JSON report");
+    assert_eq!(report["inserted"], 2, "{report}");
+    assert_eq!(report["malformed"], 1, "{report}");
+}
