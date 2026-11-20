@@ -131,6 +131,19 @@ impl RedisConnector {
         Ok(shared.lock().await)
     }
 
+    /// Replaces a dropped cached connection with a fresh one.
+    ///
+    /// `ft_search_batch_error` makes a dropped or refused connection
+    /// retryable; a `MultiplexedConnection` does not reconnect by itself, so
+    /// the retry can only succeed on a new one. If reconnecting fails too,
+    /// the dead connection stays and the next attempt tries again.
+    async fn replace_connection(&self, con: &mut redis::aio::MultiplexedConnection) {
+        match self.open_connection().await {
+            Ok(fresh) => *con = fresh,
+            Err(e) => tracing::warn!("Redis reconnect failed, the next attempt retries: {e}"),
+        }
+    }
+
     /// Detects the vector dimension by fetching a single document from the index.
     async fn detect_dimension(&self, con: &mut redis::aio::MultiplexedConnection) -> Result<usize> {
         let resp: redis::Value = redis::cmd("FT.SEARCH")
@@ -229,7 +242,7 @@ impl SourceConnector for RedisConnector {
 
         let mut con = self.acquire_connection().await?;
 
-        let resp: redis::Value = build_ft_search_cmd(
+        let result: redis::RedisResult<redis::Value> = build_ft_search_cmd(
             &self.config.index,
             query,
             offset_num,
@@ -238,8 +251,16 @@ impl SourceConnector for RedisConnector {
             &self.config.payload_fields,
         )
         .query_async(&mut *con)
-        .await
-        .map_err(ft_search_batch_error)?;
+        .await;
+        let resp = match result {
+            Ok(resp) => resp,
+            Err(e) => {
+                if e.is_connection_dropped() || e.is_connection_refusal() {
+                    self.replace_connection(&mut con).await;
+                }
+                return Err(ft_search_batch_error(e));
+            }
+        };
         drop(con);
 
         let points =

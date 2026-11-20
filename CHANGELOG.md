@@ -538,9 +538,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SourceConnection(String)` arrives as `SourceStatus`. Weaviate GraphQL
   errors, which arrive inside an HTTP 200 as free text with no status, are
   no longer retried: only their wording could have marked them transient.
-  Pinned by `retry_tests.rs` and
+  A dropped or refused Redis connection is replaced before the error is
+  returned, so the retry runs on a fresh connection instead of the dead
+  `MultiplexedConnection`, which does not reconnect by itself.
+  Pinned by `retry_tests.rs`,
   `test_pipeline_qdrant_400_quoting_500_is_not_retried`, which made four
-  scroll calls before the fix and makes one now.
+  scroll calls before the fix and makes one now, and
+  `test_a_retry_after_a_dropped_connection_uses_a_fresh_one`.
 
 - **Core: the query-cache collision counter test holds under a parallel run**
   (core, tests, 2026-11-20).
