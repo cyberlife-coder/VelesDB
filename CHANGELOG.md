@@ -539,6 +539,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `malformed`, and the stream carries on at the next line. Only newly received
   bytes are scanned for a newline.
 
+- **Core: the query-cache collision counter test holds under a parallel run**
+  (core, tests, 2026-11-20).
+  `test_query_cache_forced_hash_collision_feeds_the_collision_counter`
+  asserted an exact delta on `velesdb_cache_collision_fallback_total`, a
+  process-wide counter that
+  `test_query_cache_collision_safe_with_forced_hash_collision` also bumps with
+  the same forced hasher, so a parallel run read 2 instead of 1 (58 failures
+  in 300 runs at 16 threads). `QueryCache`'s collision branch now also feeds,
+  in test builds, a per-cache counter; the test asserts that counter exactly
+  and only checks that the global metric advanced (0 failures in 300 runs, 0
+  in 200 under CPU load).
+
+- **Core: LIKE ranking scores the exact Jaccard; the fingerprint estimate is
+  unbiased** (core, 2026-11-20). `TrigramIndex::search_like_ranked` scored
+  candidates with the fingerprint estimate, although a candidate holds every
+  trigram of the pattern: its Jaccard is exactly `|pattern trigrams| / |doc
+  trigrams|`, now read in O(1) from the counts, with no fingerprint built per
+  query (the document `matching` scored 0.889 for the pattern `matching`, for
+  an exact Jaccard of 0.8).
+  `TrigramFingerprint::approx_jaccard`, still behind `score_jaccard_fast` for
+  arbitrary pairs, divided shared bits by union bits, which overestimates by
+  about 0.1 on average since two trigrams of one set can share a bit. It now
+  estimates only the intersection from bit counts (`-(m/k) ln(1 - X/m)`,
+  rescaled by the exact set sizes its reserved parameters already received)
+  and is unbiased: over 600 generated pairs its mean error is -0.002 (it was
+  +0.086) and its mean absolute error 0.016. A saturated fingerprint falls
+  back to the bit ratio. No signature changes.
+
 - **Core: trigram fingerprints hash every byte of the trigram** (core,
   2026-11-19). `TrigramFingerprint` placed each trigram at `v * C % 256`,
   the low byte of the product, which depends on the trigram's first byte
