@@ -205,6 +205,34 @@ fn circuit_halfopen_failure_reopens() {
     assert_eq!(cb.state(), CircuitState::Open);
 }
 
+/// A request admitted before the trip can succeed after it and reset the
+/// failure count while the breaker is `Open`. The half-open probe's failure
+/// must still reopen: with a threshold above 1 it used to be counted as the
+/// first failure of a fresh window, leaving the breaker half-open — a state
+/// in which `check()` admits every request.
+#[test]
+fn circuit_halfopen_failure_reopens_after_late_success() {
+    let cb = CircuitBreaker::new(3, 0);
+    for _ in 0..3 {
+        cb.record_failure();
+    }
+    assert_eq!(cb.state(), CircuitState::Open);
+
+    // The in-flight request from before the trip completes.
+    cb.record_success();
+    assert_eq!(
+        cb.state(),
+        CircuitState::Open,
+        "a success does not close an open breaker"
+    );
+
+    assert!(cb.check().is_ok());
+    assert_eq!(cb.state(), CircuitState::HalfOpen);
+
+    cb.record_failure();
+    assert_eq!(cb.state(), CircuitState::Open);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Regression: CircuitBreaker lock-order (ABBA deadlock)
 // ─────────────────────────────────────────────────────────────────────────────

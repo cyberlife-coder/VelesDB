@@ -352,9 +352,19 @@ impl CircuitBreaker {
         // resetting opened_at and extending the recovery window.
         let mut core = self.core.write();
         let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
-        if count >= u64::from(self.failure_threshold.load(Ordering::Relaxed))
-            && (core.state == CircuitState::Closed || core.state == CircuitState::HalfOpen)
-        {
+        // A failed half-open probe reopens whatever the count says. The count
+        // is not a proxy for it: a request admitted before the trip that
+        // succeeds afterwards resets it to zero while `Open`, and the probe's
+        // failure would then be counted as the first of a fresh threshold,
+        // leaving the breaker half-open and admitting all traffic.
+        let trips = match core.state {
+            CircuitState::HalfOpen => true,
+            CircuitState::Closed => {
+                count >= u64::from(self.failure_threshold.load(Ordering::Relaxed))
+            }
+            CircuitState::Open => false,
+        };
+        if trips {
             core.state = CircuitState::Open;
             core.opened_at = Some(Instant::now());
         }
