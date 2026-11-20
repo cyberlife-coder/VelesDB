@@ -501,6 +501,20 @@ included (a filter built from VelesQL reads `id` as the point id), and
 
   Without a graph collection the loader is unchanged, and those points are
   still its nodes: do not delete them.
+
+  > **Changed since:** the two paragraphs above describe 8.0.0. A later
+  > release makes a vector collection's rows its vectors: a payload stored
+  > there without a vector — every node the 7.1.0 loader wrote, and every
+  > node without a vector the 8.0.0 loader wrote without a graph collection
+  > — is no row any more. It is no longer counted,
+  > listed or searched; it stays on disk until its id is deleted. Without a
+  > graph collection the loader now writes a node without a vector into a
+  > companion metadata collection, `<collection>_graph_nodes` (one with a
+  > vector still goes into the vector store's collection). So, with or
+  > without a graph collection: load the nodes again (`load_from_nodes`,
+  > `add_node`) so they are stored where the loader reads them, then delete
+  > the old ids from the vector store's collection, as in the snippet above,
+  > to remove them from disk.
 - **LangChain and LlamaIndex `GraphRetriever` search `seed_k` seeds**
   (default 3), not `expand_k` (default 10), then fill up to `expand_k` with
   graph neighbours. A query whose seeds have no neighbour returns at most

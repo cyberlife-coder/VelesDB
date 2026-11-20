@@ -946,14 +946,29 @@
     {
       "id": "N033",
       "query": "SELECT * FROM named ORDER BY similarity(alt, $x) DESC LIMIT 5",
-      "expect_ids": [42, 43, 41, 44, 45],
-      "note": "ORDER BY similarity(field, $v) scores the payload's named vector; a row without one (44) or of another dimension (45) takes the worst key, last under DESC (WASM refused the form)"
+      "expect_ids": [44, 45, 42, 43, 41],
+      "note": "ORDER BY similarity(field, $v) scores the payload's named vector; a row without one (44) or of another dimension (45) has a null key, first under DESC as every ORDER BY sorts a null (it took the worst key, last under DESC; WASM refused the form)"
     },
     {
       "id": "N034",
       "query": "SELECT * FROM named ORDER BY similarity(vector, $y) DESC, id ASC LIMIT 5",
       "expect_ids": [42, 45, 43, 41, 44],
-      "note": "similarity(vector, $v) in ORDER BY scores the row's own vector, ties broken by the next key"
+      "expect_scores": [1.0, 1.0, 0.707107, 0.0, 0.0],
+      "note": "similarity(vector, $v) in ORDER BY scores the row's own vector, ties broken by the next key; each row's score is that similarity, not the metadata score its scan gave it (WASM kept the scan score)"
+    },
+    {
+      "id": "N035",
+      "query": "SELECT * FROM docs WHERE similarity(vector, $a) > 0.35 ORDER BY bm25_score DESC, id ASC",
+      "expect_ids": [2, 3, 4, 5],
+      "expect_scores": [0.365148, 0.547723, 0.730297, 0.387298],
+      "note": "a row a similarity() threshold scored carries a component breakdown, its `vector_score`, as a NEAR row does (N032), so a component it lacks (`bm25_score`) reads 0.0 and the next key decides. WASM left the row untagged, so `bm25_score` fell back to the score and the similarity ranking stood"
+    },
+    {
+      "id": "N036",
+      "query": "SELECT * FROM named WHERE similarity(alt, $x) > 0.5 OR id = 44 ORDER BY bm25_score DESC, id ASC",
+      "expect_ids": [44, 42, 43],
+      "expect_scores": [1.0, 1.0, 0.894427],
+      "note": "a row the similarity() leaf could not score (44 has no `alt`) carries no breakdown: its `bm25_score` falls back to its velesql::METADATA_MATCH_SCORE and ranks it first, while the scored rows read 0.0"
     }
   ],
   "fusion_cases": [
@@ -1116,6 +1131,104 @@
       "expected_code": "V001",
       "query": "SELECT * FROM docs WHERE similarity(vector, $a) > 0.5 OR similarity(vector, $b) > 0.5",
       "note": "several similarity() under one OR would be a union of vector searches: both engines refuse it (V001)"
+    },
+    {
+      "id": "R018",
+      "expected_code": "VELES-038",
+      "query": "INSERT INTO docs (id, vector, category, year) VALUES (99, $s, 'tech', 2030)",
+      "params": { "s": "x" },
+      "note": "an INSERT vector parameter bound to a string is a parameter error (VELES-038), as a NEAR parameter is; core converted the value itself and refused it with a query error (VELES-010), WASM with an uncoded message"
+    },
+    {
+      "id": "R019",
+      "expected_code": "VELES-038",
+      "query": "INSERT INTO docs (id, vector, category, year) VALUES (99, $m, 'tech', 2030)",
+      "params": { "m": [0.1, "x", 0.3, 0.4] },
+      "note": "an INSERT vector parameter holding an element that is no number is a parameter error (VELES-038)"
+    },
+    {
+      "id": "R020",
+      "expected_code": "VELES-038",
+      "query": "UPDATE docs SET vector = $s WHERE id = 1",
+      "params": { "s": "x" },
+      "note": "UPDATE SET vector binds its parameter as INSERT does (VELES-038)"
+    },
+    {
+      "id": "R021",
+      "expected_code": "VELES-038",
+      "query": "UPDATE docs SET vector = $m WHERE id = 1",
+      "params": { "m": [0.1, "x", 0.3, 0.4] },
+      "note": "UPDATE SET vector refuses an element that is no number (VELES-038)"
+    },
+    {
+      "id": "R022",
+      "expected_code": "VELES-004",
+      "query": "SELECT * FROM docs WHERE similarity(vector, $w) < 0.1 LIMIT 5",
+      "params": { "w": [1.0, 0.0, 0.0] },
+      "note": "A query vector of another dimension is refused before any row is read, whatever the operator: `<` takes the exact scan, which used to score every row UNKNOWN and return none"
+    },
+    {
+      "id": "R023",
+      "expected_code": "VELES-004",
+      "query": "SELECT * FROM docs WHERE NOT similarity(vector, $w) > 0.1 LIMIT 5",
+      "params": { "w": [1.0, 0.0, 0.0] },
+      "note": "NOT similarity() with a query vector of another dimension is refused, not answered with no rows"
+    },
+    {
+      "id": "R024",
+      "expected_code": "VELES-004",
+      "query": "SELECT * FROM docs WHERE similarity(vector, $w) > 0.1 OR category = 'tech' LIMIT 5",
+      "params": { "w": [1.0, 0.0, 0.0] },
+      "note": "similarity() under OR with a query vector of another dimension is refused, not read as UNKNOWN beside the metadata branch"
+    },
+    {
+      "id": "R025",
+      "expected_code": "VELES-004",
+      "query": "SELECT * FROM docs ORDER BY similarity(vector, $w) DESC LIMIT 5",
+      "params": { "w": [1.0, 0.0, 0.0] },
+      "note": "ORDER BY similarity() with a query vector of another dimension is refused, not sorted on scores no row has"
+    },
+    {
+      "id": "R026",
+      "expected_code": "VELES-004",
+      "query": "MATCH (d) WHERE similarity(d.vector, $w) > 0.1 RETURN d",
+      "params": { "w": [1.0, 0.0, 0.0], "_collection": "docs" },
+      "note": "MATCH without LIMIT runs GraphFirst; its similarity() query vector is checked before the walk, as the VectorFirst plan's is"
+    },
+    {
+      "id": "R027",
+      "expected_code": "VELES-004",
+      "query": "MATCH (d) WHERE similarity(d.vector, $w) > 0.1 RETURN d LIMIT 3",
+      "params": { "w": [1.0, 0.0, 0.0], "_collection": "docs" },
+      "note": "MATCH with LIMIT runs VectorFirst: the same refusal as R026, whichever plan the planner picks"
+    },
+    {
+      "id": "R028",
+      "expected_code": "VELES-004",
+      "query": "MATCH (d) WHERE NOT similarity(d.vector, $w) < 0.1 RETURN d",
+      "params": { "w": [1.0, 0.0, 0.0], "_collection": "docs" },
+      "note": "MATCH: a negated similarity() is checked like any other"
+    },
+    {
+      "id": "R029",
+      "expected_code": "VELES-004",
+      "query": "MATCH (d) RETURN d ORDER BY similarity(d.vector, $w) DESC",
+      "params": { "w": [1.0, 0.0, 0.0], "_collection": "docs" },
+      "note": "MATCH ORDER BY similarity() with a query vector of another dimension is refused"
+    },
+    {
+      "id": "R030",
+      "expected_code": "VELES-038",
+      "query": "DELETE FROM docs WHERE id = $nope",
+      "params": {},
+      "note": "DELETE binds its WHERE: an unbound `$name` is VELES-038, not VELES-010 'ID values must be integers'"
+    },
+    {
+      "id": "R031",
+      "expected_code": "VELES-002",
+      "query": "UPDATE missing SET x = $nope",
+      "params": {},
+      "note": "UPDATE resolves its collection before it binds the assignments: a missing collection is VELES-002 even when a `$name` is unbound too"
     }
   ],
   "dml_cases": [
@@ -1191,6 +1304,22 @@
       "query": "SELECT * FROM docs ORDER BY year ASC",
       "expect_ids": [5, 1, 2, 4],
       "note": "DELETE removes the rows any metadata WHERE selects, on both engines (D007: core accepted only id predicates, though the spec shows `DELETE FROM logs WHERE level = 'debug'`)"
+    },
+    {
+      "id": "W011",
+      "statements": ["DELETE FROM docs WHERE id = $i"],
+      "params": { "i": 2 },
+      "query": "SELECT * FROM docs ORDER BY year ASC",
+      "expect_ids": [5, 1, 3, 4],
+      "note": "DELETE binds `id = $name` before it reads the ids (core used to read the raw AST and refuse it with VELES-010)"
+    },
+    {
+      "id": "W012",
+      "statements": ["DELETE FROM docs WHERE id IN ($i, $j)"],
+      "params": { "i": 2, "j": 5 },
+      "query": "SELECT * FROM docs ORDER BY year ASC",
+      "expect_ids": [1, 3, 4],
+      "note": "DELETE binds every `$name` of an `id IN (...)` list before it reads the ids"
     }
   ],
   "projection_cases": [
@@ -1542,10 +1671,10 @@
     {
       "id": "D008",
       "area": "UPDATE SET vector",
-      "core_behavior": "UPDATE may assign the `vector` column on a vector collection (apply_assignments_to_point re-parses it as the new embedding)",
+      "core_behavior": "UPDATE may assign the `vector` column on a vector collection (velesql::bind_update_assignments binds it as the new embedding, BoundAssignments::apply writes it)",
       "wasm_behavior": "RESOLVED: the WASM UPDATE replaces the embedding too, refusing it on a metadata-only collection or at another dimension; it used to refuse every `SET vector`",
       "status": "resolved — locked by dml_cases W009",
-      "evidence": "crates/velesdb-wasm/src/velesql_update.rs: new_vector()"
+      "evidence": "crates/velesdb-core/src/velesql/dml_binding.rs: bind_update_assignments, BoundAssignments::apply — the WASM UPDATE (crates/velesdb-wasm/src/velesql_update.rs) applies the same"
     },
     {
       "id": "D009",

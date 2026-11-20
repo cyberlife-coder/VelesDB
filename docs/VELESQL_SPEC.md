@@ -243,6 +243,13 @@ Every engine groups the same way:
   row never depends on the order the engine scans rows in.
 - `score` as an aggregate argument is the search score in a vector
   `GROUP BY`, and a payload field named `score` everywhere else.
+- An aggregate without a vector `GROUP BY` ranks nothing: a `NEAR` or
+  `NEAR_FUSED` in its WHERE bounds none of its rows, whatever its `LIMIT`,
+  and reads the rows such a search can rank — those storing a vector. On a
+  vector collection that is every row; on a graph a node without an
+  embedding is no row of it (`SELECT COUNT(*) FROM g WHERE vector NEAR $v`
+  counts the embedded nodes). A `SPARSE_NEAR` narrows nothing: a row without
+  a dense vector may carry sparse ones.
 - Without ORDER BY, the groups of a SQL `GROUP BY` come by `GROUP BY` key,
   ascending, `NULL` last. Groups an ORDER BY ties also fall back to that
   order, and groups whose keys compare equal (two arrays) come by their best
@@ -746,6 +753,63 @@ text index.
 ```sql
 SELECT * FROM docs WHERE content MATCH 'vector database' LIMIT 10
 ```
+
+Every row a SELECT reads can match: a metadata collection's rows and a
+graph's nodes without an embedding included, read with an empty `vector`.
+Every write keeps the text index in step with the payload it stores — a
+graph's node-payload write (`INSERT NODE`, an `INSERT` without `vector`) as
+much as a vector upsert — so a payload rewritten by either matches its new
+text and no longer its old one.
+
+**MATCH + metadata conditions** -- the `MATCH` ranks the rows by BM25 and
+the rest of the WHERE, AND-ed with it, admits them: the result is the best
+`LIMIT` rows that hold both, however far below the best of the collection a
+matching row ranks.
+
+```sql
+SELECT * FROM docs WHERE content MATCH 'database' AND category = 'tech' LIMIT 10
+```
+
+**What a MATCH selects.** A `MATCH` holds for a row when the row is a BM25
+hit for its query: the text index holds a document for the row with at
+least one of the query's terms, tokenized as `text_search` tokenizes them
+(case-folded words, so `MATCH 'apple'` holds for "Apple pie" and not for
+"pineapple juice"). The leaf means that wherever the WHERE is evaluated —
+the text search, a graph predicate's post-filter, a scan, an aggregate
+(`COUNT(*)` with a `MATCH` counts the rows the SELECT returns), a JOIN's
+filters, a MATCH statement's WHERE (`d.content MATCH 'x'` tests the node
+`d` binds). The hit set is computed once per query (`velesql::text_match`).
+
+**Which MATCH ranks.** The one `MATCH` the WHERE AND-requires (reached from
+its root through `AND` and groups) ranks a SELECT: alone, by BM25, returning
+only hits; beside one dense `NEAR`, as the text branch of a hybrid search (a
+boost, below). Every other `MATCH` — under `OR` or `NOT`, beside a
+`similarity()` threshold, or in an aggregate without a `NEAR` — is a test of
+membership in its hit set, and the rows come in the order of whatever ranks
+them:
+
+```sql
+SELECT * FROM docs WHERE content MATCH 'apple' OR category = 'tech' LIMIT 10
+```
+
+```sql
+SELECT * FROM docs WHERE similarity(vector, $v) > 0.8 AND NOT (content MATCH 'draft')
+```
+
+```sql
+SELECT category, COUNT(*) FROM docs WHERE content MATCH 'apple' GROUP BY category
+```
+
+Refused with `VELES-010` (core and the WASM executor alike,
+`velesql::validate_vector_predicates`): a second AND-required `MATCH` where
+one would rank (a query runs one text search: combine the terms), and an
+AND-required `MATCH` beside a `SPARSE_NEAR`, a `NEAR_FUSED`, or a `NEAR`
+with a `similarity()` threshold — rankings no executor fuses with text. A
+`MATCH` on a relationship alias of a MATCH statement is refused too (an edge
+has no indexed text), and so is a `SPARSE_NEAR` under `NOT`, which used to
+run without its negation. In a JOIN, a `MATCH` on a joined table's column
+tests that table's hits for the joined row. The WASM executor has no text
+index and refuses every `MATCH`.
 
 **MATCH + NEAR (hybrid search)** -- triggers Reciprocal Rank Fusion (RRF)
 between vector similarity and BM25 text relevance. In this mode, `MATCH` acts
@@ -1263,10 +1327,14 @@ HNSW path), metadata-only fetches (the anchors are hydrated directly),
 sparse-only fetches (anchors feed the sparse index's per-id filter), and
 exhaustive `similarity()` scans (restricted to the anchors).
 
+A dense `NEAR` fused with a text `MATCH` takes it too: both hybrid
+branches rank only the anchors the WHERE's metadata conditions match, the
+text branch exhaustively, the vector branch as the anchored `NEAR` above.
+
 **Execution note (over-fetch window, residual shapes).** Query shapes that
 cannot use the anchored fetch keep the windowed execution: graph predicates
-under `OR`/`NOT`, combinations with a `similarity()` threshold cascade, BM25
-text `MATCH` fusion, or hybrid dense+sparse fusion. There, a ranked fetch
+under `OR`/`NOT`, combinations with a `similarity()` threshold cascade, a
+text `MATCH` without a `NEAR`, or hybrid dense+sparse fusion. There, a ranked fetch
 retrieves up to `max(LIMIT, min(LIMIT × 10, 10 000))` candidates and keeps
 those that satisfy the pattern (rows ranked beyond the window are not
 returned — increase `LIMIT` to widen it); unranked shapes scan up to 100 000
@@ -1567,6 +1635,13 @@ ORDER BY similarity() DESC, created_at DESC
 LIMIT 20
 ```
 
+A row `similarity(<col>, $q)` cannot score — it has no vector on that field
+(a graph node without an embedding, a payload without the named vector) or
+one of another length — has a null key, sorted as every ORDER BY sorts a
+`null`: last under `ASC`, first under `DESC`, whatever the metric, in SELECT
+and MATCH alike, in core and WASM. Such a row keeps the score its plan gave
+it, without a `vector_score`: no stand-in score is written back.
+
 > **CBO routing (v1.13.0+):** When `ORDER BY` contains `similarity(<col>, $q)`
 > (two-argument form) against a vector column with an HNSW index, the
 > cost-based optimiser (CBO) automatically routes the query through the
@@ -1658,7 +1733,7 @@ literals, score variables, and `similarity()`.
 
 | Variable | Source | When Populated |
 |----------|--------|----------------|
-| `vector_score` | HNSW dense search | `NEAR` clause present |
+| `vector_score` | Dense vector similarity | `NEAR` clause present (with or without a metadata filter), a `similarity()` threshold, `ORDER BY similarity(field, $v)` on a row no search scored, a MATCH row `similarity()` scored |
 | `bm25_score` | BM25 full-text search | `MATCH` text clause present |
 | `sparse_score` | Sparse vector search | `SPARSE_NEAR` clause present |
 | `graph_score` | Graph traversal | `MATCH` graph pattern present |
@@ -2931,6 +3006,37 @@ DELETE FROM events WHERE status = 'expired' AND created_at < 1000
 
 > VelesQL rejects `DELETE FROM <collection>` without a WHERE predicate as a safety
 > measure.
+
+#### Which rows DML reads and writes
+
+`UPDATE` and a `DELETE` whose `WHERE` does not name ids touch exactly the rows
+a `SELECT` with the same `WHERE` reads: a vector collection's points with a
+vector, a metadata collection's rows, and every stored node of a graph — one
+with an embedding, a payload or both (`DELETE … WHERE id = …` removes the
+named ids whatever they store). A DML `WHERE` filters on metadata: a
+`similarity()`, `NEAR`, graph `MATCH` or full-text `MATCH` predicate is refused
+with `VELES-010`, checked before any `$name` is bound — so such a `WHERE` is
+`VELES-010` even when its parameter is unbound, and an unbound parameter of a
+metadata `WHERE` is `VELES-038`.
+
+Each row is written back by what it stores. The `vector` column is required in
+a vector collection (`VELES-010` without it) and refused in a metadata
+collection or a graph without embeddings (`VELES-014`, as the collection API
+refuses a vector written where none is stored). In a graph with embeddings it
+is optional: an `INSERT` or `UPSERT` without it writes the node's payload and
+leaves its vector store alone — a new node has no embedding (the node `INSERT
+NODE` writes), an existing one keeps the embedding it has — and `UPDATE … SET
+vector = $v` attaches one, its dimension checked (`VELES-004`). A row without a
+vector never reaches the vector store. `INSERT`, `UPSERT` and `UPDATE` return
+the rows they leave stored, as a `SELECT` reads them back: a row written
+without a vector returns the embedding its node kept. In core the read-back
+follows the write, one row per row written, in statement order: a row already
+TTL-expired, or deleted by a concurrent write in between, is left out; an id
+the statement wrote twice is returned twice, both times as finally stored;
+and no returned row carries sparse vectors. A `vector` the statement binds is always a vector of the
+collection's dimension: an empty one is refused with `VELES-004`, on a graph
+as on a vector collection — only a row without the column is a row without a
+vector.
 
 ### INSERT EDGE (v3.3+)
 

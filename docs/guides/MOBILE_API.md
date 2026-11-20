@@ -426,7 +426,8 @@ The Swift memberwise initializers are explicit and take **every** field: pass
 from the FFI boundary without string matching. Every call that reaches core keeps
 core's code and recoverability, `executeQuery`, `query`, `trainPq` and the sparse
 and multi-query searches included; a VelesQL parse error is core's query error,
-`VELES-010`. A core `DimensionMismatch` or a missing or duplicate collection
+`VELES-010`, and a `$name` parameter unbound or of the wrong type its parameter
+error, `VELES-038`. A core `DimensionMismatch` or a missing or duplicate collection
 surfaces as the typed `DimensionMismatch` or `Collection` variant instead, with
 the same `code` and `recoverable` core gives it.
 

@@ -31,6 +31,7 @@ collection_directory/
 ├── property_index.bin   # Graph property index (graph collections)
 ├── bm25.snapshot        # BM25 full-text index snapshot (when text-indexed)
 ├── bm25.wal             # BM25 WAL (when text-indexed)
+├── bm25.coverage        # What a graph's BM25 snapshot covers (graph collections)
 ├── sparse[-name].snapshot             # Sparse generation manifest (commit point)
 ├── sparse[-name].wal                  # Generation-tagged sparse WAL
 ├── sparse[-name].{idx,terms,meta}      # Sparse slot 0 / legacy layout
@@ -511,7 +512,7 @@ size an allocation.
 | **HNSW graph** (`.graph`) | Header `count_check` must equal the trusted vector count; `entry_point < count`; every neighbor ID `< count`; `num_neighbors` capped; node iteration bounded by the file length (not a static ceiling). Any violation returns `InvalidData`, so the search hot path can rely on in-bounds IDs. |
 | **PQ codebook** | Every PQ code must be `< num_centroids` and the OPQ rotation matrix length must equal `dim × dim`. An invalid code is skipped gracefully rather than reaching the SIMD/scalar ADC gather. |
 | **Sparse index** | Version, term count, and per-term offset/length fields bounded; 32-bit offset overflow guarded. |
-| **BM25 snapshot** | `version` must match `BM25_SNAPSHOT_VERSION` or the load is rejected; `doc_count`/`total_doc_length` are recomputed from the **scorable** corpus (documents present in `point_to_doc`) so a tampered counter cannot produce inf/NaN `avgdl`. |
+| **BM25 snapshot** | `version` must match `BM25_SNAPSHOT_VERSION` (2, migrating 1) or the load is rejected — every kind of collection keeps the version an older binary reads; `doc_count`/`total_doc_length` are recomputed from the **scorable** corpus (documents present in `point_to_doc`) so a tampered counter cannot produce inf/NaN `avgdl`. A graph's snapshot is loaded only where `bm25.coverage` vouches for it: the marker (postcard: a format number, the snapshot's byte length and CRC32, and the payload log position read before the index was serialized) is written after every graph snapshot, durably. On open, a marker for these exact snapshot bytes loads the snapshot, replays its WAL and indexes again every payload written to the payload log since that position — which covers a node an older binary, which never indexed a node without an embedding and never writes the marker, stored meanwhile. No marker, another snapshot's, a corrupt one or a position past the log's end rebuilds the index from the payloads: the WAL is emptied, the snapshot rewritten, then the marker, each durable before the next, so a crash in between rebuilds again. |
 | **Vector index** (`vectors.idx`) | Every persisted offset is validated against the backing file size. |
 
 A high global allocation backstop (`AllocGuard`, default 1 TiB, configurable via

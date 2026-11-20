@@ -84,7 +84,7 @@ Stable for scripting; also pinned by tests in `crates/velesdb-cli`.
 | `2` | Usage error | unknown flag, invalid `--output` value, missing argument (reported by the argument parser) |
 | `3` | Not found | collection / point / edge / node does not exist (`VELES-002`, `VELES-003`, `VELES-020`, `VELES-022`) |
 | `4` | I/O error | database path unreadable or not a directory (`VELES-011`) |
-| `5` | VelesQL parse error | invalid query syntax (`VELES-010`) |
+| `5` | VelesQL query error | invalid query syntax or a statement the engine refuses (`VELES-010`); a `$name` parameter unbound or of the wrong type (`VELES-038`) |
 
 Two more environment variables affect the binary:
 
