@@ -7,7 +7,7 @@ use velesdb_core::collection::VectorCollection;
 use velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME;
 
 use super::outcome::read_refused;
-use crate::handlers::helpers::scope_unsupported;
+use crate::handlers::helpers::{and_scope, scope_unsupported};
 use crate::types::{parse_search_mode, validate_ef_search, ErrorResponse, SearchRequest};
 use crate::AppState;
 
@@ -444,20 +444,48 @@ pub(crate) fn execute_search_request(
             execute_hybrid_sparse(state, name, collection, req, sparse, index_name)
         }
         SearchMode::DenseOnly => execute_dense_search(state, name, collection, req, quality_mode),
-        SearchMode::SparseOnly { sparse } => state
-            .db
-            .run_gated_read(
-                name,
-                velesdb_core::observer::QueryOperationKind::VectorSearch,
-                None,
-                None,
-                |scope| match scope {
-                    None => collection.sparse_search(sparse, req.top_k, index_name),
-                    Some(_) => Err(scope_unsupported("sparse-only search")),
-                },
-            )
-            .map_err(|refusal| read_refused(&refusal)),
+        SearchMode::SparseOnly { sparse } => {
+            execute_sparse_search(state, name, collection, req, sparse, index_name)
+        }
     }
+}
+
+/// Sparse-only search path: the request's metadata filter, AND-ed with the
+/// read gate's scope filter when there is one ([`and_scope`]), admits the
+/// hits inside core's walk (`VectorCollection::sparse_search_with_filter`),
+/// so the best `top_k` matching, in-scope hits are returned however far
+/// below the best they rank.
+#[allow(clippy::result_large_err)]
+fn execute_sparse_search(
+    state: &AppState,
+    name: &str,
+    collection: &VectorCollection,
+    req: &SearchRequest,
+    sparse_query: &velesdb_core::index::sparse::SparseVector,
+    index_name: &str,
+) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
+    let filter = match req.filter {
+        Some(ref filter_json) => Some(parse_filter_or_400(filter_json, &state.onboarding_metrics)?),
+        None => None,
+    };
+    state
+        .db
+        .run_gated_read(
+            name,
+            velesdb_core::observer::QueryOperationKind::VectorSearch,
+            None,
+            None,
+            |scope| match and_scope(filter, scope) {
+                Some(filter) => collection.sparse_search_with_filter(
+                    sparse_query,
+                    req.top_k,
+                    index_name,
+                    &filter,
+                ),
+                None => collection.sparse_search(sparse_query, req.top_k, index_name),
+            },
+        )
+        .map_err(|refusal| read_refused(&refusal))
 }
 
 /// Hybrid dense+sparse search path with dimension validation and fusion.

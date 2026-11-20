@@ -2,13 +2,18 @@
 //!
 //! Extracted from `repl.rs` to keep module size under 500 NLOC.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use instant::Instant;
 use std::collections::HashMap;
 use velesdb_core::Database;
 
 use crate::repl::{QueryKind, QueryResult};
 use crate::session::SessionSettings;
+
+/// The context a core query error is wrapped in: the typed error stays in
+/// the chain, where `output::exit_code` reads it (exit 5 for a query to
+/// fix), and `{:#}` prints both.
+const QUERY_ERROR: &str = "Query error";
 
 /// Execute a `VelesQL` query and return results.
 ///
@@ -46,7 +51,7 @@ pub fn execute_query(
     // aggregate engine; the standard SELECT projection path returns empty rows
     // for aggregate columns, so without this the REPL would print raw rows.
     if !parsed.is_match_query() && parsed.select.is_aggregation_query() {
-        return run_aggregation_query(db, &parsed, active_collection, start);
+        return run_aggregation_query(db, &parsed, start);
     }
 
     run_row_query(db, &parsed, active_collection, start)
@@ -165,7 +170,7 @@ fn run_row_query(
     } else {
         let results = db
             .execute_query(parsed, &HashMap::new())
-            .map_err(|e| anyhow::anyhow!("Query error: {e}"))?;
+            .context(QUERY_ERROR)?;
         if matches!(kind, QueryKind::Select) {
             project_select_rows(&results, &parsed.select.columns)
         } else {
@@ -212,62 +217,36 @@ fn query_kind(parsed: &velesdb_core::velesql::Query) -> QueryKind {
 /// Route a MATCH query through [`Database::execute_query`] so cross-collection
 /// `@collection` annotations are enriched.
 ///
-/// `Database::execute_query` resolves the target collection from the query's
-/// `FROM` clause or the `_collection` param, then merges payloads from any
-/// `@collection`-annotated node patterns. The REPL selects the target via
-/// `.use <collection>`, so when the query has no explicit `FROM` we inject the
-/// active collection as `_collection`. Resolution covers graph, vector, and
-/// metadata collections alike.
+/// The REPL selects the target via `.use <collection>`: core's rule
+/// ([`velesdb_core::velesql::with_collection_param`]) fills it in as the
+/// `_collection` param of a top-level MATCH, and
+/// [`velesdb_core::velesql::collection_target`] says whether the statement
+/// then names a collection at all — without one the REPL says how to set it.
 fn route_match_query(
     db: &Database,
     parsed: &velesdb_core::velesql::Query,
     active_collection: Option<&str>,
 ) -> Result<Vec<velesdb_core::SearchResult>> {
-    let params = params_with_active_collection(
-        parsed,
-        active_collection,
-        "MATCH queries require an active collection. Use: .use <collection_name>",
-    )?;
-    db.execute_query(parsed, &params)
-        .map_err(|e| anyhow::anyhow!("Query error: {e}"))
-}
-
-/// Builds the params map for a query, injecting the active collection as the
-/// `_collection` key when the query has no explicit `FROM` (the REPL selects the
-/// target via `.use <collection>`). `requires_msg` is the error shown when no
-/// active collection is set.
-fn params_with_active_collection(
-    parsed: &velesdb_core::velesql::Query,
-    active_collection: Option<&str>,
-    requires_msg: &str,
-) -> Result<HashMap<String, serde_json::Value>> {
-    let mut params = HashMap::new();
-    if parsed.select.from.is_empty() {
-        let col_name = active_collection.ok_or_else(|| anyhow::anyhow!("{requires_msg}"))?;
-        params.insert(
-            "_collection".to_string(),
-            serde_json::Value::String(col_name.to_string()),
-        );
+    let no_params = HashMap::new();
+    let params =
+        velesdb_core::velesql::with_collection_param(parsed, &no_params, active_collection);
+    if velesdb_core::velesql::collection_target(parsed, &params)?.is_none() {
+        anyhow::bail!("MATCH queries require an active collection. Use: .use <collection_name>");
     }
-    Ok(params)
+    db.execute_query(parsed, &params).context(QUERY_ERROR)
 }
 
 /// Routes a `GROUP BY` / scalar-aggregate SELECT through the aggregate engine and
-/// renders the JSON result (object or array-of-groups) into display rows.
+/// renders the JSON result (object or array-of-groups) into display rows. An
+/// aggregate names its collection in its `FROM`, which the grammar requires.
 fn run_aggregation_query(
     db: &Database,
     parsed: &velesdb_core::velesql::Query,
-    active_collection: Option<&str>,
     start: Instant,
 ) -> Result<QueryResult> {
-    let params = params_with_active_collection(
-        parsed,
-        active_collection,
-        "Aggregation queries require an active collection. Use: .use <collection_name>",
-    )?;
     let value = db
-        .execute_aggregate(parsed, &params)
-        .map_err(|e| anyhow::anyhow!("Query error: {e}"))?;
+        .execute_aggregate(parsed, &HashMap::new())
+        .context(QUERY_ERROR)?;
     Ok(QueryResult {
         rows: aggregate_value_to_rows(value),
         duration_ms: start.elapsed().as_secs_f64() * 1000.0,

@@ -168,7 +168,8 @@ pub fn exit_code(err: &anyhow::Error) -> i32 {
     1
 }
 
-/// Map a core error to its exit code: not-found 3, io 4, parse 5, else 1.
+/// Map a core error to its exit code: not-found 3, io 4, a query to fix
+/// (its statement, or a `$name` parameter it references) 5, else 1.
 fn core_exit_code(err: &velesdb_core::Error) -> i32 {
     use velesdb_core::Error;
     match err {
@@ -177,7 +178,7 @@ fn core_exit_code(err: &velesdb_core::Error) -> i32 {
         | Error::EdgeNotFound(_)
         | Error::NodeNotFound(_) => 3,
         Error::Io(_) => 4,
-        Error::Query(_) => 5,
+        Error::Query(_) | Error::QueryParameter { .. } => 5,
         _ => 1,
     }
 }

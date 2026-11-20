@@ -29,8 +29,8 @@ use velesdb_core::observer::QueryOperationKind;
 use velesdb_core::Point;
 
 use crate::handlers::helpers::{
-    auto_core_error_response, error_response, get_vector_collection_or_404, run_blocking,
-    worker_failure,
+    and_scope, auto_core_error_response, error_response, get_vector_collection_or_404,
+    run_blocking, worker_failure,
 };
 
 use velesdb_core::index::sparse::SparseVector;
@@ -361,20 +361,6 @@ fn scroll_gated(
 /// a point with no payload).
 fn in_scope(point: &Point, scope: Option<&velesdb_core::Filter>) -> bool {
     scope.is_none_or(|filter| filter.matches_point(point.id, point.payload.as_ref()))
-}
-
-/// AND-composes the caller's filter with the read gate's scope filter, so the
-/// scope can only narrow what the caller asked for.
-fn and_scope(
-    caller: Option<velesdb_core::Filter>,
-    scope: Option<velesdb_core::Filter>,
-) -> Option<velesdb_core::Filter> {
-    match (caller, scope) {
-        (Some(caller), Some(scope)) => Some(velesdb_core::Filter::new(
-            velesdb_core::Condition::and(vec![caller.condition, scope.condition]),
-        )),
-        (caller, scope) => caller.or(scope),
-    }
 }
 
 /// Parse the optional filter JSON into a core `Filter`.

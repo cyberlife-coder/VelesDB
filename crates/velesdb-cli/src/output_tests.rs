@@ -95,6 +95,17 @@ fn test_exit_code_parse_is_5() {
     assert_eq!(exit_code(&err), 5);
 }
 
+/// A `$name` the statement references unbound or mistyped is a query the
+/// caller must fix, as a syntax error is: `5`, not the generic `1` it fell
+/// to once it got its own code (`VELES-038`).
+#[test]
+fn test_exit_code_query_parameter_is_5() {
+    let err = anyhow::Error::new(unbound_v());
+    assert_eq!(exit_code(&err), 5);
+    let wrapped = anyhow::Error::new(unbound_v()).context("executing the query");
+    assert_eq!(exit_code(&wrapped), 5);
+}
+
 #[test]
 fn test_exit_code_generic_is_1() {
     let err = anyhow::Error::new(velesdb_core::Error::Internal("boom".into()));
@@ -115,4 +126,12 @@ fn test_init_records_quiet() {
     init(OutputOptions::default());
     assert!(quiet());
     assert_eq!(effective_format("table"), "json");
+}
+
+/// Core's error for an unbound `$v`.
+fn unbound_v() -> velesdb_core::Error {
+    velesdb_core::Error::QueryParameter {
+        name: "v".to_string(),
+        reason: "not bound".to_string(),
+    }
 }

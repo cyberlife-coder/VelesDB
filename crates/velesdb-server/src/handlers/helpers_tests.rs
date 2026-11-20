@@ -80,6 +80,13 @@ fn status_cases() -> Vec<(velesdb_core::Error, StatusCode)> {
         (Error::AccessDenied("policy".into()), StatusCode::FORBIDDEN),
         (Error::Query("[V015]".into()), StatusCode::BAD_REQUEST),
         (
+            Error::QueryParameter {
+                name: "v".into(),
+                reason: "not bound".into(),
+            },
+            StatusCode::BAD_REQUEST,
+        ),
+        (
             Error::GraphNotSupported("ORDER BY d".into()),
             StatusCode::BAD_REQUEST,
         ),

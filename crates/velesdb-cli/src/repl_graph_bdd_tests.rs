@@ -189,6 +189,20 @@ fn test_repl_count_populated_graph() {
 }
 
 #[test]
+fn test_repl_count_reports_edges_and_nodes_once() {
+    // GIVEN: a graph with 5 stored nodes and 4 edges
+    let (_dir, db) = setup_db();
+    populate(&db);
+
+    // WHEN: the `.graph count` rows are built
+    let rows = crate::repl_graph_cmds::graph_count_rows(&graph_col(&db));
+
+    // THEN: one edge count and one node count, the node count being every
+    // stored node (`GraphCollection::len`), with no second row restating it
+    assert_eq!(rows, [("Edges:", 4), ("Nodes:", 5)]);
+}
+
+#[test]
 fn test_repl_count_empty_graph() {
     // GIVEN: an empty graph
     let (_dir, db) = setup_db();

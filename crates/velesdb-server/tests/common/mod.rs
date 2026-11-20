@@ -299,3 +299,37 @@ pub async fn create_graph_node(app: &Router, collection: &str, node_id: u64) {
         "test: failed to create graph node {node_id} in '{collection}'"
     );
 }
+
+/// Sends `body` as JSON with `method` to `uri` and returns the status and
+/// the JSON body (`Null` when it is not JSON).
+pub async fn call_json(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    body: &serde_json::Value,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("test: build request"),
+        )
+        .await
+        .expect("test: request");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}

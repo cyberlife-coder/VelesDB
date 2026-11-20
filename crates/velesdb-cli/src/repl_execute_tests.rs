@@ -478,7 +478,57 @@ fn test_execute_query_aggregation_refuses_a_denied_read() {
         .expect_err("a denied aggregate must fail");
 
     assert!(
-        err.to_string().contains("orders are off limits"),
-        "the observer's denial reaches the REPL: {err}"
+        format!("{err:#}").contains("orders are off limits"),
+        "the observer's denial reaches the REPL: {err:#}"
+    );
+}
+
+/// A query refused by core keeps core's typed error through every REPL path
+/// — row query, MATCH and aggregate — so `velesdb query execute` exits 5 (a
+/// query to fix), not 1. The paths used to flatten the error into a string
+/// (`anyhow!("Query error: {e}")`), which nothing can downcast.
+#[test]
+fn a_core_query_refusal_keeps_its_type_and_exits_5() {
+    let dir = TempDir::new().expect("temp dir");
+    let db = Database::open(dir.path()).expect("open db");
+    db.create_collection("docs", 2, DistanceMetric::Cosine)
+        .expect("create collection");
+    for (query, active) in [
+        ("DELETE FROM docs WHERE name = $nope", None),
+        ("SELECT * FROM docs WHERE name = $nope", None),
+        ("SELECT COUNT(*) FROM docs WHERE name = $nope", None),
+        ("MATCH (a {name: $nope}) RETURN a", Some("docs")),
+    ] {
+        let err = execute_query(&db, query, active, None).expect_err(query);
+        let core = err
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<velesdb_core::Error>())
+            .unwrap_or_else(|| panic!("{query}: no typed core error in {err:#}"));
+        assert_eq!(core.code(), "VELES-038", "{query}: {err:#}");
+        assert_eq!(crate::output::exit_code(&err), 5, "{query}: {err:#}");
+        assert!(
+            format!("{err:#}").contains("[VELES-038]"),
+            "{query}: {err:#}"
+        );
+    }
+}
+
+/// A MATCH without `FROM` reads the active collection through core's rule
+/// (`velesql::with_collection_param`), and with none set the REPL says how to
+/// set one.
+#[test]
+fn a_match_reads_the_active_collection_or_asks_for_one() {
+    let dir = TempDir::new().expect("temp dir");
+    let db = Database::open(dir.path()).expect("open db");
+    db.create_collection("docs", 2, DistanceMetric::Cosine)
+        .expect("create collection");
+    let rows = execute_query(&db, "MATCH (a) RETURN a", Some("docs"), None)
+        .expect("test: MATCH on the active collection");
+    assert!(rows.rows.is_empty());
+    let err = execute_query(&db, "MATCH (a) RETURN a", None, None)
+        .expect_err("test: no active collection");
+    assert!(
+        format!("{err:#}").contains(".use <collection_name>"),
+        "{err:#}"
     );
 }

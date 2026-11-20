@@ -4,7 +4,6 @@
 //! routing them to `Database::execute_aggregate`, which applies the read gate.
 
 use axum::{http::StatusCode, response::IntoResponse, Json};
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use velesdb_core::velesql::Query;
@@ -37,8 +36,7 @@ pub(crate) fn execute_aggregation_query(
     // Through the database facade, never a collection handle: the facade is
     // where the read gate runs (a denial refuses the aggregate, a scope
     // narrows its rows) and where scalar subqueries are resolved.
-    let params = with_collection_param(parsed, collection_name, params);
-    let result = match state.db.execute_aggregate(parsed, &params) {
+    let result = match state.db.execute_aggregate(parsed, params) {
         Ok(r) => r,
         Err(velesdb_core::Error::CollectionNotFound(name)) => {
             state.operational_metrics.inc_errors();
@@ -70,62 +68,14 @@ pub(crate) fn execute_aggregation_query(
     .into_response()
 }
 
-/// The parameters an aggregate executes with: the caller's, plus the resolved
-/// collection as `_collection` when the query has no `FROM` (the request
-/// body's `collection`), so the read gate and the executor both see the
-/// collection this handler resolved.
-fn with_collection_param<'a>(
-    parsed: &Query,
-    collection_name: &str,
-    params: &'a HashMap<String, serde_json::Value>,
-) -> Cow<'a, HashMap<String, serde_json::Value>> {
-    if !parsed.select.from.is_empty() {
-        return Cow::Borrowed(params);
-    }
-    let mut owned = params.clone();
-    owned.insert(
-        "_collection".to_string(),
-        serde_json::json!(collection_name),
-    );
-    Cow::Owned(owned)
-}
-
-/// Resolve the collection name for an aggregation query.
-#[allow(clippy::result_large_err)]
-pub(crate) fn resolve_aggregate_collection(
-    parsed: &Query,
-    req: &QueryRequest,
-) -> Result<String, axum::response::Response> {
-    if !parsed.select.from.is_empty() {
-        return Ok(parsed.select.from.clone());
-    }
-    req.collection
-        .as_ref()
-        .filter(|name| !name.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            velesql_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "VELESQL_MISSING_COLLECTION",
-                "Aggregation query requires a FROM collection or request-body `collection`",
-                "Add FROM <collection> to query or set `collection` in request JSON",
-                Some(serde_json::json!({
-                    "field": "collection",
-                    "endpoint": "/aggregate"
-                })),
-            )
-        })
-}
-
 /// The refuse-or-proceed phase of [`aggregate`], one rule per step: the
-/// query parses, it IS an aggregation (row/search/graph belong on
-/// `/query`), and it names exactly one resolvable collection. Split out so
-/// the handler charges the error metric in ONE place instead of once per
-/// refusal arm.
+/// query parses and it IS an aggregation (row/search/graph belong on
+/// `/query`). Its collection is its `FROM`, which the grammar requires of
+/// every `SELECT` (pinned by core's `a_select_without_from_does_not_parse`,
+/// beside `velesql::collection_target`). Split out so the handler charges
+/// the error metric in ONE place instead of once per refusal arm.
 #[allow(clippy::result_large_err)]
-fn prepare_aggregation(
-    req: &QueryRequest,
-) -> Result<(velesdb_core::velesql::Query, String), axum::response::Response> {
+fn prepare_aggregation(req: &QueryRequest) -> Result<Query, axum::response::Response> {
     let parsed = parse_and_validate(&req.query)?;
     if parsed.is_match_query() || !parsed.select.is_aggregation_query() {
         return Err(velesql_error(
@@ -136,8 +86,7 @@ fn prepare_aggregation(
             Some(serde_json::json!({ "endpoint": "/aggregate" })),
         ));
     }
-    let collection_name = resolve_aggregate_collection(&parsed, req)?;
-    Ok((parsed, collection_name))
+    Ok(parsed)
 }
 
 /// Execute an aggregation-only VelesQL query.
@@ -153,7 +102,7 @@ fn prepare_aggregation(
         (status = 500, description = "An engine fault during execution (storage, I/O, internal)", body = crate::types::VelesqlErrorResponse),
         (status = 503, description = "The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement", body = crate::types::VelesqlErrorResponse),
         (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
-        (status = 422, description = "Aggregation validation/execution error", body = crate::types::VelesqlErrorResponse),
+        (status = 422, description = "Aggregation validation/execution error, or a `$name` parameter unbound or of the wrong type (`VELESQL_PARAMETER_ERROR`)", body = crate::types::VelesqlErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
     )
 )]
@@ -164,8 +113,8 @@ pub async fn aggregate(
     let start = std::time::Instant::now();
     state.operational_metrics.inc_queries();
 
-    let (parsed, collection_name) = match prepare_aggregation(&req) {
-        Ok(prepared) => prepared,
+    let parsed = match prepare_aggregation(&req) {
+        Ok(parsed) => parsed,
         Err(resp) => {
             state.operational_metrics.inc_errors();
             return resp;
@@ -176,7 +125,13 @@ pub async fn aggregate(
     // blocking pool so the async workers stay responsive.
     let state_clone = Arc::clone(&state);
     crate::handlers::helpers::run_blocking(move || {
-        execute_aggregation_query(&state_clone, &collection_name, &parsed, &req.params, start)
+        execute_aggregation_query(
+            &state_clone,
+            &parsed.select.from,
+            &parsed,
+            &req.params,
+            start,
+        )
     })
     .await
     .unwrap_or_else(|resp| resp)

@@ -329,7 +329,7 @@ fn run_query(state: &mut ReplState, line: &str, config: &ReplConfig) {
             state.last_result = Some(result);
         }
         Err(e) => {
-            println!("{} {}\n", "Error:".red().bold(), e);
+            println!("{} {e:#}\n", "Error:".red().bold());
         }
     }
 }

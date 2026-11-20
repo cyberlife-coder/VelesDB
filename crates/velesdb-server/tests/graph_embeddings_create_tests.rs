@@ -9,14 +9,9 @@
 
 mod common;
 
-use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-    Router,
-};
+use axum::{http::StatusCode, Router};
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use tower::ServiceExt;
 
 fn app(temp_dir: &TempDir) -> Router {
     let (_, state) = common::create_test_app_with_state(temp_dir);
@@ -24,26 +19,7 @@ fn app(temp_dir: &TempDir) -> Router {
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: &Value) -> (StatusCode, Value) {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(uri)
-                .header("Content-Type", "application/json")
-                .body(Body::from(body.to_string()))
-                .expect("test: build request"),
-        )
-        .await
-        .expect("test: request");
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("test: body");
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
+    common::call_json(app, method, uri, body).await
 }
 
 async fn create(app: &Router, body: &Value) {

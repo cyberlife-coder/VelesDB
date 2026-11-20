@@ -269,16 +269,21 @@ fn cmd_graph_count(db: &Database, parts: &[&str]) -> CommandResult {
         Err(r) => return r,
     };
 
-    let edge_count = col.edge_count();
-    let stored_nodes = col.all_node_ids().len();
-    let total_points = col.len();
-
     println!("\n{}\n", "Graph Stats".bold().underline(),);
-    println!("  {} {}", "Edges:".cyan(), edge_count);
-    println!("  {} {}", "Stored nodes:".cyan(), stored_nodes);
-    println!("  {} {}", "Total points:".cyan(), total_points);
+    for (label, count) in graph_count_rows(&col) {
+        println!("  {} {}", label.cyan(), count);
+    }
     println!();
     CommandResult::Continue
+}
+
+/// The `.graph count` rows: the edges, and the nodes — every stored node,
+/// with an embedding, a payload or both, as [`GraphCollection::len`] counts
+/// them (the ids `all_node_ids` lists), as `velesdb graph count` reports them.
+///
+/// [`GraphCollection::len`]: velesdb_core::GraphCollection::len
+pub(crate) fn graph_count_rows(col: &velesdb_core::GraphCollection) -> [(&'static str, usize); 2] {
+    [("Edges:", col.edge_count()), ("Nodes:", col.len())]
 }
 
 fn cmd_graph_search(db: &Database, parts: &[&str]) -> CommandResult {

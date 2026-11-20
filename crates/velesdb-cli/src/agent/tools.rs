@@ -167,7 +167,7 @@ fn graph(db: &Database, a: &[&str]) -> Result<String, String> {
 /// Run a VelesQL statement and flatten rows for the transcript.
 fn run_sql(db: &Database, sql: &str) -> Result<String, String> {
     let res = crate::repl_execute::execute_query(db, sql, None, None)
-        .map_err(|e| format!("query failed: {e}"))?;
+        .map_err(|e| format!("query failed: {e:#}"))?;
     if res.rows.is_empty() {
         return Ok(format!("{sql} -> 0 rows"));
     }
