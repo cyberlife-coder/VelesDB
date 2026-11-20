@@ -25,7 +25,7 @@ Example:
     ...     expand_k=5
     ... )
     >>>
-    >>> docs = retriever.get_relevant_documents("What is machine learning?")
+    >>> docs = retriever.invoke("What is machine learning?")
 """
 
 from typing import Any, List, Optional, Tuple

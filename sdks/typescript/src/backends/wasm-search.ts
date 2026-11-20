@@ -18,6 +18,7 @@ import type {
 } from '../types';
 import type { FilterInput } from '../filter';
 import { normalizeFilter } from '../filter';
+import { DimensionMismatchError } from '../errors';
 import { NotFoundError, VelesDBError } from '../types';
 import { wasmNotSupported } from './shared';
 import {
@@ -287,7 +288,7 @@ function requireU32(name: string, value: unknown, bound: string): number {
 
 /**
  * Validate a search's inputs before anything else, as core does
- * (`validated_hybrid_params`, `validate_multi_query_inputs`): the number of
+ * (`resolve_hybrid_vector_weight`, `validate_multi_query_inputs`): the number of
  * query vectors, when the search bounds it; every vector's dimension; and
  * `k`, a non-negative integer as core's `usize` is, at most 2^32 - 1 since
  * velesdb-wasm's `usize` is 32-bit. Returns `k`; at 0 the caller answers
@@ -313,9 +314,9 @@ function validateSearchInputs(
   const dimension = collection.config.dimension ?? 0;
   for (const vector of vectors) {
     if (vector.length !== dimension) {
-      throw new VelesDBError(
+      // Core's VELES-004, as the REST backend relays it.
+      throw new DimensionMismatchError(
         `Query dimension mismatch: expected ${dimension}, got ${vector.length}`,
-        'DIMENSION_MISMATCH'
       );
     }
   }

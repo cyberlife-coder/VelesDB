@@ -100,7 +100,13 @@ export interface GraphSearchResponse {
 export interface MatchQueryOptions {
   /** Query vector for `similarity()` scoring inside the MATCH clause. */
   vector?: number[] | Float32Array;
-  /** Similarity threshold (0.0-1.0). */
+  /**
+   * Score threshold for `vector`, in the collection metric's direction: a row
+   * is kept when its score is at least this under a similarity metric, at
+   * most this under a distance metric (`euclidean`, `hamming`). Any finite
+   * number, sent with `vector` (without one no row is scored, and the
+   * engine refuses it, `VELES-010`); omitted, every scored row is kept.
+   */
   threshold?: number;
 }
 

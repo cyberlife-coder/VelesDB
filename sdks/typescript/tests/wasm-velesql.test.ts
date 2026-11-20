@@ -12,7 +12,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
-import { InvalidCollectionNameError } from '../src/errors';
+import { CollectionExistsError, InvalidCollectionNameError, QueryError, QueryParameterError } from '../src/errors';
 import { VelesDBError } from '../src/types';
 
 const calls: string[] = [];
@@ -54,7 +54,7 @@ class MockWasmDatabase {
   static last: MockWasmDatabase | null = null;
   attached = new Map<string, MockVectorStore>();
   nextRows: unknown[] = [{ id: 1, category: 'tech' }];
-  nextError: string | null = null;
+  nextError: unknown = null;
   attachStore = vi.fn((name: string, store: MockVectorStore) => {
     this.attached.set(name, store);
   });
@@ -168,13 +168,16 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
     expect(await backend.getCollection('docs')).toBeNull();
   });
 
-  it('when the binding refuses to attach with a bare string, then the store is freed and the refusal is BAD_REQUEST', async () => {
+  it("when the binding refuses to attach a taken name, then the store is freed and the refusal is core's CollectionExistsError", async () => {
     const backend = new WasmBackend();
     await backend.init();
-    MockWasmDatabase.last!.attachStore.mockImplementationOnce(() => { throw "Collection 'docs' already exists"; });
+    MockWasmDatabase.last!.attachStore.mockImplementationOnce(() => {
+      throw Object.assign(new Error("[VELES-001] Collection 'docs' already exists"), { code: 'VELES-001' });
+    });
 
-    await expect(backend.createCollection('docs', { dimension: 2 }))
-      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: "Collection 'docs' already exists" });
+    const error = await backend.createCollection('docs', { dimension: 2 }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CollectionExistsError);
+    expect(error).toMatchObject({ code: 'VELES-001', message: "[VELES-001] Collection 'docs' already exists" });
     expect(calls).toEqual(['store.free']);
     expect(await backend.getCollection('docs')).toBeNull();
   });
@@ -272,6 +275,24 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
 
     expect(error).toMatchObject({ code: 'BAD_REQUEST' });
     expect((error as Error).message).toContain('Unknown column at position 7');
+  });
+
+  it('when the executor refuses an unbound $param, then it surfaces as QueryParameterError with core\'s VELES-038', async () => {
+    const backend = await backendWithDocs();
+    // velesdb-wasm throws an `Error` whose `code` property is core's code,
+    // its message core's text.
+    MockWasmDatabase.last!.nextError = Object.assign(
+      new Error('[VELES-038] Query parameter $c: not bound'),
+      { code: 'VELES-038' }
+    );
+
+    const error = await backend
+      .query('docs', 'SELECT * FROM docs WHERE vector NEAR $v AND category = $c LIMIT 5', { v: [1, 0] })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(QueryParameterError);
+    expect(error).toBeInstanceOf(QueryError);
+    expect(error).toMatchObject({ code: 'VELES-038', message: '[VELES-038] Query parameter $c: not bound' });
   });
 
   it.each([

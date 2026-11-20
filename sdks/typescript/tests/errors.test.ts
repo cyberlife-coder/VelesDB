@@ -45,20 +45,22 @@ import {
   InvalidCollectionNameError,
   SnapshotBuildFailedError,
   IncompatibleSchemaVersionError,
+  AccessDeniedError,
+  QueryParameterError,
   parseVelesError,
   VELES_ERROR_CODES,
 } from '../src/errors';
 import { VelesDBError } from '../src/types';
 
 // ============================================================================
-// Structural contract: 36 codes, 36 classes, all extend VelesError
+// Structural contract: 38 codes, 38 classes, all extend VelesError
 // ============================================================================
 
 describe('VELES error codes — structural contract', () => {
-  it('exports exactly 36 codes (VELES-001 to VELES-036)', () => {
-    expect(VELES_ERROR_CODES).toHaveLength(36);
+  it('exports exactly 38 codes (VELES-001 to VELES-038)', () => {
+    expect(VELES_ERROR_CODES).toHaveLength(38);
     expect(VELES_ERROR_CODES[0]).toBe('VELES-001');
-    expect(VELES_ERROR_CODES[35]).toBe('VELES-036');
+    expect(VELES_ERROR_CODES[37]).toBe('VELES-038');
   });
 
   it('every VELES error class extends VelesError (and VelesDBError)', () => {
@@ -124,6 +126,8 @@ describe('VELES typed classes — verbatim code preservation', () => {
     [InvalidCollectionNameError, 'VELES-034', 'InvalidCollectionNameError'],
     [SnapshotBuildFailedError, 'VELES-035', 'SnapshotBuildFailedError'],
     [IncompatibleSchemaVersionError, 'VELES-036', 'IncompatibleSchemaVersionError'],
+    [AccessDeniedError, 'VELES-037', 'AccessDeniedError'],
+    [QueryParameterError, 'VELES-038', 'QueryParameterError'],
   ];
 
   it.each(cases)('%s preserves code %s and name %s', (Cls, expectedCode, expectedName) => {
@@ -159,6 +163,26 @@ describe('parseVelesError — code → typed class routing', () => {
   it('routes VELES-036 to IncompatibleSchemaVersionError', () => {
     const err = parseVelesError('VELES-036', 'schema v5 > supported v3');
     expect(err).toBeInstanceOf(IncompatibleSchemaVersionError);
+  });
+
+  it('routes VELES-037 to AccessDeniedError', () => {
+    const err = parseVelesError('VELES-037', 'read denied by policy');
+    expect(err).toBeInstanceOf(AccessDeniedError);
+  });
+
+  it('routes VELES-038 to QueryParameterError, which is still a QueryError', () => {
+    const err = parseVelesError('VELES-038', '[VELES-038] Query parameter $v: not bound');
+    expect(err).toBeInstanceOf(QueryParameterError);
+    expect(err).toBeInstanceOf(QueryError);
+    expect(err.code).toBe('VELES-038');
+    // A malformed statement stays a plain QueryError.
+    expect(parseVelesError('VELES-010', 'syntax')).not.toBeInstanceOf(QueryParameterError);
+  });
+
+  it('routes the VelesQL endpoints\' VELESQL_PARAMETER_ERROR to QueryParameterError, keeping the wire code', () => {
+    const err = parseVelesError('VELESQL_PARAMETER_ERROR', '[VELES-038] Query parameter $v: not bound');
+    expect(err).toBeInstanceOf(QueryParameterError);
+    expect(err.code).toBe('VELESQL_PARAMETER_ERROR');
   });
 
   it('returns a generic VelesError for unknown codes (forward-compat)', () => {

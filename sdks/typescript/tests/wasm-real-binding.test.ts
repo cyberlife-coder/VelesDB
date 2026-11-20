@@ -24,7 +24,16 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { VelesDB } from '../src/client';
 import { WasmBackend } from '../src/backends/wasm';
-import { InvalidCollectionNameError } from '../src/errors';
+import {
+  CollectionNotFoundError,
+  ConfigError,
+  DimensionMismatchError,
+  VectorRequiredError,
+  InvalidCollectionNameError,
+  NodeNotFoundError,
+  QueryParameterError,
+} from '../src/errors';
+import { wasmThrowToError } from '../src/backends/wasm-helpers';
 import { VelesDBError } from '../src/types';
 import type { AddEdgeRequest } from '../src/types';
 
@@ -142,6 +151,15 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
   });
 
+  it("query refuses an unbound $param with core's VELES-038, as a QueryParameterError", async () => {
+    const error = await db
+      .query('docs', 'SELECT * FROM docs WHERE category = $c LIMIT 10')
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(QueryParameterError);
+    expect(error).toMatchObject({ code: 'VELES-038', message: '[VELES-038] Query parameter $c: not bound' });
+  });
+
   it('graph: edges between stored points are listed, counted and matched with REST shapes', async () => {
     await db.addEdge('docs', { id: 10, source: 1, target: 2, label: 'NEXT', properties: { weight: 0.5 } });
 
@@ -186,10 +204,36 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     expect(response.results).toEqual([]);
   });
 
-  it('graph: an edge to a point that does not exist is NOT_FOUND, as on REST', async () => {
-    await expect(
-      db.addEdge('docs', { id: 11, source: 1, target: 99, label: 'NEXT' })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  it("graph: an edge to a point that does not exist is core's NodeNotFoundError (VELES-022), as on REST", async () => {
+    const error = await db
+      .addEdge('docs', { id: 11, source: 1, target: 99, label: 'NEXT' })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NodeNotFoundError);
+    expect(error).toMatchObject({ code: 'VELES-022' });
+  });
+
+  it("DROP COLLECTION and FLUSH of a missing collection throw core's VELES-002, read as a CollectionNotFoundError", async () => {
+    // The SDK routes no DDL to the executor, so drive the binding itself:
+    // the code travels on the thrown Error, from the error's variant.
+    const mod = await import('@wiscale/velesdb-wasm');
+    const binding = new mod.WasmDatabase();
+    try {
+      for (const sql of ['DROP COLLECTION ghost', 'FLUSH ghost']) {
+        let thrown: unknown;
+        try {
+          binding.executeQuery(sql, null);
+        } catch (e) {
+          thrown = e;
+        }
+        expect(thrown, sql).toBeInstanceOf(Error);
+        expect((thrown as { code?: string }).code, sql).toBe('VELES-002');
+        const error = wasmThrowToError(thrown);
+        expect(error, sql).toBeInstanceOf(CollectionNotFoundError);
+        expect(error.message, sql).toBe("[VELES-002] Collection 'ghost' not found");
+      }
+    } finally {
+      binding.free();
+    }
   });
 
   it('graph: matchQuery scores the points\' vectors with similarity(), as on REST', async () => {
@@ -210,6 +254,15 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
       threshold: 0.9,
     });
     expect(scored.results.map(r => r.bindings.b)).toEqual(['2']);
+  });
+
+  it("graph: matchQuery refuses an unbound similarity() vector with core's VELES-038", async () => {
+    const error = await db
+      .matchQuery('docs', 'MATCH (a)-[:SEES]->(b) WHERE similarity(b.embedding, $v) > 0.5 RETURN b.id')
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(QueryParameterError);
+    expect(error).toMatchObject({ code: 'VELES-038', message: '[VELES-038] Query parameter $v: not bound' });
   });
 
   it('an upsert replaces the whole point: a payload or sparse vector it leaves out is gone', async () => {
@@ -375,11 +428,11 @@ describe.skipIf(!PKG)('VelesQL SPARSE_NEAR through the WASM backend, on the real
     expect(await ids('churn', 'SELECT * FROM churn WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 5')).toEqual(['1']);
   });
 
-  it("only a genuinely missing index is refused, with core's message", async () => {
+  it("only a genuinely missing index is refused, with core's error", async () => {
     await expect(db.query('dense', 'SELECT * FROM dense WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 5'))
-      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: "[VELES-009] Configuration error: Sparse index '<default>' not found" });
+      .rejects.toMatchObject({ code: 'VELES-009', message: "[VELES-009] Configuration error: Sparse index '<default>' not found" });
     await expect(db.query('sp', "SELECT * FROM sp WHERE vector SPARSE_NEAR {1: 1.0} USING 'splade' LIMIT 5"))
-      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: "[VELES-009] Configuration error: Sparse index 'splade' not found" });
+      .rejects.toBeInstanceOf(ConfigError);
   });
 
   it('the typed sparse and hybrid searches read the same store and rank as before', async () => {
@@ -409,6 +462,22 @@ describe.skipIf(!PKG)('the WASM backend answers as core does, on the real bindin
 
   afterAll(async () => {
     await db.close();
+  });
+
+  it('refuses an empty vector with VELES-016 and one of another length with VELES-004, as REST does', async () => {
+    await db.createCollection('dims', { dimension: 2, metric: 'cosine' });
+
+    const empty = await db.upsert('dims', { id: 1, vector: [] }).catch((err) => err);
+    const short = await db.upsert('dims', { id: 1, vector: [1] }).catch((err) => err);
+    const emptyInBatch = await db
+      .upsertBatch('dims', [{ id: 2, vector: [1, 0] }, { id: 3, vector: [] }])
+      .catch((err) => err);
+
+    expect(empty).toBeInstanceOf(VectorRequiredError);
+    expect(short).toBeInstanceOf(DimensionMismatchError);
+    expect(emptyInBatch).toBeInstanceOf(VectorRequiredError);
+    const rows = await db.query('dims', 'SELECT * FROM dims LIMIT 10');
+    expect('results' in rows && rows.results).toEqual([]);
   });
 
   it('a pure NEAR returns the rows a NEAR with a WHERE does: the id and the payload columns', async () => {

@@ -34,7 +34,7 @@ import { VelesDBError } from './types';
 
 /**
  * Base class for every server-originated VelesDB error carrying a
- * `VELES-XXX` code. All 36 typed sub-classes extend this.
+ * `VELES-XXX` code. All 38 typed sub-classes extend this.
  *
  * Also a direct sub-class of `VelesDBError` so that legacy handlers
  * that catch `VelesDBError` continue to receive typed errors too.
@@ -47,7 +47,7 @@ export class VelesError extends VelesDBError {
 }
 
 // ============================================================================
-// The 36 typed sub-classes — one per VELES-XXX variant in velesdb-core
+// The 38 typed sub-classes — one per VELES-XXX variant in velesdb-core
 // ============================================================================
 
 /** Collection already exists (VELES-001). */
@@ -122,10 +122,14 @@ export class ConfigError extends VelesError {
   }
 }
 
-/** VelesQL parse or execution error (VELES-010). */
+/**
+ * VelesQL parse or execution error (VELES-010). Base of
+ * {@link QueryParameterError}, so `instanceof QueryError` still catches a
+ * parameter error.
+ */
 export class QueryError extends VelesError {
-  constructor(message: string) {
-    super(message, 'VELES-010');
+  constructor(message: string, code: string = 'VELES-010') {
+    super(message, code);
     this.name = 'QueryError';
   }
 }
@@ -154,7 +158,7 @@ export class InternalError extends VelesError {
   }
 }
 
-/** Vector not allowed on metadata-only collection (VELES-014). */
+/** A vector written into a collection that stores none — a metadata collection, a graph without embeddings (VELES-014). */
 export class VectorNotAllowedError extends VelesError {
   constructor(message: string) {
     super(message, 'VELES-014');
@@ -162,7 +166,7 @@ export class VectorNotAllowedError extends VelesError {
   }
 }
 
-/** Vector search not supported on metadata-only collection (VELES-015). */
+/** Vector search, or a query vector, on a collection that stores no vectors — metadata-only, or a graph without embeddings (VELES-015). */
 export class SearchNotSupportedError extends VelesError {
   constructor(message: string) {
     super(message, 'VELES-015');
@@ -338,6 +342,34 @@ export class IncompatibleSchemaVersionError extends VelesError {
   }
 }
 
+/** The database's observer policy denied the request (VELES-037). */
+export class AccessDeniedError extends VelesError {
+  constructor(message: string) {
+    super(message, 'VELES-037');
+    this.name = 'AccessDeniedError';
+  }
+}
+
+/**
+ * The code the REST VelesQL endpoints (`/query`, `/aggregate`,
+ * `/query/explain`) answer a parameter failure with, in place of the
+ * endpoint's own `VELESQL_*` code.
+ */
+export const VELESQL_PARAMETER_ERROR = 'VELESQL_PARAMETER_ERROR';
+
+/**
+ * A `$name` parameter is unbound, or bound to a value its position cannot
+ * take (VELES-038). A {@link QueryError}, so a handler written before it had
+ * its own class still catches it. `code` is the wire code: `VELES-038`, or
+ * {@link VELESQL_PARAMETER_ERROR} from a REST VelesQL endpoint.
+ */
+export class QueryParameterError extends QueryError {
+  constructor(message: string, code: string = 'VELES-038') {
+    super(message, code);
+    this.name = 'QueryParameterError';
+  }
+}
+
 // ============================================================================
 // Code registry + factory discriminator
 // ============================================================================
@@ -345,7 +377,7 @@ export class IncompatibleSchemaVersionError extends VelesError {
 /**
  * Every VELES code known to this SDK version, in ascending order.
  *
- * Used by tests to verify the 36-code contract and by tooling to emit
+ * Used by tests to verify the 38-code contract and by tooling to emit
  * doc/type metadata.
  */
 export const VELES_ERROR_CODES = [
@@ -356,7 +388,7 @@ export const VELES_ERROR_CODES = [
   'VELES-021', 'VELES-022', 'VELES-023', 'VELES-024', 'VELES-025',
   'VELES-026', 'VELES-027', 'VELES-028', 'VELES-029', 'VELES-030',
   'VELES-031', 'VELES-032', 'VELES-033', 'VELES-034', 'VELES-035',
-  'VELES-036',
+  'VELES-036', 'VELES-037', 'VELES-038',
 ] as const;
 
 /** Union type of every known VELES code. */
@@ -365,9 +397,9 @@ export type VelesErrorCode = (typeof VELES_ERROR_CODES)[number];
 /**
  * Internal mapping from code → constructor. Kept in one place so that
  * `parseVelesError` dispatch is a single object lookup instead of a
- * 36-arm switch (lower cyclomatic complexity).
+ * 38-arm switch (lower cyclomatic complexity).
  */
-const CODE_TO_CLASS = new Map<string, new (message: string) => VelesError>([
+const CODE_TO_CLASS = new Map<string, new (message: string, code: string) => VelesError>([
   ['VELES-001', CollectionExistsError],
   ['VELES-002', CollectionNotFoundError],
   ['VELES-003', PointNotFoundError],
@@ -404,14 +436,20 @@ const CODE_TO_CLASS = new Map<string, new (message: string) => VelesError>([
   ['VELES-034', InvalidCollectionNameError],
   ['VELES-035', SnapshotBuildFailedError],
   ['VELES-036', IncompatibleSchemaVersionError],
+  ['VELES-037', AccessDeniedError],
+  ['VELES-038', QueryParameterError],
+  // Not a VELES code: the REST VelesQL endpoints' name for VELES-038. The
+  // error keeps it as its `code`, verbatim.
+  [VELESQL_PARAMETER_ERROR, QueryParameterError],
 ]);
 
 /**
  * Instantiate the correct typed error class from a server-provided
  * VELES code and message.
  *
- * - If `code` matches one of the 36 known VELES-XXX codes, returns
- *   the matching typed sub-class.
+ * - If `code` matches one of the 38 known VELES-XXX codes, returns
+ *   the matching typed sub-class; `VELESQL_PARAMETER_ERROR` returns a
+ *   `QueryParameterError` keeping that code.
  * - If `code` is an unknown VELES code (e.g. `VELES-999` from a
  *   newer server), returns a generic `VelesError` preserving the
  *   code verbatim — forward-compatible with future core versions.
@@ -431,7 +469,7 @@ export function parseVelesError(
   }
   const Cls = CODE_TO_CLASS.get(code);
   if (Cls !== undefined) {
-    return new Cls(message);
+    return new Cls(message, code);
   }
   // Unknown but syntactically valid VELES code — preserve verbatim.
   return new VelesError(message, code);

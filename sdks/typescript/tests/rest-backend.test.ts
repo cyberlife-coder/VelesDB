@@ -7,7 +7,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RestBackend } from '../src/backends/rest';
 import { VelesDBError, NotFoundError, ConnectionError, ValidationError } from '../src/types';
-import { CollectionNotFoundError } from '../src/errors';
+import {
+  CollectionNotFoundError,
+  DimensionMismatchError,
+  VectorRequiredError,
+} from '../src/errors';
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -244,6 +248,48 @@ describe('RestBackend', () => {
       });
       await backend.init();
       vi.clearAllMocks();
+    });
+
+    // The REST backend relays core's refusal, which the WASM backend raises
+    // itself for the same input (`wasm-backend.test.ts`): an empty vector is
+    // VELES-016, one of another length VELES-004.
+    it.each([
+      ['an empty vector', [], 'VELES-016', VectorRequiredError,
+        "[VELES-016] Vector required for collection 'test' (not metadata-only)"],
+      ['a vector of another length', [1.0, 0.0], 'VELES-004', DimensionMismatchError,
+        '[VELES-004] Dimension mismatch: expected 3, got 2'],
+    ])('relays core\'s refusal of %s on upsert', async (_label, vector, code, ErrorClass, error) => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({ code, error }),
+      });
+
+      const outcome = await backend.upsert('test', { id: 1, vector }).catch((err) => err);
+
+      expect(outcome).toBeInstanceOf(ErrorClass);
+      expect(outcome.code).toBe(code);
+    });
+
+    // The REST backend relays core's refusal, which the WASM backend raises
+    // itself for the same input (`wasm-backend.test.ts`): an empty vector is
+    // VELES-016, one of another length VELES-004.
+    it.each([
+      ['an empty vector', [], 'VELES-016', VectorRequiredError,
+        "[VELES-016] Vector required for collection 'test' (not metadata-only)"],
+      ['a vector of another length', [1.0, 0.0], 'VELES-004', DimensionMismatchError,
+        '[VELES-004] Dimension mismatch: expected 3, got 2'],
+    ])('relays core\'s refusal of %s on upsert', async (_label, vector, code, ErrorClass, error) => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({ code, error }),
+      });
+
+      const outcome = await backend.upsert('test', { id: 1, vector }).catch((err) => err);
+
+      expect(outcome).toBeInstanceOf(ErrorClass);
+      expect(outcome.code).toBe(code);
     });
 
     it('should upsert a vector', async () => {
@@ -713,7 +759,7 @@ describe('RestBackend', () => {
           Promise.resolve({
             error: {
               code: 'VELESQL_MISSING_COLLECTION',
-              message: 'MATCH query via /query requires `collection` in request body',
+              message: 'MATCH query via /query requires `collection` in request body or `_collection` in params',
               hint: 'Add collection',
             },
           }),

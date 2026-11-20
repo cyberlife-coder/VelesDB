@@ -331,21 +331,27 @@ counts = loader.load_from_nodes(nodes, extract_relations=True)
 - Edge ids are deterministic, so loading the same nodes again writes nothing
   new and returns the same counts. `edges` counts the distinct relationship
   edges the graph holds for the call, written now or by an earlier load; an
-  edge that fails to write is logged and not counted.
+  edge that fails to write is logged and not counted. A node that fails to
+  write raises, and the call stops there.
 - With `extract_relations=False` (the default) no edge is written and both
   `edges` and `skipped_relations` are 0.
-- Without a graph collection, nodes go to the vector store's own collection
-  and edges to an in-memory graph store. There the id stays
-  `stable_hash_id(f"{node_label}:{node.node_id}")`, because the point ID would
-  overwrite the stored node, and only same-call targets are linked.
+- Without a graph collection, edges go to an in-memory graph store and nodes
+  to a metadata collection beside the vector store's, named
+  `f"{collection_name}_graph_nodes"` and created on first use: the vector
+  store's collection holds vectors, and core refuses a payload without one
+  there (`VELES-016`). A node given a vector (`add_node(..., vector=...)`)
+  goes to the vector store's collection. The id stays
+  `stable_hash_id(f"{node_label}:{node.node_id}")`, and only same-call
+  targets are linked.
 
 > **Upgrading from 7.1.0:** with a graph collection, the 7.1.0 loader wrote
 > its nodes into the vector store's collection, as metadata-only points at
 > `stable_hash_id(f"{node_label}:{node.node_id}")` (or at the id given to
 > `add_node`). 8.0.0 writes them into the graph collection and no longer reads
-> those points; search and `get` never return them, but they stay stored and
-> counted. Delete them with the nodes you loaded and the `node_label` you
-> passed:
+> those points: they are no rows of the vector collection, so search, `get`,
+> `len` and scans never see them, but they stay on disk until a delete of
+> their ids removes them. Delete them with the nodes you loaded and the
+> `node_label` you passed:
 >
 > ```python
 > from velesdb_common.ids import stable_hash_id
@@ -355,8 +361,9 @@ counts = loader.load_from_nodes(nodes, extract_relations=True)
 > collection.delete([stable_hash_id(f"{node_label}:{n.node_id}") for n in nodes])
 > ```
 >
-> Only do this for a store that used `graph_collection_name`: without one,
-> those points are still the loader's nodes.
+> Without `graph_collection_name`, those points were the loader's nodes, and
+> this version can neither read nor write them there: load the nodes again
+> (they go to the `_graph_nodes` collection), then run the same cleanup.
 
 `GraphRetriever` finds seed nodes by vector search, then expands the context
 through the graph:

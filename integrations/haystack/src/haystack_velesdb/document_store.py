@@ -412,24 +412,38 @@ def _build_sparse_by_id(
 def _documents_to_points(
     documents: List[Document],
     sparse_by_id: Optional[Dict[str, dict]] = None,
+    *,
+    vectors_required: bool,
 ) -> List[dict]:
-    """Convert each document to its VelesDB point dict, logging documents
-    that lack an embedding so the caller still gets feedback when the
-    underlying SDK accepts vector-less points.
+    """Convert each document to its VelesDB point dict.
+
+    When the collection stores vectors (*vectors_required*), every one of its
+    rows stores one: a document without an embedding (``None`` or empty) is
+    refused here, before anything is written, with a ``ValueError`` naming
+    it — core would refuse the whole batch (``VELES-016``). A metadata-only
+    collection takes documents without one.
 
     *sparse_by_id* (when given) maps document ids to their sparse vector dict;
     each is attached to its point so the upsert creates the corresponding
     sparse index.
     """
-    sparse_by_id = sparse_by_id or {}
-    points: List[dict] = []
-    for doc in documents:
-        if doc.embedding is None:
-            logger.warning(
-                "Document '%s' has no embedding; stored without vector.", doc.id
+    if vectors_required:
+        missing = [doc.id for doc in documents if not _has_embedding(doc)]
+        if missing:
+            raise ValueError(
+                f"{len(missing)} document(s) have no embedding, and every document "
+                "of a vector collection needs one; nothing was written. Embed them "
+                f"first, or write them to a metadata-only collection: {missing[:10]}"
             )
-        points.append(_doc_to_point(doc, sparse_vector=sparse_by_id.get(doc.id)))
-    return points
+    sparse_by_id = sparse_by_id or {}
+    return [
+        _doc_to_point(doc, sparse_vector=sparse_by_id.get(doc.id)) for doc in documents
+    ]
+
+
+def _has_embedding(doc: Document) -> bool:
+    """Whether *doc* carries a non-empty embedding."""
+    return doc.embedding is not None and len(doc.embedding) > 0
 
 
 def _resolve_survivors_for_policy(
@@ -621,7 +635,9 @@ class VelesDBDocumentStore(CollectionAdminMixin):
             DuplicateDocumentError: When *policy* is ``FAIL`` and at least
                 one document already exists in the store.
             ValueError: When a SHA-256 hash collision is detected — two
-                distinct string IDs that map to the same integer ID.
+                distinct string IDs that map to the same integer ID — or
+                when a document has no embedding and the collection stores
+                vectors (nothing is written then).
         """
         if not documents:
             return 0
@@ -631,7 +647,9 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         survivors = _resolve_survivors_for_policy(col, documents, int_id_map, policy)
         if survivors is None:
             return 0
-        points = _documents_to_points(survivors, sparse_by_id)
+        points = _documents_to_points(
+            survivors, sparse_by_id, vectors_required=not col.is_metadata_only()
+        )
         result = col.upsert(points)
         return result if isinstance(result, int) else len(points)
 
@@ -661,12 +679,19 @@ class VelesDBDocumentStore(CollectionAdminMixin):
 
         Returns:
             Number of points inserted.
+
+        Raises:
+            ValueError: When a document has no embedding and the collection
+                stores vectors (nothing is written then).
         """
         if not documents:
             return 0
         sparse_by_id = _build_sparse_by_id(documents, sparse_vectors)
-        points = _documents_to_points(documents, sparse_by_id)
-        self._get_collection().stream_insert(points)
+        col = self._get_collection()
+        points = _documents_to_points(
+            documents, sparse_by_id, vectors_required=not col.is_metadata_only()
+        )
+        col.stream_insert(points)
         return len(points)
 
     def write_documents_streaming(
@@ -698,7 +723,9 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         Raises:
             DuplicateDocumentError: When *policy* is ``FAIL`` and at least
                 one document already exists in the store.
-            ValueError: When a SHA-256 hash collision is detected.
+            ValueError: When a SHA-256 hash collision is detected, or when a
+                document has no embedding and the collection stores vectors
+                (nothing is written then).
         """
         if not documents:
             return 0
@@ -708,7 +735,9 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         survivors = _resolve_survivors_for_policy(col, documents, int_id_map, policy)
         if survivors is None:
             return 0
-        points = _documents_to_points(survivors, sparse_by_id)
+        points = _documents_to_points(
+            survivors, sparse_by_id, vectors_required=not col.is_metadata_only()
+        )
         _flush_stream_batches(col, points, batch_size)
         return len(points)
 
