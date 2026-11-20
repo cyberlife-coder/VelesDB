@@ -17,11 +17,10 @@ fn exact_jaccard(a: &str, b: &str) -> f32 {
 }
 
 /// Largest absolute gap tolerated between the fingerprint estimate and the
-/// exact Jaccard. The residual is the bloom estimator's own bias: bits shared
-/// by chance (false positives) and bits set by two trigrams of one document
-/// (saturation), both bounded by the 256-bit width — not by the hash, which
-/// must spread every byte of the trigram.
-const APPROX_JACCARD_TOLERANCE: f32 = 0.1;
+/// exact Jaccard on the hand-written pairs below (worst observed: 0.024).
+/// The residual is the variance of the bit-count cardinality estimate over a
+/// 256-bit width; its bias is checked separately over a generated corpus.
+const APPROX_JACCARD_TOLERANCE: f32 = 0.05;
 
 fn assert_approx_tracks_exact(a: &str, b: &str) {
     let (exact, approx) = (exact_jaccard(a, b), approx_jaccard(a, b));
@@ -136,7 +135,7 @@ fn test_approx_jaccard_orders_by_similarity() {
     let base_fp = fp(base);
     let base_cnt = cnt(base);
 
-    // Identical fingerprints: AND == OR == A ⇒ ratio is exactly 1.0.
+    // Identical fingerprints: the rescaled union is the exact count ⇒ 1.0.
     let j_same = base_fp.approx_jaccard(&fp(base), base_cnt, cnt(base));
     assert!(j_same > 0.9, "identical text must score ~1.0, got {j_same}");
 
@@ -246,6 +245,106 @@ fn test_approx_jaccard_tracks_exact_on_short_and_long_documents() {
     }
 }
 
+// ========== Estimator Accuracy Tests ==========
+
+/// Deterministic xorshift64 stream, so the generated corpus is the same on
+/// every run and platform.
+struct XorShift(u64);
+
+impl XorShift {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        usize::try_from(self.0 % n as u64).expect("test: index fits usize")
+    }
+}
+
+const WORDS: [&str; 40] = [
+    "the", "of", "and", "to", "in", "is", "that", "for", "it", "as", "was", "with", "be", "by",
+    "on", "not", "this", "are", "or", "from", "at", "which", "but", "have", "an", "they", "one",
+    "all", "there", "been", "matching", "vector", "index", "search", "database", "query", "graph",
+    "lorem", "ipsum", "dolor",
+];
+
+fn phrase(rng: &mut XorShift, words: usize) -> String {
+    (0..words)
+        .map(|_| WORDS[rng.below(WORDS.len())])
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `(document, query)` pairs over 3–120-word documents: half the queries are
+/// a phrase of their document (the LIKE shape), half are unrelated phrases.
+fn generated_pairs(count: usize) -> Vec<(String, String)> {
+    let mut rng = XorShift(0x9E37_79B9_7F4A_7C15);
+    (0..count)
+        .map(|i| {
+            let doc_words = [3, 6, 12, 25, 50, 80, 120][rng.below(7)];
+            let doc = phrase(&mut rng, doc_words);
+            let query = if i % 2 == 0 {
+                let words: Vec<&str> = doc.split(' ').collect();
+                let start = rng.below(words.len());
+                let end = (start + 1 + rng.below(3)).min(words.len());
+                words[start..end].join(" ")
+            } else {
+                let query_words = [3, 6, 12, 25][rng.below(4)];
+                phrase(&mut rng, query_words)
+            };
+            (doc, query)
+        })
+        .collect()
+}
+
+#[test]
+fn test_approx_jaccard_is_unbiased_over_a_generated_corpus() {
+    // The bit-level ratio `|A AND B| / |A OR B|` overestimated by ~0.1 on
+    // average and by up to ~0.4 on long documents: two trigrams of one
+    // document sharing a bit shrink `A OR B` but not the shared bits.
+    let pairs = generated_pairs(600);
+    let errors: Vec<f32> = pairs
+        .iter()
+        .map(|(doc, query)| approx_jaccard(doc, query) - exact_jaccard(doc, query))
+        .collect();
+
+    let n = errors.len() as f32;
+    let bias = errors.iter().sum::<f32>() / n;
+    let mean_abs = errors.iter().map(|e| e.abs()).sum::<f32>() / n;
+    assert!(bias.abs() < 0.02, "estimator bias {bias:.4} over {n} pairs");
+    assert!(
+        mean_abs < 0.03,
+        "mean absolute error {mean_abs:.4} over {n} pairs"
+    );
+}
+
+#[test]
+fn test_approx_jaccard_on_a_saturated_fingerprint_stays_a_ratio() {
+    // Over a thousand distinct trigrams set every one of the 256 bits, where
+    // the cardinality estimate `-(m/k) ln(1 - X/m)` diverges.
+    let long = (0..2_000)
+        .map(|i: u32| i.to_string())
+        .collect::<Vec<_>>()
+        .join("-");
+    let trigrams = extract_trigrams(&long);
+    let fp = TrigramFingerprint::from_trigram_set(&trigrams);
+    assert_eq!(
+        fp.approx_intersection_count(&fp),
+        256,
+        "precondition: saturated"
+    );
+
+    let query = extract_trigrams("00ff");
+    let score = fp.approx_jaccard(
+        &TrigramFingerprint::from_trigram_set(&query),
+        trigrams.len(),
+        query.len(),
+    );
+    assert!(
+        score.is_finite() && (0.0..=1.0).contains(&score),
+        "saturated estimate must stay a ratio, got {score}"
+    );
+}
+
 // ========== Integration Tests ==========
 
 #[test]
@@ -287,14 +386,13 @@ fn test_fingerprint_integration_with_index() {
 }
 
 #[test]
-fn test_search_like_ranked_uses_fingerprints() {
+fn test_search_like_ranked_filters_and_sorts() {
     let mut index = TrigramIndex::new();
 
     index.insert(1, "hello world").expect("test: insert");
     index.insert(2, "hello there").expect("test: insert");
     index.insert(3, "goodbye world").expect("test: insert");
 
-    // search_like_ranked internally uses fingerprints now.
     let results = index.search_like_ranked("hello", 0.1);
 
     // Docs 1 and 2 contain "hello", doc 3 does not.
