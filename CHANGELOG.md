@@ -518,6 +518,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **VelesQL: the FROM side of a join is no longer a JOIN's alias** (core,
+  WASM, Python, 2026-11-20). `SelectStatement::from_alias` lists every alias
+  in scope — the FROM alias, then each JOIN alias — but four readers took it
+  for the FROM side alone. With an unaliased FROM and an aliased JOIN
+  (`FROM docs JOIN tags t`), core's and the WASM join executors scoped the
+  base rows under `t`, so `docs.*` read nothing; a predicate on an outer
+  join's alias (`LEFT JOIN products p … WHERE p.id IS NULL`) ran on the base
+  rows instead of the joined ones, so every row passed; and the Python
+  `ParsedStatement.table_alias` returned `t`. `table_aliases` listed each
+  JOIN alias twice. Core gains `SelectStatement::base_alias()` (the FROM's own
+  alias, `None` when only JOINs are aliased) and `base_side()` (that alias,
+  else the table), which every reader now resolves the base side by.
+  `table_alias` is the FROM alias or `None`; `table_aliases` lists each alias
+  once, FROM first, then each JOIN in order.
+
 - **REST server: the per-IP rate limit refills at the configured rate**
   (REST server, 2026-11-20). `[server] rate_limit = N` is documented as `N`
   requests per second per IP, but the limiter was built with

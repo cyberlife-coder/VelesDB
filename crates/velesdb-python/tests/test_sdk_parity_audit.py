@@ -496,4 +496,4 @@ def test_parsed_statement_table_aliases_include_join_aliases():
         "SELECT a.id FROM docs AS a JOIN other AS b ON a.id = b.id LIMIT 1"
     )
     assert parsed.table_alias == "a"
-    assert set(parsed.table_aliases) == {"a", "b"}
+    assert parsed.table_aliases == ["a", "b"]

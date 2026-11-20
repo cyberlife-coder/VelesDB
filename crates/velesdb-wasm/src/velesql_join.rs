@@ -25,7 +25,7 @@ pub(crate) fn joined_rows(
     stmt: &SelectStatement,
     params: &Params,
 ) -> Result<Vec<OwnedScanRow>, String> {
-    let from_alias = side_alias(stmt.from_alias.first().map(String::as_str), &stmt.from);
+    let from_alias = stmt.base_side();
     let mut rows: Vec<SearchResult> = scan_all(db, &stmt.from, None, params)?
         .into_iter()
         .map(|(id, score, payload)| {

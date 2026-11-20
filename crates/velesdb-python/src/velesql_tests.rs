@@ -139,3 +139,44 @@ fn test_query_type_label_select() {
     let stmt = ParsedStatement { inner: query };
     assert_eq!(stmt.query_type_label(), "SELECT");
 }
+
+fn parsed(sql: &str) -> ParsedStatement {
+    ParsedStatement {
+        inner: CoreParser::parse(sql).expect("test: parse"),
+    }
+}
+
+#[test]
+fn table_alias_is_none_for_an_unaliased_from_beside_an_aliased_join() {
+    let stmt = parsed("SELECT * FROM docs JOIN tags t ON t.id = docs.tag_id");
+    assert_eq!(stmt.table_alias(), None);
+    assert_eq!(stmt.table_aliases(), ["t"]);
+}
+
+#[test]
+fn table_alias_is_the_from_alias_beside_an_aliased_join() {
+    let stmt = parsed("SELECT * FROM docs d JOIN tags t ON t.id = d.tag_id");
+    assert_eq!(stmt.table_alias().as_deref(), Some("d"));
+    assert_eq!(stmt.table_aliases(), ["d", "t"]);
+}
+
+#[test]
+fn table_aliases_lists_each_join_alias_once_in_order() {
+    let stmt = parsed(
+        "SELECT * FROM docs JOIN tags t ON t.id = docs.tag_id \
+         JOIN users u ON u.id = docs.owner_id",
+    );
+    assert_eq!(stmt.table_alias(), None);
+    assert_eq!(stmt.table_aliases(), ["t", "u"]);
+}
+
+#[test]
+fn table_alias_of_a_single_table() {
+    let aliased = parsed("SELECT * FROM docs AS d");
+    assert_eq!(aliased.table_alias().as_deref(), Some("d"));
+    assert_eq!(aliased.table_aliases(), ["d"]);
+
+    let bare = parsed("SELECT * FROM docs");
+    assert_eq!(bare.table_alias(), None);
+    assert!(bare.table_aliases().is_empty());
+}

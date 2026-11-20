@@ -52,7 +52,9 @@ pub struct SelectStatement {
     pub columns: SelectColumns,
     /// Collection name (FROM clause).
     pub from: String,
-    /// Aliases visible in scope: FROM alias + JOIN aliases (BUG-8 fix).
+    /// Aliases visible in scope (BUG-8 fix): the FROM alias, if any, then
+    /// each JOIN alias in order. Its first entry is a JOIN's alias when the
+    /// FROM table has none — read the base side with [`Self::base_alias`].
     #[serde(default)]
     pub from_alias: Vec<String>,
     /// JOIN clauses (EPIC-031 US-004).
@@ -392,6 +394,30 @@ impl SelectStatement {
             .collect()
     }
 
+    /// The FROM table's own alias, `None` when only JOINs are aliased.
+    ///
+    /// `from_alias` holds the FROM alias first, then one entry per aliased
+    /// JOIN (the order the parser's `dispatch_join_clause` appends them in),
+    /// so the FROM has an alias exactly when the list is longer than the
+    /// JOIN aliases. Read by position, not by name: a JOIN reusing the FROM
+    /// alias leaves the base alias in place.
+    #[must_use]
+    pub fn base_alias(&self) -> Option<&str> {
+        let join_aliases = self.joins.iter().filter(|j| j.alias.is_some()).count();
+        self.from_alias
+            .first()
+            .filter(|_| self.from_alias.len() > join_aliases)
+            .map(String::as_str)
+    }
+
+    /// The name the FROM side's rows are read under in a join — its alias,
+    /// else its table ([`crate::velesql::side_alias`]). The single base-side
+    /// resolver core's join executor and the WASM one scope base rows by.
+    #[must_use]
+    pub fn base_side(&self) -> &str {
+        crate::velesql::side_alias(self.base_alias(), &self.from)
+    }
+
     /// Returns an empty `SelectStatement` with all fields at their defaults.
     ///
     /// Used by [`crate::velesql::Query::new_dml`],
@@ -464,3 +490,7 @@ impl SelectStatement {
                 .is_some_and(Condition::has_vector_search)
     }
 }
+
+#[cfg(test)]
+#[path = "select_tests.rs"]
+mod tests;

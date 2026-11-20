@@ -200,34 +200,24 @@ impl ParsedStatement {
         }
     }
 
-    /// Get the collection alias if present (for self-joins).
+    /// Get the alias of the FROM collection, never a JOIN's.
     ///
     /// Returns:
-    ///     str or None: First collection alias, or None if not aliased
+    ///     str or None: The FROM alias, or None when the FROM collection is
+    ///     not aliased (even if a JOIN is: ``FROM docs JOIN tags t`` gives None)
     #[getter]
     fn table_alias(&self) -> Option<String> {
-        self.inner.select.from_alias.first().cloned()
+        self.inner.select.base_alias().map(str::to_owned)
     }
 
-    /// Get all aliases visible in scope (FROM alias + JOIN aliases).
+    /// Get every alias visible in scope, each once: the FROM alias, then
+    /// each JOIN alias in order.
     ///
     /// Returns:
     ///     list[str]: All aliases, empty if none
     #[getter]
     fn table_aliases(&self) -> Vec<String> {
-        self.inner
-            .select
-            .from_alias
-            .iter()
-            .cloned()
-            .chain(
-                self.inner
-                    .select
-                    .joins
-                    .iter()
-                    .filter_map(|join| join.alias.clone()),
-            )
-            .collect()
+        self.inner.select.from_alias.clone()
     }
 
     /// Get the list of selected columns — one entry per SELECT-list item.

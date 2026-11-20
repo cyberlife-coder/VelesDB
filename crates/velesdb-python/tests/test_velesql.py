@@ -184,6 +184,45 @@ def test_velesql_table_alias():
     assert parsed.collection_name == "products"
 
 
+@pytest.mark.parametrize(
+    ("sql", "table_alias", "table_aliases"),
+    [
+        pytest.param(
+            "SELECT * FROM docs JOIN tags t ON t.id = docs.tag_id",
+            None,
+            ["t"],
+            id="unaliased-from-aliased-join",
+        ),
+        pytest.param(
+            "SELECT * FROM docs d JOIN tags t ON t.id = d.tag_id",
+            "d",
+            ["d", "t"],
+            id="aliased-from-aliased-join",
+        ),
+        pytest.param(
+            "SELECT * FROM docs JOIN tags t ON t.id = docs.tag_id "
+            "JOIN users u ON u.id = docs.owner_id",
+            None,
+            ["t", "u"],
+            id="multiple-joins",
+        ),
+        pytest.param("SELECT * FROM docs AS d", "d", ["d"], id="single-aliased"),
+        pytest.param("SELECT * FROM docs", None, [], id="single-unaliased"),
+    ],
+)
+def test_table_alias_names_the_from_side_and_aliases_list_each_once(
+    sql, table_alias, table_aliases
+):
+    """``table_alias`` is the FROM table's alias, never a JOIN's;
+    ``table_aliases`` lists every alias once, FROM first, then each JOIN."""
+    from velesdb import VelesQL
+
+    parsed = VelesQL.parse(sql)
+
+    assert parsed.table_alias == table_alias
+    assert parsed.table_aliases == table_aliases
+
+
 def test_an_unbound_parameter_raises_value_error(temp_db):
     """A ``$name`` with no binding raises ValueError (VELES-010) — the
     behaviour the stub documents for ``VelesQLParameterError``'s place."""

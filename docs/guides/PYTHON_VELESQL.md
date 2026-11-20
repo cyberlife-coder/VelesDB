@@ -80,8 +80,8 @@ Key parameters for `ParsedStatement`:
 | `offset` | `int` or `None` | OFFSET value |
 | `order_by` | `list[tuple[str, str]]` | (column, "ASC"/"DESC") pairs |
 | `group_by` | `list[str]` | GROUP BY columns |
-| `table_alias` | `str` or `None` | First FROM alias |
-| `table_aliases` | `list[str]` | All aliases in scope |
+| `table_alias` | `str` or `None` | Alias of the FROM collection (never a JOIN's), `None` if unaliased |
+| `table_aliases` | `list[str]` | Every alias in scope, each once: FROM first, then each JOIN |
 | `join_count` | `int` | Number of JOIN clauses |
 | `is_select()` | `bool` | True for SELECT queries |
 | `is_match()` | `bool` | True for MATCH (graph) queries |

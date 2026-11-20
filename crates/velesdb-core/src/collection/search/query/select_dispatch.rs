@@ -444,7 +444,7 @@ impl Collection {
             return pushdown::PushdownAnalysis::default();
         };
         let graph_vars: std::collections::HashSet<String> =
-            stmt.from_alias.iter().cloned().collect();
+            stmt.base_alias().map(str::to_owned).into_iter().collect();
         let join_tables = pushdown::extract_join_tables(&stmt.joins);
         let analysis = pushdown::analyze_for_pushdown(cond, &graph_vars, &join_tables);
         tracing::debug!(

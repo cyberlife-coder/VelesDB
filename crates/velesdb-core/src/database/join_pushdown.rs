@@ -18,8 +18,11 @@ impl Database {
     ) -> crate::collection::search::query::pushdown::PushdownAnalysis {
         let join_tables =
             crate::collection::search::query::pushdown::pushable_join_tables(&stmt.joins);
+        // The base side only: a JOIN alias is a join side, never the base
+        // collection, even under an outer join that keeps it out of
+        // `join_tables` — its predicate then holds on the joined rows.
         let graph_vars: std::collections::HashSet<String> =
-            stmt.from_alias.iter().cloned().collect();
+            stmt.base_alias().map(str::to_owned).into_iter().collect();
         let analysis = stmt.where_clause.as_ref().map_or_else(
             crate::collection::search::query::pushdown::PushdownAnalysis::default,
             |wc| {

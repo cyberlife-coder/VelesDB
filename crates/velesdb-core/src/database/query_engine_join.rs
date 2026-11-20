@@ -93,8 +93,7 @@ impl Database {
         plan: &JoinPlan<'_>,
     ) -> Result<Vec<SearchResult>> {
         let select = plan.select;
-        let from_alias =
-            crate::velesql::side_alias(select.from_alias.first().map(String::as_str), &select.from);
+        let from_alias = select.base_side();
         let mut results: Vec<SearchResult> = base
             .into_iter()
             .map(|mut r| {
