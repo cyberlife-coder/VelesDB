@@ -1446,6 +1446,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   After: MATCH resolves through the same resolver as SELECT, and refuses such
   a parameter with `VELES-038`.
 
+- **Core: the query-cache collision counter test holds under a parallel run**
+  (core, tests, 2026-11-20).
+  `test_query_cache_forced_hash_collision_feeds_the_collision_counter`
+  asserted an exact delta on `velesdb_cache_collision_fallback_total`, a
+  process-wide counter that
+  `test_query_cache_collision_safe_with_forced_hash_collision` also bumps with
+  the same forced hasher, so a parallel run read 2 instead of 1 (58 failures
+  in 300 runs at 16 threads). `QueryCache`'s collision branch now also feeds,
+  in test builds, a per-cache counter; the test asserts that counter exactly
+  and only checks that the global metric advanced (0 failures in 300 runs, 0
+  in 200 under CPU load).
+
+- **Core: LIKE ranking scores the exact Jaccard; the fingerprint estimate is
+  unbiased** (core, 2026-11-20). `TrigramIndex::search_like_ranked` scored
+  candidates with the fingerprint estimate, although a candidate holds every
+  trigram of the pattern: its Jaccard is exactly `|pattern trigrams| / |doc
+  trigrams|`, now read in O(1) from the counts, with no fingerprint built per
+  query (the document `matching` scored 0.889 for the pattern `matching`, for
+  an exact Jaccard of 0.8).
+  `TrigramFingerprint::approx_jaccard`, still behind `score_jaccard_fast` for
+  arbitrary pairs, divided shared bits by union bits, which overestimates by
+  about 0.1 on average since two trigrams of one set can share a bit. It now
+  estimates only the intersection from bit counts (`-(m/k) ln(1 - X/m)`,
+  rescaled by the exact set sizes its reserved parameters already received)
+  and is unbiased: over 600 generated pairs its mean error is -0.002 (it was
+  +0.086) and its mean absolute error 0.016. A saturated fingerprint falls
+  back to the bit ratio. No signature changes.
+
+- **Core: trigram fingerprints hash every byte of the trigram** (core,
+  2026-11-19). `TrigramFingerprint` placed each trigram at `v * C % 256`,
+  the low byte of the product, which depends on the trigram's first byte
+  alone: every trigram sharing a first byte set the same two bits, so the
+  256-bit filter carried about two bits per distinct leading character and
+  `approx_jaccard` — hence `TrigramIndex::score_jaccard_fast` and the
+  threshold of `search_like_ranked` — overestimated long documents
+  several-fold (`"matching"` against a 130-character document: 0.333 for an
+  exact Jaccard of 0.074). Positions are now two bytes of the `MurmurHash3`
+  32-bit finalizer of the trigram; the same pair scores 0.111, and the
+  estimate stays within 0.1 of the exact Jaccard on short and long
+  documents alike. `search_like_ranked` therefore returns fewer long
+  documents for a given threshold. Fingerprints are built in memory on
+  insert and never persisted: no migration.
+
+- **Core: `LruCache`'s O(1) claim has a deterministic guard** (core, tests,
+  2026-11-19). #2860 made every operation O(1) and #2854 moved per-size cost
+  to the `LruCache-Baseline` benchmark, which CI does not gate, so an O(n)
+  regression could merge unseen. `LruList`'s slab now counts its node accesses
+  in test builds (a plain `Vec` otherwise, no logic change), and
+  `test_recency_operations_touch_constant_nodes` requires the count for `get`,
+  evicting insert, overwrite and `remove` to be the same at 100 and at 10 000
+  entries: no clock, so load cannot move it, and a move-to-back that walks the
+  list fails it.
+
+- **Core: the unreachable-snapshot test holds when run as root** (core,
+  tests, 2026-11-19). `an_unreachable_snapshot_is_an_error_not_a_missing_one`
+  (#2325) built its unreachable path with a `chmod 000` directory, which
+  root ignores, so it failed in every root container by design. Its path is
+  now `<file>/payload.snapshot`: the lookup fails with `NotADirectory` for
+  every user, while `Path::exists` still answers `false`, the trap the test
+  guards. `load_snapshot`'s error docs no longer describe the `exists()`
+  behaviour it replaced.
+
+- **Core: an HNSW search with room left in its result set no longer stops
+  on stagnation** (core, 2026-11-19). The layer walk counted every popped
+  candidate whose neighbours were all visited already as stagnation, even
+  while its result set held fewer than `ef` nodes and still admitted every
+  node it discovered. A run of such pops — its neighbours reached first
+  through other nodes — ended the walk with candidates left, and a search
+  for `k` returned fewer than `k` results from a graph whose every node was
+  reachable: `search(&[0.0, 0.0], 10_040)` on 10 050 collinear points
+  returned about 2 000 to 9 000 results in roughly one build out of five,
+  filtered or not. The stagnation limit, like the distance bound beside
+  it, now applies only once the result set is full.
+
+- **Core: `LruCache::remove` keeps the recency order** (core, 2026-11-19).
+  `remove` used `IndexMap::swap_remove`, which moves the most recently used
+  entry into the removed key's slot, so after a removal the MRU entry could
+  sit at the front and be the next one evicted. It now uses `shift_remove`
+  (order-preserving, O(n) instead of O(1)), so eviction always picks the
+  least recently used entry. `LockFreeLruCache::remove` delegates to it for
+  its L2 tier and inherits the fix; the query plan cache only ever clears,
+  so no shipped path hit the defect. The module docs now state the real cost
+  of every operation instead of claiming O(1) throughout.
+
+- **Core: `LockFreeLruCache` evicts its least recently used L1 entry**
+  (core, 2026-11-19). Over capacity, L1 (a `DashMap`) removed whichever
+  entries its iteration reached first, so it could drop the hottest key, or
+  the key just promoted from L2. Each L1 entry now carries a logical
+  last-access stamp, and eviction removes the oldest one, guarded on that
+  stamp so an entry hit during the scan survives. Inserts and promotions
+  advance the clock; hits only read it and write their entry only when it
+  is stale, so the hit path adds no contended write: the order is exact
+  except among entries whose last access was a hit between the same two
+  writes. A per-hit clock, which would make it exact, measured at about
+  half the concurrent hit throughput. Choosing a victim scans L1, O(L1
+  capacity) per evicted entry. The compiled query plan cache sits on this
+  cache.
+
+- **Core: `LockFreeLruCache` demotes its L1 victims to L2** (core,
+  2026-11-19). An L1 hit does not touch L2, so a key served from L1 alone
+  aged in L2 and could be evicted there while hot; once L1 dropped it in
+  turn, it was gone from both tiers although it had been used more
+  recently than what L2 kept. L1 now demotes each eviction victim to L2's
+  most recently used position, re-inserting it if L2 had dropped it, so
+  L2 orders the keys outside L1 by last access. The L1 hit path is
+  unchanged. Promotion, demotion and `remove` of one key now hold that
+  key's L1 shard lock across their L2 access, so they are serialised per
+  key. Before, an L2 hit read L2 and promoted outside any lock: racing a
+  `remove`, it put the deleted key back into L1, and racing an `insert`,
+  it replaced the newer value with the older one it had read.
+
+- **Core: a zero-capacity `LruCache` stores nothing** (core, 2026-11-19).
+  `LruCache::new(0)` kept one entry, since eviction only runs on a
+  non-empty map; `LockFreeLruCache::new(n, 0)` inherited it in its L2.
+
 - **TypeScript SDK: a pure WASM `NEAR` query returns core's rows** (TypeScript
   SDK, 2026-11-18). `SELECT * FROM docs WHERE vector NEAR $v LIMIT 1` skipped
   the binding's VelesQL executor and returned `VectorStore.query`'s own
@@ -2639,6 +2754,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of an `.app` that opened no terminal; `validate_package.py`
   reads the signature from PyInstaller's compressed archive, so it no
   longer reports every official build as NOT VERIFIED.
+
+### Performance
+
+- **Core: `LruCache` is O(1)** (core, 2026-11-19). It kept recency order in
+  an `IndexMap`, so `get`, `remove` and eviction shifted every later entry:
+  O(n), about 60 µs per eviction at 10,000 entries. `LockFreeLruCache`, and
+  through it the compiled plan cache, paid that on every L2 hit and every
+  L1 demotion, the latter under an L1 shard write lock that L1 hits on the
+  shard wait for. `LruCache` now sits on a hash map over a doubly linked
+  slab, the classic LRU construction: every operation is one hash lookup
+  and a constant number of link updates. API, statistics and recency
+  semantics are unchanged. On the `LockFreeLruCache-Concurrent` benchmark
+  at the plan cache's sizes (4-core VM), the read-mostly workload with
+  evicting inserts goes from 193K, 70K, 53K and 52K ops/s at 1, 2, 4 and 8
+  threads to 675K, 649K, 673K and 697K, and no longer degrades with the
+  thread count; L1 hits are unchanged. `velesdb-core` no longer depends on
+  `indexmap`.
+
+- **Core: `LockFreeLruCache` L1 hits scale with threads** (core,
+  2026-11-19). Every L1 hit incremented one shared `AtomicU64`, whose cache
+  line bounced between cores: L1 hit throughput fell from 27M ops/s on one
+  thread to 10–12M at 2 to 8. The hit counter is now striped over
+  cache-line-padded stripes, one per thread round-robin, summed on read so
+  the count stays exact. On the `LockFreeLruCache-Concurrent` benchmark,
+  `l1_hit_read` goes from 26.8M, 11.6M, 10.2M and 12.0M ops/s at 1, 2, 4
+  and 8 threads to 25.9M, 23.0M, 26.2M and 27.0M.
 
 ## [8.2.0] - 2026-11-09
 

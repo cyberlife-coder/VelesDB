@@ -1584,32 +1584,6 @@
       "last_updated": "2026-09-13"
     },
     {
-      "id": "core_tests_readme_search_bound_row",
-      "file": "crates/velesdb-core/tests/README.md",
-      "must_contain": "verify search <100ms",
-      "validation_command": "cargo test -p velesdb-core --test integration_scenarios test_batch_product_indexing_performance",
-      "executable": false,
-      "source": "crates/velesdb-core/tests/integration_scenarios.rs asserts duration.as_millis() < 100 in test_batch_product_indexing_performance; the README states the bound the test asserts.",
-      "notes": "A threshold, not a measurement: the figure is the floor or bound named in source.",
-      "measured_on": "n/a",
-      "measured_machine": "n/a",
-      "measured_version": "n/a",
-      "last_updated": "2026-09-13"
-    },
-    {
-      "id": "core_tests_readme_search_bound_note",
-      "file": "crates/velesdb-core/tests/README.md",
-      "must_contain": "Search over 1000 products completes in <100ms",
-      "validation_command": "cargo test -p velesdb-core --test integration_scenarios test_batch_product_indexing_performance",
-      "executable": false,
-      "source": "crates/velesdb-core/tests/integration_scenarios.rs asserts duration.as_millis() < 100 in test_batch_product_indexing_performance; the README states the bound the test asserts.",
-      "notes": "A threshold, not a measurement: the figure is the floor or bound named in source.",
-      "measured_on": "n/a",
-      "measured_machine": "n/a",
-      "measured_version": "n/a",
-      "last_updated": "2026-09-13"
-    },
-    {
       "id": "planning_parity_recall_gate",
       "file": "docs/planning/CORE_PARITY_REMEDIATION.md",
       "must_contain": "QUALITY_BAR Gate 1 recall@10 ≥ 0.95",

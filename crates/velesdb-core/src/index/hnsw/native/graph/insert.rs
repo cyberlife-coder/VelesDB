@@ -4,6 +4,7 @@ use super::super::distance::DistanceEngine;
 use super::super::layer::{Layer, NodeId};
 use super::{NativeHnsw, NO_ENTRY_POINT};
 use crate::perf_optimizations::ContiguousVectors;
+use smallvec::SmallVec;
 use std::sync::atomic::Ordering;
 
 /// Headroom the slow path of `expand_layers` adds past the node that needs
@@ -485,34 +486,73 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Used by `connect_batch_chunked` to apply adaptive `ef_construction`
     /// reduction during bulk insert (lower search budget for large batches)
     /// without affecting single-vector insert or the stored `ef_construction`.
+    ///
+    /// # Publication order
+    ///
+    /// The neighbours are searched from the top layer down — each layer's
+    /// search starts from the nearest node the one above found — but the
+    /// links are published from layer 0 up. A search runs concurrently with
+    /// this, under the same index read guard, and its greedy descent enters a
+    /// node through the back-edges published at an upper layer, then starts
+    /// its layer-0 walk there. Published top-down, a node drawn to layer 1 or
+    /// above was reachable there while it still had no layer-0 neighbour: a
+    /// walk started from it returned that one node, which no id maps yet, and
+    /// the search came back empty. Published bottom-up, a node is reachable
+    /// at a layer only once every layer below already links it.
     pub(in crate::index::hnsw::native) fn connect_node_with_ef(
         &self,
         node_id: NodeId,
         query: &[f32],
         node_layer: usize,
-        mut entry_point: NodeId,
+        entry_point: NodeId,
         effective_ef: usize,
         stagnation: usize,
     ) {
-        for layer_idx in (0..=node_layer).rev() {
-            let max_conn = if layer_idx == 0 {
-                self.max_connections_0
-            } else {
-                self.max_connections
-            };
-            let neighbors = self.search_layer(
-                query,
-                &[entry_point],
-                effective_ef,
-                layer_idx,
-                stagnation,
-                None,
-            );
-            let selected = self.select_neighbors(&neighbors, max_conn);
-            self.connect_neighbors_batch(node_id, &selected, layer_idx, max_conn);
-            if !neighbors.is_empty() {
-                entry_point = neighbors[0].0;
-            }
+        let selections =
+            self.select_layer_neighbors(query, node_layer, entry_point, effective_ef, stagnation);
+        // `selections[i]` is layer `node_layer - i`: reversed, layer 0 first.
+        for (layer_idx, selected) in selections.iter().rev().enumerate() {
+            let max_conn = self.max_connections_at(layer_idx);
+            self.connect_neighbors_batch(node_id, selected, layer_idx, max_conn);
+        }
+    }
+
+    /// The neighbours `query` connects to at each of layers `node_layer`
+    /// down to 0, top layer first, found without publishing a link: each
+    /// layer's search starts from the nearest node the layer above found.
+    fn select_layer_neighbors(
+        &self,
+        query: &[f32],
+        node_layer: usize,
+        mut entry_point: NodeId,
+        effective_ef: usize,
+        stagnation: usize,
+    ) -> SmallVec<[Vec<NodeId>; 4]> {
+        (0..=node_layer)
+            .rev()
+            .map(|layer_idx| {
+                let neighbors = self.search_layer(
+                    query,
+                    &[entry_point],
+                    effective_ef,
+                    layer_idx,
+                    stagnation,
+                    None,
+                );
+                if let Some(&(nearest, _)) = neighbors.first() {
+                    entry_point = nearest;
+                }
+                self.select_neighbors(&neighbors, self.max_connections_at(layer_idx))
+            })
+            .collect()
+    }
+
+    /// The most neighbours a node keeps at `layer`.
+    fn max_connections_at(&self, layer: usize) -> usize {
+        if layer == 0 {
+            self.max_connections_0
+        } else {
+            self.max_connections
         }
     }
 

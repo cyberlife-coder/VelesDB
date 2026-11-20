@@ -227,18 +227,23 @@ fn test_query_cache_collision_safe_with_forced_hash_collision() {
 
 /// `velesdb_cache_collision_fallback_total` counts the inserts a hash
 /// collision sent to an occupied bucket — the fallback the per-bucket vector
-/// exists for. Process-wide counter, so the test reads deltas (single-threaded
-/// test run).
+/// exists for.
+///
+/// Exact counts come from this cache's own counter: the guardrail metric is
+/// process-wide, and other tests forcing collisions (see
+/// `test_query_cache_collision_safe_with_forced_hash_collision`) bump it concurrently, so
+/// an exact delta on it failed under a parallel run. The global metric is only
+/// checked to have advanced, which concurrent tests cannot undo.
 #[test]
 fn test_query_cache_forced_hash_collision_feeds_the_collision_counter() {
-    let counter = &crate::metrics::global_guardrails_metrics().cache_collision_fallback_total;
+    let global = &crate::metrics::global_guardrails_metrics().cache_collision_fallback_total;
     let cache = QueryCache::new_with_hasher(10, |_| 42);
 
-    let before = counter.load(std::sync::atomic::Ordering::Relaxed);
+    let global_before = global.load(std::sync::atomic::Ordering::Relaxed);
     cache.parse("SELECT * FROM docs LIMIT 1").expect("q1");
     assert_eq!(
-        counter.load(std::sync::atomic::Ordering::Relaxed),
-        before,
+        cache.collision_fallbacks(),
+        0,
         "the first query takes an empty bucket"
     );
     cache.parse("SELECT id FROM docs LIMIT 2").expect("q2");
@@ -246,9 +251,13 @@ fn test_query_cache_forced_hash_collision_feeds_the_collision_counter() {
         .parse("SELECT id FROM docs LIMIT 2")
         .expect("q2 again is a hit");
     assert_eq!(
-        counter.load(std::sync::atomic::Ordering::Relaxed),
-        before + 1,
+        cache.collision_fallbacks(),
+        1,
         "one different query collided into the occupied bucket, once"
+    );
+    assert!(
+        global.load(std::sync::atomic::Ordering::Relaxed) > global_before,
+        "the collision also feeds the process-wide guardrail metric"
     );
 }
 
