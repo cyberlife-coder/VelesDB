@@ -180,8 +180,9 @@ def test_velesql_table_alias():
         "SELECT a.id FROM products a JOIN products b ON a.category = b.category"
     )
     
-    # Table alias should be accessible
     assert parsed.collection_name == "products"
+    assert parsed.table_alias == "a"
+    assert parsed.table_aliases == ["a", "b"]
 
 
 @pytest.mark.parametrize(
