@@ -266,7 +266,8 @@ file = "/var/log/velesdb/velesdb.log"   # appended to; directory must exist
 - `max_body_size` bounds the memory one upload request can take — the body is
   buffered whole before it is parsed. Routes other than point upload stay at
   2 MiB (lower `max_body_size` lowers them too); the NDJSON stream route is
-  not buffered and has no body limit. An oversized request gets `413`.
+  not buffered and has no body limit; there `max_body_size` bounds one line,
+  and a longer line is skipped as malformed. An oversized request gets `413`.
 - A key the server does not read in `[server]`, `[auth]`, `[tls]`, `[cors]` or
   `[logging]`, and a top-level table nobody reads, is named in a startup
   warning instead of being ignored silently.
