@@ -628,3 +628,7 @@ pub(crate) fn remove_edges_reporting_failure(
 #[cfg(test)]
 #[path = "graph_collection_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "graph_collection_overwrite_race_tests.rs"]
+mod overwrite_race_tests;
