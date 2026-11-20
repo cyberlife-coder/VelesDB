@@ -462,3 +462,51 @@ fn test_sparse_near_scalar_order_by_ranks_every_match() {
     let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
     assert_eq!(ids, [0, 1]);
 }
+
+// -----------------------------------------------------------------------
+// SPARSE_NEAR under a selective payload filter
+// -----------------------------------------------------------------------
+
+/// `SPARSE_NEAR ... AND <payload filter>` returns the best points the filter
+/// accepts, however far down the sparse ranking they sit. The three accepted
+/// points here are the three *lowest*-scored of 200; an oversampling window
+/// (`8 * LIMIT` candidates) never reached them and the query answered nothing.
+#[test]
+fn test_sparse_near_with_a_selective_payload_filter_is_exact() {
+    let dir = TempDir::new().unwrap();
+    let col = Collection::create(
+        dir.path().join("selective"),
+        4,
+        crate::distance::DistanceMetric::Cosine,
+    )
+    .expect("create collection");
+    let points: Vec<Point> = (0u64..200)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let weight = 1.0 + i as f32;
+            Point {
+                id: i,
+                vector: vec![0.5, 0.5, 0.3, 0.1],
+                payload: Some(serde_json::json!({ "idx": i })),
+                sparse_vectors: Some(BTreeMap::from([(
+                    String::new(),
+                    SparseVector::new(vec![(1, weight)]),
+                )])),
+            }
+        })
+        .collect();
+    col.upsert(points).expect("upsert");
+
+    let query = crate::velesql::Parser::parse(
+        "SELECT * FROM docs WHERE vector SPARSE_NEAR {1: 1.0} AND idx < 3 LIMIT 2",
+    )
+    .expect("parse");
+    let ids: Vec<u64> = col
+        .execute_query(&query, &HashMap::new())
+        .expect("execute")
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+
+    assert_eq!(ids, vec![2, 1]);
+}
