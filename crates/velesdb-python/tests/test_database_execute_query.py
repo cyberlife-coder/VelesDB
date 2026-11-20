@@ -163,3 +163,17 @@ class TestAggregatesReturnTheirRows:
         assert graph.query("SELECT COUNT(*) FROM agg_graph WHERE kind = 'a'") == [
             {"count": 2}
         ]
+
+    @pytest.mark.parametrize("statement", [
+        "SELECT COUNT(*) FROM agg_rows UNION ALL SELECT COUNT(*) FROM agg_rows",
+        "SELECT cat, COUNT(*) FROM agg_rows GROUP BY cat "
+        "EXCEPT SELECT cat, COUNT(*) FROM agg_rows GROUP BY cat",
+    ])
+    def test_a_compound_of_aggregates_is_refused(self, temp_db, statement):
+        """An aggregate in a compound is refused (V019), never answered by
+        its first operand alone."""
+        collection = self._seed(temp_db)
+        with pytest.raises(Exception, match="V019"):
+            temp_db.execute_query(statement)
+        with pytest.raises(Exception, match="V019"):
+            collection.query(statement)

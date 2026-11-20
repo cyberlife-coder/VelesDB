@@ -11,7 +11,9 @@
 //! `o.amount`, `c.name` and a self-join's two `name`s read as in core.
 
 use velesdb_core::point::{Point, SearchResult};
-use velesdb_core::velesql::{hash_join, scope_base, side_alias, JoinKeys, SelectStatement};
+use velesdb_core::velesql::{
+    base_side, hash_join, scope_base, side_alias, JoinKeys, SelectStatement,
+};
 
 use crate::database::DatabaseInner;
 use crate::exec_error::ExecError;
@@ -26,7 +28,7 @@ pub(crate) fn joined_rows(
     stmt: &SelectStatement,
     params: &Params,
 ) -> Result<Vec<OwnedScanRow>, ExecError> {
-    let from_alias = side_alias(stmt.from_alias.first().map(String::as_str), &stmt.from);
+    let from_alias = base_side(stmt);
     let mut rows: Vec<SearchResult> = scan_all(db, &stmt.from, None, params)?
         .into_iter()
         .map(|row| {
@@ -47,6 +49,15 @@ pub(crate) fn joined_rows(
         rows = hash_join(rows, &side, join, &keys, &prior_aliases, usize::MAX);
         prior_aliases.push(side_alias(join.alias.as_deref(), &join.table));
     }
+    held_rows(rows, stmt, params)
+}
+
+/// The joined `rows` `stmt`'s WHERE holds for, in order.
+fn held_rows(
+    rows: Vec<SearchResult>,
+    stmt: &SelectStatement,
+    params: &Params,
+) -> Result<Vec<OwnedScanRow>, ExecError> {
     let mut kept = Vec::with_capacity(rows.len());
     for row in rows {
         let row = OwnedScanRow::new(row.point.id, row.score, row.point.payload);

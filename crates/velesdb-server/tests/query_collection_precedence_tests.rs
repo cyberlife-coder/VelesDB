@@ -193,3 +193,23 @@ async fn aggregate_with_from_ignores_the_body_and_the_param() {
         assert_eq!(body["result"]["n"], 2, "{endpoint}: {body}");
     }
 }
+
+/// A compound one of whose operands is an aggregate is refused on both
+/// endpoints (`V019`): `/query` and `/aggregate` route an aggregate to core's
+/// aggregate engine, which ran the first operand alone and dropped the
+/// others.
+#[tokio::test]
+async fn a_compound_of_aggregates_is_refused_on_both_endpoints() {
+    let (_dir, app) = setup().await;
+
+    for uri in ["/query", "/aggregate"] {
+        let (status, body) = post_json(
+            &app,
+            uri,
+            &json!({ "query": "SELECT COUNT(*) FROM small UNION ALL SELECT COUNT(*) FROM large" }),
+        )
+        .await;
+        assert!(status.is_client_error(), "{uri}: {status} {body}");
+        assert!(body.to_string().contains("V019"), "{uri}: {body}");
+    }
+}

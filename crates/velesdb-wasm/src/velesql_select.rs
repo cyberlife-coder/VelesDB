@@ -58,8 +58,25 @@ pub(crate) fn execute(
         return finalize(db, &query.select, rows, params);
     }
 
-    let rows = scan(db, &query.select, params)?;
-    finalize(db, &query.select, rows, params)
+    let select = with_base_columns(&query.select);
+    let rows = scan(db, &select, params)?;
+    finalize(db, &select, rows, params)
+}
+
+/// `select`, a single-table SELECT, with every WHERE column its FROM side's
+/// name qualifies written as the row's own, as core reads it
+/// ([`velesdb_core::velesql::resolve_base_qualifiers`]): `d.cat` in
+/// `FROM docs d` is the row's `cat`.
+fn with_base_columns(select: &SelectStatement) -> std::borrow::Cow<'_, SelectStatement> {
+    let Some(condition) = select.where_clause.as_ref() else {
+        return std::borrow::Cow::Borrowed(select);
+    };
+    let base = velesdb_core::velesql::base_side(select);
+    let mut resolved = select.clone();
+    resolved.where_clause = Some(velesdb_core::velesql::resolve_base_qualifiers(
+        condition, base,
+    ));
+    std::borrow::Cow::Owned(resolved)
 }
 
 /// Runs a compound operand: the rows its SELECT keeps, windowed by its own
@@ -87,7 +104,7 @@ pub(crate) fn execute_operand(
              supported in WASM",
         ));
     }
-    let rows = scan(db, &query.select, params)?;
+    let rows = scan(db, &with_base_columns(&query.select), params)?;
     let store = db.get_shared_store(&query.select.from)?;
     let borrowed = store.borrow();
     let mut rows = window_plain(&query.select, rows, &order_context(&borrowed, params))?;

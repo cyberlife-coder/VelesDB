@@ -11,6 +11,7 @@ from typing import Any, List, Tuple
 from langchain_core.documents import Document
 
 # Re-export shared helpers so existing intra-package imports keep working.
+from velesdb_common.aggregates import is_aggregate_row
 from velesdb_common.ids import make_initial_id_counter  # noqa: F401
 from velesdb_common.graph import (  # noqa: F401
     build_graph_rest_payload,
@@ -23,6 +24,7 @@ __all__ = [
     "make_initial_id_counter", "build_graph_rest_payload",
     "is_timeout_exception", "open_native_graph", "parse_graph_traverse_results",
     "payload_to_doc_parts", "validate_queries_batch", "open_database",
+    "query_row_to_doc",
 ]
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,24 @@ def payload_to_doc_parts(result: dict) -> Tuple[str, dict]:
     if isinstance(point_id, int):
         metadata["_int_id"] = point_id
     return text, metadata
+
+
+def query_row_to_doc(row: dict) -> Document:
+    """Convert one row of ``Collection.query`` to a LangChain Document.
+
+    A point becomes the Document its payload holds
+    (:func:`payload_to_doc_parts`). An aggregate's row — ``COUNT``, ``SUM``,
+    ``AVG``, ``MIN``, ``MAX`` or a ``GROUP BY`` group, one dict of values —
+    becomes a Document whose ``metadata`` is that row and whose
+    ``page_content`` lists it as ``column: value`` lines, the way LangChain's
+    SQL loaders render a result row: ``{"cat": "a", "count": 3}`` reads
+    ``"cat: a\ncount: 3"``.
+    """
+    if is_aggregate_row(row):
+        text = "\n".join(f"{column}: {value}" for column, value in row.items())
+        return Document(page_content=text, metadata=dict(row))
+    text, metadata = payload_to_doc_parts(row)
+    return Document(page_content=text, metadata=metadata)
 
 
 def _payload_to_doc(result: dict) -> Document:

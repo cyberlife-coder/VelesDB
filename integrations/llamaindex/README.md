@@ -277,6 +277,18 @@ for row in results:
     print(row["p.name"], row["w.city"])
 ```
 
+`velesql()` returns nodes with similarities, which an aggregate's rows are
+not: an aggregate (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX` or `GROUP BY`) raises
+`ValueError`. Read its rows with the database the store opened:
+
+```python
+rows = vector_store.client.execute_query("SELECT category, COUNT(*) FROM docs GROUP BY category")
+# [{"category": "ai", "count": 2}, ...]
+```
+
+With a `velesdb` wheel that returns points for an aggregate (8.2.0 and older),
+`velesql()` returns those points' nodes instead.
+
 > **Cross-collection `@collection` MATCH is not available through the LlamaIndex
 > integration.** `velesql()` delegates to a single `velesdb.Collection`, which
 > cannot resolve `@collection`-annotated nodes from *other* collections — that

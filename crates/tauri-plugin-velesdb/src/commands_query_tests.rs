@@ -47,3 +47,35 @@ fn test_hybrid_row_reports_only_the_tagged_component_scores() {
     assert_eq!(row.vector_score, None);
     assert!((row.fused_score - 1.0).abs() < f32::EPSILON);
 }
+
+/// A compound one of whose operands is an aggregate is refused (`V019`): the
+/// command routes an aggregate to core's aggregate engine, which ran the
+/// first operand alone and dropped the others.
+#[test]
+fn a_compound_of_aggregates_is_refused() {
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let state = crate::state::VelesDbState::new(dir.path().to_path_buf());
+    let sql = "SELECT COUNT(*) FROM a UNION ALL SELECT COUNT(*) FROM b";
+    let request = crate::types::QueryRequest {
+        query: sql.to_string(),
+        params: std::collections::HashMap::new(),
+        collection: None,
+    };
+    let parsed = velesdb_core::velesql::Parser::parse(sql).expect("test: parse");
+
+    let refused = tauri::async_runtime::block_on(async {
+        state
+            .run_db(|db| {
+                for name in ["a", "b"] {
+                    db.create_collection(name, 2, velesdb_core::DistanceMetric::Cosine)?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("test: collections");
+        super::dispatch_tauri_query(&state, parsed, request).await
+    });
+
+    let error = refused.expect_err("a compound of aggregates must be refused");
+    assert!(format!("{error:?}").contains("V019"), "{error:?}");
+}

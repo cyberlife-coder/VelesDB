@@ -270,6 +270,19 @@ for row in results:
     print(row["p.name"], row["w.city"])
 ```
 
+An aggregate (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX` or `GROUP BY`) returns one
+`Document` per row of values — one without `GROUP BY`, one per group with
+it — whose `metadata` is the row and whose `page_content` lists it as
+`column: value` lines:
+
+```python
+docs = vectorstore.query("SELECT category, COUNT(*) FROM docs GROUP BY category")
+counts = {doc.metadata["category"]: doc.metadata["count"] for doc in docs}
+```
+
+With a `velesdb` wheel that returns points for an aggregate (8.2.0 and older),
+`query()` returns those points' Documents instead.
+
 > **Cross-collection `@collection` MATCH is not available through the LangChain
 > integration.** `vectorstore.query()` delegates to a single `velesdb.Collection`,
 > which cannot resolve `@collection`-annotated nodes from *other* collections —

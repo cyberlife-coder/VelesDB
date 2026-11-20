@@ -532,3 +532,29 @@ fn a_match_reads_the_active_collection_or_asks_for_one() {
         "{err:#}"
     );
 }
+
+/// GIVEN two collections
+/// WHEN the REPL runs a compound of aggregates
+/// THEN it is refused (`V019`): routed to the aggregate engine, it used to
+/// answer for the first operand alone and drop the others.
+#[test]
+fn test_execute_query_refuses_a_compound_of_aggregates() {
+    let dir = TempDir::new().expect("temp dir");
+    let db = Database::open(dir.path()).expect("open db");
+    for name in ["a", "b"] {
+        db.create_collection(name, 2, DistanceMetric::Cosine)
+            .expect("create collection");
+    }
+
+    let refused = execute_query(
+        &db,
+        "SELECT COUNT(*) FROM a UNION ALL SELECT COUNT(*) FROM b",
+        None,
+        None,
+    );
+
+    let Err(error) = refused else {
+        panic!("a compound of aggregates must be refused");
+    };
+    assert!(format!("{error:#}").contains("V019"), "{error:#}");
+}

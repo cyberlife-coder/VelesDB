@@ -269,3 +269,47 @@ fn test_join_where_qualified_unbound_alias_returns_zero() {
     .expect("test: unbound alias");
     assert_eq!(r.row_count(), 0);
 }
+
+// =========================================================================
+// A column the FROM side's name qualifies is the base row's own (core parity)
+// =========================================================================
+
+#[test]
+fn a_base_qualified_condition_reads_the_base_rows_columns() {
+    let mut db = db_with_users_orders();
+    for sql in [
+        // An unaliased FROM keeps its table's name beside an aliased JOIN.
+        "SELECT * FROM users JOIN orders o ON users.id = o.user_id WHERE users.name = 'Alice' LIMIT 10",
+        "SELECT * FROM users u JOIN orders o ON u.id = o.user_id WHERE u.name = 'Alice' LIMIT 10",
+    ] {
+        let r = execute(&mut db, sql, None).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert_eq!(r.row_count(), 2, "{sql}");
+    }
+    for sql in [
+        "SELECT * FROM users u WHERE u.name = 'Alice' LIMIT 10",
+        "SELECT * FROM users WHERE users.name = 'Alice' LIMIT 10",
+    ] {
+        let r = execute(&mut db, sql, None).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert_eq!(r.row_count(), 1, "{sql}");
+    }
+    let counted = execute(
+        &mut db,
+        "SELECT COUNT(*) FROM users u WHERE u.name = 'Alice'",
+        None,
+    )
+    .expect("test: count");
+    assert!(
+        counted.rows_json().contains("\"count\":1"),
+        "{}",
+        counted.rows_json()
+    );
+    // A qualifier naming no side stays a payload path: none of these rows
+    // nests a `users` object under the alias `u`.
+    let r = execute(
+        &mut db,
+        "SELECT * FROM users u WHERE users.name = 'Alice' LIMIT 10",
+        None,
+    )
+    .expect("test: no side");
+    assert_eq!(r.row_count(), 0);
+}
