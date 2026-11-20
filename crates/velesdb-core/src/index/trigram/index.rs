@@ -293,8 +293,9 @@ impl TrigramIndex {
     ///
     /// The estimate is [`TrigramFingerprint::approx_jaccard`]: the
     /// intersection is estimated from the fingerprints' bit counts and
-    /// combined with the exact trigram counts. It is unbiased on average and
-    /// tracks the exact [`Self::score_jaccard`] within ~0.1 per pair.
+    /// combined with the exact trigram counts. It is unbiased on average with
+    /// respect to the exact [`Self::score_jaccard`]; the fingerprint tests
+    /// assert its bounds.
     ///
     /// For a candidate of a LIKE pattern, [`Self::search_like_ranked`] needs
     /// no estimate at all: it scores the exact Jaccard from the counts.

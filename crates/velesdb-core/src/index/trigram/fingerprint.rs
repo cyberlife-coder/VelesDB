@@ -174,12 +174,14 @@ impl TrigramFingerprint {
     ///    error the exact counts reveal (identical fingerprints score 1.0).
     /// 3. `|A ∩ B| = |A| + |B| - |A ∪ B|`, clamped to `[0, min(|A|, |B|)]`.
     ///
-    /// The plain bit ratio `|A AND B| / |A OR B|` overestimates by ~0.1 on
-    /// average: two trigrams of one set sharing a bit shrink `A OR B` but not
-    /// the shared bits. This estimator is unbiased on average.
+    /// The plain bit ratio `|A AND B| / |A OR B|` overestimates: two
+    /// trigrams of one set sharing a bit shrink `A OR B` but not the shared
+    /// bits. This estimator is unbiased on average; its bias and error bounds
+    /// are asserted by `test_approx_jaccard_is_unbiased_over_a_generated_corpus`.
     ///
-    /// A saturated union (all 256 bits set, past ~700 distinct trigrams)
-    /// carries no cardinality signal; the bit ratio is returned instead.
+    /// A saturated union (all `m` bits set, expected past about `m ln(m) / k`
+    /// distinct trigrams) carries no cardinality signal; the bit ratio is
+    /// returned instead.
     ///
     /// Returns 0.0 when either set is empty.
     #[must_use]
