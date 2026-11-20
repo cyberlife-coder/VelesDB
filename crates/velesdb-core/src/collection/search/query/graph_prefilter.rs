@@ -179,13 +179,16 @@ impl Collection {
         let restriction = crate::collection::search::pending::PendingRestriction::within(&bitmap)
             .post_filtered_if(metadata_filter.is_some());
         // The anchors judge every candidate too: an exact scan past dead
-        // candidates scores every stored vector, not the bitmap's alone.
+        // candidates scores every stored vector, not the bitmap's alone. The
+        // index search reaches the bitmap's members alone: an answer holding
+        // every stored one settles the read, however short.
         let accept = |id: u64, payload: Option<&serde_json::Value>| {
             u32::try_from(id).is_ok_and(|id| bitmap.contains(id))
                 && metadata_filter.is_none_or(|filter| filter.matches_point(id, payload))
         };
         self.nearest_live_where(
-            &crate::collection::search::live::Nearest::judging(vector, metric, limit, candidates_k),
+            &crate::collection::search::live::Nearest::judging(vector, metric, limit, candidates_k)
+                .within(bitmap.len()),
             accept,
             |n| {
                 self.search_merging_pending(vector, n, metric, restriction, |m| {

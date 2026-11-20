@@ -511,11 +511,16 @@ read made every idf negative and every hit vanish
 A vector read judges the index's candidates — live or dead, accepted or
 not — under one hold of `vector_storage` (2) and `payload_storage` (3) read
 per answer of the index, taking no guard while the index searches; an
-answer short of what was asked settles the read only when no dead candidate
-is in it, or when it holds every stored vector — an HNSW walk answers short
-past the tombstones overwrites leave
-(`expired_rows_overwritten_in_the_graph_never_empty_a_read`); when dead
-candidates crowd its answers past a bound it scores every stored vector,
+answer short of what was asked settles the read only when it holds every
+vector the read can reach — every stored one, or every member of the
+bitmap or anchor set its search is restricted to — or, for a restricted
+search, when no dead candidate is in it and the graph holds no tombstone
+(read from the index's id mappings before the storage guards are taken):
+an HNSW walk answers short past the tombstones overwrites leave, which it
+filters itself
+(`expired_rows_overwritten_in_the_graph_never_empty_a_read`,
+`a_short_answer_without_a_dead_candidate_is_not_the_index_running_out`);
+when its answers stay too few past a bound it scores every stored vector,
 one chunk per hold of `vector_storage` alone, and walks them like a text
 search (`collection/search/live.rs`).
 A WHERE's text `MATCH` is bound to its BM25 hits before any storage guard

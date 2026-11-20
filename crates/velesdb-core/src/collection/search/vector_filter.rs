@@ -30,6 +30,18 @@ enum FilteredIndexSearch<'b> {
     BitmapHnsw(&'b roaring::RoaringBitmap),
 }
 
+impl FilteredIndexSearch<'_> {
+    /// `want`, its index search restricted as this one is: a bitmap path
+    /// reaches the bitmap's members alone, the post-filter path every stored
+    /// vector.
+    fn restrict(self, want: Nearest<'_>) -> Nearest<'_> {
+        match self {
+            Self::PostFilter => want,
+            Self::BitmapScan(bitmap) | Self::BitmapHnsw(bitmap) => want.within(bitmap.len()),
+        }
+    }
+}
+
 impl Collection {
     /// Searches with metadata filtering AND quality options from a WITH clause.
     ///
@@ -85,7 +97,7 @@ impl Collection {
             _ => compute_oversampled_k(k, filter, Some(&self.get_stats())),
         };
         self.nearest_live_where(
-            &Nearest::judging(query, metric, k, budget),
+            &search.restrict(Nearest::judging(query, metric, k, budget)),
             |id, payload| filter.matches_point(id, payload),
             |n| self.run_filtered_index_search(search, query, n, quality, metric),
         )

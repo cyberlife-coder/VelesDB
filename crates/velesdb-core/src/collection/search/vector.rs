@@ -521,14 +521,20 @@ impl Collection {
         // estimate so this path's cost profile is unchanged.
         let candidates_k = super::vector_filter::compute_oversampled_k(k, filter, None);
 
-        // Attempt bitmap pre-filter from secondary indexes. The filter
-        // re-matches every candidate: the bitmap can be a superset of its
-        // matches, and a post-filtered search merges pending points
+        // Attempt bitmap pre-filter from secondary indexes, once per read:
+        // the search it restricts reaches the bitmap's members alone. The
+        // filter re-matches every candidate: the bitmap can be a superset of
+        // its matches, and a post-filtered search merges pending points
         // unfiltered.
+        let bitmap = self.build_prefilter_bitmap(filter);
+        let want = Nearest::judging(query, metric, k, candidates_k);
+        let want = bitmap
+            .as_ref()
+            .map_or(want, |bitmap| want.within(bitmap.len()));
         self.nearest_live_where(
-            &Nearest::judging(query, metric, k, candidates_k),
+            &want,
             |id, payload| filter.matches_point(id, payload),
-            |n| self.search_with_optional_bitmap(query, n, filter, metric, opts),
+            |n| self.search_with_optional_bitmap(query, n, bitmap.as_ref(), metric, opts),
         )
     }
 
@@ -537,15 +543,15 @@ impl Collection {
         &self,
         query: &[f32],
         candidates_k: usize,
-        filter: &crate::filter::Filter,
+        bitmap: Option<&roaring::RoaringBitmap>,
         metric: DistanceMetric,
         opts: Option<&crate::collection::search::query::QuerySearchOptions>,
     ) -> Result<Vec<ScoredResult>> {
-        if let Some(bitmap) = self.build_prefilter_bitmap(filter) {
+        if let Some(bitmap) = bitmap {
             if let Some(opts) = opts {
                 opts.record_executed_strategy(crate::velesql::FilterStrategy::PreFilter);
             }
-            let restriction = PendingRestriction::within(&bitmap).and_post_filtered();
+            let restriction = PendingRestriction::within(bitmap).and_post_filtered();
             // `search_with_quality_and_bitmap` at the configured quality —
             // the same call the `WITH (ef_search = N)` arm of
             // `run_filtered_index_search` runs. The ef it used to compute
@@ -555,7 +561,7 @@ impl Collection {
                     query,
                     n,
                     self.runtime_search_quality(),
-                    &bitmap,
+                    bitmap,
                 )
             });
         }

@@ -248,6 +248,134 @@ fn a_short_answer_of_expired_rows_is_not_the_index_running_out() {
     assert_eq!(exact_scans(), scans + 1, "the read did not scan exactly");
 }
 
+/// An unrestricted read's short answer holding no dead candidate is no sign
+/// the index ran out either: an HNSW walk can die in the tombstones of an
+/// overwritten graph — which it filters itself, so they never reach the read
+/// as dead candidates — and answer empty, or with a few far rows, while the
+/// collection stores many live ones. Such an answer settled the read: it
+/// returned nothing, or the wrong rows, while live rows matched. The read
+/// asks again and, past the bound, scans exactly.
+#[test]
+fn a_short_answer_without_a_dead_candidate_is_not_the_index_running_out() {
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let collection = crowded(dir.path(), 0, 100);
+    let want = Nearest::rows(&QUERY, DistanceMetric::Cosine, 10);
+    let answers: [Vec<u64>; 2] = [Vec::new(), (LIVE + 50..LIVE + 53).collect()];
+
+    for answer in answers {
+        let (hits, asks, scans) = read_answering(&collection, &want, &answer);
+
+        assert_eq!(hits, nearest_live(10), "answer {answer:?}");
+        assert!(asks > 1, "the read did not ask again ({answer:?})");
+        assert_eq!(scans, 1, "the read did not scan exactly ({answer:?})");
+    }
+}
+
+/// A read of `want` whose index answers `answer` every time it is asked:
+/// the ids it returns, how many times it asked, and how many exact scans it
+/// ran.
+fn read_answering(
+    collection: &Collection,
+    want: &Nearest<'_>,
+    answer: &[u64],
+) -> (Vec<u64>, u32, u32) {
+    use crate::scored_result::ScoredResult;
+    let scans = exact_scans();
+    let asks = std::cell::Cell::new(0_u32);
+    let hits = collection
+        .nearest_live_ids(want, |_| {
+            asks.set(asks.get() + 1);
+            Ok(answer
+                .iter()
+                .map(|&id| ScoredResult::new(id, 0.5))
+                .collect())
+        })
+        .expect("test: read");
+    let hits = hits.into_iter().map(|r| r.id).collect();
+    (hits, asks.get(), exact_scans() - scans)
+}
+
+/// [`crowded`] with no expired row and 100 live ones, every live row then
+/// written again so the graph holds the tombstones of its first versions.
+fn overwritten(dir: &std::path::Path) -> Collection {
+    let collection = crowded(dir, 0, 100);
+    let again: Vec<Point> = collection
+        .get(&nearest_live(100))
+        .into_iter()
+        .flatten()
+        .collect();
+    collection.upsert(again).expect("test: overwrite");
+    assert!(
+        collection.storage.index.tombstone_count() > 0,
+        "CONTROL: an overwrite must leave a tombstone in the graph"
+    );
+    collection
+}
+
+/// A restricted read whose answer holds every member of its set settles,
+/// however short of `k`, even from a graph holding tombstones: it neither
+/// asks again nor scans the collection for rows its set does not hold.
+#[test]
+fn a_restricted_answer_holding_every_member_settles_however_short() {
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let collection = overwritten(dir.path());
+    let members = nearest_live(3);
+    let want = Nearest::rows(&QUERY, DistanceMetric::Cosine, 10).within(3);
+
+    let (hits, asks, scans) = read_answering(&collection, &want, &members);
+
+    assert_eq!(hits, members);
+    assert_eq!(asks, 1, "the read asked again");
+    assert_eq!(scans, 0, "the read scanned exactly");
+}
+
+/// A restricted read's short answer from a graph holding tombstones settles
+/// nothing while its set holds more stored vectors: the walk may have died
+/// among them. The read asks again and, past the bound — the set's members,
+/// not the collection's — scans exactly.
+#[test]
+fn a_restricted_short_answer_past_tombstones_asks_again() {
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let collection = overwritten(dir.path());
+    let want = Nearest::rows(&QUERY, DistanceMetric::Cosine, 10).within(30);
+
+    let (hits, asks, scans) = read_answering(&collection, &want, &[LIVE + 50, LIVE + 51]);
+
+    assert_eq!(hits, nearest_live(10));
+    assert_eq!(asks, 2, "the read did not ask again up to its set's bound");
+    assert_eq!(scans, 1, "the read did not scan exactly");
+}
+
+/// A restricted read's short answer from a graph holding no tombstone, no
+/// dead candidate in it, is the index's own at its quality — a walk keeps
+/// only the set's members among the nodes it visits — and settles the read
+/// as it stands (`graph_prefilter_tests.rs` pins that quality).
+#[test]
+fn a_restricted_short_answer_from_a_graph_without_tombstones_settles() {
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let collection = crowded(dir.path(), 0, 100);
+    assert_eq!(
+        collection.storage.index.tombstone_count(),
+        0,
+        "CONTROL: a graph written once holds no tombstone"
+    );
+    let answer = [LIVE + 50, LIVE + 51];
+    let want = Nearest::rows(&QUERY, DistanceMetric::Cosine, 10).within(100);
+
+    let (hits, asks, scans) = read_answering(&collection, &want, &answer);
+
+    assert_eq!(hits, answer);
+    assert_eq!(asks, 1, "the read asked again");
+    assert_eq!(scans, 0, "the read scanned exactly");
+    let unrestricted = Nearest::rows(&QUERY, DistanceMetric::Cosine, 10);
+    let (hits, _, scans) = read_answering(&collection, &unrestricted, &answer);
+    assert_eq!(
+        (hits, scans),
+        (nearest_live(10), 1),
+        "an unrestricted short answer settled the read"
+    );
+}
+
 /// An answer that holds every stored vector is the index running out: the
 /// read returns the live rows among them, short of `k`, without asking
 /// again.
