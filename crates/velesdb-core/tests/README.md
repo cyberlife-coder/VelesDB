@@ -68,9 +68,9 @@ Simulates product catalog semantic search.
 | Test | Description | Validates |
 |------|-------------|-----------|
 | `test_product_catalog_indexing` | Index products with rich metadata (name, category, price) | Payload storage, search accuracy |
-| `test_batch_product_indexing_performance` | Batch insert 1000 products, verify search <100ms | Batch performance, latency |
+| `test_batch_product_indexing_finds_exact_match` | Batch insert 1000 products, verify the query's indexed twin ranks first | Batch indexing, search accuracy |
 
-**Performance**: Search over 1000 products completes in <100ms.
+**Latency**: not asserted by these tests — a wall-clock bound on one sample measures the runner. Search latency is gated by the `perf-smoke` CI job.
 
 **Use Case**: E-commerce, product recommendations, catalog search.
 
