@@ -446,6 +446,49 @@ fn test_tokenless_text_for_unknown_point_is_noop() {
     assert!(index.is_empty());
 }
 
+/// Concurrent removals of one point release its internal id once. Each used
+/// to push the id it had read before the other took the mapping, so the free
+/// list held it twice and gave it to two later points.
+#[test]
+fn test_concurrent_removal_recycles_the_doc_id_once() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    const THREADS: usize = 8;
+    for round in 0..200 {
+        let index = Arc::new(Bm25Index::new());
+        index.add_document(1, "alpha beta");
+        let barrier = Arc::new(Barrier::new(THREADS));
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|i| {
+                let idx = Arc::clone(&index);
+                let sync = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    sync.wait();
+                    // Both release paths: the explicit one and a tokenless update.
+                    if i % 2 == 0 {
+                        idx.remove_document(1);
+                    } else {
+                        idx.add_document(1, "-");
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+
+        // An id recycled twice goes to both points below, and the second
+        // takes over the reverse mapping the first is resolved through.
+        index.add_document(2, "bravo words");
+        index.add_document(3, "charlie words");
+        let hit = |term: &str| index.search(term, 10).first().map(|hit| hit.0);
+        assert_eq!(hit("bravo"), Some(2), "round {round}");
+        assert_eq!(hit("charlie"), Some(3), "round {round}");
+    }
+}
+
 // =========================================================================
 // #897 — snapshot validation on load (untrusted on-disk state)
 // =========================================================================

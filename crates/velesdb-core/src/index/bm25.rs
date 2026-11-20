@@ -531,9 +531,17 @@ impl Bm25Index {
         }
 
         if release_mapping {
-            self.point_to_doc.write().remove(&point_id);
-            self.doc_to_point.write().remove(&doc_id_u32);
-            self.free_doc_ids.write().push(doc_id_u32);
+            // Whoever takes the mapping out of `point_to_doc` recycles its id,
+            // and nobody else does. `doc_id_u32` above was read under a lock
+            // since released, so two removals of one point both hold it; were
+            // each to push it, the free list would hand the same id to two
+            // points and the second would overwrite the first's reverse
+            // mapping, leaving the first unsearchable.
+            let released = self.point_to_doc.write().remove(&point_id);
+            if let Some(released) = released {
+                self.doc_to_point.write().remove(&released);
+                self.free_doc_ids.write().push(released);
+            }
         }
 
         removed

@@ -531,7 +531,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Bm25Index::add_document` returned before removing the previous version
     when the text tokenized to nothing (`"N/A"`, `"-"`, `"7"`), so the old
     terms kept matching a payload that no longer contained them. It now
-    removes the document, as `remove_document` does.
+    removes the document, as `remove_document` does. Releasing a point's
+    internal id is now done by whichever removal takes its mapping out, once:
+    two concurrent removals of one point each pushed the id to the free list,
+    which then gave it to two later points and left one unsearchable.
   - *A failed half-open probe reopens the circuit breaker.* A request admitted
     before the trip that succeeded after it reset the failure count while the
     breaker was open; the probe's failure then counted as the first of a new
