@@ -190,6 +190,11 @@ impl Bm25Index {
     pub fn add_document(&self, id: u64, text: &str) {
         let tokens = Self::tokenize(text);
         if tokens.is_empty() {
+            // Text with no indexable token ("N/A", "-", "7") replaces the
+            // previous version with nothing: the point leaves the index, as
+            // it would on `remove_document`. Returning without removing kept
+            // the old terms searchable under a payload that no longer has them.
+            self.remove_document_internal(id, true);
             return;
         }
 

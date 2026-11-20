@@ -416,6 +416,36 @@ fn test_update_document_removes_old_terms() {
     assert_eq!(new_term_results[0].0, 1);
 }
 
+/// Replacement text that tokenizes to nothing (every token is one character
+/// or punctuation) must drop the previous version, not leave it searchable.
+#[test]
+fn test_update_to_tokenless_text_removes_document() {
+    let index = Bm25Index::new();
+    index.add_document(1, "alpha beta");
+    index.add_document(2, "alpha gamma");
+
+    index.add_document(1, "N/A");
+
+    let hits: Vec<u64> = index.search("alpha", 10).iter().map(|hit| hit.0).collect();
+    assert_eq!(hits, vec![2], "point 1 no longer contains 'alpha'");
+    assert!(index.search("beta", 10).is_empty());
+    assert_eq!(index.len(), 1);
+
+    // The released slot is reusable: re-adding real text indexes it again.
+    index.add_document(1, "delta epsilon");
+    assert_eq!(index.search("delta", 10).len(), 1);
+    assert_eq!(index.len(), 2);
+}
+
+/// Tokenless text for a point that was never indexed stays a no-op.
+#[test]
+fn test_tokenless_text_for_unknown_point_is_noop() {
+    let index = Bm25Index::new();
+    index.add_document(7, "-");
+    assert_eq!(index.len(), 0);
+    assert!(index.is_empty());
+}
+
 // =========================================================================
 // #897 — snapshot validation on load (untrusted on-disk state)
 // =========================================================================
