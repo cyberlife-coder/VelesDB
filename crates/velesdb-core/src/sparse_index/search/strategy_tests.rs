@@ -35,7 +35,7 @@ fn cancelling_term_postings() -> Vec<(f32, Vec<PostingEntry>)> {
 fn a_document_whose_score_cancels_to_zero_is_returned_once() {
     let term_postings = cancelling_term_postings();
 
-    let dense = linear_scan_dense(10, 2, &term_postings);
+    let dense = linear_scan_dense(10, 2, &term_postings, None);
 
     let mut ids: Vec<u64> = dense.iter().map(|r| r.doc_id).collect();
     ids.sort_unstable();
@@ -54,8 +54,8 @@ fn a_document_whose_score_cancels_to_zero_is_returned_once() {
 fn both_accumulators_agree_on_a_cancelling_query() {
     let term_postings = cancelling_term_postings();
 
-    let dense = linear_scan_dense(10, 2, &term_postings);
-    let hashmap = linear_scan_hashmap(10, &term_postings);
+    let dense = linear_scan_dense(10, 2, &term_postings, None);
+    let hashmap = linear_scan_hashmap(10, &term_postings, None);
 
     assert_eq!(
         as_pairs(&dense),
@@ -71,7 +71,7 @@ fn a_duplicate_must_not_evict_a_genuine_result_from_top_k() {
     let term_postings = cancelling_term_postings();
 
     // Truth: doc 1 = 5.0, doc 0 = 1.0 - 1.0 + 2.0 = 2.0, doc 2 = 1.5.
-    let dense = linear_scan_dense(3, 2, &term_postings);
+    let dense = linear_scan_dense(3, 2, &term_postings, None);
 
     let ids: Vec<u64> = dense.iter().map(|r| r.doc_id).collect();
     assert_eq!(
@@ -88,8 +88,8 @@ fn both_accumulators_agree_on_a_plain_positive_query() {
         (0.5, vec![entry(1, 4.0), entry(2, 2.0)]),
     ];
 
-    let dense = linear_scan_dense(10, 2, &term_postings);
-    let hashmap = linear_scan_hashmap(10, &term_postings);
+    let dense = linear_scan_dense(10, 2, &term_postings, None);
+    let hashmap = linear_scan_hashmap(10, &term_postings, None);
 
     assert_eq!(as_pairs(&dense), as_pairs(&hashmap));
 }
@@ -125,7 +125,7 @@ mod unbounded_k {
     #[test]
     fn the_dense_accumulator_returns_every_document_for_a_huge_k() {
         for k in HUGE_K {
-            let ids: Vec<u64> = linear_scan_dense(k, 1, &two_doc_postings())
+            let ids: Vec<u64> = linear_scan_dense(k, 1, &two_doc_postings(), None)
                 .iter()
                 .map(|r| r.doc_id)
                 .collect();
@@ -136,7 +136,7 @@ mod unbounded_k {
     #[test]
     fn the_hash_map_accumulator_returns_every_document_for_a_huge_k() {
         for k in HUGE_K {
-            let ids: Vec<u64> = linear_scan_hashmap(k, &two_doc_postings())
+            let ids: Vec<u64> = linear_scan_hashmap(k, &two_doc_postings(), None)
                 .iter()
                 .map(|r| r.doc_id)
                 .collect();

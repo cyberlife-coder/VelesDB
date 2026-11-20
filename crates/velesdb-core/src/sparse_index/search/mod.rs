@@ -54,18 +54,16 @@ pub fn sparse_search(
     query: &SparseVector,
     k: usize,
 ) -> Vec<ScoredDoc> {
-    if k == 0 || query.is_empty() || index.doc_count() == 0 {
-        return Vec::new();
-    }
-    linear_scan_search(index, query, k)
+    sparse_search_filtered(index, query, k, None)
 }
 
-/// Searches the sparse inverted index with an optional post-filter.
+/// Searches the sparse inverted index for the top-k documents `filter`
+/// accepts; with no filter, for the top-k documents.
 ///
-/// If `filter` is `None`, delegates to [`sparse_search`]. Otherwise,
-/// retrieves `k * 4` candidates, applies the filter, and retries with
-/// `k * 8` if fewer than `k` results survive. Returns the top-k filtered
-/// results.
+/// Exact at `k` whatever the filter's selectivity: it is applied to the whole
+/// scored set, not to an oversampled window of it. The window this replaced
+/// (`k * 4`, then `k * 8`) returned fewer than `k` results — none at all —
+/// whenever the accepted documents ranked below it.
 #[must_use]
 pub fn sparse_search_filtered(
     index: &SparseInvertedIndex,
@@ -73,30 +71,10 @@ pub fn sparse_search_filtered(
     k: usize,
     filter: Option<&dyn Fn(u64) -> bool>,
 ) -> Vec<ScoredDoc> {
-    let Some(filter) = filter else {
-        return sparse_search(index, query, k);
-    };
-
-    // First pass: 4x oversampling
-    let candidates = sparse_search(index, query, k.saturating_mul(4).max(k.saturating_add(10)));
-    let mut filtered: Vec<ScoredDoc> = candidates
-        .into_iter()
-        .filter(|doc| filter(doc.doc_id))
-        .collect();
-
-    if filtered.len() >= k {
-        filtered.truncate(k);
-        return filtered;
+    if k == 0 || query.is_empty() || index.doc_count() == 0 {
+        return Vec::new();
     }
-
-    // Second pass: 8x oversampling
-    let candidates = sparse_search(index, query, k.saturating_mul(8).max(k.saturating_add(20)));
-    filtered = candidates
-        .into_iter()
-        .filter(|doc| filter(doc.doc_id))
-        .collect();
-    filtered.truncate(k);
-    filtered
+    linear_scan_search(index, query, k, filter)
 }
 
 /// Brute-force inner product search for testing correctness.
@@ -148,7 +126,7 @@ pub(crate) fn linear_scan_search_for_bench(
     query: &SparseVector,
     k: usize,
 ) -> Vec<ScoredDoc> {
-    linear_scan_search(index, query, k)
+    linear_scan_search(index, query, k, None)
 }
 
 /// [`strategy::maxscore_search`] for the bench seam (#2177).

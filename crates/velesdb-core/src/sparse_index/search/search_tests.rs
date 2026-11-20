@@ -197,6 +197,65 @@ fn test_sparse_search_filtered_basic() {
     }
 }
 
+/// A filter far more selective than any oversampling window: the ten accepted
+/// documents are the ten *worst* of a thousand. The former `k * 4` then
+/// `k * 8` window never reached them and the search returned nothing.
+#[test]
+fn test_sparse_search_filtered_is_exact_for_a_selective_filter() {
+    let index = SparseInvertedIndex::new();
+    for i in 0..1000_u64 {
+        index.insert(i, &make_vector(vec![(1, 1.0 + i as f32)]));
+    }
+
+    let query = make_vector(vec![(1, 1.0)]);
+    let filter = |id: u64| id < 10;
+    let ids: Vec<u64> = sparse_search_filtered(&index, &query, 5, Some(&filter))
+        .iter()
+        .map(|r| r.doc_id)
+        .collect();
+
+    assert_eq!(ids, vec![9, 8, 7, 6, 5]);
+}
+
+/// Same property on the hash-map accumulator, which a sparse id space selects.
+#[test]
+fn test_sparse_search_filtered_is_exact_on_a_sparse_id_space() {
+    const STRIDE: u64 = 1_000_000;
+    let index = SparseInvertedIndex::new();
+    for i in 0..200_u64 {
+        index.insert(i * STRIDE, &make_vector(vec![(1, 1.0 + i as f32)]));
+    }
+
+    let query = make_vector(vec![(1, 1.0)]);
+    let filter = |id: u64| id < 3 * STRIDE;
+    let ids: Vec<u64> = sparse_search_filtered(&index, &query, 5, Some(&filter))
+        .iter()
+        .map(|r| r.doc_id)
+        .collect();
+
+    assert_eq!(ids, vec![2 * STRIDE, STRIDE, 0]);
+}
+
+/// The filter runs only on documents that outrank the last result.
+#[test]
+fn test_sparse_search_filtered_stops_filtering_at_k() {
+    let index = SparseInvertedIndex::new();
+    for i in 0..1000_u64 {
+        index.insert(i, &make_vector(vec![(1, 1.0 + i as f32)]));
+    }
+
+    let query = make_vector(vec![(1, 1.0)]);
+    let calls = std::cell::Cell::new(0_usize);
+    let filter = |id: u64| {
+        calls.set(calls.get() + 1);
+        id.is_multiple_of(2)
+    };
+    let results = sparse_search_filtered(&index, &query, 5, Some(&filter));
+
+    assert_eq!(results.len(), 5);
+    assert_eq!(calls.get(), 10, "five accepted, five rejected above them");
+}
+
 #[test]
 fn test_sparse_search_filtered_none() {
     let index = SparseInvertedIndex::new();

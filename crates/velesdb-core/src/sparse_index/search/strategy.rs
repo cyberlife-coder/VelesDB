@@ -73,11 +73,20 @@ pub(crate) fn maxscore_search(
     extract_sorted_results(heap)
 }
 
-/// Linear scan fallback for high-coverage queries.
+/// Decides, per document id, whether a scored document may be returned.
+pub(crate) type IdFilter<'a> = &'a dyn Fn(u64) -> bool;
+
+/// Linear scan: scores every document sharing a term with the query and
+/// returns the best `k` — of those `filter` keeps, when there is one.
+///
+/// The filter is applied to the scored set itself, so the result is exact
+/// however selective it is: a filter matching ten documents out of a million
+/// returns those ten, in score order.
 pub(crate) fn linear_scan_search(
     index: &SparseInvertedIndex,
     query: &SparseVector,
     k: usize,
+    filter: Option<IdFilter<'_>>,
 ) -> Vec<ScoredDoc> {
     // Collect all posting lists and find max doc_id
     let mut term_postings: Vec<(f32, Vec<PostingEntry>)> = Vec::with_capacity(query.nnz());
@@ -103,10 +112,45 @@ pub(crate) fn linear_scan_search(
     let use_dense = max_doc_id <= MAX_DENSE_ACCUMULATOR
         && (doc_count == 0 || max_doc_id < doc_count.saturating_mul(4));
     if use_dense {
-        linear_scan_dense(k, max_doc_id, &term_postings)
+        linear_scan_dense(k, max_doc_id, &term_postings, filter)
     } else {
-        linear_scan_hashmap(k, &term_postings)
+        linear_scan_hashmap(k, &term_postings, filter)
     }
+}
+
+/// The best `k` of `scored`, descending — the selection both accumulator
+/// variants end with.
+fn select_top_k(
+    scored: impl Iterator<Item = ScoredDoc>,
+    k: usize,
+    filter: Option<IdFilter<'_>>,
+) -> Vec<ScoredDoc> {
+    let Some(keep) = filter else {
+        let mut heap = top_k_heap(k);
+        for doc in scored {
+            topk_push(&mut heap, k, doc.doc_id, doc.score);
+        }
+        return extract_sorted_results(heap);
+    };
+    top_k_kept(scored.collect(), k, keep)
+}
+
+/// The best `k` documents `keep` accepts, descending.
+///
+/// Walks the scored set best-first and stops at the `k`-th accepted document,
+/// so `keep` — a payload read per call on the query path — runs only on the
+/// documents that outrank the last result, the fewest an exact answer allows.
+/// Building the heap is linear in the scored set, like the unfiltered scan.
+fn top_k_kept(scored: Vec<ScoredDoc>, k: usize, keep: IdFilter<'_>) -> Vec<ScoredDoc> {
+    let mut best_first = BinaryHeap::from(scored);
+    let mut kept = Vec::with_capacity(k.min(MAX_HEAP_PREALLOCATION));
+    while kept.len() < k {
+        let Some(doc) = best_first.pop() else { break };
+        if keep(doc.doc_id) {
+            kept.push(doc);
+        }
+    }
+    kept
 }
 
 /// Pushes a scored document into a min-heap of size `k`, evicting the minimum
@@ -129,6 +173,7 @@ fn linear_scan_dense(
     k: usize,
     max_doc_id: u64,
     term_postings: &[(f32, Vec<PostingEntry>)],
+    filter: Option<IdFilter<'_>>,
 ) -> Vec<ScoredDoc> {
     #[allow(clippy::cast_possible_truncation)]
     let size = (max_doc_id + 1) as usize;
@@ -154,18 +199,20 @@ fn linear_scan_dense(
         }
     }
 
-    let mut heap = top_k_heap(k);
-    for &doc_id in &touched {
+    let candidates = touched.iter().map(|&doc_id| {
         #[allow(clippy::cast_possible_truncation)]
         let score = scores[doc_id as usize];
-        topk_push(&mut heap, k, doc_id, score);
-    }
-
-    extract_sorted_results(heap)
+        ScoredDoc { score, doc_id }
+    });
+    select_top_k(candidates, k, filter)
 }
 
 /// Hash map accumulator variant for linear scan (large doc ID space).
-fn linear_scan_hashmap(k: usize, term_postings: &[(f32, Vec<PostingEntry>)]) -> Vec<ScoredDoc> {
+fn linear_scan_hashmap(
+    k: usize,
+    term_postings: &[(f32, Vec<PostingEntry>)],
+    filter: Option<IdFilter<'_>>,
+) -> Vec<ScoredDoc> {
     let mut scores: FxHashMap<u64, f32> = FxHashMap::default();
 
     for (qw, postings) in term_postings {
@@ -175,12 +222,10 @@ fn linear_scan_hashmap(k: usize, term_postings: &[(f32, Vec<PostingEntry>)]) -> 
         }
     }
 
-    let mut heap = top_k_heap(k);
-    for (&doc_id, &score) in &scores {
-        topk_push(&mut heap, k, doc_id, score);
-    }
-
-    extract_sorted_results(heap)
+    let candidates = scores
+        .iter()
+        .map(|(&doc_id, &score)| ScoredDoc { score, doc_id });
+    select_top_k(candidates, k, filter)
 }
 
 #[cfg(test)]

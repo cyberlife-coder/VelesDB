@@ -26,9 +26,8 @@ pub fn branch_depth(top_k: usize) -> usize {
 /// Both the dense and the sparse branch can independently miss the globally
 /// optimal result; fetching more candidates from each compensates for the
 /// blind spots of the other. Doubling is the conservative end:
-/// `sparse_search_filtered` oversamples further for payload-filter
-/// selectivity, so this depth works at the fusion level, not the per-branch
-/// one. Every engine
+/// `sparse_search_filtered` is exact under a payload filter, so this depth
+/// works at the fusion level, not the per-branch one. Every engine
 /// running the hybrid search reads its depth here — core's query pipeline
 /// and the WASM executor alike.
 #[must_use]
