@@ -68,7 +68,11 @@ fn test_handle_http_error_auth() {
 #[test]
 fn test_handle_http_error_other() {
     let err = handle_http_error(500, "internal error", "Test");
-    assert!(matches!(err, Error::SourceConnection(_)));
+    assert!(matches!(err, Error::SourceStatus { status: 500, .. }));
+    assert_eq!(
+        err.to_string(),
+        "Source connection error: Test error 500: internal error"
+    );
 }
 
 // ---- validate_url: SSRF regression test suite ----
