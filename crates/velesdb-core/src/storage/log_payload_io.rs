@@ -77,14 +77,14 @@ thread_local! {
 /// Makes the next [`flush_wal`] on this thread fail; the guard clears the
 /// fault on drop if no flush consumed it.
 #[cfg(test)]
-pub(super) fn fail_next_wal_flush() -> WalFlushFault {
+pub(crate) fn fail_next_wal_flush() -> WalFlushFault {
     FAIL_NEXT_WAL_FLUSH.with(|fail| fail.set(true));
     WalFlushFault
 }
 
 /// Clears an unconsumed [`fail_next_wal_flush`] fault on drop.
 #[cfg(test)]
-pub(super) struct WalFlushFault;
+pub(crate) struct WalFlushFault;
 
 #[cfg(test)]
 impl Drop for WalFlushFault {

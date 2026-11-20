@@ -51,7 +51,7 @@ pub struct MmapStorage {
     dimension: usize,
     /// In-memory index of ID -> file offset
     /// EPIC-033/US-004: Sharded for reduced lock contention on read-heavy workloads
-    index: ShardedIndex,
+    index: Arc<ShardedIndex>,
     /// Write-Ahead Log writer
     wal: RwLock<io::BufWriter<File>>,
     /// File handle for the data file (kept open for resizing).
@@ -95,6 +95,22 @@ pub struct MmapStorage {
     /// so with no registered consumer truncation is unchanged from before this
     /// seam existed.
     watermarks: super::wal_cursor::WalWatermarkRegistry,
+    /// The ids its writes changed, by revision ([`MmapStorage::changes`]).
+    changes: super::ChangeLog,
+}
+
+/// Which ids a vector store holds, read without the store's guard
+/// ([`MmapStorage::held_ids`]): what a graph's write reads of the store it
+/// does not write, under node locks that keep its answer true
+/// (`collection/core/size.rs`).
+#[derive(Clone)]
+pub(crate) struct HeldVectorIds(Arc<ShardedIndex>);
+
+impl HeldVectorIds {
+    /// Whether the store holds a vector under `id`.
+    pub(crate) fn contains(&self, id: u64) -> bool {
+        self.0.contains_key(id)
+    }
 }
 
 impl MmapStorage {
@@ -175,7 +191,7 @@ impl MmapStorage {
         Ok(Self {
             path,
             dimension,
-            index,
+            index: Arc::new(index),
             wal: RwLock::new(wal),
             data_file,
             mmap: RwLock::new(mmap),
@@ -185,7 +201,19 @@ impl MmapStorage {
             durability,
             wal_replayed_ids,
             watermarks: super::wal_cursor::WalWatermarkRegistry::new(),
+            changes: super::ChangeLog::default(),
         })
+    }
+
+    /// Which ids its writes changed, by revision: every store and delete
+    /// records the ids it wrote, a failed one included, under the store's
+    /// write guard, so two holds of the read guard reading the same revision
+    /// read the same vectors, and a later one can ask which ids changed in
+    /// between. What a ranked walk reads between its holds
+    /// (`collection/search/ranked.rs`).
+    #[must_use]
+    pub(crate) fn changes(&self) -> &super::ChangeLog {
+        &self.changes
     }
 
     /// Drains the ids touched by the open-time WAL replay (see the
@@ -263,6 +291,12 @@ impl MmapStorage {
     #[inline]
     pub(super) fn index(&self) -> &ShardedIndex {
         &self.index
+    }
+
+    /// Which ids this store holds, readable without its guard: the index it
+    /// keeps them in, shared (its shards lock themselves).
+    pub(crate) fn held_ids(&self) -> HeldVectorIds {
+        HeldVectorIds(Arc::clone(&self.index))
     }
 
     /// Write-Ahead Log writer lock.

@@ -211,7 +211,7 @@ fn database_match_query_is_capped() {
     let probe = vector(0);
     let scoring = velesdb_core::MatchScoring {
         vector: &probe,
-        threshold: 1_000.0,
+        threshold: None,
     };
     let scored = db
         .match_query("docs", clause, &HashMap::new(), Some(scoring))

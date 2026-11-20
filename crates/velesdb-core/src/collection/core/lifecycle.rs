@@ -1,6 +1,7 @@
 //! Collection lifecycle methods (create, open, flush).
 
 use crate::collection::graph::{ConcurrentEdgeStore, LabelIndex, PropertyIndex, RangeIndex};
+use crate::collection::search::query::row_universe::RowUniverse;
 use crate::collection::types::{Collection, CollectionConfig};
 use crate::error::Result;
 use crate::index::sparse::SparseInvertedIndex;
@@ -145,13 +146,20 @@ impl Collection {
         index: Arc<HnswIndex>,
         text_index: Arc<Bm25Index>,
     ) -> crate::collection::types::StorageState {
+        let held_vector_ids = vector_storage.read().held_ids();
+        let held_payload_ids = payload_storage.read().held_ids();
         crate::collection::types::StorageState {
             path,
-            config: Arc::new(RwLock::new(config)),
+            held_vector_ids,
+            held_payload_ids,
+            size: Arc::new(std::sync::atomic::AtomicUsize::new(config.point_count)),
+            config: Arc::new(crate::lock_audit::ConfigLock::new(config)),
             vector_storage,
             payload_storage,
             index,
             text_index,
+            text_wal: Arc::new(RwLock::new(())),
+            node_locks: Arc::new(super::size::NodeLocks::new()),
             pq_cache: Arc::new(RwLock::new(HashMap::new())),
             pq_quantizer: Arc::new(RwLock::new(None)),
             pq_training_buffer: Arc::new(RwLock::new(VecDeque::new())),
@@ -268,7 +276,7 @@ impl Collection {
     }
 
     /// Rebuilds the BM25 full-text index from persisted payloads.
-    fn rebuild_bm25_index(
+    pub(super) fn rebuild_bm25_index(
         payload_storage: &Arc<RwLock<LogPayloadStorage>>,
         text_index: &Arc<Bm25Index>,
     ) {
@@ -292,7 +300,9 @@ impl Collection {
     ///
     /// # Contract
     ///
-    /// - Snapshot present → load + replay WAL on top.
+    /// - Snapshot present → load + replay WAL on top; a graph's only where
+    ///   its coverage marker vouches for it, else rebuilt from the payloads
+    ///   ([`Self::load_graph_bm25`], `bm25_coverage.rs`).
     /// - Snapshot absent → fall back to the legacy payload rebuild
     ///   (backward-compat for DBs written before this feature).
     /// - Snapshot corrupt → propagate the error (fail-fast, per #618
@@ -300,25 +310,38 @@ impl Collection {
     fn load_bm25_index(
         path: &std::path::Path,
         payload_storage: &Arc<RwLock<LogPayloadStorage>>,
+        rows: RowUniverse,
     ) -> Result<Arc<Bm25Index>> {
-        if let Some(loaded) = crate::index::bm25_persistence::load_snapshot(path)? {
-            let index = Arc::new(loaded);
-            let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(path);
-            let replayed = crate::index::bm25_persistence_wal::wal_replay(&wal_path, &index)?;
-            tracing::debug!(
-                "BM25 restored from snapshot + {replayed} WAL entries ({} docs)",
-                index.len()
-            );
-            Ok(index)
-        } else {
-            let index = Arc::new(Bm25Index::new());
-            Self::rebuild_bm25_index(payload_storage, &index);
-            tracing::debug!(
-                "BM25 snapshot absent; rebuilt from payload storage ({} docs)",
-                index.len()
-            );
-            Ok(index)
+        match crate::index::bm25_persistence::load_snapshot(path)? {
+            Some(stored) if rows == RowUniverse::StoredNodes => {
+                Self::load_graph_bm25(path, payload_storage, stored)
+            }
+            Some(stored) => Self::replay_bm25_wal(path, Arc::new(stored.index)),
+            None => {
+                let index = Arc::new(Bm25Index::new());
+                Self::rebuild_bm25_index(payload_storage, &index);
+                tracing::debug!(
+                    "BM25 snapshot absent; rebuilt from payload storage ({} docs)",
+                    index.len()
+                );
+                Ok(index)
+            }
         }
+    }
+
+    /// Replays the BM25 WAL — the delta since the snapshot `index` was
+    /// loaded from — on top of it.
+    pub(super) fn replay_bm25_wal(
+        path: &std::path::Path,
+        index: Arc<Bm25Index>,
+    ) -> Result<Arc<Bm25Index>> {
+        let wal_path = crate::index::bm25_persistence_wal::wal_path_for_bm25(path);
+        let replayed = crate::index::bm25_persistence_wal::wal_replay(&wal_path, &index)?;
+        tracing::debug!(
+            "BM25 restored from snapshot + {replayed} WAL entries ({} docs)",
+            index.len()
+        );
+        Ok(index)
     }
 
     // Create constructors are in lifecycle_create.rs
@@ -359,7 +382,7 @@ impl Collection {
         let index = Self::load_or_create_hnsw(&path, &config)?;
         // Issue #389: try snapshot + WAL first, fall back to payload
         // rebuild if no snapshot exists (backward-compat).
-        let text_index = Self::load_bm25_index(&path, &payload_storage)?;
+        let text_index = Self::load_bm25_index(&path, &payload_storage, RowUniverse::of(&config))?;
 
         let GraphParts {
             property_index,
@@ -780,10 +803,14 @@ impl Collection {
         &self.runtime.guard_rails
     }
 
-    /// Returns the collection configuration.
+    /// Returns the collection configuration. Its `point_count` is
+    /// [`len`](Self::len): the collection's size, for a graph every stored
+    /// node.
     #[must_use]
     pub fn config(&self) -> CollectionConfig {
-        self.storage.config.read().clone()
+        let mut config = self.storage.config.read().clone();
+        config.point_count = self.size();
+        config
     }
 
     /// Returns a reference to the collection's data path.

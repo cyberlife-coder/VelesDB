@@ -7,6 +7,8 @@ use crate::collection::types::Collection;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 
+use super::row_universe::{RowScope, RowUniverse};
+
 /// Outcome of a tracked metadata scan (WO-D2): the collected matches plus
 /// how many candidate ids were never visited because the scan already
 /// reached `limit`.
@@ -21,6 +23,14 @@ pub(crate) struct TrackedScan {
     /// Candidate ids left unvisited when the scan stopped at `limit`;
     /// `0` when the scan exhausted the candidate set.
     pub(crate) unscanned_ids: usize,
+}
+
+/// The storage guards a scan reads, with the rows they hold.
+#[derive(Clone, Copy)]
+struct ScanStores<'a> {
+    vector_storage: &'a dyn VectorStorage,
+    payload_storage: &'a dyn PayloadStorage,
+    universe: RowUniverse,
 }
 
 /// One `similarity(field, vector) <op> threshold` leaf, its query vector
@@ -114,14 +124,26 @@ impl Collection {
     /// (e.g. [`Self::scan_and_score_by_vector`]) need `unscanned_ids` to
     /// detect — and surface — silent truncation. Behavior and results are
     /// byte-identical to `execute_scan_query`.
+    pub(crate) fn execute_scan_query_tracked(
+        &self,
+        filter: &crate::filter::Filter,
+        limit: usize,
+        cond: Option<&crate::velesql::Condition>,
+    ) -> TrackedScan {
+        self.scan_rows_tracked(RowScope::All, filter, limit, cond)
+    }
+
+    /// The tracked scan over the rows `scope` reads: every SELECT row, or —
+    /// for a vector ranking — only those storing a vector.
     // vector_storage(2) before payload_storage(3), and held together for the
     // whole scan. This pair's order is not incidental: it was reversed here
     // and caused the deadlock reproduced by
     // tests/tokio_blocking_lock_contention_repro.rs. Tightening either guard
     // reopens that ordering question, so both are held deliberately.
     #[expect(clippy::significant_drop_tightening)]
-    pub(crate) fn execute_scan_query_tracked(
+    fn scan_rows_tracked(
         &self,
+        scope: RowScope,
         filter: &crate::filter::Filter,
         limit: usize,
         cond: Option<&crate::velesql::Condition>,
@@ -134,18 +156,20 @@ impl Collection {
         // IsMobile=1 matching 20% of rows). Both paths return identical results.
         if let Some(candidate_ids) = self.try_index_accelerated_ids(filter) {
             if self.prefer_candidate_scan(candidate_ids.len(), limit, cond) {
-                return self.scan_candidate_ids(&candidate_ids, filter, limit);
+                return self.scan_candidate_ids(scope, &candidate_ids, filter, limit);
             }
             // Fall through to sequential scan — cost model prefers full scan
         }
 
         // Full sequential scan (slow fallback for non-indexed conditions).
-        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
-        // reversed here. See tests/tokio_blocking_lock_contention_repro.rs.
+        // LOCK ORDER: config(1), then vector_storage(2) before
+        // payload_storage(3) — the pair was reversed here. See
+        // tests/tokio_blocking_lock_contention_repro.rs.
+        let universe = scope.universe(self.row_universe());
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
 
-        let ids = Self::scan_universe_ids(&*vector_storage, &*payload_storage);
+        let ids = universe.ids(&vector_storage, &payload_storage);
         let total_ids = ids.len();
 
         // Record rows actually visited as payload-mirror scan debt: once the
@@ -154,8 +178,11 @@ impl Collection {
         let mut scanned: u64 = 0;
         let counted_ids = ids.into_iter().inspect(|_| scanned += 1);
         let results = Self::collect_filtered_scan(
-            &*payload_storage,
-            &*vector_storage,
+            &ScanStores {
+                vector_storage: &*vector_storage,
+                payload_storage: &*payload_storage,
+                universe,
+            },
             counted_ids,
             filter,
             limit,
@@ -170,56 +197,21 @@ impl Collection {
         }
     }
 
-    /// The ids a full scan visits, in storage order: every point of the
-    /// vector storage, or — a metadata collection stores no vectors — every
-    /// point of the payload storage. This is also the universe an
-    /// `execute_aggregate` scans (`aggregate_scan_ids`): a point no SELECT
-    /// can reach counts in no aggregate either. It is a subset of the
-    /// storage-level set `all_point_ids` lists: a payload-only id in a
-    /// mixed collection is stored (and scrollable) yet is not a row here —
-    /// `collect_filtered_scan` drops candidate ids that violate the same
-    /// rule, so an `id IN` list or a bitmap superset cannot smuggle one in.
-    pub(super) fn scan_universe_ids(
-        vector_storage: &dyn VectorStorage,
-        payload_storage: &dyn PayloadStorage,
-    ) -> Vec<u64> {
-        let vector_ids = vector_storage.ids();
-        if vector_ids.is_empty() {
-            payload_storage.ids()
-        } else {
-            vector_ids
-        }
-    }
-
-    /// Whether `id` is in the scan universe ([`Self::scan_universe_ids`])
-    /// without listing it: vector-backed where any point carries a vector,
-    /// payload-backed where none does. A payload-only id in a vector
-    /// collection hydrates to nothing — `get` requires the vector — so it
-    /// is as invisible to a scan as a missing one.
-    pub(super) fn in_scan_universe(
-        vector_storage: &dyn VectorStorage,
-        payload_storage: &dyn PayloadStorage,
-        id: u64,
-    ) -> bool {
-        vector_storage.retrieve(id).ok().flatten().is_some()
-            || (vector_storage.is_empty() && payload_storage.retrieve(id).ok().flatten().is_some())
-    }
-
     /// Shared scan body: iterates `ids`, hydrates each matching point, and
     /// stops once `limit` results are collected. Extracted to keep the full
     /// scan and the candidate-id scan from duplicating the hydration loop.
     fn collect_filtered_scan(
-        payload_storage: &dyn PayloadStorage,
-        vector_storage: &dyn VectorStorage,
+        stores: &ScanStores<'_>,
         ids: impl IntoIterator<Item = u64>,
         filter: &crate::filter::Filter,
         limit: usize,
     ) -> Vec<SearchResult> {
         let now_secs = now_unix_secs();
-        // One discriminator for the whole scan, shared with
-        // `scan_universe_ids`/`in_scan_universe`: the collection is
-        // payload-backed when it stores no vector at all.
-        let payload_backed = vector_storage.is_empty();
+        let ScanStores {
+            vector_storage,
+            payload_storage,
+            universe,
+        } = *stores;
         let mut results = Vec::new();
         for id in ids {
             let payload = payload_storage.retrieve(id).ok().flatten();
@@ -229,14 +221,11 @@ impl Collection {
             let matches = filter.matches_point(id, payload.as_ref());
             if matches {
                 let vector = vector_storage.retrieve(id).ok().flatten();
-                // Candidate lists can name ids outside the scan universe
-                // (`id IN (...)` literals, bitmap supersets): an id with no
-                // stored vector is a SELECT row only in a payload-backed
-                // collection — a payload-only id in a mixed collection (a
-                // graph node, the residue of a torn delete) is not, and an
-                // id naming nothing at all is not either.
-                let in_universe = vector.is_some() || (payload_backed && payload.is_some());
-                if !in_universe {
+                // Candidate lists can name ids outside the row universe
+                // (`id IN (...)` literals, bitmap supersets): a payload-only
+                // id of a vector collection (the residue of a torn delete)
+                // is no row, nor is an id naming nothing at all.
+                if !universe.admits(vector.is_some(), payload.is_some()) {
                     continue;
                 }
                 results.push(SearchResult::new(
@@ -298,18 +287,24 @@ impl Collection {
     #[expect(clippy::significant_drop_tightening)]
     fn scan_candidate_ids(
         &self,
+        scope: RowScope,
         candidate_ids: &[u64],
         filter: &crate::filter::Filter,
         limit: usize,
     ) -> TrackedScan {
-        // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
-        // reversed here. See tests/tokio_blocking_lock_contention_repro.rs.
+        // LOCK ORDER: config(1), then vector_storage(2) before
+        // payload_storage(3) — the pair was reversed here. See
+        // tests/tokio_blocking_lock_contention_repro.rs.
+        let universe = scope.universe(self.row_universe());
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
         let mut scanned: usize = 0;
         let results = Self::collect_filtered_scan(
-            &*payload_storage,
-            &*vector_storage,
+            &ScanStores {
+                vector_storage: &*vector_storage,
+                payload_storage: &*payload_storage,
+                universe,
+            },
             candidate_ids.iter().copied().inspect(|_| scanned += 1),
             filter,
             limit,
@@ -321,6 +316,10 @@ impl Collection {
     }
 
     /// Scans all metadata-matching points and rescores them by exact vector similarity.
+    ///
+    /// Only rows storing a vector are scanned ([`RowScope::Embedded`]): a
+    /// row without one — a payload-only graph node — cannot answer a NEAR,
+    /// as the HNSW path it stands in for never returns one.
     ///
     /// Used by the `GraphFirst` CBO strategy when the metadata filter is **highly selective**
     /// (eliminates most of the collection). In that case the ANN index over-fetch approach
@@ -377,7 +376,7 @@ impl Collection {
         let metric = config.metric;
         let higher_is_better = metric.higher_is_better();
 
-        let scan = self.execute_scan_query_tracked(metadata_filter, scan_cap, None);
+        let scan = self.scan_rows_tracked(RowScope::Embedded, metadata_filter, scan_cap, None);
         if scan.results.len() >= scan_cap && scan.unscanned_ids > 0 {
             // Observability (WO-D2): the #901 pathological-query guard
             // otherwise degrades recall silently once a collection outgrows
@@ -408,13 +407,22 @@ impl Collection {
         };
         let mut topk = super::bounded_top_k::BoundedTopK::new(limit, higher_is_better);
         for mut r in scan.results {
-            // Exact distance computation using the stored vector.
-            let raw = metric.calculate(&r.point.vector, query);
+            // Exact distance computation using the stored vector. The scope
+            // admits only stored vectors, of the collection's dimension, as
+            // `query` is checked to be; a vector that still cannot be
+            // compared is no candidate rather than a kernel panic.
+            let Some(raw) = metric.checked_calculate(&r.point.vector, query) else {
+                continue;
+            };
             r.score = if raw.is_nan() { worst } else { raw };
             topk.offer(r);
         }
 
-        topk.into_sorted_vec()
+        // The rescored rows answer a NEAR: their score is the vector
+        // component, tagged as the HNSW path tags it.
+        let mut results = topk.into_sorted_vec();
+        crate::collection::search::tag_vector_component_scores(&mut results);
+        results
     }
 }
 

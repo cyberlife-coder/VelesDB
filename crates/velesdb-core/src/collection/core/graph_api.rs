@@ -697,8 +697,9 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns `Error::VectorNotAllowed` if no embeddings are configured,
-    /// or `Error::DimensionMismatch` if the query dimension is wrong.
+    /// Returns `Error::SearchNotSupported` (`VELES-015`) if no embeddings are
+    /// configured, or `Error::DimensionMismatch` if the query dimension is
+    /// wrong.
     pub fn search_by_embedding(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         let metric = self.check_embedding_query(query)?;
         // Not `VectorIndex::search`: it pins `Balanced` and so ignores `[search]` (#2430).
@@ -708,26 +709,19 @@ impl Collection {
                     .index
                     .search_with_quality(query, n, self.runtime_search_quality())
             })?;
-        Ok(self.hydrate_embedding_hits(&hits))
+        let mut results = self.hydrate_embedding_hits(&hits);
+        crate::collection::search::tag_vector_component_scores(&mut results);
+        Ok(results)
     }
 
-    /// Checks that this graph collection has embeddings of `query`'s
-    /// dimension, returning the metric they are compared with.
-    ///
-    /// The existing HNSW index is reused: its dimension is the embedding
-    /// dimension when the collection was created with embeddings, and a graph
-    /// without embeddings (dimension 0) is rejected here.
+    /// Checks `query` as every search entry point checks a query vector
+    /// ([`QueryVectorTarget::check_len`](crate::velesql::QueryVectorTarget::check_len)):
+    /// a graph without embeddings stores no vector to compare it with
+    /// (`VELES-015`), and one with embeddings compares only a query of their
+    /// dimension (`VELES-004`). Returns the metric they are compared with.
     fn check_embedding_query(&self, query: &[f32]) -> Result<DistanceMetric> {
         let config = self.storage.config.read();
-        let emb_dim = config
-            .embedding_dimension
-            .ok_or_else(|| Error::VectorNotAllowed(config.name.clone()))?;
-        if query.len() != emb_dim {
-            return Err(Error::DimensionMismatch {
-                expected: emb_dim,
-                actual: query.len(),
-            });
-        }
+        config.query_vector_target().check_len(query.len())?;
         Ok(config.metric)
     }
 

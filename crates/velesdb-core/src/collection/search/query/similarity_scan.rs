@@ -7,12 +7,18 @@
 //! evaluator, three-valued, each `similarity()` read on its own vector — so
 //! `NOT`, `OR` and named vectors need no path of their own. The rows come back
 //! most similar first to the first leaf (closest first under a distance), each
-//! scored by it; a row that leaf cannot score comes after them, carrying
-//! [`crate::velesql::METADATA_MATCH_SCORE`].
+//! scored by it and tagged with that score as its `vector_score` component; a
+//! row that leaf cannot score comes after them, carrying
+//! [`crate::velesql::METADATA_MATCH_SCORE`] and no component breakdown.
 //!
 //! It is the path for every shape no index can bound: a negated threshold, a
 //! threshold under `OR`, and one that is not a "closer than" bound on the
 //! point's own vector.
+//!
+//! It reads every row a SELECT reads ([`RowUniverse`]): a row without a
+//! vector of its own — a payload-only graph node, a metadata row — leaves a
+//! `similarity(vector, …)` leaf UNKNOWN, while its named vectors and its
+//! other predicates still decide it, as they do for `COUNT(*)`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -24,6 +30,7 @@ use crate::storage::{PayloadStorage, VectorStorage};
 use crate::velesql::Condition;
 
 use super::bounded_top_k::BoundedTopK;
+use super::row_universe::RowUniverse;
 
 /// The first `similarity()` leaf of a clause, resolved: what every row is
 /// ranked and scored by.
@@ -36,6 +43,7 @@ struct RankingLeaf {
 struct ScanCtx<'a> {
     vector_storage: &'a crate::storage::MmapStorage,
     payload_storage: &'a crate::storage::LogPayloadStorage,
+    universe: RowUniverse,
     metric: crate::distance::DistanceMetric,
     now_secs: u64,
     ranking: Option<&'a RankingLeaf>,
@@ -144,7 +152,8 @@ impl Collection {
     }
 
     /// The ids a scan visits, in id order: the `candidates` when given, else
-    /// every stored vector, refused above [`Self::SIMILARITY_SCAN_MAX`].
+    /// every row ([`Self::row_ids`]), refused above
+    /// [`Self::SIMILARITY_SCAN_MAX`].
     fn similarity_scan_ids(
         &self,
         candidates: Option<&HashSet<u64>>,
@@ -152,7 +161,7 @@ impl Collection {
     ) -> Result<Vec<u64>> {
         let mut ids: Vec<u64> = match candidates {
             Some(ids) => ids.iter().copied().collect(),
-            None => self.storage.vector_storage.read().ids(),
+            None => self.row_ids(),
         };
         ids.sort_unstable();
         Self::guard_similarity_scan(ids.len())?;
@@ -190,12 +199,16 @@ impl Collection {
         // HTTP deadlock was traced to (tests/tokio_blocking_lock_contention_repro.rs).
         // The guards are then handed to the evaluator so a nested MATCH leaf
         // reuses them instead of re-acquiring the same locks mid-scan.
-        let metric = self.storage.config.read().metric;
+        let (metric, universe) = {
+            let config = self.storage.config.read();
+            (config.metric, RowUniverse::of(&config))
+        };
         let now_secs = now_unix_secs();
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
         let match_guards = super::match_exec::MatchStorageGuards::single(
             metric,
+            universe,
             &vector_storage,
             &payload_storage,
         );
@@ -203,6 +216,7 @@ impl Collection {
         let scan = ScanCtx {
             vector_storage: &vector_storage,
             payload_storage: &payload_storage,
+            universe,
             metric,
             now_secs,
             ranking: ranking.as_ref(),
@@ -234,19 +248,19 @@ impl Collection {
         guards: &super::match_exec::MatchStorageGuards<'_>,
         graph_cache: &mut super::where_eval::GraphMatchEvalCache,
     ) -> Result<Option<(SearchResult, bool)>> {
-        // The SELECT universe of a vector collection: points with a vector.
-        let Ok(Some(vector)) = scan.vector_storage.retrieve(id) else {
-            return Ok(None);
-        };
+        let vector = scan.vector_storage.retrieve(id).ok().flatten();
         let payload = scan.payload_storage.retrieve(id).ok().flatten();
-        if is_payload_expired(payload.as_ref(), scan.now_secs) {
+        // A candidate id (a GraphFirst anchor) may name no row.
+        if !scan.universe.admits(vector.is_some(), payload.is_some())
+            || is_payload_expired(payload.as_ref(), scan.now_secs)
+        {
             return Ok(None);
         }
         if !self.evaluate_where_condition_for_record(
             condition,
             id,
             payload.as_ref(),
-            Some(&vector),
+            vector.as_deref(),
             params,
             &[],
             graph_cache,
@@ -256,37 +270,42 @@ impl Collection {
         }
         let score = scan
             .ranking
-            .and_then(|leaf| ranking_score(leaf, &vector, payload.as_ref(), scan.metric));
-        let row = SearchResult::new(
+            .and_then(|leaf| ranking_score(leaf, vector.as_deref(), payload.as_ref(), scan.metric));
+        let mut row = SearchResult::new(
             Point {
                 id,
-                vector,
+                vector: vector.unwrap_or_default(),
                 payload,
                 sparse_vectors: None,
             },
             score.unwrap_or(crate::velesql::METADATA_MATCH_SCORE),
         );
+        // A row the ranking leaf scored carries that similarity as its
+        // vector component; an unscored one carries no breakdown.
+        if score.is_some() {
+            crate::collection::search::tag_vector_component_scores(std::slice::from_mut(&mut row));
+        }
         Ok(Some((row, score.is_some())))
     }
 }
 
 /// The score of a row against the ranking leaf: `None` when the row has no
-/// vector of the query's dimension under the leaf's field.
+/// vector of the query's dimension under the leaf's field — its own
+/// (`own`, absent from a row that stores none) or a payload's named one.
 fn ranking_score(
     leaf: &RankingLeaf,
-    own: &[f32],
+    own: Option<&[f32]>,
     payload: Option<&serde_json::Value>,
     metric: crate::distance::DistanceMetric,
 ) -> Option<f32> {
     let named;
     let vector: &[f32] = if leaf.field == crate::velesql::PRIMARY_VECTOR_FIELD {
-        own
+        own?
     } else {
         named = crate::velesql::payload_vector(payload?, &leaf.field).ok()??;
         &named
     };
-    (vector.len() == leaf.query.len() && !vector.is_empty())
-        .then(|| metric.calculate(vector, &leaf.query))
+    metric.checked_calculate(vector, &leaf.query)
 }
 
 #[cfg(test)]

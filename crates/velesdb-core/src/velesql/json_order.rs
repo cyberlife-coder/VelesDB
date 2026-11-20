@@ -25,6 +25,20 @@ pub fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
     }
 }
 
+/// Compares two scores in ascending ORDER BY order, as
+/// [`compare_json_values`] compares values: a missing score — a row the
+/// ORDER BY key cannot score, such as a row without a vector under
+/// `similarity(vector, $q)` — is a null, sorting after every score (`NULLS
+/// LAST` ascending and, reversed, `NULLS FIRST` descending); scores compare by
+/// `total_cmp`.
+#[must_use]
+pub fn compare_scores(a: Option<f32>, b: Option<f32>) -> Ordering {
+    match (a, b) {
+        (Some(a), Some(b)) => a.total_cmp(&b),
+        _ => a.is_none().cmp(&b.is_none()),
+    }
+}
+
 /// The exact order of a JSON number against a `VelesQL` literal, as
 /// [`compare_numbers`] orders two JSON numbers: an integer literal and a
 /// float one are told apart even past 2^53, and `-0.0` equals `0`. `None`

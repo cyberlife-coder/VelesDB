@@ -424,8 +424,36 @@ fn test_resolve_sparse_vector_shorthand() {
 fn test_resolve_sparse_vector_missing_param() {
     let params = HashMap::new();
     let expr = crate::velesql::SparseVectorExpr::Parameter("missing".to_string());
-    let result = expr.resolve(&params);
-    assert!(result.is_err());
+    let err = expr
+        .resolve(&params)
+        .expect_err("test: $missing is not bound");
+    assert!(
+        matches!(&err, crate::error::Error::QueryParameter { name, .. } if name == "missing"),
+        "{err}"
+    );
+}
+
+/// A sparse-vector parameter of the wrong shape — not an object, mismatched
+/// `indices`/`values`, a key that is no index, a weight that is no number —
+/// is a parameter error (`VELES-038`) naming it, not a generic query error.
+#[test]
+fn test_resolve_sparse_vector_refuses_a_parameter_of_the_wrong_type() {
+    let expr = crate::velesql::SparseVectorExpr::Parameter("sv".to_string());
+    for bound in [
+        serde_json::json!([1, 2]),
+        serde_json::json!({ "indices": ["a"], "values": [0.5] }),
+        serde_json::json!({ "indices": [1], "values": ["a"] }),
+        serde_json::json!({ "indices": [1, 2], "values": [0.5] }),
+        serde_json::json!({ "x": 0.5 }),
+        serde_json::json!({ "1": "heavy" }),
+    ] {
+        let params = HashMap::from([("sv".to_string(), bound.clone())]);
+        let err = expr.resolve(&params).expect_err("test: wrong shape");
+        assert!(
+            matches!(&err, crate::error::Error::QueryParameter { name, .. } if name == "sv"),
+            "{bound}: {err}"
+        );
+    }
 }
 
 /// A JSON weight past `f32::MAX` narrows to infinity: VelesQL refuses it as

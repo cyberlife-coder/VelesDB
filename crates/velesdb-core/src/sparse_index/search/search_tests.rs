@@ -197,6 +197,26 @@ fn test_sparse_search_filtered_basic() {
     }
 }
 
+/// The filter decides which documents take a place among the `k`: the
+/// matches are found however far below the best they rank — an oversampled
+/// window of the best (eight times `k`) used to be filtered alone.
+#[test]
+fn test_sparse_search_filtered_finds_matches_below_any_window() {
+    let index = SparseInvertedIndex::new();
+    for i in 0..100_u64 {
+        index.insert(i, &make_vector(vec![(1, 200.0 - i as f32)]));
+    }
+
+    let query = make_vector(vec![(1, 1.0)]);
+    let filter = |id: u64| id >= 90;
+    let ids: Vec<u64> = sparse_search_filtered(&index, &query, 3, Some(&filter))
+        .iter()
+        .map(|r| r.doc_id)
+        .collect();
+
+    assert_eq!(ids, [90, 91, 92]);
+}
+
 #[test]
 fn test_sparse_search_filtered_none() {
     let index = SparseInvertedIndex::new();
@@ -237,4 +257,42 @@ fn test_maxscore_negative_weights() {
 
     assert_eq!(ms[0].doc_id, 2, "doc 2 should score highest (6.0)");
     assert!((ms[0].score - 6.0).abs() < 1e-5, "score={}", ms[0].score);
+}
+
+/// One tie rule on every sparse path: equal scores rank by ascending id —
+/// cut at `k` too, whatever order the accumulator visits the documents in
+/// (the dense one for a compact id space, the hash map past it) — and a NaN
+/// score ranks last whatever its sign.
+#[test]
+fn every_sparse_search_ranks_a_tie_by_ascending_id_and_a_nan_last() {
+    for base in [0_u64, 10_000_000] {
+        let index = SparseInvertedIndex::new();
+        for id in [5, 3, 9, 1, 7] {
+            index.insert(base + id, &make_vector(vec![(1, 1.0)]));
+        }
+        let query = make_vector(vec![(1, 2.0)]);
+        let expected: Vec<u64> = [1, 3, 5].iter().map(|id| base + id).collect();
+        let ids = |docs: Vec<ScoredDoc>| docs.iter().map(|d| d.doc_id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(sparse_search(&index, &query, 3)),
+            expected,
+            "base {base}"
+        );
+        let all = |_: u64| true;
+        assert_eq!(
+            ids(sparse_search_filtered(&index, &query, 3, Some(&all))),
+            expected,
+            "base {base}"
+        );
+    }
+    let index = SparseInvertedIndex::new();
+    index.insert(1, &make_vector(vec![(1, 3.0e38), (2, 3.0e38)]));
+    index.insert(2, &make_vector(vec![(1, 1.0)]));
+    // 2 · 3e38 overflows to +inf, - 2 · 3e38 to -inf: id 1 scores a NaN.
+    let query = make_vector(vec![(1, 2.0), (2, -2.0)]);
+    let order: Vec<u64> = sparse_search(&index, &query, 2)
+        .iter()
+        .map(|d| d.doc_id)
+        .collect();
+    assert_eq!(order, [2, 1]);
 }

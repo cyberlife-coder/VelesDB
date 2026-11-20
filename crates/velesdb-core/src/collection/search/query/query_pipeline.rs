@@ -207,8 +207,7 @@ impl Collection {
             ctx.set_client_timeout_ms(requested_ms);
         }
 
-        crate::velesql::QueryValidator::validate(query)
-            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        crate::velesql::QueryValidator::validate(query)?;
 
         Ok(ctx)
     }
@@ -245,7 +244,7 @@ impl Collection {
 
             // Issue #469: CBO calibration feedback — record actual ms vs cost estimate.
             let actual_ms = elapsed.as_secs_f64() * 1000.0;
-            let dataset_size = self.len();
+            let dataset_size = self.vector_count();
             let ef_search = fctx
                 .stmt
                 .with_clause
@@ -260,58 +259,44 @@ impl Collection {
         Ok(())
     }
 
-    /// Returns a copy of `stmt` with scalar WHERE parameter placeholders
-    /// resolved, or `None` when the statement has no WHERE clause.
+    /// Returns a copy of `query` whose WHERE is bound, or `None` when it has
+    /// no WHERE clause: its scalar parameter placeholders resolved, then its
+    /// text `MATCH` leaves bound to this collection's hits for `reader`
+    /// ([`Self::bind_where_text_matches`]).
     ///
     /// Resolving once at pipeline entry guarantees every downstream
     /// conversion to a payload [`Filter`](crate::filter::Filter) sees bound
     /// values: without this, `filter::Condition::from` would compare against
     /// the placeholder text `$name` ([`Value::to_json`](crate::velesql::Value::to_json))
-    /// instead of the caller's value, returning wrong rows without error.
+    /// instead of the caller's value, returning wrong rows without error —
+    /// and every evaluator reads a `MATCH` as the same hit set.
     ///
     /// # Errors
     ///
     /// Returns an error when a referenced parameter is missing or has an
     /// unsupported type, mirroring the vector-parameter paths.
-    pub(super) fn resolve_stmt_where_params(
-        stmt: &crate::velesql::SelectStatement,
+    pub(super) fn bind_query_where(
+        &self,
+        query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<Option<crate::velesql::SelectStatement>> {
-        let Some(cond) = stmt.where_clause.as_ref() else {
+        reader: super::text_match::WhereReader,
+    ) -> Result<Option<crate::velesql::Query>> {
+        let Some(cond) = query.select.where_clause.as_ref() else {
             return Ok(None);
         };
         let resolved = crate::velesql::bind_condition(cond, params)?;
-        let mut resolved_stmt = stmt.clone();
-        resolved_stmt.where_clause = Some(resolved);
-        Ok(Some(resolved_stmt))
+        let bound = self.bind_where_text_matches(&resolved, reader);
+        let mut select = query.select.clone();
+        select.where_clause = Some(bound);
+        Ok(Some(crate::velesql::Query {
+            select,
+            ..query.clone()
+        }))
     }
 
-    /// Returns a copy of `query` with scalar WHERE parameter placeholders
-    /// resolved, or `None` when the query has no WHERE clause.
-    ///
-    /// Convenience wrapper around [`Self::resolve_stmt_where_params`] for
-    /// callers that thread a whole [`Query`](crate::velesql::Query) through
-    /// their pipeline.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a referenced parameter is missing or has an
-    /// unsupported type.
-    pub(super) fn resolve_query_where_params(
-        query: &crate::velesql::Query,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<Option<crate::velesql::Query>> {
-        Ok(
-            Self::resolve_stmt_where_params(&query.select, params)?.map(|select| {
-                crate::velesql::Query {
-                    select,
-                    ..query.clone()
-                }
-            }),
-        )
-    }
-
-    /// Extracts all query components from the SELECT statement's WHERE clause.
+    /// Extracts all query components from the SELECT statement's WHERE
+    /// clause, which its caller validated as written
+    /// (`Collection::bind_select`).
     pub(super) fn extract_query_components(
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
@@ -324,7 +309,6 @@ impl Collection {
         let mut fused_search = None;
 
         if let Some(ref cond) = stmt.where_clause {
-            Self::validate_similarity_query_structure(cond)?;
             Self::collect_graph_match_predicates(cond, &mut graph_match_predicates);
             sparse_vector_search = Self::extract_sparse_vector_search(cond).cloned();
             fused_search = Self::extract_fused_vectors(cond, params)?;

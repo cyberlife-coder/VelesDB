@@ -40,6 +40,12 @@ impl Database {
         let base_collection = self.resolve_collection(&query.select.from)?;
         let joins = query.select.joins.clone();
         let (analysis, post_join_filters) = Self::prepare_join_pushdown(&mut query, params)?;
+        let post_join_filters = self.bind_post_join_text_matches(
+            &base_collection,
+            &query.select,
+            &joins,
+            post_join_filters,
+        )?;
         let row_budget = Self::join_row_budget(budget_select, &post_join_filters);
         // A RIGHT or FULL join tells an unmatched joined point only against
         // every base row, so it reads them all at once.
@@ -146,8 +152,10 @@ impl Database {
         Ok(results)
     }
 
-    /// Resolves WHERE parameters, runs pushdown analysis, and strips from the
-    /// base query every predicate the joined rows answer
+    /// Resolves which side each text `MATCH` reads
+    /// ([`Self::resolve_join_text_matches`]) and the WHERE parameters, runs
+    /// pushdown analysis, and strips from the base query every predicate the
+    /// joined rows answer
     /// ([`PushdownAnalysis::joined_row_filters`]).
     ///
     /// [`PushdownAnalysis::joined_row_filters`]: crate::collection::search::query::pushdown::PushdownAnalysis::joined_row_filters
@@ -162,6 +170,7 @@ impl Database {
         crate::collection::search::query::pushdown::PushdownAnalysis,
         Vec<crate::velesql::Condition>,
     )> {
+        Self::resolve_join_text_matches(&mut single_query.select)?;
         if let Some(cond) = single_query.select.where_clause.take() {
             single_query.select.where_clause = Some(crate::velesql::bind_condition(&cond, params)?);
         }

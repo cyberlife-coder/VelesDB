@@ -5,10 +5,10 @@
 //! and parameter resolution are in `having.rs`.
 
 use super::super::match_exec::MatchStorageGuards;
+use super::super::row_universe::RowScope;
 use super::super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;
 use crate::error::Result;
-use crate::storage::PayloadStorage;
 use crate::velesql::{GroupInput, Grouper, HavingClause, Query};
 use std::collections::HashMap;
 
@@ -25,8 +25,7 @@ impl Collection {
         // The grouper returns its groups by GROUP BY key already: only an
         // ORDER BY sorts them again.
         let sort_columns = if stmt.order_by.is_some() {
-            stmt.grouped_sort_keys()
-                .map_err(|e| crate::error::Error::Query(e.to_string()))?
+            stmt.grouped_sort_keys()?
         } else {
             Vec::new()
         };
@@ -98,8 +97,7 @@ impl Collection {
                 .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())));
         }
         let sort_columns = if stmt.order_by.is_some() {
-            stmt.grouped_sort_keys()
-                .map_err(|e| crate::error::Error::Query(e.to_string()))?
+            stmt.grouped_sort_keys()?
         } else {
             Vec::new()
         };
@@ -131,17 +129,23 @@ impl Collection {
         // LOCK ORDER: metric snapshot (config, rank 1) first, then
         // vector_storage(2) before payload_storage(3) — the pair was
         // reversed here. See tests/tokio_blocking_lock_contention_repro.rs.
-        let metric = self.storage.config.read().metric;
+        let (metric, rows) = self.aggregate_config_snapshot();
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
-        let match_guards = MatchStorageGuards::single(metric, &vector_storage, &payload_storage);
+        let match_guards =
+            MatchStorageGuards::single(metric, rows, &vector_storage, &payload_storage);
         // Rows feed the grouper in id order, so a float SUM or AVG adds its
         // values in the same order on every run, whatever the storage order.
-        let ids = Self::aggregate_scan_ids(&*vector_storage, &*payload_storage, filter.as_ref());
+        let ids = Self::aggregate_scan_ids(
+            RowScope::of_where(where_clause).universe(rows),
+            &vector_storage,
+            &payload_storage,
+            filter.as_ref(),
+        );
         let mut graph_cache = GraphMatchEvalCache::default();
+        let now_secs = crate::collection::expiry::now_unix_secs();
 
-        for id in ids {
-            let payload = payload_storage.retrieve(id).ok().flatten();
+        for (id, payload) in super::live_rows(&ids, &*payload_storage, now_secs) {
             let passes = if use_runtime {
                 let mut rt_ctx = super::RuntimeWhereCtx {
                     vector_storage: &*vector_storage,

@@ -23,6 +23,15 @@ fn saturating_u64(value: usize) -> u64 {
 const STATS_TTL: Duration = Duration::from_secs(30);
 
 impl Collection {
+    /// The rows the planner costs this collection by: its size
+    /// ([`len`](Self::len) — a graph's stored nodes, with an embedding or
+    /// not), O(1). ANALYZE's `row_count` and the MATCH planner's
+    /// `total_nodes` both read it, so the two cannot disagree, and planning
+    /// a query never counts.
+    pub(crate) fn row_count(&self) -> usize {
+        self.len()
+    }
+
     /// Analyzes the collection and returns statistics.
     ///
     /// This method collects:
@@ -47,12 +56,9 @@ impl Collection {
     pub fn analyze(&self) -> Result<CollectionStats, Error> {
         let mut collector = StatsCollector::new();
 
-        // Basic counts from config
         // Note: deleted_count and column_stats are placeholders for future tombstone tracking
         // and per-column cardinality analysis (EPIC-046 future work)
-        let config = self.storage.config.read();
-        collector.set_row_count(saturating_u64(config.point_count));
-        drop(config);
+        collector.set_row_count(saturating_u64(self.row_count()));
 
         let (payload_size_bytes, distinct_values, null_counts) = self.sample_payload_stats();
 

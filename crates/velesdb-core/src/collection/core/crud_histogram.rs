@@ -21,13 +21,13 @@ impl Collection {
     }
 
     /// Decrements old payload histograms and increments new ones in a single
-    /// read → modify → write cycle. Used by bulk upsert paths where points
+    /// read → modify → write cycle. Used by the upsert paths, where points
     /// replace existing data (old values must be decremented, new values
     /// incremented). One I/O cycle does what separate delete + upsert calls do in two.
     pub(super) fn update_histograms_replace(
         &self,
         old_payloads: &[Option<serde_json::Value>],
-        new_payloads: &[Option<serde_json::Value>],
+        new_payloads: &[Option<&serde_json::Value>],
     ) {
         let stats_path = self.storage.path.join("collection.stats.json");
         let _guard = self.query.stats_io_mutex.lock();
@@ -39,8 +39,10 @@ impl Collection {
             return;
         }
 
-        let mut modified = Self::apply_histogram_updates(&mut stats, old_payloads, false);
-        modified |= Self::apply_histogram_updates(&mut stats, new_payloads, true);
+        let mut modified =
+            Self::apply_histogram_updates(&mut stats, old_payloads.iter().flatten(), false);
+        modified |=
+            Self::apply_histogram_updates(&mut stats, new_payloads.iter().flatten().copied(), true);
 
         if modified {
             Self::write_persisted_stats(&stats_path, &stats);
@@ -70,7 +72,8 @@ impl Collection {
             return;
         }
 
-        let modified = Self::apply_histogram_updates(&mut stats, payloads, increment);
+        let modified =
+            Self::apply_histogram_updates(&mut stats, payloads.iter().flatten(), increment);
 
         if modified {
             Self::write_persisted_stats(&stats_path, &stats);
@@ -92,13 +95,13 @@ impl Collection {
     }
 
     /// Applies histogram updates for all payloads. Returns `true` if any histogram was modified.
-    fn apply_histogram_updates(
+    fn apply_histogram_updates<'a>(
         stats: &mut CollectionStats,
-        payloads: &[Option<serde_json::Value>],
+        payloads: impl Iterator<Item = &'a serde_json::Value>,
         increment: bool,
     ) -> bool {
         let mut modified = false;
-        for payload in payloads.iter().filter_map(|p| p.as_ref()) {
+        for payload in payloads {
             if let Some(obj) = payload.as_object() {
                 for (col, value) in obj {
                     if let Some(v) = payload_value_to_f64(value) {

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::point::{Point, SearchResult};
 
 /// A metadata-only collection storing structured payloads without vector indexes.
@@ -182,14 +182,8 @@ impl MetadataCollection {
     /// or if storage operations fail.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
-        let name = self.inner.config().name;
-
-        for point in &points {
-            if !point.vector.is_empty() {
-                return Err(Error::VectorNotAllowed(name.clone()));
-            }
-        }
-
+        // The write rule every surface applies (`VELES-014` for a vector).
+        self.inner.validate_points_for_upsert(&points)?;
         self.inner.upsert_metadata(points)
     }
 

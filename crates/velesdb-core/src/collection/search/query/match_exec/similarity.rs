@@ -277,17 +277,25 @@ impl Collection {
     /// Combines graph pattern matching with vector similarity, enabling queries
     /// like `MATCH (n:Article)-[:CITED]->(m) WHERE similarity(...) > 0.8`.
     ///
+    /// Each row's last node is scored against `query_vector`. A row is kept
+    /// when its score is at least `similarity_threshold` under a similarity
+    /// metric, at most it under a distance metric
+    /// ([`DistanceMetric::higher_is_better`](crate::DistanceMetric::higher_is_better));
+    /// `None` keeps every scored row.
+    ///
     /// Acquires `payload_storage` and `vector_storage` once for the entire
     /// scoring loop to avoid per-node lock acquisitions.
     ///
     /// # Errors
     ///
-    /// Returns an error on dimension mismatch or underlying storage errors.
+    /// Returns [`Error::Query`](crate::error::Error::Query) for a non-finite
+    /// threshold, before any row is read, and an error on dimension mismatch
+    /// or underlying storage errors.
     pub fn execute_match_with_similarity(
         &self,
         match_clause: &crate::velesql::MatchClause,
         query_vector: &[f32],
-        similarity_threshold: f32,
+        similarity_threshold: Option<f32>,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
         self.execute_match_with_similarity_reading(
@@ -310,11 +318,11 @@ impl Collection {
         &self,
         match_clause: &crate::velesql::MatchClause,
         query_vector: &[f32],
-        similarity_threshold: f32,
+        similarity_threshold: Option<f32>,
         params: &HashMap<String, serde_json::Value>,
         sources: &super::MatchSources,
     ) -> Result<Vec<MatchResult>> {
-        super::super::match_dispatch::validate_match_clause(match_clause)?;
+        self.validate_scored_match(match_clause, query_vector, similarity_threshold, params)?;
         // Raw traversal results (no ORDER BY/LIMIT yet): the similarity score is
         // computed below, then the shared finalize step applies ORDER BY + LIMIT.
         // The score sort reorders the rows, so the walk reads every one of them
@@ -335,8 +343,6 @@ impl Collection {
         let metric = config.metric;
         let expected_dimension = config.dimension;
         drop(config);
-
-        validate_dimension_match(expected_dimension, query_vector.len())?;
 
         // Hoist every storage lock once for the entire scoring loop, in the
         // cross-collection order (vector_storage(2) before payload_storage(3)
@@ -379,6 +385,22 @@ impl Collection {
         Ok(scored_results)
     }
 
+    /// Refuses a scored MATCH before the walk: a threshold core cannot apply,
+    /// a clause `QueryValidator` refuses, then the scoring vector and every
+    /// `similarity()` query vector the collection cannot score — a walk that
+    /// finds no row must not turn a refusal into `[]`.
+    fn validate_scored_match(
+        &self,
+        match_clause: &crate::velesql::MatchClause,
+        query_vector: &[f32],
+        similarity_threshold: Option<f32>,
+        params: &HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        crate::velesql::validate_match_threshold(Some(query_vector), similarity_threshold)?;
+        super::super::match_dispatch::validate_match_clause(match_clause)?;
+        self.check_match_query_vectors(match_clause, params, Some(query_vector))
+    }
+
     /// Scores each match result by vector similarity against the query vector.
     ///
     /// Filters results below the threshold and projects RETURN properties.
@@ -392,7 +414,7 @@ impl Collection {
         query_vector: &[f32],
         expected_dimension: usize,
         metric: crate::distance::DistanceMetric,
-        similarity_threshold: f32,
+        similarity_threshold: Option<f32>,
         higher_is_better: bool,
     ) -> Result<Vec<MatchResult>> {
         let mut scored_results = Vec::new();
@@ -403,13 +425,11 @@ impl Collection {
 
                 let score = metric.calculate(&node_vector, query_vector);
 
-                let passes_threshold = if higher_is_better {
-                    score >= similarity_threshold
-                } else {
-                    score <= similarity_threshold
-                };
-
-                if passes_threshold {
+                if crate::velesql::match_threshold_keeps(
+                    similarity_threshold,
+                    score,
+                    higher_is_better,
+                ) {
                     result.score = Some(score);
                     result.projected = self.project_properties_with_score(
                         &result.bindings,
@@ -533,10 +553,18 @@ impl Collection {
                 sparse_vectors: None,
             };
 
-            // Use depth as inverse score (closer = higher score)
-            let score = mr.score.unwrap_or(1.0 / (mr.depth as f32 + 1.0));
-
-            results.push(SearchResult::new(point, score));
+            // A `similarity()` score is the row's vector component, tagged
+            // as a SELECT row's is; without one, depth is an inverse score
+            // (closer = higher) and the row carries no component breakdown.
+            let result = match mr.score {
+                Some(similarity) => SearchResult::with_component_scores(
+                    point,
+                    similarity,
+                    smallvec::smallvec![("vector_score", similarity)],
+                ),
+                None => SearchResult::new(point, 1.0 / (mr.depth as f32 + 1.0)),
+            };
+            results.push(result);
         }
 
         Ok(results)

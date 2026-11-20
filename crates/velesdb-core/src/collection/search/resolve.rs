@@ -8,43 +8,22 @@
 //! Currently tested directly; callers will migrate in a follow-up.
 
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
-use crate::error::Error;
+use crate::collection::search::query::row_universe::RowUniverse;
+use crate::collection::types::Collection;
 use crate::point::{Point, SearchResult};
 use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 
-/// Hydrates a single `(id, score)` pair into a `SearchResult` by fetching
-/// vector and payload from storage.
+/// Hydrates, in `pairs` order, the first `limit` points that are rows of
+/// `universe`, are not TTL-expired at `now_secs` and that `accept` takes.
+/// `accept` sees the point's id and its payload (`None` when the point has
+/// none), so a filter built from `VelesQL` can read its `id` column.
 ///
-/// Returns `None` if the vector cannot be retrieved (deleted point) or the
-/// payload is TTL-expired at `now_secs` (expired points are invisible on
-/// every read surface).
-#[inline]
-pub(crate) fn hydrate_point(
-    id: u64,
-    score: f32,
-    now_secs: u64,
-    vector_storage: &dyn VectorStorage,
-    payload_storage: &dyn PayloadStorage,
-) -> Option<SearchResult> {
-    let vector = vector_storage.retrieve(id).ok().flatten()?;
-    let payload = payload_storage.retrieve(id).ok().flatten();
-    if is_payload_expired(payload.as_ref(), now_secs) {
-        return None;
-    }
-    let point = Point {
-        id,
-        vector,
-        payload,
-        sparse_vectors: None,
-    };
-    Some(SearchResult::new(point, score))
-}
-
-/// Hydrates, in `pairs` order, the first `limit` points that exist, are not
-/// TTL-expired at `now_secs` and that `accept` takes. `accept` sees the
-/// point's id and its payload (`None` when the point has none), so a filter
-/// built from `VelesQL` can read its `id` column.
+/// A vector ranking passes the vectors' universe (`RowScope::Embedded`): a
+/// candidate without a vector is no row of it. A text search passes the
+/// collection's rows (`RowScope::All`), so a metadata row or a graph node
+/// without an embedding is hydrated with an empty `vector`, as SELECT reads
+/// it.
 ///
 /// A point's payload is read and judged before its vector is copied, so a
 /// filtered search copies the vectors of the `limit` points it returns, not
@@ -53,6 +32,7 @@ pub(crate) fn hydrate_accepted(
     pairs: impl IntoIterator<Item = (u64, f32)>,
     limit: usize,
     now_secs: u64,
+    universe: RowUniverse,
     vector_storage: &dyn VectorStorage,
     payload_storage: &dyn PayloadStorage,
     accept: impl Fn(u64, Option<&serde_json::Value>) -> bool,
@@ -66,12 +46,13 @@ pub(crate) fn hydrate_accepted(
         if is_payload_expired(payload.as_ref(), now_secs) || !accept(id, payload.as_ref()) {
             continue;
         }
-        let Some(vector) = vector_storage.retrieve(id).ok().flatten() else {
+        let vector = vector_storage.retrieve(id).ok().flatten();
+        if !universe.admits(vector.is_some(), payload.is_some()) {
             continue;
-        };
+        }
         let point = Point {
             id,
-            vector,
+            vector: vector.unwrap_or_default(),
             payload,
             sparse_vectors: None,
         };
@@ -80,44 +61,60 @@ pub(crate) fn hydrate_accepted(
     results
 }
 
-/// Resolves a slice of `(id, score)` tuples into `SearchResult` values,
-/// taking at most `limit` results.
-pub(crate) fn resolve_id_score_pairs(
-    pairs: &[(u64, f32)],
-    limit: usize,
+/// Hydrates `rows`, in order, as SELECT reads them: rows the caller admitted
+/// under the storage guards it passes, so none is judged again — a row
+/// without a vector (a metadata row, a graph node without an embedding)
+/// gets an empty one. What a ranked walk hands back
+/// (`Collection::ranked_hits`).
+pub(crate) fn hydrate_rows(
+    rows: Vec<(u64, f32)>,
     vector_storage: &dyn VectorStorage,
     payload_storage: &dyn PayloadStorage,
 ) -> Vec<SearchResult> {
-    let now_secs = now_unix_secs();
-    pairs
-        .iter()
-        .take(limit)
-        .filter_map(|&(id, score)| {
-            hydrate_point(id, score, now_secs, vector_storage, payload_storage)
+    rows.into_iter()
+        .map(|(id, score)| {
+            let point = Point {
+                id,
+                vector: vector_storage
+                    .retrieve(id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
+                payload: payload_storage.retrieve(id).ok().flatten(),
+                sparse_vectors: None,
+            };
+            SearchResult::new(point, score)
         })
         .collect()
 }
 
-/// Resolves `ScoredResult` values into full `SearchResult` with point data.
-pub(crate) fn resolve_scored_results(
-    results: &[ScoredResult],
-    vector_storage: &dyn VectorStorage,
-    payload_storage: &dyn PayloadStorage,
-) -> Vec<SearchResult> {
-    let now_secs = now_unix_secs();
-    results
-        .iter()
-        .filter_map(|sr| hydrate_point(sr.id, sr.score, now_secs, vector_storage, payload_storage))
-        .collect()
-}
-
-/// Sorts `(id, score, payload)` candidates by score according to metric
-/// direction: descending when `higher_is_better` (cosine, dot product),
-/// ascending otherwise (euclidean distance). The deferred-hydration filter
-/// path ranks candidates before any vector is read, so it sorts triples, not
-/// results.
-pub(crate) fn sort_scored_ids_by_metric<P>(entries: &mut [(u64, f32, P)], higher_is_better: bool) {
-    entries.sort_unstable_by(|a, b| crate::distance::rank_scores(a.1, b.1, higher_is_better));
+impl Collection {
+    /// Hydrates, in `pairs` order, the first `limit` that are rows of
+    /// `universe` and not TTL-expired, as SELECT reads them: one deleted or
+    /// expired since it was ranked is skipped before the `limit` is counted,
+    /// so the next one takes its place, never returned empty. What every
+    /// fused ranking resolves by — a multi-query search's, a dense+sparse
+    /// hybrid's.
+    ///
+    /// LOCK ORDER: vector_storage(2) → payload_storage(3), both read.
+    pub(crate) fn first_rows(
+        &self,
+        pairs: impl IntoIterator<Item = (u64, f32)>,
+        limit: usize,
+        universe: RowUniverse,
+    ) -> Vec<SearchResult> {
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        hydrate_accepted(
+            pairs,
+            limit,
+            now_unix_secs(),
+            universe,
+            &*vector_storage,
+            &*payload_storage,
+            |_, _| true,
+        )
+    }
 }
 
 /// Sorts `ScoredResult` values by score according to metric direction.
@@ -126,20 +123,6 @@ pub(crate) fn sort_scored_ids_by_metric<P>(entries: &mut [(u64, f32, P)], higher
 pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_better: bool) {
     results
         .sort_unstable_by(|a, b| crate::distance::rank_scores(a.score, b.score, higher_is_better));
-}
-
-/// Creates a "sparse index not found" error with consistent formatting.
-///
-/// Displays `<default>` for empty index names to aid debugging.
-pub(crate) fn sparse_index_not_found(index_name: &str) -> Error {
-    Error::Config(format!(
-        "Sparse index '{}' not found",
-        if index_name.is_empty() {
-            "<default>"
-        } else {
-            index_name
-        }
-    ))
 }
 
 #[cfg(test)]

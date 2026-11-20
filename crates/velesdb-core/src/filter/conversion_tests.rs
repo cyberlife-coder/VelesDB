@@ -236,8 +236,10 @@ fn test_group_condition() {
     assert!(matches!(result, Condition::Gt { field, .. } if field == "val"));
 }
 
+/// A text `MATCH` is no substring test: the engine binds it to its BM25
+/// hits before lowering, so one left in a WHERE is its ranking, TRUE.
 #[test]
-fn test_match_condition() {
+fn test_match_condition_lowers_to_the_engine_handled_identity() {
     let m = MatchCondition {
         column: "text".to_string(),
         query: "hello".to_string(),
@@ -245,7 +247,8 @@ fn test_match_condition() {
     let cond = crate::velesql::Condition::Match(m);
     let result: Condition = cond.into();
     assert!(
-        matches!(result, Condition::Contains { field, value } if field == "text" && value == "hello")
+        matches!(&result, Condition::And { conditions } if conditions.is_empty()),
+        "{result:?}"
     );
 }
 

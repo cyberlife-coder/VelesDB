@@ -290,9 +290,10 @@ impl GraphCollection {
         self.inner.get_node_degree(node_id)
     }
 
-    /// Returns the IDs of all nodes that have a stored payload, ascending.
+    /// Returns the IDs of every stored node — with an embedding, a payload
+    /// or both — ascending.
     ///
-    /// Nodes that appear only as edge endpoints without a stored payload
+    /// Nodes that appear only as edge endpoints, with nothing stored,
     /// are not included. Use [`GraphCollection::get_edges`] to discover
     /// all referenced node IDs.
     #[must_use]
@@ -321,19 +322,34 @@ impl GraphCollection {
         )
     }
 
-    /// Returns the number of nodes (points) stored in this collection.
+    /// Returns the number of nodes stored in this collection: every node,
+    /// with an embedding, a payload or both, each counted once — the ids
+    /// [`all_node_ids`](Self::all_node_ids) lists.
+    ///
+    /// A storage count, as a vector collection's `len` is: a TTL-expired node
+    /// the sweep has not removed yet is still counted, while
+    /// [`get`](Self::get) already reads it as `None`. Between expiry and the
+    /// sweep, `len` can therefore exceed the nodes `get` returns.
+    ///
+    /// O(1): the size every write keeps exact (`Collection::len`), which
+    /// every view of the collection reports.
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
-    /// Returns `true` if the collection contains no nodes.
+    /// Returns `true` if the collection stores no node at all, in O(1).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
     /// Retrieves nodes by IDs, returning `None` for missing entries.
+    ///
+    /// Every stored node is returned with what it stores: its payload, and
+    /// its embedding as `vector` — empty for a node without one (a
+    /// payload-only node, or any node of a graph without embeddings) — the
+    /// rows `Collection::get` reads on a graph.
     #[must_use]
     pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {
         self.inner.get(ids)
@@ -575,8 +591,9 @@ impl GraphCollection {
     ///
     /// # Errors
     ///
-    /// Returns `Error::VectorNotAllowed` if this collection has no embeddings,
-    /// or `Error::DimensionMismatch` if the query dimension is wrong.
+    /// Returns `Error::SearchNotSupported` (`VELES-015`) if this collection
+    /// has no embeddings, or `Error::DimensionMismatch` if the query
+    /// dimension is wrong.
     pub fn search_by_embedding(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         // `search.max_results` bounds the caller-visible row count (#2591);
         // `usize::MAX` when no `Database` pushed a cap at open.
@@ -590,8 +607,9 @@ impl GraphCollection {
     ///
     /// # Errors
     ///
-    /// Returns `Error::VectorNotAllowed` if this collection has no embeddings,
-    /// or `Error::DimensionMismatch` if the query dimension is wrong.
+    /// Returns `Error::SearchNotSupported` (`VELES-015`) if this collection
+    /// has no embeddings, or `Error::DimensionMismatch` if the query
+    /// dimension is wrong.
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         self.search_by_embedding(query, k)
     }

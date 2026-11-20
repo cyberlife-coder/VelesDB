@@ -64,18 +64,6 @@ impl ParseError {
             format!("Unknown column '{col}'"),
         )
     }
-
-    /// Creates a missing parameter error.
-    #[must_use]
-    pub fn missing_parameter(param: impl Into<String>) -> Self {
-        let p = param.into();
-        Self::new(
-            ParseErrorKind::MissingParameter,
-            0,
-            p.clone(),
-            format!("Missing parameter '${p}'"),
-        )
-    }
 }
 
 impl fmt::Display for ParseError {
@@ -93,6 +81,10 @@ impl fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 /// Kind of parse error.
+///
+/// A `$name` the caller did not bind, or bound to a value its position cannot
+/// take, is not a parse error — the parser never sees the parameters — but
+/// an execution error, [`crate::Error::QueryParameter`] (`VELES-038`).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseErrorKind {
@@ -106,8 +98,6 @@ pub enum ParseErrorKind {
     CollectionNotFound,
     /// Vector dimension mismatch (E004).
     DimensionMismatch,
-    /// Missing parameter (E005).
-    MissingParameter,
     /// Type mismatch (E006).
     TypeMismatch,
     /// Query complexity guardrail exceeded (E007).
@@ -123,7 +113,6 @@ impl ParseErrorKind {
             Self::UnknownColumn => "E002",
             Self::CollectionNotFound => "E003",
             Self::DimensionMismatch => "E004",
-            Self::MissingParameter => "E005",
             Self::TypeMismatch => "E006",
             Self::ComplexityLimit => "E007",
         }

@@ -304,3 +304,50 @@ fn test_filtered_search_deeper_than_the_oversampling_ceiling_is_filled() {
         .expect("test: filtered fusion");
     assert_eq!(fused.len(), WANTED, "multi_query_search");
 }
+
+/// The collections that store no vector — a metadata collection, and a graph
+/// created without embeddings (dimension 0) — refuse every batch and fused
+/// search with `SearchNotSupported` (VELES-015), as the single search does,
+/// instead of a `DimensionMismatch` "expected 0".
+#[test]
+fn a_collection_without_vectors_refuses_every_batch_search() {
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let metadata = Collection::create_metadata_only(dir.path().join("tags"), "tags")
+        .expect("test: metadata collection");
+    let graph = Collection::create_graph_collection(
+        dir.path().join("kg"),
+        "kg",
+        crate::collection::graph::GraphSchema::schemaless(),
+        None,
+        crate::DistanceMetric::Cosine,
+    )
+    .expect("test: graph without embeddings");
+    let query = [1.0_f32, 0.0];
+    for (name, col) in [("tags", &metadata), ("kg", &graph)] {
+        let refusals = [
+            ("search", col.search(&query, 3).err()),
+            ("batch", col.search_batch_parallel(&[&query], 3).err()),
+            (
+                "filtered batch",
+                col.search_batch_with_filters(&[&query], 3, &[None]).err(),
+            ),
+            (
+                "fused",
+                col.multi_query_search(
+                    &[&query],
+                    3,
+                    crate::fusion::FusionStrategy::RRF { k: 60 },
+                    None,
+                )
+                .err(),
+            ),
+        ];
+        for (path, err) in refusals {
+            let err = err.unwrap_or_else(|| panic!("test: {name} {path} must refuse"));
+            assert!(
+                matches!(err, crate::error::Error::SearchNotSupported(ref n) if n == name),
+                "{name} {path}: {err:?}"
+            );
+        }
+    }
+}

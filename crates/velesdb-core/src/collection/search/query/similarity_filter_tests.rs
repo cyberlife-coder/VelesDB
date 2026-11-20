@@ -388,11 +388,11 @@ mod scan_score_semantics {
         );
     }
 
-    /// The documented universes, in one mixed collection: `all_ids` is the
-    /// storage set (vector ∪ payload ids); SELECT, COUNT(*) and `get` —
-    /// which UPDATE's target list goes through — see only the
-    /// vector-backed rows. A payload-only graph node is stored and
-    /// scrollable, and is a row on none of the read paths.
+    /// The documented universes, in one mixed collection: the storage set is
+    /// vector ∪ payload ids; `all_ids`, SELECT, COUNT(*) and `get` — which
+    /// UPDATE's target list goes through — see only the vector-backed rows.
+    /// A payload-only graph node is stored, and is a row on none of the read
+    /// paths.
     #[test]
     fn payload_only_ids_are_stored_but_outside_the_select_universe() {
         let (_dir, col) = setup(
@@ -407,8 +407,9 @@ mod scan_score_semantics {
         col.store_node_payload(9, &serde_json::json!({"_labels": ["Doc"], "cat": "a"}))
             .expect("test: store node payload");
 
-        // Storage set: all three ids.
-        assert_eq!(col.all_ids(), vec![1, 2, 9]);
+        // Storage set: all three ids; the rows (`all_ids`): the two vectors.
+        assert_eq!(col.stored_ids(), vec![1, 2, 9]);
+        assert_eq!(col.all_ids(), vec![1, 2]);
 
         // Scan universe: the vector-backed points only.
         let empty = Filter::new(Condition::And { conditions: vec![] });
@@ -436,7 +437,7 @@ mod scan_score_semantics {
 
         // `get` — the read UPDATE's target list goes through — hydrates
         // the same two rows: UPDATE can mutate nothing SELECT cannot see.
-        let rows = col.get(&col.all_ids());
+        let rows = col.get(&col.stored_ids());
         assert_eq!(rows.iter().flatten().count(), 2);
     }
 }

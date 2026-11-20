@@ -175,12 +175,8 @@ pub fn execute_join(
 
 /// Validates the JOIN condition and verifies it targets the column store primary key.
 fn validate_join_condition(join: &JoinClause, column_store: &ColumnStore) -> Result<JoinCondition> {
-    let condition = resolve_join_condition(join).ok_or_else(|| {
-        Error::Query(format!(
-            "JOIN on table '{}' must use ON condition or USING(single_column).",
-            join.table
-        ))
-    })?;
+    let condition =
+        resolve_join_condition(join).ok_or_else(|| Error::join_without_key(&join.table))?;
 
     let join_column = &condition.left.column;
     let pk_column = column_store.primary_key_column().ok_or_else(|| {

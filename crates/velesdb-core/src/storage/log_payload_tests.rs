@@ -1268,3 +1268,65 @@ fn test_store_after_a_failed_flush_reads_back_its_own_payload() {
 fn test_deferred_batch_after_a_failed_flush_reads_back_its_own_payload() {
     assert_recovers_after_failed_flush(|s| s.store_batch_deferred(&[(2, &json!({"b": "kept"}))]));
 }
+
+// -------------------------------------------------------------------------
+// wal_position / ids_written_since: what a graph's BM25 catch-up reads
+// -------------------------------------------------------------------------
+
+fn sorted(mut ids: Vec<u64>) -> Vec<u64> {
+    ids.sort_unstable();
+    ids
+}
+
+#[test]
+fn test_wal_position_moves_past_every_record_written() {
+    let (mut storage, _temp) = create_test_storage();
+    let start = storage.wal_position();
+
+    storage.store(1, &json!({"a": 1})).expect("store");
+    let after_one = storage.wal_position();
+    storage.delete(1).expect("delete");
+
+    assert!(
+        after_one > start,
+        "a store moves it: {start} -> {after_one}"
+    );
+    assert!(storage.wal_position() > after_one, "so does a tombstone");
+}
+
+#[test]
+fn test_ids_written_since_lists_the_payloads_stored_from_a_position() {
+    let (mut storage, _temp) = create_test_storage();
+    storage.store(1, &json!({"a": 1})).expect("store 1");
+    storage.store(2, &json!({"a": 2})).expect("store 2");
+    let position = storage.wal_position();
+    storage.store(3, &json!({"a": 3})).expect("store 3");
+    storage.store(1, &json!({"a": 10})).expect("rewrite 1");
+    storage.store(4, &json!({"a": 4})).expect("store 4");
+    storage.delete(4).expect("delete 4");
+
+    assert_eq!(
+        sorted(storage.ids_written_since(position)),
+        vec![1, 3],
+        "the new id and the rewritten one; not 2, written before, nor 4, deleted since"
+    );
+    assert!(storage.ids_written_since(storage.wal_position()).is_empty());
+    assert_eq!(sorted(storage.ids_written_since(0)), vec![1, 2, 3]);
+}
+
+#[test]
+fn test_wal_position_and_ids_written_since_survive_a_reopen() {
+    let temp = TempDir::new().expect("temp dir");
+    let (position, end) = {
+        let mut storage = LogPayloadStorage::new(temp.path()).expect("storage");
+        storage.store(1, &json!({"a": 1})).expect("store 1");
+        let position = storage.wal_position();
+        storage.store(2, &json!({"a": 2})).expect("store 2");
+        storage.flush().expect("flush");
+        (position, storage.wal_position())
+    };
+
+    let reopened = LogPayloadStorage::new(temp.path()).expect("reopen");
+    assert_eq!(reopened.wal_position(), end, "the log end");
+    assert_eq!(reopened.ids_written_since(position), vec![2]);
+}

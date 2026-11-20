@@ -36,15 +36,12 @@ mod strategy_tests;
 mod weight_validation_tests;
 
 mod branches;
-pub use branches::{branch_depth, dense_sparse_candidate_k, MAX_FUSED_VECTORS};
+pub use branches::{
+    branch_depth, dense_sparse_candidate_k, validate_fused_vector_count, MAX_FUSED_VECTORS,
+};
 pub use name::FusionParams;
 pub use strategy::{
     min_max_normalize, sort_fused_results, FusionError, FusionStrategy, ScoreDirection,
     DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT, DEFAULT_RELATIVE_SCORE_SPARSE_WEIGHT, DEFAULT_RRF_K,
     DEFAULT_WEIGHTED_AVG_WEIGHT, DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
 };
-
-// For the hybrid search's top-k heap (`collection::search`), which exists
-// only with `persistence`.
-#[cfg(feature = "persistence")]
-pub(crate) use strategy::fused_score_cmp;

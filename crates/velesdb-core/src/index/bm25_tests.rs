@@ -496,3 +496,28 @@ fn test_from_snapshot_counts_only_scorable_corpus() {
         "doc_count must reflect only the scorable corpus, not all documents"
     );
 }
+
+/// Documents scoring the same rank by ascending id, whatever order they
+/// were indexed in — the one tie rule of every ranking — so the cut at `k`
+/// keeps the lowest ids, as a collection's ranked walk does.
+#[test]
+fn test_bm25_search_ties_rank_by_ascending_id() {
+    let index = Bm25Index::new();
+    for id in [9, 3, 7, 5, 8] {
+        index.add_document(id, "rust language");
+    }
+    index.add_document(1, "rust rust rust");
+
+    let order: Vec<u64> = index
+        .search("rust", 10)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(order, [1, 3, 5, 7, 8, 9]);
+    let cut: Vec<u64> = index
+        .search("rust", 3)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(cut, [1, 3, 5]);
+}

@@ -194,12 +194,48 @@ fn a_failed_batch_indexes_what_storage_holds() {
     storage
         .store_batch(&[(1, &rewritten)])
         .expect("test: the record written before the failure");
-    failed.reindex_after_failed_node_write(&storage, &ids, &old);
+    let _held = failed.reindex_after_failed_node_write(&storage, &ids, &old);
     drop(storage);
 
     assert_eq!(label_members(&failed, "Person"), vec![2]);
     assert_eq!(label_members(&failed, "Company"), vec![1]);
     assert_eq!(range_index_shape(&failed), range_index_shape(&landed));
+}
+
+/// A rewrite fails at its barrier, through the payload WAL's fault seam. The
+/// BM25 WAL must never lead payload durability: a write the store did not
+/// complete leaves no BM25 frame and no change to the BM25 index, so the node
+/// still matches the text it had. The failed batch used to run the BM25
+/// effects of whatever storage read back, appending and syncing a frame that
+/// removed the node's document.
+#[test]
+fn a_failed_write_leaves_no_bm25_frame_for_a_payload_that_is_not_durable() {
+    let (collection, dir) = graph_collection();
+    collection
+        .store_node_payload(1, &json!({ "content": "seed text" }))
+        .expect("test: seed");
+    let wal = crate::index::bm25_persistence_wal::wal_path_for_bm25(dir.path());
+    let wal_len = || std::fs::metadata(&wal).map_or(0, |m| m.len());
+    let seeded = wal_len();
+    {
+        let _fault = crate::storage::fail_next_wal_flush();
+        let written = collection.store_node_payload(1, &json!({ "content": "hello world" }));
+        assert!(written.is_err(), "precondition: the barrier failed");
+    }
+    assert_eq!(wal_len(), seeded, "no BM25 frame for a write that failed");
+    // The BM25 index itself: a text search would also hydrate each hit
+    // from storage, which cannot read a record whose barrier failed.
+    let hits = |query: &str| -> Vec<u64> {
+        collection
+            .storage
+            .text_index
+            .search(query, 10)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    };
+    assert_eq!(hits("seed"), vec![1], "the BM25 index is untouched");
+    assert!(hits("world").is_empty());
 }
 
 #[test]

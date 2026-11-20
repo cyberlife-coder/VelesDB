@@ -158,10 +158,7 @@ impl<'a> ScoreContext<'a> {
 
     /// Looks up a named component score, returning `None` if absent.
     fn lookup_component(&self, name: &str) -> Option<f32> {
-        self.component_scores?
-            .iter()
-            .find(|(k, _)| *k == name)
-            .map(|(_, v)| *v)
+        crate::point::component_score_in(self.component_scores?, name)
     }
 
     /// Resolves a variable name from the payload; `id` is the point id.

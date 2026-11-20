@@ -322,7 +322,7 @@ fn test_upsert_batch_produces_searchable_results() {
     let query: Vec<f32> = (0..16).map(|d| d as f32 * 0.01).collect();
     let results = coll.search(&query, 10).expect("search should succeed");
     assert_eq!(results.len(), 10, "search should return k results");
-    assert_eq!(coll.storage.config.read().point_count, 200);
+    assert_eq!(coll.len(), 200);
 }
 
 /// Regression test: `upsert()` throughput should be close to `upsert_bulk()`.
@@ -1141,7 +1141,7 @@ fn test_phase2_does_not_skip_with_sparse_vectors() {
 
 /// Issue #425: BM25 skip in bulk path must still index text when payloads exist.
 ///
-/// Regression: the bulk path's BM25 update (`update_text_index_for_entries`)
+/// Regression: the bulk path's BM25 update (`apply_payload_effects`)
 /// must NOT be skipped when at least one point has a payload containing text.
 #[test]
 fn test_bulk_bm25_skip_does_not_lose_text() {
@@ -1638,7 +1638,7 @@ fn test_execute_match_with_similarity_order_by_overrides_score() {
         .execute_match_with_similarity(
             &person_order_by_age_clause(true, Some(100)),
             &query_vector,
-            0.0,
+            Some(0.0),
             &params,
         )
         .expect("execute_match_with_similarity should succeed");

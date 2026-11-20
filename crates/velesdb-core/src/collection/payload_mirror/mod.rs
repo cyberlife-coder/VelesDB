@@ -395,7 +395,7 @@ impl crate::collection::types::Collection {
 
     /// Whether accumulated scan debt justifies the one-off build cost.
     fn mirror_build_due(&self) -> bool {
-        let rows = self.storage.config.read().point_count;
+        let rows = self.len();
         rows >= MIRROR_MIN_ROWS && self.storage.payload_mirror.scan_debt() >= rows as u64
     }
 

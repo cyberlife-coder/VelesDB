@@ -9,19 +9,37 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
-use crate::collection::expiry::{is_payload_expired, now_unix_secs};
+use crate::collection::search::live::Nearest;
 use crate::collection::search::pending::PendingRestriction;
-use crate::collection::search::resolve;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
 use crate::scored_result::ScoredResult;
-use crate::storage::{PayloadStorage, VectorStorage};
-use crate::validation::validate_dimension_match;
 use crate::velesql::{decide_filter_strategy, FilterDecisionMode, FilterStrategy};
+
+/// How a filtered search with quality overrides asks the index for its
+/// candidates, chosen once from the filter's prefilter bitmap.
+#[derive(Clone, Copy)]
+enum FilteredIndexSearch<'b> {
+    /// No bitmap, or one too unselective to restrict by: the quality-aware
+    /// HNSW search, every candidate post-filtered.
+    PostFilter,
+    /// An exact scan of the bitmap's points.
+    BitmapScan(&'b roaring::RoaringBitmap),
+    /// The HNSW search restricted to the bitmap's points.
+    BitmapHnsw(&'b roaring::RoaringBitmap),
+}
 
 impl Collection {
     /// Searches with metadata filtering AND quality options from a WITH clause.
+    ///
+    /// The `k` nearest live rows the filter matches, among as many live
+    /// candidates as the chosen index search calls for
+    /// (`collection/search/live.rs`). The filter re-matches every candidate
+    /// even on the bitmap paths: the prefilter bitmap can be a SUPERSET of
+    /// the true matches (non-indexed conditions, mirror false positives),
+    /// and the post-filter path merges every pending point unfiltered (see
+    /// `pending.rs`) — skipping it would return false positives.
     ///
     /// # Errors
     ///
@@ -38,8 +56,7 @@ impl Collection {
         }
 
         let config = self.storage.config.read();
-        validate_dimension_match(config.dimension, query.len())?;
-        let higher_is_better = config.metric.higher_is_better();
+        config.query_vector_target().check_len(query.len())?;
         let metric = config.metric;
         drop(config);
 
@@ -50,27 +67,28 @@ impl Collection {
         // unbounded brute-force scan, matching the unfiltered entry points.
         self.enforce_perfect_mode_limit(quality)?;
 
-        let index_results = match self.build_prefilter_bitmap(filter) {
+        let bitmap = self.build_prefilter_bitmap(filter);
+        let search = match &bitmap {
             Some(bitmap) if bitmap.is_empty() => {
                 // The bitmap answers the query exactly: nothing matches.
                 opts.record_executed_strategy(FilterStrategy::PreFilterExact);
                 return Ok(Vec::new());
             }
-            Some(bitmap) => {
-                self.search_with_bitmap_strategy(query, k, filter, quality, metric, &bitmap, opts)?
-            }
+            Some(bitmap) => self.bitmap_search(bitmap, opts),
             None => {
                 opts.record_executed_strategy(FilterStrategy::PostFilter);
-                self.search_post_filter(query, k, filter, quality, metric)?
+                FilteredIndexSearch::PostFilter
             }
         };
-
-        // The full re-match inside `filter_and_hydrate` is deliberate even on
-        // the bitmap path: the prefilter bitmap can be a SUPERSET of the true
-        // matches (non-indexed conditions, mirror false positives), and the
-        // post-filter path merges every pending point unfiltered (see
-        // `pending.rs`) — skipping it would return false positives.
-        Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
+        let budget = match search {
+            FilteredIndexSearch::BitmapScan(_) => k,
+            _ => compute_oversampled_k(k, filter, Some(&self.get_stats())),
+        };
+        self.nearest_live_where(
+            &Nearest::judging(query, metric, k, budget),
+            |id, payload| filter.matches_point(id, payload),
+            |n| self.run_filtered_index_search(search, query, n, quality, metric),
+        )
     }
 
     /// [`Self::search_with_filter_and_opts`] for callers that carry a bare
@@ -99,126 +117,64 @@ impl Collection {
         self.search_with_filter_and_opts(query, k, filter, &opts)
     }
 
-    /// Dispatches to full-scan, HNSW+bitmap, or post-filter based on selectivity.
-    #[allow(clippy::too_many_arguments)] // Reason: dispatch bundle mirrors the query's full shape.
-    fn search_with_bitmap_strategy(
+    /// Chooses the index search for a non-empty prefilter `bitmap` by its
+    /// selectivity, recording the strategy.
+    fn bitmap_search<'b>(
         &self,
-        query: &[f32],
-        k: usize,
-        filter: &crate::filter::Filter,
-        quality: crate::SearchQuality,
-        metric: crate::DistanceMetric,
-        bitmap: &roaring::RoaringBitmap,
+        bitmap: &'b roaring::RoaringBitmap,
         opts: &crate::collection::search::query::QuerySearchOptions,
-    ) -> Result<Vec<ScoredResult>> {
+    ) -> FilteredIndexSearch<'b> {
         let selectivity =
             super::vector::estimate_real_selectivity(bitmap, self.storage.index.len());
-
         let strategy = decide_filter_strategy(selectivity, FilterDecisionMode::Exact, None);
         opts.record_executed_strategy(strategy);
-        // `filter_and_hydrate` re-matches every result: the bitmap can be a
-        // superset of the matches.
-        let restriction = PendingRestriction::within(bitmap).and_post_filtered();
         match strategy {
-            FilterStrategy::PostFilter => {
-                self.search_post_filter(query, k, filter, quality, metric)
-            }
-            FilterStrategy::PreFilterExact => {
-                self.search_merging_pending(query, k, metric, restriction, |n| {
-                    self.storage.index.full_scan_with_bitmap(query, n, bitmap)
-                })
-            }
+            FilterStrategy::PostFilter => FilteredIndexSearch::PostFilter,
+            FilterStrategy::PreFilterExact => FilteredIndexSearch::BitmapScan(bitmap),
             // Exact mode never emits `None`; if it ever did, the bitmap
             // path below is the shape that ran. Spelled out (no wildcard)
             // so a future `FilterStrategy` variant fails compilation here
             // and forces an explicit dispatch choice.
             FilterStrategy::PreFilter | FilterStrategy::None => {
-                let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
-                self.search_merging_pending(query, candidates_k, metric, restriction, |n| {
-                    self.storage
-                        .index
-                        .search_with_quality_and_bitmap(query, n, quality, bitmap)
-                })
+                FilteredIndexSearch::BitmapHnsw(bitmap)
             }
         }
     }
 
-    /// Searches without bitmap pre-filter, using quality-aware HNSW + post-filter.
-    fn search_post_filter(
+    /// Asks the index for its `n` nearest candidates by `search`, the
+    /// pending points merged under the matching restriction.
+    fn run_filtered_index_search(
         &self,
+        search: FilteredIndexSearch<'_>,
         query: &[f32],
-        k: usize,
-        filter: &crate::filter::Filter,
+        n: usize,
         quality: crate::SearchQuality,
         metric: crate::DistanceMetric,
     ) -> Result<Vec<ScoredResult>> {
-        let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
-        self.search_merging_pending(
-            query,
-            candidates_k,
-            metric,
-            PendingRestriction::post_filtered(),
-            |n| self.storage.index.search_with_quality(query, n, quality),
-        )
-    }
-
-    /// Filters scored results by metadata and hydrates matching points.
-    pub(super) fn filter_and_hydrate(
-        &self,
-        index_results: Vec<ScoredResult>,
-        filter: &crate::filter::Filter,
-        k: usize,
-        higher_is_better: bool,
-    ) -> Vec<SearchResult> {
-        let vector_storage = self.storage.vector_storage.read();
-        let payload_storage = self.storage.payload_storage.read();
-        let now_secs = now_unix_secs();
-
-        // Phase 1 — filter on payloads only. The pre-fix shape hydrated the
-        // vector of EVERY candidate that passed the filter (the oversampled
-        // budget reaches 10 000), then threw all but k away: up to ~60 MB of
-        // vector copies per 1536-dim query to keep 10.
-        let mut passing: Vec<(u64, f32, Option<serde_json::Value>)> = index_results
-            .into_iter()
-            .filter_map(|sr| {
-                let payload = payload_storage.retrieve(sr.id).ok().flatten();
-                if is_payload_expired(payload.as_ref(), now_secs) {
-                    return None;
-                }
-                // Correctness-bearing re-match (see dispatch above): candidates
-                // may come from an over-approximate bitmap or be pending points
-                // a post-filtered search merged unfiltered.
-                let matches = filter.matches_point(sr.id, payload.as_ref());
-                matches.then_some((sr.id, sr.score, payload))
-            })
-            .collect();
-        // Phase 1 read every payload it needs; phase 2 touches vectors only.
-        drop(payload_storage);
-
-        resolve::sort_scored_ids_by_metric(&mut passing, higher_is_better);
-
-        // Phase 2 — hydrate vectors in sorted order until k results stand. A
-        // candidate whose vector is missing is skipped and the next one takes
-        // its place, exactly as the eager filter_map dropped it pre-truncate.
-        let mut results: Vec<SearchResult> = passing
-            .into_iter()
-            .filter_map(|(id, score, payload)| {
-                let vector = vector_storage.retrieve(id).ok().flatten()?;
-                Some(SearchResult::new(
-                    crate::point::Point {
-                        id,
-                        vector,
-                        payload,
-                        sparse_vectors: None,
-                    },
-                    score,
-                ))
-            })
-            .take(k)
-            .collect();
-        drop(vector_storage);
-        super::vector::tag_vector_component_scores(&mut results);
-        results
+        let index = &self.storage.index;
+        match search {
+            FilteredIndexSearch::PostFilter => self.search_merging_pending(
+                query,
+                n,
+                metric,
+                PendingRestriction::post_filtered(),
+                |m| index.search_with_quality(query, m, quality),
+            ),
+            FilteredIndexSearch::BitmapScan(bitmap) => self.search_merging_pending(
+                query,
+                n,
+                metric,
+                PendingRestriction::within(bitmap).and_post_filtered(),
+                |m| index.full_scan_with_bitmap(query, m, bitmap),
+            ),
+            FilteredIndexSearch::BitmapHnsw(bitmap) => self.search_merging_pending(
+                query,
+                n,
+                metric,
+                PendingRestriction::within(bitmap).and_post_filtered(),
+                |m| index.search_with_quality_and_bitmap(query, m, quality, bitmap),
+            ),
+        }
     }
 }
 

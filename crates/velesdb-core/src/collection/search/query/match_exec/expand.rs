@@ -136,6 +136,10 @@ impl Collection {
             return Ok(());
         }
         let next_id = Self::edge_next_node(edge, current_id);
+        // Every node a path passes through is a row (`MatchStorageGuards`).
+        if !walk.ctx.guards.is_row(next_id) {
+            return Ok(());
+        }
         walk.path.push(edge.id());
         let saved_alias = Self::bind_edge_alias(walk, rel_idx, edge.id());
         *walk.ctx.iteration_count += 1;

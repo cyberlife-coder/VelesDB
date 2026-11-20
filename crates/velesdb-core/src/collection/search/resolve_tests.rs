@@ -37,41 +37,6 @@ fn sort_scored_by_metric_empty_slice_is_noop() {
     assert!(results.is_empty());
 }
 
-// --- sparse_index_not_found ---
-
-#[test]
-fn sparse_index_not_found_with_named_index() {
-    let err = sparse_index_not_found("my_index");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("my_index"),
-        "Error message should contain the index name, got: {msg}"
-    );
-    // Verify it is an Error::Config variant.
-    assert!(matches!(err, Error::Config(_)));
-}
-
-#[test]
-fn sparse_index_not_found_empty_name_shows_default() {
-    let err = sparse_index_not_found("");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("<default>"),
-        "Empty name should display <default>, got: {msg}"
-    );
-    assert!(matches!(err, Error::Config(_)));
-}
-
-#[test]
-fn sparse_index_not_found_nonempty_does_not_show_default() {
-    let err = sparse_index_not_found("title_sparse");
-    let msg = err.to_string();
-    assert!(
-        !msg.contains("<default>"),
-        "Non-empty name should not show <default>, got: {msg}"
-    );
-}
-
 // --- hydrate_accepted ---
 
 /// Vector storage holding `[id as f32]` for every id, counting the vectors
@@ -138,9 +103,15 @@ fn hydrate_accepted_copies_only_the_vectors_it_returns() {
     let vectors = CountingVectors::default();
     let pairs = (0..100_u64).map(|id| (id, 1.0));
 
-    let results = hydrate_accepted(pairs, 3, 0, &vectors, &ParityPayloads, |_id, payload| {
-        payload.and_then(|p| p.get("even")) == Some(&serde_json::Value::Bool(true))
-    });
+    let results = hydrate_accepted(
+        pairs,
+        3,
+        0,
+        RowUniverse::Vectors,
+        &vectors,
+        &ParityPayloads,
+        |_id, payload| payload.and_then(|p| p.get("even")) == Some(&serde_json::Value::Bool(true)),
+    );
 
     let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
     assert_eq!(ids, vec![0, 2, 4], "the first accepted, in candidate order");
@@ -148,5 +119,58 @@ fn hydrate_accepted_copies_only_the_vectors_it_returns() {
         vectors.retrieved.load(std::sync::atomic::Ordering::Relaxed),
         3,
         "one vector copy per returned point"
+    );
+}
+
+/// Vector storage holding a vector for even ids only.
+struct EvenVectors;
+
+impl crate::storage::VectorStorage for EvenVectors {
+    fn store(&mut self, _: u64, _: &[f32]) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn store_batch(&mut self, vectors: &[(u64, &[f32])]) -> std::io::Result<usize> {
+        Ok(vectors.len())
+    }
+    fn retrieve(&self, id: u64) -> std::io::Result<Option<Vec<f32>>> {
+        Ok(id.is_multiple_of(2).then(|| vec![1.0]))
+    }
+    fn delete(&mut self, _: u64) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+    fn len(&self) -> usize {
+        0
+    }
+    fn ids(&self) -> Vec<u64> {
+        Vec::new()
+    }
+}
+
+/// A hydration admits the rows of its universe: a vector ranking only ids
+/// storing a vector, a text search a graph's every stored node — one without
+/// a vector read with an empty one.
+#[test]
+fn hydrate_accepted_admits_the_rows_of_its_universe() {
+    let hydrate = |universe| -> Vec<(u64, usize)> {
+        hydrate_accepted(
+            (0..4_u64).map(|id| (id, 1.0)),
+            10,
+            0,
+            universe,
+            &EvenVectors,
+            &ParityPayloads,
+            |_, _| true,
+        )
+        .iter()
+        .map(|r| (r.point.id, r.point.vector.len()))
+        .collect()
+    };
+    assert_eq!(hydrate(RowUniverse::Vectors), vec![(0, 1), (2, 1)]);
+    assert_eq!(
+        hydrate(RowUniverse::StoredNodes),
+        vec![(0, 1), (1, 0), (2, 1), (3, 0)]
     );
 }

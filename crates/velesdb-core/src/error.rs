@@ -78,12 +78,18 @@ pub enum Error {
     #[error("[VELES-013] Internal error: {0}")]
     Internal(String),
 
-    /// Vector not allowed on metadata-only collection (VELES-014).
-    #[error("[VELES-014] Vector not allowed on metadata-only collection '{0}'")]
+    /// A vector given to a write that stores none: into a collection that
+    /// stores no vectors — a metadata collection, a graph without embeddings
+    /// — through any write surface, the collection API or DML; or to
+    /// `upsert_metadata` on a vector collection, which writes payloads only
+    /// (VELES-014). Carries the name of the collection written to.
+    #[error("[VELES-014] Vector not allowed on '{0}': this write stores no vector")]
     VectorNotAllowed(String),
 
-    /// Search not supported on metadata-only collection (VELES-015).
-    #[error("[VELES-015] Vector search not supported on metadata-only collection '{0}'. Use query() instead.")]
+    /// Vector search, or a query vector, against a collection that stores
+    /// no vectors — a metadata collection, a graph without embeddings
+    /// (VELES-015). Carries the name of what was searched.
+    #[error("[VELES-015] Vector search not supported on '{0}': it stores no vectors. Use query() instead.")]
     SearchNotSupported(String),
 
     /// Vector required for vector collection (VELES-016).
@@ -238,9 +244,79 @@ pub enum Error {
     /// again, and it never counts toward a circuit breaker.
     #[error("[VELES-037] Access denied: {0}")]
     AccessDenied(String),
+
+    /// Query parameter error (VELES-038).
+    ///
+    /// A `$name` the statement references is not bound in the caller's
+    /// parameters, or is bound to a value its position cannot take: an array
+    /// or object where a scalar goes, anything but an array of numbers where
+    /// a vector goes, a malformed sparse-vector map. It has its own code,
+    /// apart from [`Error::Query`], so every surface can tell "supply this
+    /// parameter" from "rewrite this statement": REST answers `400` with
+    /// `VELES-038` (`422` `VELESQL_PARAMETER_ERROR` on the `VelesQL`
+    /// endpoints), Python raises `VelesQLParameterError`, a `ValueError`. A
+    /// caller error: it never counts toward a circuit breaker.
+    #[error("[VELES-038] Query parameter ${name}: {reason}")]
+    QueryParameter {
+        /// The parameter's name, without the leading `$`.
+        name: String,
+        /// Why it cannot be bound: unbound, or the value it should have.
+        reason: String,
+    },
 }
 
 impl Error {
+    /// [`Error::QueryParameter`] for a `$name` the caller bound nothing to.
+    /// Another engine binds through `velesql`'s binders, which raise it.
+    #[must_use]
+    pub(crate) fn unbound_parameter(name: &str) -> Self {
+        Self::QueryParameter {
+            name: name.to_string(),
+            reason: "not bound".to_string(),
+        }
+    }
+
+    /// [`Error::QueryParameter`] for a `$name` bound to a value its position
+    /// cannot take; `reason` says what it should be.
+    pub(crate) fn invalid_parameter(name: &str, reason: impl Into<String>) -> Self {
+        Self::QueryParameter {
+            name: name.to_string(),
+            reason: reason.into(),
+        }
+    }
+
+    /// [`Error::Config`] for a sparse index named `index_name` that does not
+    /// exist — `<default>` naming the unnamed one. The one wording of this
+    /// refusal: core's sparse search and hybrid paths and the WASM executor
+    /// raise it.
+    #[must_use]
+    pub fn sparse_index_not_found(index_name: &str) -> Self {
+        let shown = if index_name.is_empty() {
+            "<default>"
+        } else {
+            index_name
+        };
+        Self::Config(format!("Sparse index '{shown}' not found"))
+    }
+
+    /// [`Error::Query`] for a JOIN on `table` that names no join key: neither
+    /// an `ON` condition nor `USING(single_column)`. The one wording of this
+    /// refusal: core's column-store and hash joins and the WASM executor
+    /// raise it.
+    #[must_use]
+    pub fn join_without_key(table: &str) -> Self {
+        Self::Query(format!(
+            "JOIN on table '{table}' must use ON condition or USING(single_column)."
+        ))
+    }
+
+    /// [`Error::Query`] for a MATCH pattern without a node. The one wording
+    /// of this refusal: core's walk and the WASM executor raise it.
+    #[must_use]
+    pub fn pattern_without_node() -> Self {
+        Self::Query("Pattern must have at least one node".to_string())
+    }
+
     /// Returns the error code (e.g., "VELES-001").
     #[must_use]
     pub const fn code(&self) -> &'static str {
@@ -282,6 +358,7 @@ impl Error {
             Self::SnapshotBuildFailed(_) => "VELES-035",
             Self::IncompatibleSchemaVersion { .. } => "VELES-036",
             Self::AccessDenied(_) => "VELES-037",
+            Self::QueryParameter { .. } => "VELES-038",
         }
     }
 
@@ -344,7 +421,8 @@ impl Error {
             | Self::InvalidQuantizerConfig(_)
             | Self::InvalidDimension { .. }
             | Self::InvalidCollectionName { .. }
-            | Self::AccessDenied(_) => true,
+            | Self::AccessDenied(_)
+            | Self::QueryParameter { .. } => true,
             Self::GuardRail { kind, .. } => kind.is_caller_error(),
             Self::Storage(_)
             | Self::Index(_)
@@ -369,6 +447,22 @@ impl Error {
 impl From<crate::velesql::ParseError> for Error {
     fn from(err: crate::velesql::ParseError) -> Self {
         Self::Query(err.to_string())
+    }
+}
+
+/// Conversion from a semantic validation failure (`QueryValidator`): a query
+/// error whose message carries the validation code (`[V012] …`).
+impl From<crate::velesql::ValidationError> for Error {
+    fn from(err: crate::velesql::ValidationError) -> Self {
+        Self::Query(err.to_string())
+    }
+}
+
+/// Conversion from a fusion failure (weights, directions): a configuration
+/// error, the caller's fusion settings being what is wrong.
+impl From<crate::fusion::FusionError> for Error {
+    fn from(err: crate::fusion::FusionError) -> Self {
+        Self::Config(format!("Fusion error: {err}"))
     }
 }
 

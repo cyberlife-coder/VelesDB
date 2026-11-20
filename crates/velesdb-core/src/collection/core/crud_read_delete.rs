@@ -5,14 +5,22 @@
 //! - `delete()` — point deletion (vector + metadata paths)
 //! - `len()`, `is_empty()`, `all_ids()` — collection-level accessors
 
+use super::crud_indexing::TextWalShared;
+use super::size::StoreEffect;
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
+use crate::collection::search::query::row_universe::RowUniverse;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::Point;
 use crate::storage::{PayloadStorage, VectorStorage};
 
 impl Collection {
-    /// Retrieves points by their IDs.
+    /// Retrieves points by their IDs: the rows of `ids`, read as every SELECT
+    /// reads them. A graph's are its stored nodes — an embedding, a payload or
+    /// both, a node without an embedding read with an empty `vector`
+    /// ([`get_stored_nodes`](Self::get_stored_nodes)); a vector collection's
+    /// are its vectors; a metadata collection's its payloads. An id that is no
+    /// row reads `None`.
     ///
     /// TTL-expired points (payload `_veles_expires_at <= now`) are returned
     /// as `None`, like deleted points: expired-but-not-yet-swept entries are
@@ -21,6 +29,9 @@ impl Collection {
     /// [`get_raw`](Self::get_raw).
     #[must_use]
     pub fn get(&self, ids: &[u64]) -> Vec<Option<Point>> {
+        if self.row_universe() == RowUniverse::StoredNodes {
+            return self.get_stored_nodes(ids);
+        }
         let now_secs = now_unix_secs();
         self.get_raw(ids)
             .into_iter()
@@ -49,11 +60,7 @@ impl Collection {
     /// acquire vector before payload.
     #[must_use]
     pub(crate) fn get_raw(&self, ids: &[u64]) -> Vec<Option<Point>> {
-        let config = self.storage.config.read();
-        let is_metadata_only = config.metadata_only;
-        drop(config);
-
-        if is_metadata_only {
+        if self.row_universe() == RowUniverse::Payloads {
             // Metadata-only collections never touch vector_storage, so the
             // canonical order is trivially satisfied here.
             let payload_storage = self.storage.payload_storage.read();
@@ -97,13 +104,19 @@ impl Collection {
         self.delete_counted(ids).map(|_| ())
     }
 
-    /// Deletes points by their IDs and returns how many of them held a point.
+    /// Deletes points by their IDs and returns how many of them were rows.
     ///
-    /// An id counts when the collection stored anything under it — a vector
-    /// or a payload, the set [`all_ids`](Self::all_ids) lists — so a missing
-    /// id counts zero and an id repeated in `ids` counts once. The count is
-    /// taken under the same write locks as the delete, so two concurrent
-    /// deletes of one id never both count it.
+    /// An id counts when it was a row of the collection ([`RowUniverse`]):
+    /// a vector collection's vector, a metadata collection's payload, a
+    /// graph's stored node — the set [`all_ids`](Self::all_ids) lists — so a
+    /// missing id counts zero and an id repeated in `ids` counts once. What
+    /// a vector collection stores for an id that is no row there — an edge
+    /// endpoint's payload (`store_node_payload`), or a payload an earlier
+    /// version let `upsert_metadata` store without a vector, with its BM25
+    /// document and sparse vectors — is removed with it and not counted.
+    /// Every store is cleared of each id, sparse indexes included, on every
+    /// kind of collection. The count is taken under the same write locks as
+    /// the delete, so two concurrent deletes of one id never both count it.
     ///
     /// # Errors
     ///
@@ -112,11 +125,20 @@ impl Collection {
         // Collect old payloads for incremental histogram maintenance.
         let old_payloads = self.collect_payloads_for_histogram(ids);
 
-        let removed = if self.storage.config.read().metadata_only {
-            self.delete_metadata_only(ids)?
+        let rows = self.row_universe();
+        // Taken before any node lock or storage guard: a delete waiting for
+        // a BM25 snapshot holds up no read (`text_wal_shared`).
+        let text_wal = self.text_wal_shared();
+        let removed = if rows == RowUniverse::Payloads {
+            self.delete_metadata_only(ids, &text_wal)?
         } else {
-            self.delete_vector_points(ids)?
+            self.delete_vector_core_stores(ids, rows, &text_wal)?
         };
+        drop(text_wal);
+        // Sparse postings go with every row, a metadata row's included: a
+        // SPARSE_NEAR must never reach a deleted id.
+        self.delete_from_sparse_indexes(ids)?;
+        self.delete_from_deferred_stores(ids);
 
         // Decrement histogram buckets BEFORE cache invalidation.
         self.update_histograms_on_delete(&old_payloads);
@@ -201,53 +223,43 @@ impl Collection {
     /// the vector store: one WAL barrier for the payload tombstones, one for
     /// the BM25 removes — O(1) fsyncs per batch under the write locks, not
     /// O(N) (finding C3).
-    fn delete_metadata_only(&self, ids: &[u64]) -> Result<usize> {
-        // LOCK ORDER: payload_storage(3) → label_index(7), released →
-        // graph_range_indexes(7).
-        let mut payload_storage = self.storage.payload_storage.write();
-        let mut label_idx = self.graph.label_index.write();
+    ///
+    /// LOCK ORDER: text_wal(1a, shared, held by the caller) →
+    /// payload_storage(3) → label_index(7), released →
+    /// graph_range_indexes(7).
+    fn delete_metadata_only(&self, ids: &[u64], text_wal: &TextWalShared<'_>) -> Result<usize> {
+        let rows = RowUniverse::Payloads;
+        self.write_payload_store(rows, ids, StoreEffect::StoresOrRemoves, |payload_storage| {
+            let mut label_idx = self.graph.label_index.write();
 
-        // Old payloads must be read before the tombstones land — they feed
-        // the secondary-index, label-index and range-index removals below.
-        let old_payloads: Vec<Option<serde_json::Value>> = ids
-            .iter()
-            .map(|&id| payload_storage.retrieve(id).ok().flatten())
-            .collect();
-        let removed = count_held(ids, &old_payloads, |_| false);
+            // Old payloads must be read before the tombstones land — they feed
+            // the secondary-index, label-index and range-index removals below.
+            let old_payloads: Vec<Option<serde_json::Value>> = ids
+                .iter()
+                .map(|&id| payload_storage.retrieve(id).ok().flatten())
+                .collect();
+            let removed = count_rows(RowUniverse::Payloads, ids, &old_payloads, |_| false);
 
-        payload_storage.delete_batch(ids)?;
-        // Issue #389: WAL-before-apply for BM25 removes so crash recovery
-        // replays the remove — batched, one barrier for the whole batch.
-        #[cfg(feature = "persistence")]
-        self.append_bm25_wal_remove_batch(ids)?;
+            payload_storage.delete_batch(ids)?;
+            // Issue #389: WAL-before-apply for BM25 removes so crash recovery
+            // replays the remove — batched, one barrier for the whole batch.
+            self.change_text_index_ordered(text_wal, &[], ids)?;
 
-        for (&id, old_payload) in ids.iter().zip(&old_payloads) {
-            self.storage.text_index.remove_document(id);
-            self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
-            if let Some(ref old) = old_payload {
-                label_idx.remove_from_payload(id, old);
+            for (&id, old_payload) in ids.iter().zip(&old_payloads) {
+                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
+                if let Some(ref old) = old_payload {
+                    label_idx.remove_from_payload(id, old);
+                }
             }
-        }
-        let point_count = payload_storage.ids().len();
-        // label_index(7) released before graph_range_indexes(7), its rank-mate.
-        drop(label_idx);
-        self.remove_deleted_from_range_indexes(ids, &old_payloads);
-        drop(payload_storage);
-        self.storage.config.write().point_count = point_count;
-        Ok(removed)
-    }
-
-    /// Deletes vector points from all stores (vector, payload, index, caches,
-    /// sparse, delta) and returns how many ids held a point.
-    fn delete_vector_points(&self, ids: &[u64]) -> Result<usize> {
-        let removed = self.delete_vector_core_stores(ids)?;
-        self.delete_from_sparse_indexes(ids)?;
-        self.delete_from_deferred_stores(ids);
-        Ok(removed)
+            // label_index(7) released before graph_range_indexes(7), its rank-mate.
+            drop(label_idx);
+            self.remove_deleted_from_range_indexes(ids, &old_payloads);
+            Ok(removed)
+        })
     }
 
     /// Removes points from vector/payload storage, HNSW index, caches, and the
-    /// label and range indexes.
+    /// label and range indexes, and returns how many ids were `rows`.
     ///
     /// # Durability: one barrier per touched store per batch (finding C3)
     ///
@@ -289,49 +301,51 @@ impl Collection {
     ///   `collection/core/recovery.rs`, and the leftover payload/BM25
     ///   entries are exactly what a re-issued delete of the same ids cleans
     ///   up.
-    fn delete_vector_core_stores(&self, ids: &[u64]) -> Result<usize> {
-        // LOCK ORDER: vector_storage(2) → payload_storage(3) → caches(4) → label_index(7),
-        // released → graph_range_indexes(7).
-        let mut vector_storage = self.storage.vector_storage.write();
-        let mut payload_storage = self.storage.payload_storage.write();
-        let mut pq_cache = self.storage.pq_cache.write();
-        let mut label_idx = self.graph.label_index.write();
+    ///
+    /// LOCK ORDER: text_wal(1a, shared, held by the caller) →
+    /// node_locks(1c) → vector_storage(2) → payload_storage(3) → caches(4)
+    /// → label_index(7), released → graph_range_indexes(7). The size moves
+    /// by what the batch removed ([`Self::write_both_stores`]).
+    fn delete_vector_core_stores(
+        &self,
+        ids: &[u64],
+        rows: RowUniverse,
+        text_wal: &TextWalShared<'_>,
+    ) -> Result<usize> {
+        self.write_both_stores(rows, ids, |vector_storage, payload_storage| {
+            let mut pq_cache = self.storage.pq_cache.write();
+            let mut label_idx = self.graph.label_index.write();
 
-        // Old payloads must be read before the tombstones land — they feed
-        // the secondary-index, label-index and range-index removals below.
-        let old_payloads: Vec<Option<serde_json::Value>> = ids
-            .iter()
-            .map(|&id| payload_storage.retrieve(id).ok().flatten())
-            .collect();
-        let removed = count_held(ids, &old_payloads, |id| vector_storage.contains(id));
+            // Old payloads must be read before the tombstones land — they feed
+            // the secondary-index, label-index and range-index removals below.
+            let old_payloads: Vec<Option<serde_json::Value>> = ids
+                .iter()
+                .map(|&id| payload_storage.retrieve(id).ok().flatten())
+                .collect();
+            let removed = count_rows(rows, ids, &old_payloads, |id| vector_storage.contains(id));
 
-        // ONE durability barrier per store for the whole batch (see rustdoc).
-        vector_storage.delete_batch(ids)?;
-        payload_storage.delete_batch(ids)?;
-        // Issue #389: WAL-before-apply for BM25 removes so crash recovery
-        // replays the remove — batched, applied in-memory only below.
-        #[cfg(feature = "persistence")]
-        self.append_bm25_wal_remove_batch(ids)?;
+            // ONE durability barrier per store for the whole batch (see rustdoc).
+            vector_storage.delete_batch(ids)?;
+            payload_storage.delete_batch(ids)?;
+            // Issue #389: WAL-before-apply for BM25 removes so crash recovery
+            // replays the remove — batched, one barrier for the whole batch.
+            self.change_text_index_ordered(text_wal, &[], ids)?;
 
-        for (&id, old_payload) in ids.iter().zip(&old_payloads) {
-            self.storage.index.remove(id);
-            pq_cache.remove(&id);
-            self.storage.text_index.remove_document(id);
-            self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
-            if let Some(ref old) = old_payload {
-                label_idx.remove_from_payload(id, old);
+            for (&id, old_payload) in ids.iter().zip(&old_payloads) {
+                self.storage.index.remove(id);
+                pq_cache.remove(&id);
+                self.update_secondary_indexes_on_delete(id, old_payload.as_ref());
+                if let Some(ref old) = old_payload {
+                    label_idx.remove_from_payload(id, old);
+                }
             }
-        }
 
-        let point_count = vector_storage.len();
-        // label_index(7) released before graph_range_indexes(7), its rank-mate.
-        drop(label_idx);
-        self.remove_deleted_from_range_indexes(ids, &old_payloads);
-        drop(vector_storage);
-        drop(payload_storage);
-        drop(pq_cache);
-        self.storage.config.write().point_count = point_count;
-        Ok(removed)
+            // label_index(7) released before graph_range_indexes(7), its rank-mate.
+            drop(label_idx);
+            self.remove_deleted_from_range_indexes(ids, &old_payloads);
+            drop(pq_cache);
+            Ok(removed)
+        })
     }
 
     /// Removes deleted nodes from the graph range indexes, the way the label
@@ -393,84 +407,82 @@ impl Collection {
         Ok(())
     }
 
-    /// Returns the number of points stored in the collection.
+    /// Returns the collection's size: the vectors of a vector collection,
+    /// the rows of a metadata collection, the stored nodes of a graph — with
+    /// an embedding, a payload or both, each counted once.
     ///
-    /// This reflects the **storage count** (vectors written to disk), not the
-    /// number of points currently indexed in the HNSW graph. During a batch
-    /// upsert or when deferred indexing is active, `len()` may temporarily
-    /// exceed the HNSW-indexed count until the deferred merge completes.
+    /// This reflects the **storage count**, not the number of points
+    /// currently indexed in the HNSW graph. During a batch upsert or when
+    /// deferred indexing is active, `len()` may temporarily exceed the
+    /// HNSW-indexed count until the deferred merge completes. A TTL-expired
+    /// point the sweep has not removed yet is still counted, while
+    /// [`get`](Self::get) already reads it as `None`.
     ///
-    /// Perf: Uses cached `point_count` from config instead of acquiring storage lock.
+    /// O(1): every write keeps the count exact (`collection/core/size.rs`).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.storage.config.read().point_count
+        self.size()
     }
 
-    /// Returns true if the collection is empty.
-    ///
-    /// Uses the same cached `point_count` as [`len()`](Self::len), reflecting
-    /// the storage count rather than the HNSW-indexed count.
+    /// Returns true if the collection's size ([`len()`](Self::len)) is zero.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.storage.config.read().point_count == 0
+        self.size() == 0
     }
 
-    /// Returns all point IDs in the collection, ascending.
-    ///
-    /// Every stored point is listed, with or without a payload: this is
-    /// [`all_point_ids`](Self::all_point_ids), the storage-level set
-    /// `scroll_batch` and an export enumerate. In a vector collection it is
-    /// a **superset** of the universe a `SELECT`, an aggregate or an
-    /// `UPDATE` sees — a payload-only id (a graph node written through
-    /// `store_node_payload`, or the residue of a torn delete) is listed
-    /// here and by scroll yet is not a `SELECT` row, exactly as `get()`
-    /// returns `None` for it.
+    /// Returns every row id of the collection, ascending ([`RowUniverse`]):
+    /// a vector collection's vectors, a metadata collection's payloads, a
+    /// graph's stored nodes. This is [`all_point_ids`](Self::all_point_ids),
+    /// the set `scroll_batch` enumerates and [`len`](Self::len) counts —
+    /// storage's, so a TTL-expired row the sweep has not removed yet is
+    /// listed, while every read surface (`get`, `scroll_batch`, a search, a
+    /// `SELECT`, an aggregate, an `UPDATE`) skips it: the ids a sweep
+    /// enumerates.
     #[must_use]
     pub fn all_ids(&self) -> Vec<u64> {
         self.all_point_ids()
     }
 
-    /// Returns all point IDs from both vector and payload storage.
+    /// Returns every row id of the collection, ascending
+    /// ([`all_ids`](Self::all_ids)).
     ///
-    /// This is the authoritative *storage* set of IDs in the collection:
-    /// it unions IDs from `vector_storage` (points with vectors) and
-    /// `payload_storage` (points with payloads, graph nodes included).
-    /// Points inserted with `None` payload are included via the vector
-    /// storage path. Returns IDs in ascending sorted order.
-    /// Uses `BTreeSet` for deduplication and sorted iteration in one pass,
-    /// so callers (e.g. `scroll_batch`) need not sort separately.
-    ///
-    /// It is deliberately not the scan universe: see
-    /// [`all_ids`](Self::all_ids) for how the two sets differ in a mixed
-    /// collection.
+    /// A payload a vector collection stores without a vector is no row of
+    /// it, and is not listed: an edge endpoint's payload
+    /// (`store_node_payload`), or one an earlier version let
+    /// `upsert_metadata` store, which this one refuses (`VELES-016`). It is
+    /// unreachable through every read, and a delete of its id removes it.
     #[must_use]
     pub fn all_point_ids(&self) -> Vec<u64> {
-        let mut ids: std::collections::BTreeSet<u64> = self
-            .storage
-            .vector_storage
-            .read()
-            .ids()
-            .into_iter()
-            .collect();
-        // Bound so `payload_storage` (lock-order 3) is not held across the loop.
-        let payload_ids = self.storage.payload_storage.read().ids();
-        for id in payload_ids {
-            ids.insert(id);
-        }
-        ids.into_iter().collect()
+        let mut ids = self.row_ids();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Every id either store holds, a row or not, ascending: what a
+    /// `TRUNCATE` deletes, so it leaves nothing behind.
+    ///
+    /// LOCK ORDER: vector_storage(2), released, then payload_storage(3).
+    pub(crate) fn stored_ids(&self) -> Vec<u64> {
+        let mut ids = self.storage.vector_storage.read().ids();
+        ids.extend(self.storage.payload_storage.read().ids());
+        ids.sort_unstable();
+        ids.dedup();
+        ids
     }
 }
 
-/// Number of distinct ids in `ids` that held a point: a payload (`old_payloads`
-/// is index-aligned with `ids`) or, per `has_vector`, a vector.
-fn count_held(
+/// Number of distinct ids in `ids` that were `rows`, judged by what each
+/// stored: a payload (`old_payloads` is index-aligned with `ids`) and, per
+/// `has_vector`, a vector.
+fn count_rows(
+    rows: RowUniverse,
     ids: &[u64],
     old_payloads: &[Option<serde_json::Value>],
     has_vector: impl Fn(u64) -> bool,
 ) -> usize {
     ids.iter()
         .zip(old_payloads)
-        .filter(|(&id, payload)| payload.is_some() || has_vector(id))
+        .filter(|(&id, payload)| rows.admits(has_vector(id), payload.is_some()))
         .map(|(&id, _)| id)
         .collect::<rustc_hash::FxHashSet<u64>>()
         .len()

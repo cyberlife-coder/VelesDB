@@ -115,35 +115,35 @@ impl Collection {
         apply_permutation_in_place(results, &mut indices);
 
         // Write back pre-computed scores.
-        if let Some(scores) = sorted_scores {
-            for (result, score) in results.iter_mut().zip(scores) {
-                result.score = score;
-            }
+        if let Some((scores, recomputed)) = sorted_scores {
+            write_back_similarity_scores(results, scores, recomputed);
         }
 
         Ok(())
     }
 
-    /// Pre-computes similarity scores for all ORDER BY similarity() columns.
+    /// Pre-computes similarity scores for all ORDER BY similarity() columns:
+    /// per column, each row's score, `None` for a row the column cannot
+    /// score (a null key).
     fn precompute_similarity_scores(
         &self,
         results: &[SearchResult],
         order_by: &[crate::velesql::SelectOrderBy],
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<std::collections::HashMap<usize, Vec<f32>>> {
+    ) -> Result<SimilarityKeys> {
         use crate::velesql::OrderByExpr;
         let mut map = std::collections::HashMap::new();
         for (idx, ob) in order_by.iter().enumerate() {
             match &ob.expr {
                 OrderByExpr::Similarity(sim) => {
-                    let order_vec = Self::resolve_vector(&sim.vector, params)?;
+                    let order_vec = crate::velesql::bind_vector(&sim.vector, params)?;
                     let scores =
                         self.similarity_scores_for_field(results, &sim.field, &order_vec)?;
                     map.insert(idx, scores);
                 }
                 OrderByExpr::SimilarityBare => {
                     // Zero-arg similarity(): use existing search scores (no recompute).
-                    let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+                    let scores: Vec<Option<f32>> = results.iter().map(|r| Some(r.score)).collect();
                     map.insert(idx, scores);
                 }
                 OrderByExpr::Field(_) | OrderByExpr::Aggregate(_) | OrderByExpr::Arithmetic(_) => {}
@@ -156,22 +156,16 @@ impl Collection {
     /// `field`: the default vector when `field == "vector"`, otherwise the named
     /// payload vector for that row's point id (multi-vector support, P1-A).
     ///
-    /// A row whose named vector is missing, `None`, or length-mismatched scores
-    /// as least similar (mirroring the MATCH-side `ORDER BY similarity()`): the
-    /// metric-appropriate worst key — `NEG_INFINITY` for higher-is-better
-    /// metrics, `INFINITY` (largest distance) for lower-is-better metrics — so it
-    /// sorts last under DESC regardless of metric.
+    /// A row whose vector is missing (a graph node without an embedding),
+    /// `None`, or length-mismatched has no score: `None`, a null key that
+    /// [`SelectOrderBy::directed_score`](crate::velesql::SelectOrderBy::directed_score)
+    /// sorts as every ORDER BY sorts a null.
     fn similarity_scores_for_field(
         &self,
         results: &[SearchResult],
         field: &str,
         order_vec: &[f32],
-    ) -> Result<Vec<f32>> {
-        let worst = if self.storage.config.read().metric.higher_is_better() {
-            f32::NEG_INFINITY
-        } else {
-            f32::INFINITY
-        };
+    ) -> Result<Vec<Option<f32>>> {
         results
             .iter()
             .map(|r| {
@@ -181,11 +175,11 @@ impl Collection {
                 } else {
                     match self.get_vector_for_field(r.point.id, field)? {
                         Some(v) => std::borrow::Cow::Owned(v),
-                        None => return Ok(worst),
+                        None => return Ok(None),
                     }
                 };
                 // `None` covers the length-mismatched and empty cases.
-                Ok(self.compute_metric_score(&vec, order_vec).unwrap_or(worst))
+                Ok(self.compute_metric_score(&vec, order_vec))
             })
             .collect()
     }
@@ -197,39 +191,58 @@ impl Collection {
         j: usize,
         results: &[SearchResult],
         order_by: &[crate::velesql::SelectOrderBy],
-        similarity_scores: &std::collections::HashMap<usize, Vec<f32>>,
+        similarity_scores: &SimilarityKeys,
         higher_is_better: bool,
         per_result_let: &[Vec<(String, f32)>],
         field_keys: &[Option<Vec<Option<&serde_json::Value>>>],
     ) -> Ordering {
-        use crate::velesql::OrderByExpr;
         for (idx, ob) in order_by.iter().enumerate() {
-            let cmp = match &ob.expr {
-                OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => similarity_scores
-                    .get(&idx)
-                    .map_or(Ordering::Equal, |scores| scores[i].total_cmp(&scores[j])),
-                OrderByExpr::Field(field_name) => {
-                    match field_keys.get(idx).and_then(Option::as_ref) {
-                        Some(keys) => compare_json_values(keys[i], keys[j]),
-                        None => Self::compare_field_expr(field_name, i, j, results, per_result_let),
-                    }
-                }
-                OrderByExpr::Aggregate(_) => Ordering::Equal,
-                // Design: Arithmetic ORDER BY uses direct numeric ordering without
-                // distance-metric inversion. Users constructing custom formulas with
-                // Euclidean/Hamming scores should account for lower-is-better semantics
-                // in their expression (e.g., `ORDER BY -1 * vector_score + price ASC`).
-                OrderByExpr::Arithmetic(expr) => {
-                    Self::compare_arithmetic(expr, i, j, results, per_result_let)
-                }
+            let directed_cmp = if let Some(scores) = similarity_scores.get(&idx) {
+                ob.directed_score(scores[i], scores[j], higher_is_better)
+            } else {
+                let keys = field_keys.get(idx).and_then(Option::as_ref);
+                let cmp = Self::compare_values(ob, keys, i, j, results, per_result_let);
+                ob.directed(cmp, higher_is_better)
             };
-
-            let directed_cmp = ob.directed(cmp, higher_is_better);
             if directed_cmp != Ordering::Equal {
                 return directed_cmp;
             }
         }
         Ordering::Equal
+    }
+
+    /// Compares two results on an ORDER BY item that is no similarity
+    /// column, ascending: `keys` holds the decorated payload keys of a plain
+    /// field column.
+    fn compare_values(
+        ob: &crate::velesql::SelectOrderBy,
+        keys: Option<&Vec<Option<&serde_json::Value>>>,
+        i: usize,
+        j: usize,
+        results: &[SearchResult],
+        per_result_let: &[Vec<(String, f32)>],
+    ) -> Ordering {
+        use crate::velesql::OrderByExpr;
+        match (&ob.expr, keys) {
+            (OrderByExpr::Field(_), Some(keys)) => compare_json_values(keys[i], keys[j]),
+            (OrderByExpr::Field(field_name), None) => {
+                Self::compare_field_expr(field_name, i, j, results, per_result_let)
+            }
+            // Design: Arithmetic ORDER BY uses direct numeric ordering without
+            // distance-metric inversion. Users constructing custom formulas with
+            // Euclidean/Hamming scores should account for lower-is-better semantics
+            // in their expression (e.g., `ORDER BY -1 * vector_score + price ASC`).
+            (OrderByExpr::Arithmetic(expr), _) => {
+                Self::compare_arithmetic(expr, i, j, results, per_result_let)
+            }
+            // A similarity column is compared from its precomputed keys.
+            (
+                OrderByExpr::Aggregate(_)
+                | OrderByExpr::Similarity(_)
+                | OrderByExpr::SimilarityBare,
+                _,
+            ) => Ordering::Equal,
+        }
     }
 
     /// Compares a payload field value between two results; `id` is the point
@@ -351,6 +364,10 @@ impl Collection {
     }
 }
 
+/// Per similarity ORDER BY column (by its index in the clause), each row's
+/// score, `None` for a row the column cannot score.
+type SimilarityKeys = std::collections::HashMap<usize, Vec<Option<f32>>>;
+
 /// Whether an ORDER BY `name` reads a payload field: neither a built-in
 /// score variable nor `id`, the point id.
 fn is_payload_field(name: &str) -> bool {
@@ -379,28 +396,57 @@ fn apply_permutation_in_place<T>(slice: &mut [T], perm: &mut [usize]) {
     }
 }
 
-/// Returns sorted similarity scores in output order, or `None` when the query
+/// Returns the first similarity ORDER BY column's scores in output order,
+/// with whether that column recomputed them (`similarity(field, $v)`) rather
+/// than reading the search score back (`similarity()`); `None` when the query
 /// has no similarity ORDER BY column.
 ///
 /// Must be called before `apply_permutation_in_place` because that call
 /// overwrites `indices` (the original-position mapping).
 fn extract_sorted_similarity_scores(
     order_by: &[crate::velesql::SelectOrderBy],
-    similarity_scores_map: &std::collections::HashMap<usize, Vec<f32>>,
+    similarity_scores_map: &SimilarityKeys,
     indices: &[usize],
-) -> Option<Vec<f32>> {
+) -> Option<(Vec<Option<f32>>, bool)> {
     use crate::velesql::OrderByExpr;
-    let sim_idx = order_by
-        .iter()
-        .enumerate()
-        .find(|(_, ob)| {
-            matches!(
-                ob.expr,
-                OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare
-            )
-        })
-        .map(|(idx, _)| idx)?;
+    let (sim_idx, recomputed) =
+        order_by
+            .iter()
+            .enumerate()
+            .find_map(|(idx, ob)| match ob.expr {
+                OrderByExpr::Similarity(_) => Some((idx, true)),
+                OrderByExpr::SimilarityBare => Some((idx, false)),
+                _ => None,
+            })?;
 
     let scores = similarity_scores_map.get(&sim_idx)?;
-    Some(indices.iter().map(|&orig| scores[orig]).collect())
+    Some((
+        indices.iter().map(|&orig| scores[orig]).collect(),
+        recomputed,
+    ))
+}
+
+/// Writes each row's ORDER BY similarity score back as its score.
+///
+/// A recomputed `similarity(field, $v)` score is a vector similarity, so a
+/// row that carries no component breakdown — a metadata row, which only this
+/// ORDER BY scored — is tagged with it as its `vector_score`, as a `NEAR`
+/// row is. A row that already carries one (a `NEAR`, a hybrid) keeps it: its
+/// components describe the search that found it. A row the column could not
+/// score (a null key) keeps the score its plan gave it, untagged: no
+/// non-finite stand-in is ever written back.
+fn write_back_similarity_scores(
+    results: &mut [SearchResult],
+    scores: Vec<Option<f32>>,
+    recomputed: bool,
+) {
+    for (result, score) in results.iter_mut().zip(scores) {
+        let Some(score) = score.filter(|score| score.is_finite()) else {
+            continue;
+        };
+        result.score = score;
+        if recomputed && result.component_scores.is_none() {
+            result.component_scores = Some(smallvec::smallvec![("vector_score", score)]);
+        }
+    }
 }

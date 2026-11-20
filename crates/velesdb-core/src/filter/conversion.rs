@@ -26,10 +26,10 @@ fn engine_handled_identity() -> Condition {
 ///
 /// The `From` lowering must stay total: the query engine pre-extracts
 /// engine-handled conditions before lowering a WHERE clause, so
-/// `VectorSearch`/`Similarity`/`GraphMatch` map to an always-true sentinel
-/// and `MATCH` to a substring `Contains`. An observer scope cannot afford
-/// that: a conjunct lowered to "match all" silently narrows nothing, and a
-/// `MATCH` lowered to substring containment narrows by the *wrong* predicate.
+/// `VectorSearch`/`Similarity`/`GraphMatch` — and a text `MATCH`, which the
+/// engine binds to its BM25 hits first (`velesql::text_match`) — map to an
+/// always-true sentinel. An observer scope cannot afford that: a conjunct
+/// lowered to "match all" silently narrows nothing.
 /// A `$param` or subquery compared value is likewise not a policy value — it
 /// would bind to the *caller's* params or lower to `NULL`, so a scope must be
 /// self-contained. Callers enforcing a scope consult this first and fail
@@ -233,15 +233,15 @@ impl From<crate::velesql::Condition> for Condition {
                 condition: Box::new(Self::from(*inner)),
             },
             crate::velesql::Condition::Group(inner) => Self::from(*inner),
+            // A text `MATCH` reaches a filter only as a bound WHERE's ranking
+            // (`velesql::text_match`): every other one was replaced by the `IN`
+            // list of its hits' ids before the WHERE was lowered.
             crate::velesql::Condition::VectorSearch(_)
             | crate::velesql::Condition::VectorFusedSearch(_)
             | crate::velesql::Condition::SparseVectorSearch(_)
             | crate::velesql::Condition::Similarity(_)
-            | crate::velesql::Condition::GraphMatch(_) => engine_handled_identity(),
-            crate::velesql::Condition::Match(m) => Self::Contains {
-                field: field(m.column),
-                value: m.query,
-            },
+            | crate::velesql::Condition::GraphMatch(_)
+            | crate::velesql::Condition::Match(_) => engine_handled_identity(),
             crate::velesql::Condition::ContainsText(ct) => Self::Contains {
                 field: field(ct.column),
                 value: ct.query,

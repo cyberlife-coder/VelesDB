@@ -254,7 +254,7 @@ impl Collection {
     /// Scores each id on the vector storage holds for it now, with the
     /// index's distance and clamp ([`crate::index::hnsw::HnswIndex::score`]);
     /// an id storage no longer holds is skipped.
-    fn score_current(&self, query: &[f32], ids: &[u64]) -> Vec<ScoredResult> {
+    pub(super) fn score_current(&self, query: &[f32], ids: &[u64]) -> Vec<ScoredResult> {
         let index = &self.storage.index;
         let mut scored = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(SCORE_CHUNK) {

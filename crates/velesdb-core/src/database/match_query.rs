@@ -25,8 +25,31 @@ use crate::velesql::MatchClause;
 pub struct MatchScoring<'v> {
     /// The query vector, of the collection's dimension.
     pub vector: &'v [f32],
-    /// Kept rows score at least this (at most, under a distance metric).
-    pub threshold: f32,
+    /// Kept rows score at least this under a similarity metric, at most this
+    /// under a distance metric
+    /// ([`DistanceMetric::higher_is_better`](crate::DistanceMetric::higher_is_better)).
+    /// `None` keeps every scored row. A non-finite threshold is refused with
+    /// [`Error::Query`](crate::error::Error::Query)
+    /// ([`crate::velesql::validate_match_threshold`]).
+    pub threshold: Option<f32>,
+}
+
+impl<'v> MatchScoring<'v> {
+    /// The scoring of a MATCH request that carries an optional query
+    /// `vector` and an optional `threshold` — REST `/match`'s body, the
+    /// Python `match_query` arguments: `None` when there is no vector, so
+    /// the rows are not scored. One rule for every surface
+    /// ([`crate::velesql::validate_match_threshold`]): a threshold must be a
+    /// finite number and comes with a vector.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Query`](crate::error::Error::Query) for a threshold that is
+    /// not a finite number, or one given without a vector.
+    pub fn new(vector: Option<&'v [f32]>, threshold: Option<f32>) -> Result<Option<Self>> {
+        crate::velesql::validate_match_threshold(vector, threshold)?;
+        Ok(vector.map(|vector| Self { vector, threshold }))
+    }
 }
 
 impl Database {
@@ -41,8 +64,9 @@ impl Database {
     /// # Errors
     ///
     /// The read gate's refusal, [`crate::error::Error::CollectionNotFound`]
-    /// for the target or an annotation naming no collection, or any error of
-    /// the MATCH itself (validation, guard rails, a dimension mismatch).
+    /// for the target or an annotation naming no collection,
+    /// [`crate::error::Error::Query`] for a non-finite threshold, or any error
+    /// of the MATCH itself (validation, guard rails, a dimension mismatch).
     pub fn match_query(
         &self,
         collection: &str,
@@ -70,3 +94,7 @@ impl Database {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "match_query_tests.rs"]
+mod tests;

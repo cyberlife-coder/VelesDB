@@ -87,7 +87,9 @@ impl AnyCollection {
         }
     }
 
-    /// Returns the collection configuration.
+    /// Returns the collection configuration. Its `point_count` is
+    /// [`point_count`](Self::point_count): for a graph, every stored node,
+    /// with an embedding or not.
     #[must_use]
     pub fn config(&self) -> CollectionConfig {
         self.inner().config()
@@ -106,13 +108,16 @@ impl AnyCollection {
         }
     }
 
-    /// Returns the number of points in the collection.
+    /// Returns the number of points in the collection; for a graph, the
+    /// number of nodes ([`GraphCollection::len`]) — the size every kind of
+    /// collection reports through every surface (`Collection::len`).
     #[must_use]
     pub fn point_count(&self) -> usize {
-        self.config().point_count
+        self.inner().len()
     }
 
-    /// Returns `true` if the collection contains no points.
+    /// Returns `true` if the collection contains no points; for a graph, no
+    /// node ([`GraphCollection::is_empty`]).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner().is_empty()
@@ -231,28 +236,19 @@ impl AnyCollection {
         }
     }
 
-    /// Upserts points (vector + payload).
-    ///
-    /// For graph collections the payload is stored via the node-payload path
-    /// (no vector update occurs since graph nodes have no embedding by default).
+    /// Upserts points (vector + payload), by the rule of the collection's
+    /// kind: a graph writes each row by what it stores (`Collection::upsert`)
+    /// — a vector through the vector upsert, its dimension checked, a row
+    /// without one through the node-payload write.
     ///
     /// # Errors
     ///
-    /// Returns an error if storage fails.
+    /// Returns an error if a point fails its collection's checks or storage
+    /// fails.
     pub fn upsert(&self, points: Vec<crate::point::Point>) -> Result<()> {
         match self {
             Self::Vector(c) => c.upsert(points),
-            Self::Graph(c) => {
-                // One barrier for the batch, matching the Vector and Metadata
-                // arms. This used to loop the single-node path, paying an
-                // fsync, an auto-snapshot check and two label-index
-                // acquisitions per node (#2153).
-                let entries: Vec<(u64, &serde_json::Value)> = points
-                    .iter()
-                    .filter_map(|p| p.payload.as_ref().map(|payload| (p.id, payload)))
-                    .collect();
-                c.upsert_node_payloads(&entries)
-            }
+            Self::Graph(c) => c.inner.upsert(points),
             Self::Metadata(c) => c.upsert(points),
         }
     }
@@ -531,3 +527,7 @@ impl AnyCollection {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "any_collection_tests.rs"]
+mod tests;

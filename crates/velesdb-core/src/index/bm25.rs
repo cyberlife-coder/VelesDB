@@ -295,9 +295,20 @@ impl Bm25Index {
     ///
     /// # Returns
     ///
-    /// Vector of (`document_id`, score) tuples, sorted by score descending.
-    #[allow(clippy::cast_precision_loss)]
+    /// Vector of (`document_id`, score) tuples, sorted by score descending,
+    /// a tie by ascending id.
     pub fn search(&self, query: &str, k: usize) -> Vec<(u64, f32)> {
+        let mut scores = self.score_all(query);
+        Self::top_k_sort(&mut scores, k);
+        scores
+    }
+
+    /// Every document matching `query` with its score, in no particular
+    /// order: what [`Self::search`] cuts to its top `k`, for a caller that
+    /// decides which documents may take a place before the cut — a
+    /// collection admitting only its rows (`collection/search/ranked.rs`).
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn score_all(&self, query: &str) -> Vec<(u64, f32)> {
         let query_terms = Self::tokenize(query);
         if query_terms.is_empty() {
             return Vec::new();
@@ -327,9 +338,7 @@ impl Bm25Index {
         let total_length = *self.total_doc_length.read();
         let avgdl = total_length as f32 / doc_count as f32;
 
-        let mut scores = self.score_candidates(&query_ids, doc_count, avgdl);
-        Self::top_k_sort(&mut scores, k);
-        scores
+        self.score_candidates(&query_ids, doc_count, avgdl)
     }
 
     /// Scores all candidate documents for the given query term ids.
@@ -402,9 +411,11 @@ impl Bm25Index {
         candidate_union
     }
 
-    /// Partial sort + truncate for top-k results (descending by score).
+    /// Partial sort + truncate for top-k results: descending by score, a tie
+    /// by ascending id and a NaN last ([`crate::distance::hit_rank_key`]).
     fn top_k_sort(scores: &mut Vec<(u64, f32)>, k: usize) {
-        super::top_k_partial_sort(scores, k, |a, b| b.1.total_cmp(&a.1));
+        let rank = |&(id, score): &(u64, f32)| crate::distance::hit_rank_key(score, id);
+        super::top_k_partial_sort(scores, k, |a, b| rank(b).cmp(&rank(a)));
     }
 
     /// Fast BM25 scoring with pre-computed IDF cache.

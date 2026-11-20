@@ -37,6 +37,7 @@ use rustc_hash::FxHashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Controls how payload WAL writes are synced to disk.
 ///
@@ -55,6 +56,20 @@ pub enum DurabilityMode {
     None,
 }
 
+/// Which ids a payload store holds, read without the store's guard
+/// ([`LogPayloadStorage::held_ids`]): what a graph's write reads of the store
+/// it does not write, under node locks that keep its answer true
+/// (`collection/core/size.rs`).
+#[derive(Clone)]
+pub(crate) struct HeldPayloadIds(Arc<RwLock<FxHashMap<u64, u64>>>);
+
+impl HeldPayloadIds {
+    /// Whether the store holds a payload under `id`.
+    pub(crate) fn contains(&self, id: u64) -> bool {
+        self.0.read().contains_key(&id)
+    }
+}
+
 /// Log-structured payload storage with snapshot support.
 ///
 /// Stores payloads in an append-only log file with an in-memory index.
@@ -64,7 +79,7 @@ pub struct LogPayloadStorage {
     /// Directory path for storage files
     path: PathBuf,
     /// In-memory index: ID -> Offset of length field in WAL
-    index: RwLock<FxHashMap<u64, u64>>,
+    index: Arc<RwLock<FxHashMap<u64, u64>>>,
     /// Write-Ahead Log writer (append-only)
     wal: RwLock<io::BufWriter<File>>,
     /// Independent file handle for reading, protected for seeking
@@ -75,6 +90,8 @@ pub struct LogPayloadStorage {
     durability: DurabilityMode,
     /// Tracked WAL write position (avoids flush+metadata syscall for `DurabilityMode::None`)
     write_offset: RwLock<u64>,
+    /// The ids its writes changed, by revision ([`LogPayloadStorage::changes`]).
+    changes: super::ChangeLog,
 }
 
 use super::wal_entry::WalEntry;
@@ -119,13 +136,25 @@ impl LogPayloadStorage {
 
         Ok(Self {
             path,
-            index: RwLock::new(index),
+            index: Arc::new(RwLock::new(index)),
             wal: RwLock::new(wal),
             reader: RwLock::new(reader),
             last_snapshot_wal_pos: RwLock::new(last_snapshot_wal_pos),
             durability,
             write_offset: RwLock::new(write_offset),
+            changes: super::ChangeLog::default(),
         })
+    }
+
+    /// Which ids its writes changed, by revision: every store and delete
+    /// records the ids it wrote, a failed one included, under the store's
+    /// write guard, so two holds of the read guard reading the same revision
+    /// read the same payloads, and a later one can ask which ids changed in
+    /// between. What a ranked walk reads between its holds
+    /// (`collection/search/ranked.rs`).
+    #[must_use]
+    pub(crate) fn changes(&self) -> &super::ChangeLog {
+        &self.changes
     }
 
     /// Opens the WAL file for append-mode writing.
@@ -317,6 +346,46 @@ impl LogPayloadStorage {
         Ok(())
     }
 
+    /// Number of ids holding a payload: an in-memory index read, no I/O.
+    pub(crate) fn len(&self) -> usize {
+        self.index.read().len()
+    }
+
+    /// The log position the next record is written at. The log is
+    /// append-only, so every record written from here on starts at or after
+    /// it ([`Self::ids_written_since`]).
+    pub(crate) fn wal_position(&self) -> u64 {
+        *self.write_offset.read()
+    }
+
+    /// The ids whose stored payload was written at or after `position`
+    /// ([`Self::wal_position`]): those whose record starts there or later.
+    /// An id deleted since holds no payload and is not listed. An index scan,
+    /// no I/O.
+    pub(crate) fn ids_written_since(&self, position: u64) -> Vec<u64> {
+        // The index holds the offset of a record's length field, inside the
+        // record: past its start, and before the end of any record that
+        // starts before `position`, a record boundary.
+        self.index
+            .read()
+            .iter()
+            .filter(|&(_, &offset)| offset >= position)
+            .map(|(&id, _)| id)
+            .collect()
+    }
+
+    /// Returns `true` when a payload is stored under `id` — an index lookup,
+    /// without reading the payload itself.
+    pub(crate) fn contains(&self, id: u64) -> bool {
+        self.index.read().contains_key(&id)
+    }
+
+    /// Which ids this store holds, readable without its guard: the index it
+    /// keeps them in, shared (it locks itself).
+    pub(crate) fn held_ids(&self) -> HeldPayloadIds {
+        HeldPayloadIds(Arc::clone(&self.index))
+    }
+
     /// Returns whether a new snapshot should be created.
     ///
     /// Heuristic: Returns true if WAL has grown by more than the default threshold
@@ -391,6 +460,7 @@ impl LogPayloadStorage {
         if entries.is_empty() {
             return Ok(());
         }
+        self.changes.record(entries.iter().map(|&(id, _)| id));
 
         {
             let mut wal = self.wal.write();
@@ -470,6 +540,7 @@ impl LogPayloadStorage {
         if live.is_empty() {
             return Ok(());
         }
+        self.changes.record(live.iter().copied());
 
         // Scoped block: all lock guards are released before the auto-snapshot
         // check, which itself acquires locks (see `create_snapshot`).
@@ -502,6 +573,7 @@ impl LogPayloadStorage {
 
 impl PayloadStorage for LogPayloadStorage {
     fn store(&mut self, id: u64, payload: &serde_json::Value) -> io::Result<()> {
+        self.changes.record([id]);
         // Scoped block: lock guards released before auto-snapshot (which acquires locks).
         {
             let mut wal = self.wal.write();
@@ -578,6 +650,7 @@ impl PayloadStorage for LogPayloadStorage {
         if !self.index.read().contains_key(&id) {
             return Ok(());
         }
+        self.changes.record([id]);
 
         let crc = compute_delete_crc(id);
 

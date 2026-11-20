@@ -6,12 +6,15 @@
 //! `DedupMap`, and the PQ cache guard are in `crud_helpers.rs`.
 
 use super::crud_helpers::DedupMap;
+use super::rows::{split_graph_rows, AbsentFields};
+use super::size::{RowStores, StoreEffect};
+use crate::collection::search::query::row_universe::RowUniverse;
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::point::Point;
 use crate::quantization::StorageMode;
 use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
-use crate::validation::validate_dimension_match;
+use crate::velesql::QueryVectorTarget;
 
 use std::collections::HashMap;
 
@@ -20,62 +23,141 @@ impl Collection {
     ///
     /// Accepts any iterator of points (Vec, slice, array, etc.)
     ///
+    /// A point with an empty vector stores none. In a graph that is a node
+    /// without an embedding, written as [`Self::store_node_payloads`] writes
+    /// one — the vector store is left alone, so an embedding the node already
+    /// has is kept — while a point with a vector goes through the vector
+    /// pipeline (`rows.rs`, which also resolves a repeated id as the same
+    /// upserts made one by one would). A vector collection refuses it, every
+    /// row of it storing a vector (`VELES-016`); a metadata-only collection
+    /// stores only payloads.
+    ///
     /// # Errors
     ///
-    /// Returns an error if any point has a mismatched dimension, or if
-    /// attempting to insert vectors into a metadata-only collection.
+    /// Returns an error if any point has a mismatched dimension, carries no
+    /// vector on a vector collection
+    /// ([`Error::VectorRequired`](crate::Error::VectorRequired)), or carries
+    /// one into a metadata-only collection.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
         // Parity item E + dimension validation at the cold boundary, before any
         // storage lock or WAL write — a violation rejects the whole batch.
         self.validate_points_for_upsert(&points)?;
-        let config = self.storage.config.read();
-        let storage_mode = config.storage_mode;
-        if config.metadata_only {
-            drop(config);
+        let (rows, storage_mode) = {
+            let config = self.storage.config.read();
+            (RowUniverse::of(&config), config.storage_mode)
+        };
+        match rows {
             // `upsert_metadata` is the storage entry for this path and applies
             // the runtime limits itself.
-            return self.upsert_metadata(points);
+            RowUniverse::Payloads => self.upsert_metadata(points),
+            RowUniverse::StoredNodes => self.upsert_graph_rows(points, storage_mode),
+            RowUniverse::Vectors => {
+                self.write_vector_rows(&points, storage_mode)?;
+                self.report_upsert(points.len());
+                Ok(())
+            }
         }
-        drop(config);
+    }
 
-        let old_payloads = self.upsert_storage_and_index(&points, storage_mode)?;
-
-        self.apply_sparse_batch_upsert(&points)?;
-
-        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
-        // so only the final payload counts, then decrement old + increment
-        // new in one atomic cycle. See `apply_histogram_replace_dedup`.
-        self.apply_histogram_replace_dedup(&points, &old_payloads);
-
-        self.bump_generation_with_mirror_upserts(&points);
-        self.report_upsert(points.len());
+    /// The vector pipeline of [`Self::upsert`] for a checked batch whose
+    /// points all store a vector; the caller reports the write.
+    pub(super) fn write_vector_rows(
+        &self,
+        points: &[Point],
+        storage_mode: StorageMode,
+    ) -> Result<()> {
+        self.upsert_storage_and_index(points, storage_mode)?;
+        self.apply_sparse_batch_upsert(points)?;
+        self.bump_generation_with_mirror_upserts(points);
         Ok(())
     }
 
-    /// The checks [`Self::upsert`] runs on its points before any write: a
-    /// metadata-only collection refuses a vector
-    /// ([`Error::VectorNotAllowed`]); a vector collection runs the runtime
-    /// ingest limits and the per-point dimension and finite checks. Streaming
+    /// The checks [`Self::upsert`] runs on its points before any write, by
+    /// the kind of collection ([`RowUniverse::of`]): a metadata-only
+    /// collection refuses a vector
+    /// ([`Error::VectorNotAllowed`](crate::Error::VectorNotAllowed),
+    /// [`Self::validate_payload_rows`]); a vector collection runs the
+    /// runtime ingest limits and the per-point dimension and finite checks.
+    /// Streaming
     /// runs them too, when a point is queued — the only moment its caller can
     /// still hear of a refusal, since the drain writes it later — and refuses
     /// with [`BackpressureError::InvalidPoint`](crate::collection::streaming::BackpressureError::InvalidPoint);
     /// a surface calls this first to report the refusal with core's code.
+    /// A graph checks each point by what it stores
+    /// ([`Self::validate_graph_rows`]).
     ///
     /// # Errors
     ///
     /// The refusal of the first point that fails a check.
     pub(crate) fn validate_points_for_upsert(&self, points: &[Point]) -> Result<()> {
-        let config = self.storage.config.read();
-        if config.metadata_only {
-            if points.iter().any(|point| !point.vector.is_empty()) {
-                return Err(Error::VectorNotAllowed(config.name.clone()));
-            }
-            return Ok(());
+        match self.row_universe() {
+            RowUniverse::Payloads => self.validate_payload_rows(points),
+            RowUniverse::StoredNodes => self.validate_graph_rows(points),
+            RowUniverse::Vectors => self.validate_vector_upsert_batch(points),
         }
-        let dimension = config.dimension;
-        drop(config);
-        self.validate_vector_upsert_batch(points, dimension)
+    }
+
+    /// The checks a metadata collection's rows pass, on every write path: a
+    /// point with an empty vector is a payload row, and one carrying a vector
+    /// is refused ([`QueryVectorTarget::check_write`]: `VELES-014`).
+    pub(super) fn validate_payload_rows(&self, points: &[Point]) -> Result<()> {
+        self.with_write_target(|target| {
+            points
+                .iter()
+                .filter(|point| !point.is_metadata_only())
+                .try_for_each(|point| target.check_write(point.dimension()))
+        })
+    }
+
+    /// Runs `check` against what a vector written into this collection must
+    /// match ([`QueryVectorTarget::check_write`], the rule every write
+    /// surface applies, DML included): its name and the dimension of the
+    /// vectors it stores, `None` when it stores none — taken from an owned
+    /// snapshot of the config, so the checks run without its lock.
+    fn with_write_target(
+        &self,
+        check: impl FnOnce(&QueryVectorTarget<'_>) -> Result<()>,
+    ) -> Result<()> {
+        let (name, dimension) = {
+            let config = self.storage.config.read();
+            (config.name.clone(), config.query_vector_target().dimension)
+        };
+        check(&QueryVectorTarget {
+            collection: &name,
+            dimension,
+        })
+    }
+
+    /// The checks a graph batch passes. Every row's payload passes those of a
+    /// node-payload write (payload limits, labels against a strict schema),
+    /// whether the row carries a vector or not, and every row's sparse
+    /// vectors their name and finite checks; a row with a vector also passes
+    /// the vector checks of a vector upsert — the vector cap, counted over
+    /// these rows only, the write rule (a graph without embeddings refuses
+    /// it with `VELES-014`, one with embeddings checks its dimension) and
+    /// finite components.
+    pub(super) fn validate_graph_rows(&self, points: &[Point]) -> Result<()> {
+        let empty = serde_json::Value::Object(serde_json::Map::new());
+        let payloads: Vec<(u64, &serde_json::Value)> = points
+            .iter()
+            .map(|point| (point.id, point.payload.as_ref().unwrap_or(&empty)))
+            .collect();
+        self.validate_node_payload_batch(&payloads)?;
+        let embedded = points.iter().filter(|point| !point.is_metadata_only());
+        self.enforce_vector_count(
+            embedded.clone().count(),
+            self.runtime_limits().max_vectors_per_collection,
+        )?;
+        self.with_write_target(|target| {
+            points.iter().try_for_each(|point| {
+                if point.is_metadata_only() {
+                    Self::validate_sparse_vectors(point)
+                } else {
+                    Self::validate_vector_point(point, target)
+                }
+            })
+        })
     }
 
     /// Validates a vector-collection upsert batch at the cold boundary:
@@ -91,25 +173,47 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::GuardRail`] on a limit violation, or the dimension
-    /// mismatch error from [`validate_dimension_match`], or
-    /// [`Error::SchemaValidation`] on an invalid sparse index name, or
-    /// [`Error::InvalidVector`] on a non-finite dense component or sparse
-    /// weight.
-    pub(super) fn validate_vector_upsert_batch(
-        &self,
-        points: &[Point],
-        dimension: usize,
-    ) -> Result<()> {
+    /// Returns [`Error::GuardRail`](crate::Error::GuardRail) on a limit
+    /// violation, or [`QueryVectorTarget::check_required_write`]'s refusal —
+    /// [`Error::VectorRequired`](crate::Error::VectorRequired) for a point
+    /// without a vector, every row of a vector collection storing one, or
+    /// the dimension mismatch error — or
+    /// [`Error::SchemaValidation`](crate::Error::SchemaValidation) on an
+    /// invalid sparse index name, or
+    /// [`Error::InvalidVector`](crate::Error::InvalidVector) on a non-finite
+    /// dense component or sparse weight.
+    pub(super) fn validate_vector_upsert_batch(&self, points: &[Point]) -> Result<()> {
         self.enforce_upsert_limits(points)?;
-        for point in points {
-            validate_dimension_match(dimension, point.dimension())?;
-            crate::validation::validate_vector_is_finite(&point.vector)?;
-            if let Some(sv_map) = &point.sparse_vectors {
-                for (name, vector) in sv_map {
-                    crate::validation::validate_sparse_index_name(name)?;
-                    crate::validation::validate_sparse_vector_is_finite(vector)?;
-                }
+        self.with_write_target(|target| {
+            points.iter().try_for_each(|point| {
+                target.check_required_write(point.dimension())?;
+                Self::validate_point_contents(point)
+            })
+        })
+    }
+
+    /// The per-point checks of a graph row carrying a vector: the write rule
+    /// ([`QueryVectorTarget::check_write`]: a collection that stores vectors
+    /// checks the dimension), then [`Self::validate_point_contents`].
+    fn validate_vector_point(point: &Point, target: &QueryVectorTarget<'_>) -> Result<()> {
+        target.check_write(point.dimension())?;
+        Self::validate_point_contents(point)
+    }
+
+    /// What a vector upsert checks once the vector's length passed: finite
+    /// dense components and [`Self::validate_sparse_vectors`].
+    fn validate_point_contents(point: &Point) -> Result<()> {
+        crate::validation::validate_vector_is_finite(&point.vector)?;
+        Self::validate_sparse_vectors(point)
+    }
+
+    /// Valid sparse index names (they reach the filesystem, see
+    /// [`Self::validate_vector_upsert_batch`]) and finite sparse weights.
+    pub(super) fn validate_sparse_vectors(point: &Point) -> Result<()> {
+        if let Some(sv_map) = &point.sparse_vectors {
+            for (name, vector) in sv_map {
+                crate::validation::validate_sparse_index_name(name)?;
+                crate::validation::validate_sparse_vector_is_finite(vector)?;
             }
         }
         Ok(())
@@ -118,8 +222,13 @@ impl Collection {
     /// Stores vectors, payloads, and indexes for a batch of points.
     ///
     /// Three-phase pipeline to minimize lock contention and I/O:
-    /// 1. Batch storage: `store_batch()` for vectors + payloads (1 fsync each)
-    /// 2. Per-point updates: secondary indexes, quantization, text
+    /// 1. Batch storage, by the rule every row write follows
+    ///    ([`Self::write_rows`]): the payloads, then the vectors (one fsync
+    ///    each), then the BM25 change — on a vector collection all three
+    ///    under the node locks of the batch's ids, so a delete of one of them
+    ///    lands wholly before or after
+    /// 2. The histograms ([`Self::apply_payload_histograms`]), then per-point
+    ///    updates: secondary indexes, quantization
     /// 3. Batch HNSW insert via `bulk_index_or_defer()`
     ///
     /// # Crash Recovery
@@ -129,31 +238,40 @@ impl Collection {
     /// detection compares storage IDs against HNSW mappings and re-indexes
     /// any missing vectors. The recovery window is bounded by one batch.
     ///
-    /// Returns the payloads the batch replaced. Sparse vectors are not phase
-    /// work: `apply_sparse_batch_upsert` replaces them afterwards.
-    fn upsert_storage_and_index(
-        &self,
-        points: &[Point],
-        storage_mode: StorageMode,
-    ) -> Result<Vec<Option<serde_json::Value>>> {
-        // Phase 1: Batch storage under write locks (1 fsync per storage)
-        let old_payloads = self.batch_store_all(points)?;
+    /// Sparse vectors are not phase work: `apply_sparse_batch_upsert`
+    /// replaces them afterwards.
+    fn upsert_storage_and_index(&self, points: &[Point], storage_mode: StorageMode) -> Result<()> {
+        let ids: Vec<u64> = points.iter().map(|p| p.id).collect();
+        let writes = payload_writes(points);
+        // Phase 1: the stores and the BM25 change, under the row write's
+        // locks. The payloads are stored and flushed before the BM25 change,
+        // so the BM25 WAL never leads their durability.
+        let (old_payloads, text_changed) =
+            self.write_rows(self.row_universe(), &ids, |stores| -> Result<_> {
+                let old_payloads = self.batch_store_all(stores, points)?;
+                let text_changed = self.apply_payload_text(&writes, &old_payloads, |a, r| {
+                    stores.change_text_index(a, r)
+                });
+                Ok((old_payloads, text_changed))
+            })?;
 
-        // Phase 2: Per-point updates (no storage locks held)
-        self.per_point_updates(points, &old_payloads, storage_mode)?;
+        // Phase 2 (no lock held): the histograms describe the stored
+        // payloads, whatever BM25 did.
+        self.apply_payload_histograms(&writes, &old_payloads);
+        text_changed?;
+        self.per_point_updates(points, &old_payloads, storage_mode);
 
         // Phase 3: Batch HNSW insert
         let vector_refs: Vec<(u64, &[f32])> =
             points.iter().map(|p| (p.id, p.vector.as_slice())).collect();
         self.bulk_index_or_defer(&vector_refs);
-
-        Ok(old_payloads)
+        Ok(())
     }
 
-    /// Phase 1: Batch-stores vectors and payloads with minimal lock scope.
+    /// Phase 1: Batch-stores payloads, then vectors, through `stores`.
     ///
     /// Pre-collects old payloads (needed for secondary index updates),
-    /// then writes all vectors and payloads in single batch calls (1 fsync each).
+    /// then writes all payloads and vectors in single batch calls (1 fsync each).
     ///
     /// Deduplicates intra-batch duplicate IDs using last-writer-wins semantics:
     /// only the final occurrence per ID is written to the WAL, avoiding wasteful
@@ -189,35 +307,40 @@ impl Collection {
     /// defeating an external `tokio::time::timeout` guard.
     ///
     /// The two writes are independent (payload and vector storage use
-    /// separate `RwLock`s — positions 3 and 2 in the lock order, per the
-    /// original design note below) and each is a single small write + fsync,
-    /// so the parallelism this bought was marginal against the deadlock risk
-    /// it introduced. Sequential execution removes the shared-pool
-    /// interaction entirely and cannot deadlock this way.
+    /// separate `RwLock`s — positions 3 and 2 in the lock order) and each is
+    /// a single small write + fsync, so the parallelism this bought was
+    /// marginal against the deadlock risk it introduced. Sequential
+    /// execution removes the shared-pool interaction entirely and cannot
+    /// deadlock this way.
     ///
-    /// Design notes preserved from the original parallel-I/O rationale
-    /// (still true, just no longer exploited for concurrency):
-    ///
-    /// - Payload and vector storage use independent `RwLock`s (positions 3
-    ///   and 2 in the lock order). Neither write acquires both locks.
-    /// - Crash recovery only requires that both are durable before Phase 3
-    ///   (HNSW insertion). There is no ordering dependency between payload
-    ///   and vector WAL writes — gap detection on `Collection::open()` handles
-    ///   any partial write scenario.
+    /// - Neither store takes both write guards. On a vector collection the
+    ///   row write holds the node locks of the batch's ids across both
+    ///   ([`Self::write_rows`]); on a graph a store that may change its nodes
+    ///   takes their node locks itself, so it can count the nodes it changes
+    ///   (`size.rs`).
+    /// - The payload store comes first: a crash between the two leaves a
+    ///   payload without a vector, no row, which gap detection and the next
+    ///   write of the id resolve.
     /// - The payload write holds the payload lock from reading the old
     ///   payloads to updating the label and range indexes, and releases it
-    ///   before the vector write, so neither write holds both locks.
+    ///   before the vector write.
     ///
     /// Returns the old payloads for Phase 2.
-    fn batch_store_all(&self, points: &[Point]) -> Result<Vec<Option<serde_json::Value>>> {
+    fn batch_store_all(
+        &self,
+        stores: &RowStores<'_>,
+        points: &[Point],
+    ) -> Result<Vec<Option<serde_json::Value>>> {
         // Issue #425: Build the dedup map once and share it across both
         // write paths, avoiding redundant HashMap construction.
         let dedup_map = Self::build_dedup_map(points);
 
         // Sequential: see the "Sequential I/O" doc section above for why this
         // is no longer `rayon::join` (deadlock under concurrent load).
-        let old_payloads = self.write_and_flush_payloads(points, &dedup_map)?;
-        self.write_deduped_vectors(points, &dedup_map)?;
+        let old_payloads = self.write_and_flush_payloads(stores, points, &dedup_map)?;
+        #[cfg(test)]
+        super::write_hooks::between_row_stores();
+        Self::write_deduped_vectors(stores, points, &dedup_map)?;
 
         Ok(old_payloads)
     }
@@ -238,28 +361,38 @@ impl Collection {
     /// Issue #425: Accepts a pre-computed `dedup_map` to avoid rebuilding
     /// the last-writer-wins map redundantly.
     ///
-    /// LOCK ORDER: payload_storage(3) → label_index(7), released →
-    /// graph_range_indexes(7).
+    /// The write moves the collection's size by what it changed
+    /// ([`RowStores::payloads`]).
+    ///
+    /// LOCK ORDER: as [`Self::write_payload_store`]: payload_storage(3)
+    /// → label_index(7), released → graph_range_indexes(7).
     fn write_and_flush_payloads(
         &self,
+        stores: &RowStores<'_>,
         points: &[Point],
         dedup_map: &DedupMap,
     ) -> Result<Vec<Option<serde_json::Value>>> {
-        let mut payload_storage = self.storage.payload_storage.write();
-        let old_payloads = Self::collect_old_payloads(points, &payload_storage);
-        let written = Self::write_deduped_payloads(points, &mut payload_storage, dedup_map)
-            .and_then(|()| payload_storage.flush().map_err(Into::into));
-        if let Err(error) = written {
-            let ids: Vec<u64> = points.iter().map(|p| p.id).collect();
-            self.index_payloads_after_failed_write(&payload_storage, &ids, &old_payloads);
-            return Err(error);
-        }
-        self.index_payload_writes(
-            points.iter().map(|p| (p.id, p.payload.as_ref())),
-            &old_payloads,
-        );
-        drop(payload_storage);
-        Ok(old_payloads)
+        let ids: Vec<u64> = points.iter().map(|p| p.id).collect();
+        // A point without a payload deletes the stored one.
+        let effect = if points.iter().all(|p| p.payload.is_some()) {
+            StoreEffect::Stores
+        } else {
+            StoreEffect::StoresOrRemoves
+        };
+        stores.payloads(&ids, effect, |payload_storage| {
+            let old_payloads = Self::collect_old_payloads(points, payload_storage);
+            let written = Self::write_deduped_payloads(points, payload_storage, dedup_map)
+                .and_then(|()| payload_storage.flush().map_err(Into::into));
+            if let Err(error) = written {
+                self.index_payloads_after_failed_write(payload_storage, &ids, &old_payloads);
+                return Err(error);
+            }
+            self.index_payload_writes(
+                points.iter().map(|p| (p.id, p.payload.as_ref())),
+                &old_payloads,
+            );
+            Ok(old_payloads)
+        })
     }
 
     /// Retrieves pre-batch payloads, querying storage only once per unique ID.
@@ -338,11 +471,16 @@ impl Collection {
         Ok(())
     }
 
-    /// Writes only the last vector per ID to vector storage.
+    /// Writes only the last vector per ID to vector storage, through
+    /// `stores` ([`RowStores::vectors`]).
     ///
     /// Issue #425: Accepts a pre-computed `dedup_map` instead of building
     /// its own, consolidating the two redundant maps into one.
-    fn write_deduped_vectors(&self, points: &[Point], dedup_map: &DedupMap) -> Result<()> {
+    fn write_deduped_vectors(
+        stores: &RowStores<'_>,
+        points: &[Point],
+        dedup_map: &DedupMap,
+    ) -> Result<()> {
         let deduped: Vec<(u64, &[f32])> = points
             .iter()
             .enumerate()
@@ -350,40 +488,26 @@ impl Collection {
             .map(|(_, p)| (p.id, p.vector.as_slice()))
             .collect();
 
-        let mut vector_storage = self.storage.vector_storage.write();
-        vector_storage.store_batch(&deduped)?;
-        let point_count = vector_storage.len();
-        vector_storage.flush()?;
-        drop(vector_storage);
-
-        self.storage.config.write().point_count = point_count;
-        Ok(())
+        let ids: Vec<u64> = deduped.iter().map(|&(id, _)| id).collect();
+        stores.vectors(&ids, |vector_storage| {
+            vector_storage.store_batch(&deduped)?;
+            vector_storage.flush()?;
+            Ok(())
+        })
     }
 
-    /// Returns `true` when Phase 2 processing can be skipped entirely.
+    /// Returns `true` when the per-point loop can be skipped entirely.
     ///
     /// Issue #425: For the common case (`StorageMode::Full`, no secondary
-    /// indexes, empty BM25 index), Phase 2 does zero useful work. Skipping avoids PQ cache guard acquisition,
-    /// `seen_payloads` HashMap allocation, and the per-point loop.
-    fn can_skip_phase2(&self, points: &[Point], storage_mode: StorageMode) -> bool {
+    /// indexes), the loop does zero useful work. Skipping avoids PQ cache
+    /// guard acquisition, `seen_payloads` HashMap allocation, and the
+    /// per-point loop.
+    fn can_skip_phase2(&self, storage_mode: StorageMode) -> bool {
         // PQ is the only mode with per-upsert quantization caching; every
-        // other mode (Full, RaBitQ, SQ8, Binary) does none here.
-        let no_quantization = !matches!(storage_mode, StorageMode::ProductQuantization);
-        if !no_quantization {
-            return false;
-        }
-
-        // Secondary indexes require per-point old/new payload diffing
-        let no_secondary = self.query.secondary_indexes.read().is_empty();
-        if !no_secondary {
-            return false;
-        }
-
-        // BM25 text index: skip only when the index is empty AND no point
-        // carries a payload (nothing to add, nothing to remove)
-        let bm25_empty = self.storage.text_index.is_empty();
-        let any_payload = points.iter().any(|p| p.payload.is_some());
-        bm25_empty && !any_payload
+        // other mode (Full, RaBitQ, SQ8, Binary) does none here. Secondary
+        // indexes require per-point old/new payload diffing.
+        !matches!(storage_mode, StorageMode::ProductQuantization)
+            && self.query.secondary_indexes.read().is_empty()
     }
 
     /// Phase 2: Per-point updates that don't need storage write locks.
@@ -403,12 +527,12 @@ impl Collection {
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
         storage_mode: StorageMode,
-    ) -> Result<()> {
-        // Issue #425: Fast-path — skip Phase 2 entirely when no secondary
+    ) {
+        // Issue #425: Fast-path — skip the loop entirely when no secondary
         // processing is needed. Avoids lock acquisition, HashMap allocation,
         // and the per-point loop for the common StorageMode::Full case.
-        if self.can_skip_phase2(points, storage_mode) {
-            return Ok(());
+        if self.can_skip_phase2(storage_mode) {
+            return;
         }
 
         // PQ is the only mode with per-upsert quantization work; its quantizer
@@ -416,13 +540,14 @@ impl Collection {
         // one cache guard.
         let mut pq_guard = super::crud_helpers::pq_cache_guard(self, storage_mode);
 
-        self.per_point_sequential_updates(points, old_payloads, &mut pq_guard)
+        self.per_point_sequential_updates(points, old_payloads, &mut pq_guard);
     }
 
-    /// Runs the sequential per-point loop for secondary indexes, BM25, and
-    /// (when not pre-computed) quantization. The label and range
-    /// indexes are not phase-2 work: `write_and_flush_payloads` updates them
-    /// under the payload lock.
+    /// Runs the sequential per-point loop for secondary indexes and (when
+    /// not pre-computed) quantization. The label and range indexes are not
+    /// phase-2 work: `write_and_flush_payloads` updates them under the
+    /// payload lock; nor are BM25 and the histograms, which
+    /// [`Self::apply_payload_effects`] updates for the batch.
     ///
     /// Extracted from `per_point_updates` to keep each function under 50 NLOC.
     fn per_point_sequential_updates(
@@ -430,20 +555,9 @@ impl Collection {
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
         pq_guard: &mut Option<super::crud_helpers::PqCacheGuard<'_>>,
-    ) -> Result<()> {
+    ) {
         let mut seen_payloads: HashMap<u64, Option<&serde_json::Value>> =
             HashMap::with_capacity(points.len());
-        let skip_bm25 =
-            self.storage.text_index.is_empty() && !points.iter().any(|p| p.payload.is_some());
-        // Issue #389 + #1797: WAL-before-apply at BATCH granularity — one
-        // durability barrier for the whole batch's BM25 mutations instead of
-        // one open + fsync per point. Payloads were already stored and
-        // flushed by `batch_store_all`, so the BM25 WAL never leads payload
-        // durability. A failure propagates with the in-memory index untouched.
-        if !skip_bm25 {
-            self.bulk_update_text_index(points, old_payloads)?;
-        }
-
         for (point, pre_batch_old) in points.iter().zip(old_payloads) {
             let effective_old =
                 Self::resolve_effective_old(&seen_payloads, point.id, pre_batch_old.as_ref());
@@ -455,74 +569,128 @@ impl Collection {
             );
             seen_payloads.insert(point.id, point.payload.as_ref());
         }
-
-        Ok(())
     }
 
-    /// Inserts or updates metadata-only points (no vectors).
+    /// Inserts or updates rows by their payloads, by the kind of collection
+    /// ([`RowUniverse::of`]):
     ///
-    /// This method is for metadata-only collections. Points should have
-    /// empty vectors and only contain payload data.
+    /// - a **metadata** collection writes its rows as [`Self::upsert`] does
+    ///   — by the graph rule for rows without a vector (`rows.rs`): a vector
+    ///   is refused (`VELES-014`), a row without a payload stores an empty
+    ///   one, and its sparse vectors replace the stored ones;
+    /// - a **graph** writes them by its rule of [`Self::upsert`]: its checks,
+    ///   and a node's embedding kept by a payload write;
+    /// - a **vector** collection's rows are its vectors, so this replaces
+    ///   the payloads of points it already stores — a payload-less point
+    ///   deletes the stored payload, as `upsert` does — and refuses the whole
+    ///   batch, before writing anything, when one id stores no vector: a
+    ///   payload there would be no row of it. It writes payloads only, so a
+    ///   point carrying a dense vector is refused too, the whole batch before
+    ///   anything is written — `upsert` writes a vector. Sparse vectors are
+    ///   not written here.
     ///
     /// # Errors
     ///
-    /// Returns an error if storage operations fail.
+    /// [`Error::VectorRequired`](crate::Error::VectorRequired) on a vector
+    /// collection when an id stores no vector, and
+    /// [`Error::VectorNotAllowed`](crate::Error::VectorNotAllowed) when a
+    /// point carries a dense vector; the runtime limits'
+    /// refusals; a vector or an invalid sparse vector on a metadata
+    /// collection; a storage failure; or the refusal of [`Self::upsert`] on
+    /// a graph.
     pub fn upsert_metadata(&self, points: impl IntoIterator<Item = Point>) -> Result<()> {
         let points: Vec<Point> = points.into_iter().collect();
+        match self.row_universe() {
+            RowUniverse::StoredNodes => self.upsert(points),
+            RowUniverse::Payloads => self.upsert_payload_rows(points),
+            RowUniverse::Vectors => self.upsert_vector_row_payloads(&points),
+        }
+    }
 
-        // Parity item E: cold-boundary runtime limits. This is the storage
-        // entry for the metadata-only path (`MetadataCollection::upsert` and
-        // `upsert_metadata` route here directly, bypassing `Collection::upsert`).
-        self.enforce_upsert_limits(&points)?;
+    /// [`Self::upsert_metadata`] on a metadata collection — the storage entry
+    /// of its `upsert`: the checks its rows run on every write path (a
+    /// vector refused, [`Self::validate_payload_rows`]; their sparse vectors
+    /// and the runtime limits), then the rows written by the graph rule
+    /// under `upsert`'s contract ([`AbsentFields::Replace`]), the observer
+    /// told once.
+    fn upsert_payload_rows(&self, points: Vec<Point>) -> Result<()> {
+        self.validate_payload_rows(&points)?;
+        self.validate_payload_row_contents(&points)?;
+        let count = points.len();
+        let (embedded, rows) = split_graph_rows(points, AbsentFields::Replace);
+        debug_assert!(embedded.is_empty(), "a metadata row stores no vector");
+        self.write_payload_rows(&rows, AbsentFields::Replace)?;
+        self.report_upsert(count);
+        Ok(())
+    }
 
-        // LOCK ORDER: payload_storage(3) → label_index(7).
-        let mut payload_storage = self.storage.payload_storage.write();
-        let mut label_idx = self.graph.label_index.write();
+    /// What a metadata collection's rows pass beyond refusing a vector, on
+    /// both its write paths: their sparse vectors' checks — the names reach
+    /// the filesystem ([`Self::validate_vector_upsert_batch`]) — and the
+    /// runtime limits.
+    pub(super) fn validate_payload_row_contents(&self, points: &[Point]) -> Result<()> {
+        points.iter().try_for_each(Self::validate_sparse_vectors)?;
+        self.enforce_upsert_limits(points)
+    }
 
-        // Collect old payloads for histogram decrements before they are overwritten.
-        // Bug #46: use collect_old_payloads to deduplicate by ID — only the
-        // first occurrence retrieves the pre-batch value; duplicates get None
-        // so the old value is decremented exactly once.
-        let old_payloads_for_hist = Self::collect_old_payloads(&points, &payload_storage);
-
-        let effective_olds =
-            self.apply_metadata_point_writes(&points, &mut payload_storage, &mut label_idx)?;
-
-        // LOCK ORDER: drop label_index(7) before acquiring config(1) and stats_io_mutex(12),
-        // and before graph_range_indexes(7), which shares its rank.
-        drop(label_idx);
-        self.apply_range_index_changes(
-            points
-                .iter()
-                .zip(&effective_olds)
-                .map(|(point, old)| (point.id, old.as_ref(), point.payload.as_ref())),
-        );
-
-        // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).
-        let point_count = payload_storage.ids().len();
-        payload_storage.flush()?;
-        drop(payload_storage);
-
-        // Issue #389 + #1797: one BM25 WAL barrier for the whole batch,
-        // sequenced after the payload flush so the BM25 WAL never leads
-        // payload durability — the same envelope as the vector upsert path.
-        self.bulk_update_text_index(&points, &old_payloads_for_hist)?;
-
-        // config(1) only — payload_storage(3) and label_index(7) both released above.
-        self.storage.config.write().point_count = point_count;
-
-        // Incremental histogram maintenance for metadata-only collections
-        // (Bug #47 + Bug #49): dedup by id and replace histograms in one
-        // atomic cycle. See `apply_histogram_replace_dedup`.
-        self.apply_histogram_replace_dedup(&points, &old_payloads_for_hist);
-
-        self.bump_generation_with_mirror_upserts(&points);
+    /// [`Self::upsert_metadata`] on a vector collection: replaces the
+    /// payloads of points that store a vector, after refusing a batch that
+    /// carries one (it writes none) and the runtime limits.
+    /// The payload effects (histograms, BM25) follow the stored payloads
+    /// once the guards are released, as on the vector upsert path.
+    fn upsert_vector_row_payloads(&self, points: &[Point]) -> Result<()> {
+        let name = self.storage.config.read().name.clone();
+        if points.iter().any(|point| !point.vector.is_empty()) {
+            return Err(crate::Error::VectorNotAllowed(name));
+        }
+        self.enforce_upsert_limits(points)?;
+        let old_payloads = self.store_metadata_rows(&name, points)?;
+        self.apply_payload_effects(&payload_writes(points), &old_payloads)?;
+        self.bump_generation_with_mirror_upserts(points);
         self.report_upsert(points.len());
         Ok(())
     }
 
-    /// Applies the per-point payload store/delete, text-index, secondary-index,
-    /// and label-index updates for a metadata-only batch.
+    /// Stores the payloads of a batch of the rows of the vector collection
+    /// `name` and brings the label and range indexes in line with them;
+    /// returns each point's pre-batch payload (`collect_old_payloads`), for
+    /// the histograms. A point without a payload deletes the stored one. The
+    /// whole batch is refused, before anything is written, when one id
+    /// stores no vector ([`Self::write_payloads_of_vector_rows`]).
+    ///
+    /// LOCK ORDER: node_locks(1c) → payload_storage(3) → label_index(7),
+    /// released → graph_range_indexes(7); the payload flush runs under
+    /// `payload_storage`.
+    fn store_metadata_rows(
+        &self,
+        name: &str,
+        points: &[Point],
+    ) -> Result<Vec<Option<serde_json::Value>>> {
+        let ids: Vec<u64> = points.iter().map(|p| p.id).collect();
+        self.write_payloads_of_vector_rows(name, &ids, |payload_storage| {
+            let mut label_idx = self.graph.label_index.write();
+            // Collect old payloads for histogram decrements before they are
+            // overwritten. Bug #46: use collect_old_payloads to deduplicate by
+            // ID — only the first occurrence retrieves the pre-batch value;
+            // duplicates get None so the old value is decremented exactly once.
+            let old_payloads_for_hist = Self::collect_old_payloads(points, payload_storage);
+            let effective_olds =
+                self.apply_metadata_point_writes(points, payload_storage, &mut label_idx)?;
+            // label_index(7) released before graph_range_indexes(7), its rank-mate.
+            drop(label_idx);
+            self.apply_range_index_changes(
+                points
+                    .iter()
+                    .zip(&effective_olds)
+                    .map(|(point, old)| (point.id, old.as_ref(), point.payload.as_ref())),
+            );
+            payload_storage.flush()?;
+            Ok(old_payloads_for_hist)
+        })
+    }
+
+    /// Applies the per-point payload store/delete, secondary-index and
+    /// label-index updates for [`Self::store_metadata_rows`].
     ///
     /// Extracted from [`Self::upsert_metadata`] so each function stays within
     /// the complexity budget. Both write guards are passed in by the caller,
@@ -578,4 +746,10 @@ impl Collection {
         }
         Ok(effective_olds)
     }
+}
+
+/// Each point's `(id, payload)` write, in batch order: `None` where the
+/// point carries no payload, which deletes the stored one.
+pub(super) fn payload_writes(points: &[Point]) -> Vec<(u64, Option<&serde_json::Value>)> {
+    points.iter().map(|p| (p.id, p.payload.as_ref())).collect()
 }

@@ -54,6 +54,8 @@ impl Database {
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect();
+        // The side's rows, as a SELECT of it reads them (a graph's
+        // payload-only nodes included).
         let fetched = collection.get(&unique_ids);
         let point_map: std::collections::HashMap<u64, crate::Point> =
             fetched.into_iter().flatten().map(|p| (p.id, p)).collect();
@@ -207,12 +209,8 @@ impl Database {
                 step.row_budget,
             ));
         }
-        let keys = crate::velesql::JoinKeys::of(join).ok_or_else(|| {
-            Error::Query(format!(
-                "JOIN on table '{}' must use ON condition or USING(single_column).",
-                join.table
-            ))
-        })?;
+        let keys = crate::velesql::JoinKeys::of(join)
+            .ok_or_else(|| Error::join_without_key(&join.table))?;
         let side = self.join_side_points(&join.table, &join_collection, step.pushed);
         Ok(crate::velesql::hash_join(
             results,

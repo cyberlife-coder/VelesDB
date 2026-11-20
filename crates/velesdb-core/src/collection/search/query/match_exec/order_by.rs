@@ -8,7 +8,7 @@ use super::{parse_property_path, MatchResult};
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::{PayloadStorage, VectorStorage};
-use crate::velesql::{evaluate_arithmetic, ScoreContext};
+use crate::velesql::{compare_scores, evaluate_arithmetic, ScoreContext};
 use crate::velesql::{ArithmeticExpr, OrderByExpr, SimilarityOrderBy};
 use std::collections::HashMap;
 
@@ -72,14 +72,12 @@ impl Collection {
     /// `!higher_is_better`) is negated: a LARGER key always means "more
     /// similar" and `DESC` is most-similar-first under every metric, as for
     /// [`Self::sort_match_by_similarity`] and the SELECT-side
-    /// `ORDER BY similarity()`. An unscored row sorts as least similar.
+    /// `ORDER BY similarity()`. An unscored row has a null key, which sorts
+    /// last under `ASC` and first under `DESC`, as every ORDER BY sorts a
+    /// null ([`compare_scores`]).
     fn sort_match_by_score(results: &mut [MatchResult], descending: bool, higher_is_better: bool) {
-        let key = |r: &MatchResult| match r.score {
-            Some(score) if higher_is_better => score,
-            Some(distance) => -distance,
-            None => f32::NEG_INFINITY,
-        };
-        results.sort_by(|a, b| Self::apply_direction(key(a).total_cmp(&key(b)), descending));
+        let key = |r: &MatchResult| r.score.map(|s| if higher_is_better { s } else { -s });
+        results.sort_by(|a, b| Self::apply_direction(compare_scores(key(a), key(b)), descending));
     }
 
     /// Sorts by traversal depth.
@@ -94,7 +92,8 @@ impl Collection {
     /// the node bound to `alias` (the property denotes that node's single
     /// vector); a bare field scores each result's anchor `node_id`. A result
     /// whose alias is unbound, or whose node has a missing/mismatched vector,
-    /// scores as least similar (`f32::NEG_INFINITY`).
+    /// has a null key, sorted as every ORDER BY sorts a null
+    /// ([`compare_scores`]).
     ///
     /// The per-node key is normalized so a LARGER key always means "more
     /// similar" — distance metrics (lower = closer, `!higher_is_better`) are
@@ -109,31 +108,20 @@ impl Collection {
         descending: bool,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<()> {
-        let query_vector = Self::resolve_vector(&sim.vector, params)?;
+        let query_vector = crate::velesql::bind_vector(&sim.vector, params)?;
         let metric = self.storage.config.read().metric;
         let higher_is_better = metric.higher_is_better();
         // `alias.property` => score the node bound to `alias`; bare => the anchor.
         let alias = parse_property_path(&sim.field).map(|(alias, _)| alias);
         let vector_storage = self.storage.vector_storage.read();
         results.sort_by(|a, b| {
-            let score = |r: &MatchResult| -> f32 {
-                let Some(node_id) = resolve_scored_node_id(r, alias) else {
-                    return f32::NEG_INFINITY;
-                };
-                let Some(v) = vector_storage.retrieve(node_id).ok().flatten() else {
-                    return f32::NEG_INFINITY;
-                };
-                if v.len() != query_vector.len() || v.is_empty() {
-                    return f32::NEG_INFINITY;
-                }
-                let raw = metric.calculate(&v, &query_vector);
-                if higher_is_better {
-                    raw
-                } else {
-                    -raw
-                }
+            let score = |r: &MatchResult| -> Option<f32> {
+                let node_id = resolve_scored_node_id(r, alias)?;
+                let v = vector_storage.retrieve(node_id).ok().flatten()?;
+                let raw = metric.checked_calculate(&v, &query_vector)?;
+                Some(if higher_is_better { raw } else { -raw })
             };
-            Self::apply_direction(score(a).total_cmp(&score(b)), descending)
+            Self::apply_direction(compare_scores(score(a), score(b)), descending)
         });
         Ok(())
     }
