@@ -518,6 +518,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Core: three silent wrong answers in search and guard rails** (core,
+  2026-11-20).
+  - *Filtered sparse search is exact.* `sparse_search_filtered` fetched the
+    best `4k` (then `8k`) documents and filtered that window, so a filter or
+    GraphFirst anchor set whose documents ranked below it returned fewer than
+    `k` results, or none: 1 000 documents, a filter accepting the ten
+    lowest-scored, `k = 5` returned nothing. The filter now runs on the scored
+    set, best-first, and stops at the `k`-th accepted document — one scan
+    instead of two, and no filter call past the last result.
+  - *BM25 drops a document whose new text has no indexable token.*
+    `Bm25Index::add_document` returned before removing the previous version
+    when the text tokenized to nothing (`"N/A"`, `"-"`, `"7"`), so the old
+    terms kept matching a payload that no longer contained them. It now
+    removes the document, as `remove_document` does.
+  - *A failed half-open probe reopens the circuit breaker.* A request admitted
+    before the trip that succeeded after it reset the failure count while the
+    breaker was open; the probe's failure then counted as the first of a new
+    window, and with a threshold above 1 the breaker stayed half-open, where
+    every request is admitted. A failure in `HalfOpen` now reopens it
+    whatever the count.
+
 - **Core: `LruCache`'s O(1) claim has a deterministic guard** (core, tests,
   2026-11-19). #2860 made every operation O(1) and #2854 moved per-size cost
   to the `LruCache-Baseline` benchmark, which CI does not gate, so an O(n)
