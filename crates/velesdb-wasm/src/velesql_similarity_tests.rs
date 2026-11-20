@@ -42,6 +42,7 @@ fn db_with_named_vectors() -> DatabaseInner {
 fn evaluator(db: &DatabaseInner, sql: &str, json: &str) -> Result<SimilarityEvaluator, String> {
     let cond = normalized(sql);
     SimilarityEvaluator::for_condition(db, "v", Some(&cond), &params(json))
+        .map_err(|e| e.to_string())
         .map(|e| e.expect("test: the clause has a similarity() leaf"))
 }
 
@@ -60,29 +61,37 @@ fn a_clause_without_similarity_needs_no_evaluator() {
     assert!(eval.is_none());
 }
 
+/// A query vector the collection cannot score is the SELECT's refusal, raised
+/// once before any row is read (`velesql_select::check_select`); the
+/// evaluator built after it does not refuse it again, and leaves a row it
+/// cannot score UNKNOWN rather than reaching the kernel's length assertion.
 #[test]
-fn the_own_vector_of_a_metadata_only_collection_cannot_be_scored() {
+fn a_query_vector_the_collection_cannot_score_is_refused_once_up_front() {
     let mut db = DatabaseInner::new();
-    db.create_metadata_collection("v").expect("test: create");
-    let err = evaluator(
-        &db,
-        "SELECT * FROM v WHERE similarity(vector, $q) > 0.5",
-        r#"{"q": [1.0, 0.0]}"#,
+    db.create_metadata_collection("m").expect("test: create");
+    let refused = crate::velesql_exec::execute(
+        &mut db,
+        "SELECT * FROM m WHERE similarity(vector, $q) > 0.5",
+        Some(r#"{"q": [1.0, 0.0]}"#),
     )
     .expect_err("test: refused");
-    assert!(err.contains("metadata-only"), "{err}");
-}
+    assert!(refused.to_string().contains("[VELES-015]"), "{refused}");
 
-#[test]
-fn a_query_vector_of_another_dimension_is_refused() {
-    let db = db_with_named_vectors();
-    let err = evaluator(
+    let mut db = db_with_named_vectors();
+    let refused = crate::velesql_exec::execute(
+        &mut db,
+        "SELECT * FROM v WHERE similarity(vector, $q) > 0.5",
+        Some(r#"{"q": [1.0, 0.0, 0.0]}"#),
+    )
+    .expect_err("test: refused");
+    assert!(refused.to_string().contains("[VELES-004]"), "{refused}");
+    let eval = evaluator(
         &db,
         "SELECT * FROM v WHERE similarity(vector, $q) > 0.5",
         r#"{"q": [1.0, 0.0, 0.0]}"#,
     )
-    .expect_err("test: refused");
-    assert!(err.contains("dimension mismatch"), "{err}");
+    .expect("test: no second check");
+    assert_eq!((eval.score_at(0), eval.score_at(1)), (None, None));
 }
 
 /// Each leaf is scored against its own query vector, so two thresholds over

@@ -12,16 +12,19 @@
 //! score, [`crate::velesql_match_score`]), `similarity(field, $v)` (the vector
 //! of the node `alias.` names, else the row's target), and arithmetic over
 //! the target (`year - 2000`, `id`, through core's `ScoreContext`). The
-//! similarity keys are most-similar-first under every metric. Aggregates are
+//! similarity keys are most-similar-first under every metric, a row they
+//! cannot score a null key (core's `velesql::compare_scores`). Aggregates are
 //! refused, as core refuses them.
 
 use std::cmp::Ordering;
 
 use velesdb_core::velesql::json_path::payload_path;
 use velesdb_core::velesql::{
-    evaluate_arithmetic, ArithmeticExpr, OrderByExpr, OrderByItem, ScoreContext, SimilarityOrderBy,
+    compare_scores, evaluate_arithmetic, ArithmeticExpr, OrderByExpr, OrderByItem, ScoreContext,
+    SimilarityOrderBy,
 };
 
+use crate::exec_error::ExecError;
 use crate::velesql_match_nodes::MatchNodes;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
@@ -85,7 +88,7 @@ pub(crate) fn order_and_limit(
     order_by: Option<&[OrderByItem]>,
     limit: Option<u64>,
     order: &MatchOrder<'_>,
-) -> Result<(), String> {
+) -> Result<(), ExecError> {
     if let Some(items) = order_by {
         // Deterministic baseline: the bound-node-id tuple is unique per row, so
         // it gives the stable per-key sorts below a total tie-break order.
@@ -108,7 +111,7 @@ fn sort_by_key(
     expr: &OrderByExpr,
     descending: bool,
     order: &MatchOrder<'_>,
-) -> Result<(), String> {
+) -> Result<(), ExecError> {
     let higher_is_better = order.higher_is_better;
     match expr {
         OrderByExpr::Field(f) if f == "depth" => {
@@ -120,15 +123,14 @@ fn sort_by_key(
         OrderByExpr::Field(f) => sort_by_property(candidates, f, descending),
         OrderByExpr::SimilarityBare => {
             // Core's `sort_match_by_score`: a distance is negated so `DESC`
-            // is most-similar-first under every metric; unscored rows sort as
-            // least similar.
+            // is most-similar-first under every metric; an unscored row is a
+            // null key, last under `ASC` and first under `DESC`.
             sort_stable(candidates, descending, |a, b| {
-                let key = |c: &MatchCandidate| match c.score {
-                    Some(score) if higher_is_better => score,
-                    Some(distance) => -distance,
-                    None => f32::NEG_INFINITY,
+                let key = |c: &MatchCandidate| {
+                    c.score
+                        .map(|score| if higher_is_better { score } else { -score })
                 };
-                key(a).total_cmp(&key(b))
+                compare_scores(key(a), key(b))
             });
             Ok(())
         }
@@ -138,18 +140,20 @@ fn sort_by_key(
             Ok(())
         }
         OrderByExpr::Arithmetic(expr) => {
-            let keys: Vec<f32> = candidates
+            let keys: Vec<Option<f32>> = candidates
                 .iter()
-                .map(|c| arithmetic_key(c, expr, order.nodes))
+                .map(|c| Some(arithmetic_key(c, expr, order.nodes)))
                 .collect();
             sort_by_keys(candidates, &keys, descending);
             Ok(())
         }
-        _ => Err(
+        // Core's refusal of the same ORDER BY (`order_match_results`).
+        _ => Err(velesdb_core::Error::GraphNotSupported(
             "MATCH ORDER BY aggregate expression is not supported (use similarity(), depth, \
              alias.property, or arithmetic over properties)"
                 .to_string(),
-        ),
+        )
+        .into()),
     }
 }
 
@@ -160,14 +164,14 @@ fn target(candidate: &MatchCandidate) -> Option<u64> {
 
 /// Core's `sort_match_by_similarity` key per row: the vector of the node
 /// `alias.` names (the target for a bare field) against the query vector, a
-/// distance negated so a larger key is more similar; an unscorable row
-/// `-inf`.
+/// distance negated so a larger key is more similar; an unscorable row a
+/// null key (`None`).
 fn similarity_keys(
     candidates: &[MatchCandidate],
     sim: &SimilarityOrderBy,
     order: &MatchOrder<'_>,
-) -> Result<Vec<f32>, String> {
-    let query = crate::velesql_value::resolve_vector(&sim.vector, order.params)?;
+) -> Result<Vec<Option<f32>>, ExecError> {
+    let query = velesdb_core::velesql::bind_vector(&sim.vector, order.params)?;
     let alias = sim.field.split_once('.').map(|(alias, _)| alias);
     let space = order.nodes.and_then(MatchNodes::vector_space);
     Ok(candidates
@@ -185,14 +189,9 @@ fn similarity_keys(
             node.zip(order.nodes)
                 .and_then(|(id, nodes)| nodes.vector(id))
                 .zip(space)
-                .filter(|(vector, _)| vector.len() == query.len() && !vector.is_empty())
-                .map_or(f32::NEG_INFINITY, |(vector, (_, metric))| {
-                    let raw = metric.calculate(vector, &query);
-                    if metric.higher_is_better() {
-                        raw
-                    } else {
-                        -raw
-                    }
+                .and_then(|(vector, (_, metric))| {
+                    let raw = metric.checked_calculate(vector, &query)?;
+                    Some(if metric.higher_is_better() { raw } else { -raw })
                 })
         })
         .collect())
@@ -216,10 +215,10 @@ fn arithmetic_key(
 }
 
 /// Stable sort of the candidates by one precomputed key each.
-fn sort_by_keys(candidates: &mut [MatchCandidate], keys: &[f32], descending: bool) {
+fn sort_by_keys(candidates: &mut [MatchCandidate], keys: &[Option<f32>], descending: bool) {
     let mut order: Vec<usize> = (0..candidates.len()).collect();
     order.sort_by(|&i, &j| {
-        let ascending = keys[i].total_cmp(&keys[j]);
+        let ascending = compare_scores(keys[i], keys[j]);
         if descending {
             ascending.reverse()
         } else {
@@ -249,12 +248,14 @@ fn sort_by_property(
     candidates: &mut [MatchCandidate],
     path: &str,
     descending: bool,
-) -> Result<(), String> {
+) -> Result<(), ExecError> {
     if !path.contains('.') {
-        return Err(format!(
+        // Core's refusal of the same ORDER BY (`order_match_results_by_property`).
+        return Err(velesdb_core::Error::GraphNotSupported(format!(
             "MATCH ORDER BY expression '{path}' is not supported \
              (use similarity(), depth, or alias.property)"
-        ));
+        ))
+        .into());
     }
     sort_stable(candidates, descending, |a, b| {
         let va = payload_path(&a.value, path);

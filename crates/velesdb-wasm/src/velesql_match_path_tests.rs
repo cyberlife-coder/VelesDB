@@ -155,5 +155,8 @@ fn given_a_variable_length_relationship_when_matching_then_it_is_rejected_not_mi
 
     let err = execute_match(&mut db, &query, &Params::new()).expect_err("test: rejected");
 
-    assert!(err.contains("Variable-length"), "unexpected error: {err}");
+    assert!(
+        err.to_string().contains("Variable-length"),
+        "unexpected error: {err}"
+    );
 }

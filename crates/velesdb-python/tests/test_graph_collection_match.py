@@ -181,31 +181,57 @@ def test_bfs_and_match_agree(graph_db):
 
 
 def test_search_by_embedding_without_embeddings_raises_value_error(tmp_path):
+    """A graph without embeddings stores no vector to search: ``VELES-015``,
+    the code every search entry point answers there (it was ``VELES-014``,
+    the code of a vector write)."""
     db = velesdb.Database(str(tmp_path))
     graph = db.create_graph_collection("no_emb")
-    with pytest.raises(ValueError, match="VELES-014"):
+    with pytest.raises(ValueError, match="VELES-015"):
         graph.search_by_embedding([1.0, 0.0, 0.0, 0.0])
 
 
-def test_count_len_and_get_see_only_nodes_stored_with_a_vector(tmp_path):
-    """What the docs now say: ``count``/``len``/``is_empty``/``get`` read the
-    points stored with a vector; a payload-only node is listed by
-    ``all_node_ids`` and ``in``, and read by ``get_node_payload``."""
+def test_count_len_is_empty_and_get_see_every_stored_node(tmp_path):
+    """``count``/``len``/``is_empty``/``get`` see every stored node: a
+    payload-only node counts and reads as one carrying an embedding does,
+    each node counted once."""
     db = velesdb.Database(str(tmp_path))
     graph = db.create_graph_collection("vec_nodes", dimension=3)
-    graph.upsert_node_payload(1, {"name": "payload only"})
     assert graph.count() == len(graph) == 0 and graph.is_empty()
-    assert graph.get([1]) == [None]
+    graph.upsert_node_payload(1, {"name": "payload only"})
+    assert graph.count() == len(graph) == 1 and not graph.is_empty()
+    assert graph.get([1]) == [{"id": 1, "payload": {"name": "payload only"}}]
     assert 1 in graph and graph.all_node_ids() == [1]
-    assert graph.get_node_payload(1) == {"name": "payload only"}
 
     graph.upsert_node(2, {"name": "with vector"}, [1.0, 0.0, 0.0])
-    assert graph.count() == len(graph) == 1 and not graph.is_empty()
-    assert graph.get([2])[0]["payload"] == {"name": "with vector"}
+    assert graph.count() == len(graph) == 2 == len(graph.all_node_ids())
+    with_vector = graph.get([2])[0]
+    assert with_vector["payload"] == {"name": "with vector"}
+    assert list(with_vector["vector"]) == [1.0, 0.0, 0.0]
+    assert graph.get([3]) == [None]
 
     plain = db.create_graph_collection("no_vec_nodes")
     plain.upsert_node_payload(1, {"name": "payload only"})
-    assert plain.count() == 0 and plain.get([1]) == [None] and 1 in plain
+    plain.upsert_node_payload(2, {"name": "another"})
+    assert plain.count() == len(plain) == 2 and not plain.is_empty()
+    assert [n["id"] for n in plain.get([1, 2])] == [1, 2]
+    plain.delete([1, 2])
+    assert plain.count() == 0 and plain.is_empty()
+
+
+def test_in_sees_every_stored_node_a_vector_only_one_included(tmp_path):
+    """``in`` answers as ``len`` counts and ``get`` reads: a node stored with
+    an embedding and no payload is in the graph (it read as absent while
+    ``in`` asked for a payload)."""
+    db = velesdb.Database(str(tmp_path))
+    graph = db.create_graph_collection("vec_only", dimension=3)
+    # The graph's points are its nodes: a point upserted without a payload
+    # is a node with an embedding only.
+    db.get_collection("vec_only").upsert([{"id": 3, "vector": [0.0, 1.0, 0.0]}])
+    assert graph.get_node_payload(3) is None
+    assert len(graph) == 1 and graph.get([3])[0]["id"] == 3
+    assert 3 in graph
+    graph.upsert_node_payload(4, {"name": "payload only"})
+    assert 4 in graph and 5 not in graph
 
 
 def test_query_runs_on_its_own_collection_whatever_params_collection_says(graph_db, tmp_path):
@@ -218,3 +244,52 @@ def test_query_runs_on_its_own_collection_whatever_params_collection_says(graph_
         params={"_collection": "some_other_graph"},
     )
     assert [r["id"] for r in redirected] == [r["id"] for r in expected]
+
+
+def test_the_collection_view_of_a_graph_reports_its_node_count(tmp_path):
+    """``Database.get_collection`` on a graph sizes it as the graph does:
+    ``count``/``len``/``is_empty``/``info()['point_count']`` see every stored
+    node, as ``GraphCollection`` and REST do (they read the vector store, so a
+    graph without embeddings holding nodes reported 0)."""
+    db = velesdb.Database(str(tmp_path))
+    graph = db.create_graph_collection("payload_graph")
+    graph.upsert_node_payload(1, {"name": "a"})
+    graph.upsert_node_payload(2, {"name": "b"})
+
+    view = db.get_collection("payload_graph")
+    assert view.count() == len(view) == 2 == len(graph)
+    assert not view.is_empty()
+    assert view.info()["point_count"] == 2
+
+
+def test_the_collection_view_of_a_graph_reads_every_stored_node(tmp_path):
+    """``Database.get_collection`` on a graph reads its nodes as it counts
+    them: ``get`` and ``in`` see a payload-only node, as ``len`` does and as
+    ``GraphCollection`` does (they asked the vector store, so a graph without
+    embeddings reported ``len`` 2 while ``get`` read ``None`` and ``in`` was
+    ``False``). A node without an embedding has no ``vector`` key."""
+    db = velesdb.Database(str(tmp_path))
+    graph = db.create_graph_collection("payload_graph")
+    graph.upsert_node_payload(1, {"name": "a"})
+    graph.upsert_node_payload(2, {"name": "b"})
+
+    view = db.get_collection("payload_graph")
+    assert len(view) == 2
+    assert view.get([1, 2, 3]) == graph.get([1, 2, 3])
+    assert view.get([1]) == [{"id": 1, "payload": {"name": "a"}}]
+    assert 1 in view and 2 in view and 3 not in view
+
+
+def test_upsert_bulk_on_a_graph_view_writes_rows_by_the_graph_rule(tmp_path):
+    """``upsert_bulk`` on a graph's collection view writes a row without a
+    vector as a node without an embedding: it put an empty vector into the
+    vector store of a graph without embeddings, and refused the row on a
+    graph with embeddings, though ``upsert`` took it."""
+    db = velesdb.Database(str(tmp_path))
+    db.create_graph_collection("plain")
+    db.create_graph_collection("embedded", dimension=2)
+    for name in ("plain", "embedded"):
+        view = db.get_collection(name)
+        view.upsert_bulk([{"id": 1, "vector": [], "payload": {"name": "a"}}])
+        assert view.get([1]) == [{"id": 1, "payload": {"name": "a"}}], name
+        assert len(view) == 1, name

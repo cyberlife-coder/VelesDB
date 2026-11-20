@@ -182,7 +182,10 @@ fn test_match_at_collection_missing_collection_is_refused() {
 
     let q = parse_match("MATCH (a:Person)-[:HAS]->(b:Profile@nope) RETURN a, b LIMIT 10");
     let err = execute_match(&mut db, &q, &Params::new()).expect_err("test: refused");
-    assert!(err.contains("VELES-002") && err.contains("nope"), "{err}");
+    assert!(
+        err.to_string().contains("VELES-002") && err.to_string().contains("nope"),
+        "{err}"
+    );
 }
 
 #[test]

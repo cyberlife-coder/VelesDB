@@ -125,6 +125,11 @@ pub struct MetadataPointInput {
     /// Point ID.
     #[serde(deserialize_with = "serde_id::deserialize_id_from_string_or_number")]
     pub id: u64,
+    /// A vector sent with the point: a metadata write stores none, so core
+    /// refuses the batch carrying one (`VELES-014`) instead of the field
+    /// being dropped by deserialization.
+    #[serde(default)]
+    pub vector: Option<Vec<f32>>,
     /// Payload (JSON object).
     pub payload: serde_json::Value,
 }
@@ -278,10 +283,10 @@ pub struct QueryRequest {
     /// Query parameters.
     #[serde(default)]
     pub params: std::collections::HashMap<String, serde_json::Value>,
-    /// Collection a statement without `FROM` (a top-level `MATCH`, an
-    /// aggregate) runs on, as the REST server's `/query` body field: it is
-    /// passed as `params._collection` unless that is already set, and a
-    /// statement with a `FROM` reads its `FROM`.
+    /// Collection a top-level `MATCH` (the one statement without `FROM`)
+    /// runs on, by core's rule (`velesql::with_collection_param`), the REST
+    /// server's `/query` body field's: it is passed as `params._collection`
+    /// unless that is already set; every other statement ignores it.
     #[serde(default)]
     pub collection: Option<String>,
 }

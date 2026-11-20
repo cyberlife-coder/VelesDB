@@ -61,26 +61,47 @@ pub(crate) fn sort_scored_triples<T>(results: &mut [(u64, f32, T)], higher_is_be
     results.sort_by(|a, b| velesdb_core::distance::rank_scores(a.1, b.1, higher_is_better));
 }
 
-/// Validates query dimension matches store dimension, returning a structured
-/// [`WasmError`] (carrying `VELES-004`) on mismatch.
-///
-/// Single source of truth for the dimension check: delegates to core's
-/// [`velesdb_core::validate_dimension_match`] and preserves the core error's
-/// machine-readable `code` instead of pre-flattening it to a bare string
-/// (backlog #22). [`validate_query_vector`] and [`validate_ingest_vector`]
-/// build on it; their callers render the error as a structured JS `Error`.
+/// Validates that a vector's length is the store's dimension, returning a
+/// structured [`WasmError`] (carrying core's `VELES-004`) on mismatch — the
+/// check of a raw batch insert (`store_insert`), which states the dimension
+/// of the flat buffer it hands over.
 #[inline]
 pub fn validate_dimension_structured(query_len: usize, store_dim: usize) -> Result<(), WasmError> {
     velesdb_core::validate_dimension_match(store_dim, query_len).map_err(WasmError::from)
 }
 
-/// The checks core runs on a query vector before it searches a collection:
-/// the store holds vectors (a metadata-only store refuses with
-/// `SearchNotSupported`, VELES-015), the query has the store's dimension
-/// (VELES-004) and only finite components (`InvalidVector`, VELES-005).
+/// Core's query-vector target ([`velesdb_core::velesql::QueryVectorTarget`])
+/// for the store of the collection `collection`: a store of dimension 0 is
+/// metadata-only and stores no vector.
+pub(crate) fn query_vector_target(
+    collection: &str,
+    store_dim: usize,
+) -> velesdb_core::velesql::QueryVectorTarget<'_> {
+    velesdb_core::velesql::QueryVectorTarget {
+        collection,
+        dimension: (store_dim > 0).then_some(store_dim),
+    }
+}
+
+/// The checks core runs on a query vector before it searches a standalone
+/// [`crate::VectorStore`]: [`check_query_vector`] for a store with no
+/// collection name ([`VECTOR_STORE`]).
 pub fn validate_query_vector(query: &[f32], store_dim: usize) -> Result<(), WasmError> {
-    refuse_metadata_only(store_dim)?;
-    validate_ingest_vector(query, store_dim)
+    check_query_vector(VECTOR_STORE, query, store_dim).map_err(WasmError::from)
+}
+
+/// The checks of core's `Collection::search`, in its order, for the store
+/// of the collection named `collection`: the store holds vectors and the
+/// query has their dimension ([`query_vector_target`] — `SearchNotSupported`,
+/// VELES-015, naming it, then `DimensionMismatch`, VELES-004), and only
+/// finite components (`InvalidVector`, VELES-005).
+pub(crate) fn check_query_vector(
+    collection: &str,
+    query: &[f32],
+    store_dim: usize,
+) -> Result<(), velesdb_core::Error> {
+    query_vector_target(collection, store_dim).check_len(query.len())?;
+    velesdb_core::validation::validate_vector_is_finite(query)
 }
 
 /// [`validate_query_vector`] for `num_vectors` queries laid out row-major in
@@ -90,7 +111,9 @@ pub fn validate_query_vectors(
     num_vectors: usize,
     store_dim: usize,
 ) -> Result<(), WasmError> {
-    refuse_metadata_only(store_dim)?;
+    // A store holding vectors accepts its own dimension; one holding none
+    // refuses with VELES-015 before the buffer is read.
+    query_vector_target(VECTOR_STORE, store_dim).check_len(store_dim)?;
     validate_multi_vector_len(vectors.len(), num_vectors, store_dim)
         .map_err(|e| WasmError::from(velesdb_core::Error::InvalidVector(e)))?;
     velesdb_core::validation::validate_vector_is_finite(vectors).map_err(WasmError::from)
@@ -99,19 +122,30 @@ pub fn validate_query_vectors(
 /// The checks core runs on a vector it stores: the store's dimension and
 /// only finite components.
 pub fn validate_ingest_vector(vector: &[f32], store_dim: usize) -> Result<(), WasmError> {
-    validate_dimension_structured(vector.len(), store_dim)?;
-    velesdb_core::validation::validate_vector_is_finite(vector).map_err(WasmError::from)
+    check_ingest_vector(vector, store_dim).map_err(WasmError::from)
 }
 
-/// A store of dimension 0 is metadata-only: it holds no vector to search.
-fn refuse_metadata_only(store_dim: usize) -> Result<(), WasmError> {
-    if store_dim == 0 {
-        return Err(WasmError::from(velesdb_core::Error::SearchNotSupported(
-            "vector search needs a vector store; this one is metadata-only".to_string(),
-        )));
+/// [`validate_ingest_vector`] as core's error, what the VelesQL executor's
+/// `INSERT` and `UPDATE` refuse with: a store of vectors stores one per row,
+/// so an empty one is none — `VectorRequired` (VELES-016), by core's rule
+/// ([`velesdb_core::velesql::QueryVectorTarget::check_required_write`]) — and
+/// one of another length is `DimensionMismatch` (VELES-004); then
+/// `InvalidVector` (VELES-005) for a non-finite component.
+pub(crate) fn check_ingest_vector(
+    vector: &[f32],
+    store_dim: usize,
+) -> Result<(), velesdb_core::Error> {
+    if store_dim > 0 {
+        query_vector_target(VECTOR_STORE, store_dim).check_required_write(vector.len())?;
+    } else {
+        velesdb_core::validate_dimension_match(store_dim, vector.len())?;
     }
-    Ok(())
+    velesdb_core::validation::validate_vector_is_finite(vector)
 }
+
+/// How `SearchNotSupported` names a standalone [`crate::VectorStore`], which
+/// has no collection name: by its JavaScript class.
+const VECTOR_STORE: &str = "VectorStore";
 
 /// Validates that a flat multi-vector buffer holds exactly
 /// `num_vectors * dimension` floats, using a checked multiplication.

@@ -88,7 +88,7 @@ fn an_edge_to_a_missing_node_is_refused() {
     let err = db
         .add_edge("docs", edge(10, 1, 99, "CITES"))
         .expect_err("node 99 does not exist");
-    assert!(err.contains("99"), "{err}");
+    assert!(err.to_string().contains("99"), "{err}");
     assert_eq!(db.edge_count("docs").expect("count"), 0);
 }
 
@@ -98,7 +98,7 @@ fn an_edge_on_a_missing_collection_is_refused() {
     let err = db
         .add_edge("ghost", edge(1, 1, 2, "R"))
         .expect_err("no collection");
-    assert!(err.contains("ghost"), "{err}");
+    assert!(err.to_string().contains("ghost"), "{err}");
     assert!(db.edges("ghost", None).is_err());
     assert!(db.edge_count("ghost").is_err());
 }
@@ -160,7 +160,7 @@ fn an_edges_ends_are_sent_as_strings_or_numbers() {
 
 #[test]
 fn an_edge_id_argument_is_a_decimal_u64() {
-    assert_eq!(parse_edge_id("9007199254740993"), Ok(HASHED));
+    assert_eq!(parse_edge_id("9007199254740993").ok(), Some(HASHED));
     for bad in ["", "x", "-1", "1.5", "18446744073709551616"] {
         assert!(parse_edge_id(bad).is_err(), "{bad:?} is not an edge id");
     }

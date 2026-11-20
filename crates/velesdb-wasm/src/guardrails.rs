@@ -47,23 +47,17 @@ pub(crate) const QUERY_MEMORY_LIMIT_BYTES: usize =
 const RESULT_ENTRY_BYTES: usize = std::mem::size_of::<(u64, f32)>();
 
 /// Refuses `count` rows of intermediate cardinality above
-/// [`MAX_INTERMEDIATE_CARDINALITY`].
-///
-/// The `String` error is the `Display` of the error core raises for the
-/// same violation — `Error::from(GuardRailViolation::CardinalityExceeded)`,
-/// which embeds the `[VELES-027]` code. The `VelesQL` executor's
-/// `Result<_, String>` channel pre-dates structured `WasmError`s and
-/// degrades every error the same way; the canonical tag survives in the
-/// message.
-pub(crate) fn check_cardinality(count: usize) -> Result<(), String> {
+/// [`MAX_INTERMEDIATE_CARDINALITY`] with the error core raises for the same
+/// violation — `Error::from(GuardRailViolation::CardinalityExceeded)`,
+/// `VELES-027`.
+pub(crate) fn check_cardinality(count: usize) -> Result<(), velesdb_core::Error> {
     if count > MAX_INTERMEDIATE_CARDINALITY {
         return Err(velesdb_core::Error::from(
             velesdb_core::guardrails::GuardRailViolation::CardinalityExceeded {
                 max: MAX_INTERMEDIATE_CARDINALITY,
                 actual: count,
             },
-        )
-        .to_string());
+        ));
     }
     Ok(())
 }

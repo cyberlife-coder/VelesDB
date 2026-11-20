@@ -14,7 +14,10 @@ fn cardinality_refuses_above_limit_with_veles_027() {
     let err = check_cardinality(MAX_INTERMEDIATE_CARDINALITY + 1).unwrap_err();
     // The VelesQL executor channel is `Result<_, String>`; the canonical
     // code must survive inside the message.
-    assert!(err.contains("VELES-027"), "missing guardrail code: {err}");
+    assert!(
+        err.to_string().contains("VELES-027"),
+        "missing guardrail code: {err}"
+    );
 }
 
 #[test]

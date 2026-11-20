@@ -1,206 +1,72 @@
 //! INSERT / UPSERT dispatch for the WASM VelesQL executor (S4-13).
 //!
-//! Handles single- and multi-row `INSERT` / `UPSERT` statements against a
-//! `WasmDatabase` collection. Supports:
-//!
-//! - Metadata-only collections (no `vector` column required)
-//! - Vector collections (require a `vector` column bound to a `$param`)
-//! - Multi-row `VALUES (...), (...), (...)` with mixed payload fields
-//! - `$param` substitution for scalar payload values AND the `vector` column
-//!
-//! Vector literal inlining is NOT supported — vectors must be passed via
-//! `$param` as a JSON array. This matches the Mobile executor semantics.
+//! Each `VALUES` row is bound by core's DML binder
+//! ([`velesdb_core::velesql::bind_insert_row`]) into the point core's
+//! `INSERT` writes, so the cells accepted, the point built and the words a
+//! refusal uses are core's: an `id` that is a non-negative integer, a
+//! `vector` bound to a `$param` (no literal is a vector) and required on a
+//! vector collection, refused on a metadata-only one, every other column a
+//! payload field. The vector is then checked as the store checks an ingest
+//! (dimension, finite components).
 
-use velesdb_core::velesql::{InsertStatement, Value};
+use velesdb_core::velesql::InsertStatement;
 
 use crate::database::DatabaseInner;
-use crate::velesql_value::{json_to_f32_vec, resolve_value, Params};
+use crate::exec_error::ExecError;
+use crate::velesql_value::Params;
 
 /// Executes an INSERT or UPSERT statement. Returns the number of rows
 /// upserted (INSERT with duplicate ID counts as an upsert in WASM because the
 /// underlying `VectorStore` already replaces on duplicate).
 ///
-/// All or nothing, as core's single batch upsert: every row is resolved and
+/// All or nothing, as core's single batch upsert: every row is bound and
 /// checked first, and only a statement whose rows all pass writes any.
 pub(crate) fn execute(
     db: &DatabaseInner,
     stmt: &InsertStatement,
     params: &Params,
-) -> Result<u32, String> {
-    validate_statement(stmt)?;
+) -> Result<u32, ExecError> {
     let store = db.get_shared_store(&stmt.table)?;
-    let is_metadata = store.borrow().dimension() == 0;
-
-    let vector_idx = stmt.columns.iter().position(|c| c == "vector");
-    let id_idx = find_required_column(&stmt.columns, "id")?;
-
-    if !is_metadata && vector_idx.is_none() {
-        return Err(format!(
-            "Collection '{}' is a vector collection; INSERT must include a 'vector' column",
-            stmt.table
-        ));
-    }
-
     let dimension = store.borrow().dimension();
-    let resolved = stmt
+    let points = stmt
         .rows
         .iter()
-        .map(|row| resolve_row(stmt, row, params, id_idx, vector_idx, dimension))
-        .collect::<Result<Vec<_>, String>>()?;
+        .map(|row| bound_point(stmt, row, params, dimension))
+        .collect::<Result<Vec<_>, ExecError>>()?;
 
     let mut borrowed = store.borrow_mut();
-    for row in &resolved {
-        match &row.vector {
-            Some(vector) => crate::store_insert::insert_with_payload(
+    for point in &points {
+        if dimension == 0 {
+            insert_metadata_row(&mut borrowed, point.id, point.payload.clone());
+        } else {
+            crate::store_insert::insert_with_payload(
                 &mut borrowed,
-                row.id,
-                vector,
-                row.payload.clone(),
-            ),
-            None => insert_metadata_row(&mut borrowed, row.id, row.payload.clone()),
+                point.id,
+                &point.vector,
+                point.payload.clone(),
+            );
         }
     }
-    Ok(u32::try_from(resolved.len()).unwrap_or(u32::MAX))
+    Ok(u32::try_from(points.len()).unwrap_or(u32::MAX))
 }
 
-/// One row, resolved and checked, ready to write.
-struct ResolvedRow {
-    id: u64,
-    /// `None` on a metadata-only collection.
-    vector: Option<Vec<f32>>,
-    payload: Option<serde_json::Value>,
-}
-
-/// Validates global statement invariants (columns present, rows non-empty,
-/// row arity matches columns).
-fn validate_statement(stmt: &InsertStatement) -> Result<(), String> {
-    if stmt.columns.is_empty() {
-        return Err("INSERT requires at least one column".to_string());
-    }
-    if stmt.rows.is_empty() {
-        return Err("INSERT requires at least one VALUES row".to_string());
-    }
-    for (i, row) in stmt.rows.iter().enumerate() {
-        if row.len() != stmt.columns.len() {
-            return Err(format!(
-                "INSERT row {i} has {} values but {} columns were declared",
-                row.len(),
-                stmt.columns.len()
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Finds the index of a required column or returns a descriptive error.
-fn find_required_column(columns: &[String], name: &str) -> Result<usize, String> {
-    columns
-        .iter()
-        .position(|c| c == name)
-        .ok_or_else(|| format!("INSERT must include an '{name}' column"))
-}
-
-/// Resolves one row and runs the checks an upsert runs on it, writing
-/// nothing. `dimension` 0 is a metadata-only collection.
-fn resolve_row(
+/// One row as the point core's `INSERT` writes, its vector checked as the
+/// store checks an ingest. `dimension` 0 is a metadata-only collection; the
+/// collections of this executor are no graphs.
+fn bound_point(
     stmt: &InsertStatement,
-    row: &[Value],
+    row: &[velesdb_core::velesql::Value],
     params: &Params,
-    id_idx: usize,
-    vector_idx: Option<usize>,
     dimension: usize,
-) -> Result<ResolvedRow, String> {
-    let id = extract_row_id(row, id_idx, params)?;
-    let payload = build_payload(&stmt.columns, row, id_idx, vector_idx, params)?;
-
-    if dimension == 0 {
-        // Core refuses a vector on a metadata-only collection rather than
-        // dropping it (`build_insert_point`): the same words here.
-        if vector_idx.is_some() {
-            return Err("INSERT on metadata-only collection cannot set 'vector'".to_string());
-        }
-        return Ok(ResolvedRow {
-            id,
-            vector: None,
-            payload,
-        });
+) -> Result<velesdb_core::Point, ExecError> {
+    let column =
+        crate::store_search::query_vector_target(&stmt.table, dimension).vector_column(false);
+    let point =
+        velesdb_core::velesql::bind_insert_row(&stmt.columns, row, params)?.into_point(column)?;
+    if dimension > 0 {
+        crate::store_search::check_ingest_vector(&point.vector, dimension)?;
     }
-
-    // Vector collection path — the vector from its bound parameter, checked
-    // as `VectorStore.insert` checks it (dimension, finite components).
-    let vector = resolve_vector_cell(row, vector_idx, params)?;
-    crate::store_search::validate_ingest_vector(&vector, dimension)
-        .map_err(|e| format!("INSERT row with id {id}: {}", e.message()))?;
-    Ok(ResolvedRow {
-        id,
-        vector: Some(vector),
-        payload,
-    })
-}
-
-/// Resolves the `id` column of a row into a `u64`.
-///
-/// Accepts integer literals and `$param`-bound integers; rejects strings,
-/// floats (non-integral), and NULL.
-fn extract_row_id(row: &[Value], id_idx: usize, params: &Params) -> Result<u64, String> {
-    let raw = resolve_value(&row[id_idx], params)?;
-    match raw {
-        serde_json::Value::Number(n) => n
-            .as_u64()
-            .or_else(|| n.as_i64().and_then(|i| u64::try_from(i).ok()))
-            .ok_or_else(|| "INSERT id must fit in u64".to_string()),
-        other => Err(format!("INSERT id must be an integer, got {other}")),
-    }
-}
-
-/// Resolves the `vector` cell of a row into a `Vec<f32>` via `$param`.
-fn resolve_vector_cell(
-    row: &[Value],
-    vector_idx: Option<usize>,
-    params: &Params,
-) -> Result<Vec<f32>, String> {
-    let idx = vector_idx.ok_or_else(|| {
-        "Vector collection INSERT requires a 'vector' column bound to $param".to_string()
-    })?;
-    match &row[idx] {
-        Value::Parameter(name) => {
-            let value = params
-                .get(name.as_str())
-                .ok_or_else(|| format!("Vector parameter ${name} is not bound"))?;
-            json_to_f32_vec(value, name.as_str())
-        }
-        Value::Null => Err("Vector column cannot be NULL".to_string()),
-        other => Err(format!(
-            "Vector column must be bound via $param (got literal {other:?}); \
-             inline vectors are not supported in WASM INSERT"
-        )),
-    }
-}
-
-/// Builds the payload object for a row by projecting all columns except
-/// `id` and `vector`.
-fn build_payload(
-    columns: &[String],
-    row: &[Value],
-    id_idx: usize,
-    vector_idx: Option<usize>,
-    params: &Params,
-) -> Result<Option<serde_json::Value>, String> {
-    let mut map = serde_json::Map::new();
-    for (i, col) in columns.iter().enumerate() {
-        if i == id_idx {
-            continue;
-        }
-        if Some(i) == vector_idx {
-            continue;
-        }
-        let value = resolve_value(&row[i], params)?;
-        map.insert(col.clone(), value);
-    }
-    if map.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(serde_json::Value::Object(map)))
+    Ok(point)
 }
 
 /// Inserts a row into a metadata-only collection (no vector data).

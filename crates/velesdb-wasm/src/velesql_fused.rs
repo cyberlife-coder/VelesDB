@@ -17,8 +17,9 @@
 use velesdb_core::velesql::{Condition, SelectStatement, VectorFusedSearch};
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::velesql_scan::OwnedScanRow;
-use crate::velesql_value::{resolve_vector, Params};
+use crate::velesql_value::Params;
 use crate::velesql_where;
 
 /// Finds a top-level `NEAR_FUSED` leaf in the WHERE clause, recursing through
@@ -45,17 +46,10 @@ pub(crate) fn execute_fused_search(
     stmt: &SelectStatement,
     fused: &VectorFusedSearch,
     params: &Params,
-) -> Result<Vec<OwnedScanRow>, String> {
+) -> Result<Vec<OwnedScanRow>, ExecError> {
     let store = db.get_shared_store(&stmt.from)?;
     let borrowed = store.borrow();
-    if borrowed.dimension == 0 {
-        return Err(format!(
-            "Collection '{}' is metadata-only; NEAR_FUSED queries require a vector collection",
-            stmt.from
-        ));
-    }
-
-    let vectors = resolve_fused_vectors(fused, &borrowed, params)?;
+    let vectors = resolve_fused_vectors(fused, params)?;
     let residual = residual_metadata_filter(stmt.where_clause.as_ref());
     let depth = branch_depth(stmt);
     let branches = score_branches(&vectors, &borrowed, residual.as_ref(), params, depth)?;
@@ -64,41 +58,26 @@ pub(crate) fn execute_fused_search(
         .fusion
         .near_fused_strategy()
         .fuse_with_directions(branches, &directions)
-        .map_err(|e| format!("Fusion error: {e}"))?;
+        .map_err(velesdb_core::Error::from)?;
 
     // Hydrate rows via the shared collector (same id->idx map + drop-unknown
     // semantics as the single-vector fusion path).
     crate::velesql_select::collect_vector_rows_unfiltered(&fused_scores, &borrowed)
 }
 
-/// Resolves and dimension-checks each fused query vector. Rejects an empty
-/// fused list (mirrors core's `multi_query_search` "at least one vector").
+/// Binds each fused query vector and checks their count as core's
+/// `multi_query_search` does: one to `MAX_FUSED_VECTORS` vectors
+/// ([`velesdb_core::fusion::validate_fused_vector_count`]). Each vector's
+/// dimension was checked with the statement's other query vectors before
+/// the scan (`velesql_select::check_query_vectors`).
 fn resolve_fused_vectors(
     fused: &VectorFusedSearch,
-    store: &crate::store_state::StoreState,
     params: &Params,
-) -> Result<Vec<Vec<f32>>, String> {
-    if fused.vectors.is_empty() {
-        return Err("NEAR_FUSED requires at least one query vector".to_string());
-    }
-    let max = velesdb_core::fusion::MAX_FUSED_VECTORS;
-    if fused.vectors.len() > max {
-        return Err(format!(
-            "multi_query_search supports at most {max} vectors, got {}",
-            fused.vectors.len()
-        ));
-    }
+) -> Result<Vec<Vec<f32>>, ExecError> {
+    velesdb_core::fusion::validate_fused_vector_count(fused.vectors.len())?;
     let mut out = Vec::with_capacity(fused.vectors.len());
     for expr in &fused.vectors {
-        let v = resolve_vector(expr, params)?;
-        if v.len() != store.dimension {
-            return Err(format!(
-                "NEAR_FUSED query dimension mismatch: expected {}, got {}",
-                store.dimension,
-                v.len()
-            ));
-        }
-        out.push(v);
+        out.push(velesdb_core::velesql::bind_vector(expr, params)?);
     }
     Ok(out)
 }
@@ -112,7 +91,7 @@ fn score_branches(
     residual: Option<&Condition>,
     params: &Params,
     depth: usize,
-) -> Result<Vec<Vec<(u64, f32)>>, String> {
+) -> Result<Vec<Vec<(u64, f32)>>, ExecError> {
     let keep = passing_ids(store, residual, params)?;
     let mut branches = Vec::with_capacity(vectors.len());
     for query in vectors {
@@ -164,7 +143,7 @@ pub(crate) fn passing_ids(
     store: &crate::store_state::StoreState,
     residual: Option<&Condition>,
     params: &Params,
-) -> Result<Option<std::collections::HashSet<u64>>, String> {
+) -> Result<Option<std::collections::HashSet<u64>>, ExecError> {
     let Some(cond) = residual else {
         return Ok(None);
     };

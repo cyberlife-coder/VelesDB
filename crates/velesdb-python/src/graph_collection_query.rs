@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use crate::collection::query::{
     build_explain_analyze_dict, build_explain_dict, convert_params, parse_read_only_velesql,
     parse_velesql, retarget_to_collection, run_match_on, run_velesql_match, run_velesql_select,
-    run_velesql_select_ids, validate_match_threshold, validate_query,
+    run_velesql_select_ids, validate_query,
 };
 use crate::collection_helpers::core_err;
 use crate::graph_collection::PyGraphCollection;
@@ -23,7 +23,10 @@ impl PyGraphCollection {
     ///     params: Query parameters (vectors as lists/numpy arrays, scalars)
     ///
     /// Returns:
-    ///     List of result dicts
+    ///     List of result dicts; an aggregate (``COUNT``, ``SUM``, ``AVG``,
+    ///     ``MIN``, ``MAX``, or a ``GROUP BY``) returns its rows instead, as
+    ///     ``Database.execute_query`` does: one dict of its values without
+    ///     ``GROUP BY``, one per group with it.
     ///
     /// Raises:
     ///     ValueError: If the statement writes (DDL, DML, ``TRAIN``,
@@ -67,10 +70,7 @@ impl PyGraphCollection {
         // re-targeted this method) while keying the gate on the collection
         // actually read. `@collection` payload enrichment applies at the
         // facade as it does for `Database.execute_query`.
-        run_velesql_select(py, query_str, params, |q, p| {
-            self.db
-                .execute_query(&retarget_to_collection(q, &self.name), p)
-        })
+        run_velesql_select(py, query_str, params, &self.db, &self.name)
     }
 
     /// Execute a MATCH graph traversal query.
@@ -91,7 +91,8 @@ impl PyGraphCollection {
     ///     List of dicts with keys: node_id, depth, path, bindings, score, projected
     ///
     /// Raises:
-    ///     ValueError: If ``threshold`` is NaN or infinite.
+    ///     ValueError: If ``threshold`` is NaN or infinite, or given without
+    ///         ``vector`` (no row is scored).
     ///
     /// Example:
     ///     >>> results = graph.match_query(
@@ -108,7 +109,6 @@ impl PyGraphCollection {
     ) -> PyResult<Vec<Py<PyAny>>> {
         // Through the owning database (`run_match_on`); a read-gate scope is
         // refused, since a MATCH row carries no payload to narrow.
-        let threshold = validate_match_threshold(threshold)?;
         let db = &self.db;
         let name = &self.name;
         run_velesql_match(py, query_str, params, vector, move |mc, p, qv| {

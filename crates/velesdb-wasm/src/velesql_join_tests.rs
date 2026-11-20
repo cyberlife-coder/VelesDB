@@ -90,9 +90,9 @@ fn a_right_join_keeps_the_unmatched_joined_rows() {
 
     let stmt = parse("SELECT * FROM users RIGHT JOIN orders ON users.id = orders.user_id");
     let rows = joined_rows(&db, &stmt, &Params::new()).expect("test: right join");
-    let ids: Vec<u64> = rows.iter().map(|r| r.0).collect();
+    let ids: Vec<u64> = rows.iter().map(|r| r.id).collect();
     assert_eq!(ids, [1, 1, 2, 13]);
-    let unmatched = rows[3].2.as_ref().expect("test: payload");
+    let unmatched = rows[3].payload.as_ref().expect("test: payload");
     assert_eq!(unmatched["users"]["id"], serde_json::Value::Null);
     assert_eq!(unmatched["orders"]["id"], serde_json::json!(13));
 }
@@ -114,8 +114,8 @@ fn a_self_join_keeps_each_sides_fields_under_its_alias() {
     let rows = joined_rows(&db, &stmt, &Params::new()).expect("test: self-join");
     let ann = rows
         .iter()
-        .find(|(id, _, _)| *id == 1)
-        .and_then(|(_, _, p)| p.as_ref())
+        .find(|r| r.id == 1)
+        .and_then(|r| r.payload.as_ref())
         .expect("test: Ann's row");
     assert_eq!(ann["e"]["name"], serde_json::json!("Ann"));
     assert_eq!(ann["m"]["name"], serde_json::json!("Bo"));

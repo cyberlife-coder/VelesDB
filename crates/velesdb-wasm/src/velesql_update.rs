@@ -1,120 +1,98 @@
 //! UPDATE dispatch for the WASM VelesQL executor (S4-13).
 //!
-//! `SET column = value` updates with a standard WHERE clause (including IN /
-//! BETWEEN / LIKE / AND / OR). As in core (`apply_assignments_to_point`),
-//! `SET vector = $v` replaces the embedding of a vector collection's rows —
-//! refused on a metadata-only collection, and a vector of another dimension
-//! refused — while every other column is a payload field.
+//! Core's UPDATE, over the in-memory store: once the collection resolves,
+//! the WHERE's shape is checked by core's rule
+//! ([`velesdb_core::velesql::check_dml_where`], a vector, graph or full-text
+//! predicate refused with `VELES-010` before any `$name` is bound), then
+//! the `SET` list is bound by core's DML binder
+//! ([`velesdb_core::velesql::bind_update_assignments`]) before any row is
+//! read, so an unbound `$name` refuses the statement whatever its
+//! WHERE matches; the WHERE (including IN / BETWEEN / LIKE / AND / OR)
+//! selects the rows; and each matched row is rewritten by core's rule
+//! ([`velesdb_core::velesql::BoundAssignments::apply`]) — `SET vector = $v`
+//! replaces a vector collection's embedding and is refused per row on a
+//! metadata-only one, every other column is a payload field. A WHERE that
+//! matches no row updates none. All or nothing: every row is rewritten and
+//! checked before any is written.
 
-use velesdb_core::velesql::{UpdateAssignment, UpdateStatement};
+use velesdb_core::velesql::{BoundAssignments, UpdateStatement, VectorColumn};
+use velesdb_core::Point;
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
+use crate::store_state::StoreState;
 use crate::velesql_helpers::collect_matching_indices;
-use crate::velesql_value::{resolve_value, Params};
+use crate::velesql_value::Params;
 
-/// Executes an UPDATE statement. Returns the number of rows whose payload
-/// was mutated.
+/// Executes an UPDATE statement. Returns the number of rows it rewrote.
 pub(crate) fn execute(
     db: &DatabaseInner,
     stmt: &UpdateStatement,
     params: &Params,
-) -> Result<u32, String> {
-    validate_assignments(&stmt.assignments)?;
-
+) -> Result<u32, ExecError> {
+    // Core's order: the collection first (a missing one is VELES-002 even
+    // when a `$name` is unbound too), then the `SET` list.
     let store = db.get_shared_store(&stmt.table)?;
+    velesdb_core::velesql::check_dml_where("UPDATE", stmt.where_clause.as_ref())?;
+    let assignments = velesdb_core::velesql::bind_update_assignments(&stmt.assignments, params)?;
     let indices = collect_matching_indices(&store, stmt.where_clause.as_ref(), params)?;
-    apply_updates(&store, &indices, &stmt.assignments, params)?;
-
-    let n = u32::try_from(indices.len()).unwrap_or(u32::MAX);
-    Ok(n)
+    let column = crate::store_search::query_vector_target(&stmt.table, store.borrow().dimension)
+        .vector_column(false);
+    let updated = updated_rows(&store.borrow(), &indices, &assignments, column)?;
+    write_rows(&mut store.borrow_mut(), &indices, updated);
+    Ok(u32::try_from(indices.len()).unwrap_or(u32::MAX))
 }
 
-/// Rejects assignments that target reserved columns.
-fn validate_assignments(assignments: &[UpdateAssignment]) -> Result<(), String> {
-    if assignments.is_empty() {
-        return Err("UPDATE must include at least one SET assignment".to_string());
-    }
-    for a in assignments {
-        if a.column == "id" {
-            return Err("UPDATE cannot modify the 'id' column".to_string());
+/// Writes each rewritten row back at its index: its vector (none on a
+/// metadata-only store) and its payload.
+fn write_rows(store: &mut StoreState, indices: &[usize], rows: Vec<Point>) {
+    let dimension = store.dimension;
+    for (&idx, point) in indices.iter().zip(rows) {
+        if dimension > 0 {
+            store.data[idx * dimension..(idx + 1) * dimension].copy_from_slice(&point.vector);
+        }
+        if let Some(slot) = store.payloads.get_mut(idx) {
+            *slot = point.payload;
         }
     }
-    Ok(())
 }
 
-/// Applies the `SET` assignments to the rows at the given indices.
-fn apply_updates(
-    store: &std::rc::Rc<std::cell::RefCell<crate::store_state::StoreState>>,
+/// The rows at `indices` with `assignments` applied, each vector checked as
+/// the store checks an ingest (dimension, finite components).
+fn updated_rows(
+    store: &StoreState,
     indices: &[usize],
-    assignments: &[UpdateAssignment],
-    params: &Params,
-) -> Result<(), String> {
-    // Resolve assignment values ONCE; params + literals are stable across rows.
-    let resolved: Vec<(String, serde_json::Value)> = assignments
+    assignments: &BoundAssignments,
+    column: VectorColumn<'_>,
+) -> Result<Vec<Point>, ExecError> {
+    let dimension = store.dimension;
+    indices
         .iter()
-        .map(|a| resolve_value(&a.value, params).map(|v| (a.column.clone(), v)))
-        .collect::<Result<_, _>>()?;
-
-    let vector = resolved
-        .iter()
-        .find(|(col, _)| col == "vector")
-        .map(|(_, value)| new_vector(&store.borrow(), value))
-        .transpose()?;
-
-    let mut borrowed = store.borrow_mut();
-    let dimension = borrowed.dimension;
-    for &idx in indices {
-        if let Some(vector) = &vector {
-            borrowed.data[idx * dimension..(idx + 1) * dimension].copy_from_slice(vector);
-        }
-        let Some(slot) = borrowed.payloads.get_mut(idx) else {
-            continue;
-        };
-        let map = ensure_object(slot);
-        for (col, val) in resolved.iter().filter(|(col, _)| col != "vector") {
-            map.insert(col.clone(), val.clone());
-        }
-    }
-    Ok(())
+        .map(|&idx| {
+            let point = stored_point(store, idx);
+            let updated = assignments.apply(&point, column)?;
+            if dimension > 0 {
+                crate::store_search::check_ingest_vector(&updated.vector, dimension)?;
+            }
+            Ok(updated)
+        })
+        .collect()
 }
 
-/// The embedding `SET vector = value` assigns, as core reads it: an array
-/// of finite numbers of the collection's dimension, on a vector collection.
-fn new_vector(
-    store: &crate::store_state::StoreState,
-    value: &serde_json::Value,
-) -> Result<Vec<f32>, String> {
-    if store.dimension == 0 {
-        return Err("UPDATE on metadata-only collection cannot set 'vector'".to_string());
-    }
-    let Some(items) = value.as_array() else {
-        return Err("'vector' must be an array of numbers".to_string());
-    };
-    let vector = crate::velesql_value::json_to_f32_vec(value, "vector")?;
-    if vector.len() != store.dimension {
-        return Err(format!(
-            "[VELES-004] Vector dimension mismatch: expected {}, got {}",
-            store.dimension,
-            items.len()
-        ));
-    }
-    Ok(vector)
-}
-
-/// Ensures the payload at `slot` is a JSON object we can mutate.
-///
-/// Replaces `None` / non-object payloads with a fresh empty object so the
-/// caller can insert assignment values into it.
-fn ensure_object(
-    slot: &mut Option<serde_json::Value>,
-) -> &mut serde_json::Map<String, serde_json::Value> {
-    if !matches!(slot, Some(serde_json::Value::Object(_))) {
-        *slot = Some(serde_json::Value::Object(serde_json::Map::new()));
-    }
-    match slot {
-        Some(serde_json::Value::Object(m)) => m,
-        // Unreachable by construction above, but kept defensively.
-        _ => unreachable!("ensure_object guarantees an Object variant"),
+/// The row at `idx` as a point: its id, vector (empty on a metadata-only
+/// store) and payload.
+fn stored_point(store: &StoreState, idx: usize) -> Point {
+    let dimension = store.dimension;
+    let vector = store
+        .data
+        .get(idx * dimension..(idx + 1) * dimension)
+        .map(<[f32]>::to_vec)
+        .unwrap_or_default();
+    Point {
+        id: store.ids[idx],
+        vector,
+        payload: store.payloads.get(idx).cloned().flatten(),
+        sparse_vectors: None,
     }
 }
 

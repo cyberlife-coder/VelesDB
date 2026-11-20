@@ -11,57 +11,88 @@
 //!   negation admits the row. The row's score
 //!   is its first similarity leaf's (core #2787).
 //! - **Query vector** (`executeMatch`'s `vector`, REST `/match`'s): each
-//!   row's last node is scored, rows past the threshold are dropped
-//!   (`>=` it, or `<=` under a distance metric), and rows are ordered by
-//!   score before any `ORDER BY`.
+//!   row's last node is scored, rows past the threshold, when one is given,
+//!   are dropped by core's rule
+//!   ([`velesdb_core::velesql::match_threshold_keeps`]), and rows are
+//!   ordered by score before any `ORDER BY`.
+//!
+//! Every query vector — this one and each `similarity()`'s — is checked
+//! against the collection before the walk, by core's
+//! [`velesdb_core::velesql::QueryVectorTarget`] (`velesql_match`).
 
-use velesdb_core::velesql::{Condition, SimilarityCondition};
+use velesdb_core::velesql::{Condition, MatchClause, SimilarityCondition};
 
+use crate::exec_error::ExecError;
 use crate::velesql_match_nodes::MatchNodes;
-use crate::velesql_value::{resolve_vector, Params};
+use crate::velesql_value::Params;
 
-/// REST `/match`'s query vector and threshold.
+/// REST `/match`'s query vector and threshold, built only through
+/// [`MatchScoring::from_request`], which applies core's threshold rule once.
 #[derive(Debug, Clone)]
 pub(crate) struct MatchScoring {
-    pub vector: Vec<f32>,
+    vector: Vec<f32>,
     /// Kept rows score at least this (at most, under a distance metric).
-    /// REST's default is `0.0`.
-    pub threshold: Option<f32>,
+    /// `None` keeps every scored row, as on REST.
+    threshold: Option<f32>,
 }
 
 impl MatchScoring {
-    /// Refuses what REST `/match` refuses: a threshold outside `[0, 1]`, a
-    /// vector whose dimension is not the collection's.
-    pub(crate) fn validate(&self, nodes: &MatchNodes<'_>) -> Result<(), String> {
-        if let Some(t) = self.threshold {
-            if !(0.0..=1.0).contains(&t) {
-                return Err(format!("MATCH threshold must be in [0.0, 1.0], got {t}"));
-            }
-        }
-        let Some((dimension, _)) = nodes.vector_space() else {
-            return Err("MATCH with a query vector needs a collection with vectors".to_string());
-        };
-        if self.vector.len() != dimension {
-            return Err(format!(
-                "MATCH query vector dimension mismatch: expected {dimension}, got {}",
-                self.vector.len()
-            ));
-        }
-        Ok(())
+    /// The scoring of an `executeMatch` call from its optional query
+    /// `vector` and `threshold`, under core's rule
+    /// ([`velesdb_core::velesql::validate_match_threshold`]), as REST
+    /// `/match` builds its own: `None` without a vector; a threshold must be
+    /// finite and come with a vector.
+    ///
+    /// # Errors
+    ///
+    /// Core's `Error::Query` (`VELES-010`) for a threshold it cannot apply.
+    pub(crate) fn from_request(
+        vector: Option<Vec<f32>>,
+        threshold: Option<f32>,
+    ) -> Result<Option<Self>, ExecError> {
+        velesdb_core::velesql::validate_match_threshold(vector.as_deref(), threshold)?;
+        Ok(vector.map(|vector| Self { vector, threshold }))
     }
 
-    /// The score of `node` and whether it passes the threshold.
+    /// The query vector, which the walk checks against the collection
+    /// before scoring any row (`velesql_match`).
+    pub(crate) fn vector(&self) -> &[f32] {
+        &self.vector
+    }
+
+    /// The score of `node`, when it passes the threshold
+    /// ([`velesdb_core::velesql::match_threshold_keeps`]).
     pub(crate) fn score(&self, nodes: &MatchNodes<'_>, node: u64) -> Option<f32> {
         let (_, metric) = nodes.vector_space()?;
-        let score = metric.calculate(nodes.vector(node)?, &self.vector);
-        let threshold = self.threshold.unwrap_or(0.0);
-        let passes = if metric.higher_is_better() {
-            score >= threshold
-        } else {
-            score <= threshold
-        };
-        passes.then_some(score)
+        let score = metric.checked_calculate(nodes.vector(node)?, &self.vector)?;
+        velesdb_core::velesql::match_threshold_keeps(
+            self.threshold,
+            score,
+            metric.higher_is_better(),
+        )
+        .then_some(score)
     }
+}
+
+/// Refuses, before the walk, a query vector the collection cannot score —
+/// REST `/match`'s and every `similarity()`'s — by core's rule
+/// ([`velesdb_core::velesql::QueryVectorTarget`]): a collection without
+/// vectors (`SearchNotSupported`, VELES-015), then another dimension
+/// (`DimensionMismatch`, VELES-004). A walk that finds no row must not turn
+/// the refusal into an empty result.
+pub(crate) fn check_query_vectors(
+    collection: &str,
+    nodes: &MatchNodes<'_>,
+    clause: &MatchClause,
+    params: &Params,
+    scoring: Option<&MatchScoring>,
+) -> Result<(), ExecError> {
+    crate::store_search::query_vector_target(collection, nodes.store_dimension()).check_match(
+        clause,
+        params,
+        scoring.map(|scoring| scoring.vector().len()),
+    )?;
+    Ok(())
 }
 
 /// One bound node, as WHERE sees it, in pattern order: its alias (`None`
@@ -84,8 +115,8 @@ pub(crate) fn where_holds(
     bound: &[BoundNode<'_>],
     nodes: &MatchNodes<'_>,
     params: &Params,
-    other_leaf: &dyn Fn(&Condition) -> Result<Option<bool>, String>,
-) -> Result<bool, String> {
+    other_leaf: &dyn Fn(&Condition) -> Result<Option<bool>, ExecError>,
+) -> Result<bool, ExecError> {
     Ok(where_truth(cond, bound, nodes, params, other_leaf)? == Some(true))
 }
 
@@ -96,22 +127,9 @@ fn where_truth(
     bound: &[BoundNode<'_>],
     nodes: &MatchNodes<'_>,
     params: &Params,
-    other_leaf: &dyn Fn(&Condition) -> Result<Option<bool>, String>,
-) -> Result<Option<bool>, String> {
-    use crate::velesql_where::{and, or};
-    match cond {
-        Condition::And(l, r) => Ok(and(
-            where_truth(l, bound, nodes, params, other_leaf)?,
-            where_truth(r, bound, nodes, params, other_leaf)?,
-        )),
-        Condition::Or(l, r) => Ok(or(
-            where_truth(l, bound, nodes, params, other_leaf)?,
-            where_truth(r, bound, nodes, params, other_leaf)?,
-        )),
-        Condition::Not(inner) => {
-            Ok(where_truth(inner, bound, nodes, params, other_leaf)?.map(|known| !known))
-        }
-        Condition::Group(inner) => where_truth(inner, bound, nodes, params, other_leaf),
+    other_leaf: &dyn Fn(&Condition) -> Result<Option<bool>, ExecError>,
+) -> Result<Option<bool>, ExecError> {
+    crate::velesql_where::fold_truth(cond, &|leaf| match leaf {
         Condition::Similarity(sim) => Ok(leaf_score(sim, bound, nodes, params)?.map(
             |(score, higher_is_better)| {
                 velesdb_core::velesql::similarity_holds(
@@ -122,8 +140,8 @@ fn where_truth(
                 )
             },
         )),
-        leaf => other_leaf(leaf),
-    }
+        other => other_leaf(other),
+    })
 }
 
 /// The row's score from its first `similarity()` leaf, if WHERE has one and
@@ -133,7 +151,7 @@ pub(crate) fn where_score(
     bound: &[BoundNode<'_>],
     nodes: &MatchNodes<'_>,
     params: &Params,
-) -> Result<Option<f32>, String> {
+) -> Result<Option<f32>, ExecError> {
     let Some(sim) = cond.and_then(first_similarity) else {
         return Ok(None);
     };
@@ -158,8 +176,8 @@ fn leaf_score(
     bound: &[BoundNode<'_>],
     nodes: &MatchNodes<'_>,
     params: &Params,
-) -> Result<Option<(f32, bool)>, String> {
-    let query = resolve_vector(&sim.vector, params)?;
+) -> Result<Option<(f32, bool)>, ExecError> {
+    let query = velesdb_core::velesql::bind_vector(&sim.vector, params)?;
     let target = sim
         .field
         .split_once('.')
@@ -171,13 +189,9 @@ fn leaf_score(
     let (Some(vector), Some((_, metric))) = (nodes.vector(target.id), nodes.vector_space()) else {
         return Ok(None);
     };
-    if vector.len() != query.len() {
-        return Ok(None);
-    }
-    Ok(Some((
-        metric.calculate(vector, &query),
-        metric.higher_is_better(),
-    )))
+    Ok(metric
+        .checked_calculate(vector, &query)
+        .map(|score| (score, metric.higher_is_better())))
 }
 
 #[cfg(test)]

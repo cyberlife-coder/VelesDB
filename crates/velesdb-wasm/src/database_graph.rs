@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use velesdb_core::api_types::serde_id;
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::graph_store::WasmEdge;
 use crate::observer::WasmQueryOperationKind;
 
@@ -70,9 +71,13 @@ impl From<&WasmEdge> for EdgeOutput {
 /// # Errors
 ///
 /// Returns an error for anything but a decimal `u64`.
-pub(crate) fn parse_edge_id(id: &str) -> Result<u64, String> {
-    id.parse::<u64>()
-        .map_err(|_| format!("Invalid edge id '{id}': expected a decimal u64 string"))
+pub(crate) fn parse_edge_id(id: &str) -> Result<u64, ExecError> {
+    // The JS surface's own input (an id as a string, for ids past 2^53).
+    id.parse::<u64>().map_err(|_| {
+        ExecError::refused(format!(
+            "Invalid edge id '{id}': expected a decimal u64 string"
+        ))
+    })
 }
 
 impl DatabaseInner {
@@ -80,15 +85,14 @@ impl DatabaseInner {
     ///
     /// # Errors
     ///
-    /// Returns an error when the collection does not exist, an endpoint is
-    /// not a node of it, or an explicit id is already taken.
-    pub(crate) fn add_edge(&mut self, collection: &str, edge: EdgeInput) -> Result<u64, String> {
+    /// Returns core's error when the collection does not exist
+    /// (`CollectionNotFound`), an endpoint is not a node of it
+    /// (`NodeNotFound`), or an explicit id is already taken (`EdgeExists`).
+    pub(crate) fn add_edge(&mut self, collection: &str, edge: EdgeInput) -> Result<u64, ExecError> {
         self.require_collection(collection)?;
         for node in [edge.source, edge.target] {
             if !self.has_node(collection, node) {
-                return Err(format!(
-                    "Node {node} not found in collection '{collection}'"
-                ));
+                return Err(velesdb_core::Error::NodeNotFound(node).into());
             }
         }
         self.graph_store(collection).borrow_mut().insert_edge(
@@ -110,7 +114,7 @@ impl DatabaseInner {
         &self,
         collection: &str,
         label: Option<&str>,
-    ) -> Result<Vec<EdgeOutput>, String> {
+    ) -> Result<Vec<EdgeOutput>, ExecError> {
         self.require_collection(collection)?;
         self.check_query_access(collection, WasmQueryOperationKind::GraphTraversal)?;
         Ok(self
@@ -129,7 +133,7 @@ impl DatabaseInner {
     /// # Errors
     ///
     /// Returns an error when the collection does not exist.
-    pub(crate) fn remove_edge(&mut self, collection: &str, id: u64) -> Result<bool, String> {
+    pub(crate) fn remove_edge(&mut self, collection: &str, id: u64) -> Result<bool, ExecError> {
         self.require_collection(collection)?;
         Ok(self
             .get_graph_store(collection)
@@ -145,7 +149,11 @@ impl DatabaseInner {
     /// # Errors
     ///
     /// Returns an error when the collection does not exist.
-    pub(crate) fn remove_points(&mut self, collection: &str, ids: &[u64]) -> Result<usize, String> {
+    pub(crate) fn remove_points(
+        &mut self,
+        collection: &str,
+        ids: &[u64],
+    ) -> Result<usize, ExecError> {
         let store = self.get_shared_store(collection)?;
         let removed = ids
             .iter()
@@ -171,7 +179,7 @@ impl DatabaseInner {
     ///
     /// Returns an error when the collection does not exist or the read gate
     /// denies it.
-    pub(crate) fn edge_count(&self, collection: &str) -> Result<usize, String> {
+    pub(crate) fn edge_count(&self, collection: &str) -> Result<usize, ExecError> {
         self.require_collection(collection)?;
         self.check_query_access(collection, WasmQueryOperationKind::GraphTraversal)?;
         Ok(self
@@ -179,11 +187,14 @@ impl DatabaseInner {
             .map_or(0, |store| store.borrow().edges().len()))
     }
 
-    fn require_collection(&self, collection: &str) -> Result<(), String> {
+    /// Refuses a missing `collection` with core's `CollectionNotFound`.
+    fn require_collection(&self, collection: &str) -> Result<(), velesdb_core::Error> {
         if self.contains(collection) {
             Ok(())
         } else {
-            Err(format!("Collection '{collection}' not found"))
+            Err(velesdb_core::Error::CollectionNotFound(
+                collection.to_string(),
+            ))
         }
     }
 

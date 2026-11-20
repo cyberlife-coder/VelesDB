@@ -201,7 +201,11 @@ fn a_missing_sparse_index_fails_with_cores_message() {
     };
     let named = "SELECT * FROM c WHERE vector SPARSE_NEAR {1: 1.0} USING 'title' LIMIT 5";
     let wasm_named = execute(&mut wasm_db("cosine"), named, None).expect_err("wasm: named");
-    assert_eq!(wasm_named, core_err(&core_db(CoreMetric::Cosine).1, named));
+    assert_eq!(wasm_named.code(), Some("VELES-009"), "{wasm_named}");
+    assert_eq!(
+        wasm_named.to_string(),
+        core_err(&core_db(CoreMetric::Cosine).1, named)
+    );
 
     let default = "SELECT * FROM d WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 5";
     let mut wasm = DatabaseInner::new();
@@ -212,7 +216,8 @@ fn a_missing_sparse_index_fails_with_cores_message() {
     core.create_vector_collection("d", 4, CoreMetric::Cosine)
         .expect("test: create");
     let wasm_default = execute(&mut wasm, default, None).expect_err("wasm: default");
-    assert_eq!(wasm_default, core_err(&core, default));
+    assert_eq!(wasm_default.code(), Some("VELES-009"), "{wasm_default}");
+    assert_eq!(wasm_default.to_string(), core_err(&core, default));
 }
 
 /// Rows `(id, score, payload)` of `sql` on both engines over `metric`,

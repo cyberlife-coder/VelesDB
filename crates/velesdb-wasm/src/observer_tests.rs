@@ -80,8 +80,9 @@ fn gate_deny_propagates_message() {
     let obs: Rc<dyn WasmObserver> = DenyObserver::new(vec![WasmQueryOperationKind::VectorSearch]);
     let err = gate(Some(&obs), "docs", WasmQueryOperationKind::VectorSearch)
         .expect_err("test: should be denied");
-    assert!(err.contains("denied"));
-    assert!(err.contains("docs"));
+    assert_eq!(err.code(), "VELES-037", "core's access-denied error: {err}");
+    assert!(err.to_string().contains("denied"));
+    assert!(err.to_string().contains("docs"));
 }
 
 // --- DatabaseInner::check_query_access ------------------------------------
@@ -125,7 +126,10 @@ fn select_denied_returns_error_and_no_rows() {
     inner.register_observer(DenyObserver::new(vec![WasmQueryOperationKind::Select]));
     let err = crate::velesql_exec::execute(&mut inner, "SELECT * FROM docs", None)
         .expect_err("test: select must be denied");
-    assert!(err.contains("denied"), "carries the denial message: {err}");
+    assert!(
+        err.to_string().contains("denied"),
+        "carries the denial message: {err}"
+    );
 }
 
 #[test]
@@ -158,7 +162,7 @@ fn set_operation_operands_are_each_gated() {
         None,
     )
     .expect_err("test: union must be denied");
-    assert!(err.contains("denied"));
+    assert!(err.to_string().contains("denied"));
 }
 
 // --- Graph read paths ------------------------------------------------------
@@ -173,7 +177,10 @@ fn select_edges_denied_before_store_lookup() {
     ]));
     let err = crate::velesql_exec::execute(&mut inner, "SELECT EDGES FROM social", None)
         .expect_err("test: select edges denied");
-    assert!(err.contains("denied"), "denial wins over not-found: {err}");
+    assert!(
+        err.to_string().contains("denied"),
+        "denial wins over not-found: {err}"
+    );
 }
 
 #[test]
@@ -185,7 +192,10 @@ fn select_edges_allowed_passes_gate_to_store_lookup() {
     inner.register_observer(Rc::new(DefaultObserver));
     let err = crate::velesql_exec::execute(&mut inner, "SELECT EDGES FROM social", None)
         .expect_err("test: missing graph");
-    assert!(err.contains("not found"), "gate is transparent: {err}");
+    assert!(
+        err.to_string().contains("not found"),
+        "gate is transparent: {err}"
+    );
 }
 
 // --- WasmCollectionHandle observer snapshot -------------------------------
@@ -271,7 +281,10 @@ fn join_secondary_collection_is_gated() {
     inner.register_observer(Rc::new(DenyCollection("secret")));
     let err = crate::velesql_exec::execute(&mut inner, join, None)
         .expect_err("test: a JOIN on a denied collection must be refused");
-    assert!(err.contains("secret"), "carries the denial: {err}");
+    assert!(
+        err.to_string().contains("secret"),
+        "carries the denial: {err}"
+    );
 }
 
 // --- MATCH gate names the collection the MATCH reads ---------------------
@@ -376,7 +389,7 @@ fn a_velesql_near_is_gated_as_a_vector_search() {
         Some(r#"{"v": [1.0, 0.0]}"#),
     )
     .expect_err("test: a NEAR query is a vector search");
-    assert!(err.contains("denied"), "{err}");
+    assert!(err.to_string().contains("denied"), "{err}");
     crate::velesql_exec::execute(&mut inner, "SELECT * FROM vecs", None)
         .expect("test: a plain SELECT is still a Select");
 }

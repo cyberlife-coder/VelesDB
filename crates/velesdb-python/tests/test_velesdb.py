@@ -751,6 +751,22 @@ class TestMetadataOnlyCollections:
         assert count == 2
         assert not collection.is_empty()
 
+    def test_upsert_bulk_writes_metadata_rows(self, temp_db):
+        """upsert_bulk takes a metadata collection's rows as upsert does:
+        a point with an empty vector is a payload row; a vector is refused."""
+        collection = temp_db.create_metadata_collection("bulk_items")
+
+        count = collection.upsert_bulk([
+            {"id": 4, "vector": [], "payload": {"a": 4}},
+            {"id": 5, "vector": [], "payload": {"a": 5}},
+        ])
+
+        assert count == 2
+        assert collection.count() == 2
+        assert collection.get([4])[0]["payload"] == {"a": 4}
+        with pytest.raises(ValueError):
+            collection.upsert_bulk([{"id": 6, "vector": [1.0], "payload": {}}])
+
     def test_get_metadata_points(self, temp_db):
         """Test retrieving metadata-only points."""
         collection = temp_db.create_metadata_collection("products")
@@ -781,6 +797,61 @@ class TestMetadataOnlyCollections:
         points = collection.get([1, 2])
         assert points[0] is None
         assert points[1] is not None
+
+    def test_upsert_metadata_on_a_vector_collection(self, temp_db):
+        """A vector collection's rows are its vectors: upsert_metadata replaces
+        the payload of a stored point and refuses an id without a vector
+        (VELES-016), writing nothing."""
+        collection = temp_db.create_collection("vectors_meta", dimension=4)
+        collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"v": 1}}])
+
+        assert collection.upsert_metadata([{"id": 1, "payload": {"v": 2}}]) == 1
+        assert collection.get([1])[0]["payload"] == {"v": 2}
+
+        with pytest.raises(ValueError, match="VELES-016"):
+            collection.upsert_metadata([
+                {"id": 1, "payload": {"v": 3}},
+                {"id": 9, "payload": {"v": 9}},
+            ])
+        assert collection.get([1])[0]["payload"] == {"v": 2}
+        assert collection.all_ids() == [1]
+
+    def test_upsert_metadata_refuses_a_vector(self, temp_db):
+        """upsert_metadata writes payloads only: a point carrying a vector is
+        refused (VELES-014, ValueError), the whole batch before anything is
+        written, instead of storing the payload and dropping the vector."""
+        collection = temp_db.create_collection("vectors_meta_vec", dimension=4)
+        collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": {"v": 1}}])
+
+        with pytest.raises(ValueError, match="VELES-014"):
+            collection.upsert_metadata([
+                {"id": 1, "vector": [0.0, 1.0, 0.0, 0.0], "payload": {"v": 2}},
+            ])
+        stored = collection.get([1])[0]
+        assert stored["payload"] == {"v": 1}
+        assert stored["vector"] == pytest.approx([1.0, 0.0, 0.0, 0.0])
+
+    def test_a_point_without_a_vector_on_a_vector_collection_is_veles_016(self, temp_db):
+        """Every row of a vector collection stores a vector: a point without
+        one is refused by core with VELES-016 (ValueError) on every write —
+        an absent `vector`, `None` or `[]` alike — and a vector of another
+        dimension keeps its own error."""
+        collection = temp_db.create_collection("vectors_only", dimension=4)
+
+        for point in (
+            {"id": 1, "payload": {"v": 1}},
+            {"id": 1, "vector": None, "payload": {"v": 1}},
+            {"id": 1, "vector": [], "payload": {"v": 1}},
+        ):
+            with pytest.raises(ValueError, match="VELES-016"):
+                collection.upsert([point])
+            with pytest.raises(ValueError, match="VELES-016"):
+                collection.upsert_bulk([point])
+        import velesdb
+
+        with pytest.raises(velesdb.DimensionMismatchError):
+            collection.upsert([{"id": 1, "vector": [1.0]}])
+        assert collection.all_ids() == []
 
     def test_metadata_collection_search_raises_value_error(self, temp_db):
         """Vector search on a metadata-only collection raises `ValueError`.

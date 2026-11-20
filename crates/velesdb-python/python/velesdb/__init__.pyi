@@ -74,10 +74,12 @@ class SearchResultDict(TypedDict, total=False):
     ``component_scores`` is the per-component breakdown (``vector_score``,
     ``bm25_score``, ...) core tagged the result with, absent when it tagged
     none. A VelesQL ``query`` row adds the multi-model fields: ``node_id``
-    (the id), ``vector_score`` (the tagged component; ``None`` when a tagged
-    row has none, as a BM25-only row; the row's score when it carries no
-    breakdown), ``graph_score`` (the tagged component, ``None`` otherwise —
-    no search tags one today), ``fused_score`` (the final score),
+    (the id), ``vector_score`` (the tagged component: every row a vector
+    scored carries one — a ``NEAR``, filtered or not, a ``similarity()``
+    threshold or ``ORDER BY similarity(field, $v)``, a hybrid; ``None`` on a
+    row no vector scored, as a metadata or BM25-only row), ``graph_score``
+    (the tagged component, ``None`` otherwise — no search tags one today),
+    ``fused_score`` (the final score),
     ``bindings`` (the payload) and ``column_data`` (``None``).
     """
 
@@ -399,8 +401,8 @@ class Collection:
         """Get collection configuration info.
 
         Returns:
-            Dict with name, dimension, metric, storage_mode, point_count,
-            metadata_only, and auto_reindex keys.
+            Dict with name, dimension, metric, storage_mode, point_count (a
+            graph's every stored node), metadata_only, and auto_reindex keys.
         """
         ...
 
@@ -428,7 +430,8 @@ class Collection:
         ...
 
     def __len__(self) -> int:
-        """Return the number of points in the collection."""
+        """Return the number of points in the collection; for the view of a
+        graph collection, its every stored node, with an embedding or not."""
         ...
 
     def __contains__(self, point_id: int) -> bool:
@@ -483,7 +486,10 @@ class Collection:
     def upsert_metadata(self, points: List[Dict[str, Any]]) -> int:
         """Insert or update metadata-only points (no vectors).
 
-        Each point dict must have 'id' (int) and 'payload' (dict) keys.
+        Each point dict must have 'id' (int) and 'payload' (dict) keys. On a
+        vector collection, whose rows are its vectors, this replaces the
+        payloads of points it stores, and raises ``ValueError`` (VELES-016)
+        before writing anything when an id stores no vector.
 
         Args:
             points: List of point dicts
@@ -941,7 +947,8 @@ class Collection:
         ...
 
     def count(self) -> int:
-        """Return number of points in the collection."""
+        """Return number of points in the collection (a graph's every stored
+        node)."""
         ...
 
     def all_ids(self) -> List[int]:
@@ -949,7 +956,7 @@ class Collection:
         ...
 
     def all_point_ids(self) -> List[int]:
-        """All point IDs (vector and payload indexes union), ascending.
+        """All point IDs (the collection's rows, as ``all_ids``), ascending.
 
         Gated like ``all_ids``: raises if the observer denies the read or
         narrows it with a scope.
@@ -1078,7 +1085,10 @@ class Collection:
     def query(self, query_str: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Execute a read-only VelesQL query against this collection.
 
-        A SELECT's ``FROM`` is rewritten to this collection.
+        A SELECT's ``FROM`` is rewritten to this collection. An aggregate
+        (``COUNT``, ``SUM``, ``AVG``, ``MIN``, ``MAX``, or a ``GROUP BY``)
+        returns its rows: one dict of its values without ``GROUP BY``, one
+        per group with it.
 
         Raises:
             ValueError: If the statement writes (DDL, DML, ``TRAIN``,
@@ -1119,7 +1129,8 @@ class Collection:
                 dropped. Omitted (the default), every scored row is kept.
 
         Raises:
-            ValueError: If ``threshold`` is NaN or infinite.
+            ValueError: If ``threshold`` is NaN or infinite, or given
+                without ``vector`` (no row is scored).
         """
         ...
 
@@ -1514,6 +1525,9 @@ class Database:
 
         Returns:
             List of result dicts for SELECT queries, empty list for DDL/DML.
+            An aggregate (``COUNT``, ``SUM``, ``AVG``, ``MIN``, ``MAX``, or a
+            ``GROUP BY``) returns its rows: one dict of its values without
+            ``GROUP BY`` (``[{"count": 3}]``), one per group with it.
         """
         ...
 
@@ -1783,12 +1797,13 @@ class VelesQLSyntaxError(Exception):
     ...
 
 
-class VelesQLParameterError(Exception):
-    """Reserved: no call raises it in this release.
+class VelesQLParameterError(ValueError):
+    """Raised when a ``$name`` parameter is unbound, or bound to a value its
+    position cannot take (``[VELES-038]``).
 
-    An unbound ``$name`` parameter, or one bound to a value its operand
-    cannot take, raises ``ValueError`` (``[VELES-010]``): core reports it as
-    a generic query error the binding cannot tell apart from the others.
+    A ``ValueError``, as every other query error, so ``except ValueError``
+    still catches it; a malformed statement raises a plain ``ValueError``
+    (``[VELES-010]``), never this class.
     """
     ...
 
@@ -2291,7 +2306,7 @@ class _GraphCollectionMembers:
         ``principal`` / ``tenant`` are forwarded to the read gate.
 
         Raises:
-            ValueError: If the collection has no embeddings (``VELES-014``)
+            ValueError: If the collection has no embeddings (``VELES-015``)
                 or the query's dimension is not the collection's.
             PermissionError: If the read gate denies the read.
         """
@@ -2315,7 +2330,9 @@ class _GraphCollectionMembers:
             params: Query parameters (vectors as lists/numpy arrays, scalars)
 
         Returns:
-            List of result dicts
+            List of result dicts; an aggregate (``COUNT``, ``SUM``, ``AVG``,
+            ``MIN``, ``MAX``, or a ``GROUP BY``) returns its rows instead: one
+            dict of its values without ``GROUP BY``, one per group with it.
 
         Raises:
             ValueError: If the statement writes (DDL, DML, ``TRAIN``,
@@ -2349,7 +2366,8 @@ class _GraphCollectionMembers:
             List of dicts with keys: node_id, depth, path, bindings, score, projected
 
         Raises:
-            ValueError: If ``threshold`` is NaN or infinite.
+            ValueError: If ``threshold`` is NaN or infinite, or given
+                without ``vector`` (no row is scored).
         """
         ...
 
@@ -2428,36 +2446,34 @@ class _GraphCollectionMembers:
         ...
 
     def __len__(self) -> int:
-        """Return the number of nodes stored with an embedding vector.
+        """Return the number of nodes stored in the graph.
 
-        That is core's ``GraphCollection::len``, the points in vector storage:
-        a node written by ``upsert_node(..., vector=...)``. A payload-only node
-        (``upsert_node_payload``, or any node of a graph without embeddings) is
-        not counted — ``all_node_ids()`` lists those.
+        Every node counts once, whether it carries an embedding, a payload
+        (``upsert_node_payload``, or any node of a graph without embeddings)
+        or both: the ids ``all_node_ids()`` lists.
         """
         ...
 
     def count(self) -> int:
-        """Return the number of nodes stored with an embedding vector
-        (``len()``; payload-only nodes are not counted)."""
+        """Return the number of nodes stored in the graph (``len()``)."""
         ...
 
     def is_empty(self) -> bool:
-        """Return True when no node is stored with an embedding vector
-        (``count() == 0``), even if payload-only nodes exist."""
+        """Return True when the graph stores no node at all
+        (``count() == 0``)."""
         ...
 
     def get(self, ids: List[int]) -> List[Optional[Dict[str, Any]]]:
-        """Get the nodes stored with an embedding vector, by id.
+        """Get stored nodes by id.
 
-        A payload-only node reads as ``None``, as a missing one does; read
-        its properties with ``get_node_payload``.
+        Every stored node is returned, payload-only ones included; a node
+        without an embedding has no ``vector`` key.
 
         Args:
-            ids: List of point IDs to retrieve
+            ids: List of node IDs to retrieve
 
         Returns:
-            List of point dicts (or None for missing and payload-only IDs)
+            List of node dicts (or None for missing IDs)
         """
         ...
 
@@ -2524,7 +2540,7 @@ class _GraphCollectionMembers:
         ...
 
     def __contains__(self, node_id: int) -> bool:
-        """Membership test: ``node_id in graph`` (true if node has a payload)."""
+        """Membership test: ``node_id in graph`` (true if the graph stores the node: with an embedding, a payload or both)."""
         ...
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:

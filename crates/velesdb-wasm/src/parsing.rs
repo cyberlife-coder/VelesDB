@@ -99,7 +99,7 @@ pub(crate) fn wasm_to_core_storage_mode(mode: StorageMode) -> velesdb_core::Stor
 /// propagated. In debug builds, the `debug_assert!` makes the gap visible
 /// immediately during testing — see `tests::core_to_wasm_storage_mode_*`
 /// for the contract.
-fn core_to_wasm_storage_mode(core: velesdb_core::StorageMode) -> StorageMode {
+pub(crate) fn core_to_wasm_storage_mode(core: velesdb_core::StorageMode) -> StorageMode {
     match core {
         velesdb_core::StorageMode::Full => StorageMode::Full,
         velesdb_core::StorageMode::SQ8 => StorageMode::SQ8,

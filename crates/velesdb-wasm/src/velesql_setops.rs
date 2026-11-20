@@ -9,6 +9,7 @@
 use velesdb_core::velesql::{Query, SelectOrderBy, SelectStatement};
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
 
@@ -22,7 +23,7 @@ pub(crate) fn execute(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     let higher_is_better = crate::velesql_select::metric_direction(db, &query.select)?;
     // The window ranks by the first operand's metric, as core's; each row
     // carries its own vector (`execute_operand`).

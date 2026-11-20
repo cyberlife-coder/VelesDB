@@ -27,7 +27,7 @@ fn db(with_sparse: bool) -> DatabaseInner {
 }
 
 fn ids(db: &mut DatabaseInner, sql: &str) -> Result<Vec<u64>, String> {
-    let r = execute(db, sql, Some(r#"{"q": [1.0, 0.0]}"#))?;
+    let r = execute(db, sql, Some(r#"{"q": [1.0, 0.0]}"#)).map_err(|e| e.to_string())?;
     Ok((0..r.row_count() as usize)
         .map(|i| r.row(i).expect("test: row").id())
         .collect())
@@ -68,7 +68,7 @@ fn a_non_finite_sparse_parameter_is_refused_as_core_refuses_it() {
         Some(r#"{"s": {"7": 1e300}}"#),
     )
     .expect_err("an infinite weight");
-    assert!(err.contains("not finite"), "{err}");
+    assert!(err.to_string().contains("not finite"), "{err}");
 }
 
 /// An aggregation reads every point its metadata filter keeps, as core's

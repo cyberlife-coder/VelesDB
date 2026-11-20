@@ -42,14 +42,14 @@ fn test_fused_returns_fused_ranking() {
         "SELECT * FROM vecs WHERE vector NEAR_FUSED [$a, $b]",
         r#"{"a": [0.0, 1.0, 0.0, 0.0], "b": [0.1, 0.9, 0.0, 0.0]}"#,
     );
-    let ids: Vec<u64> = rows.iter().map(|(id, _, _)| *id).collect();
+    let ids: Vec<u64> = rows.iter().map(|r| r.id).collect();
     assert_eq!(ids.len(), 4, "all four ids present in the fused ranking");
     assert_eq!(
         ids[0], 12,
         "id 12 (favored by both query vectors) must be the top fused result, not storage-order id 10"
     );
     // Fused output is ordered by descending fused score (a real ranking).
-    let scores: Vec<f32> = rows.iter().map(|(_, s, _)| *s).collect();
+    let scores: Vec<f32> = rows.iter().map(|r| r.score).collect();
     assert!(
         scores.windows(2).all(|w| w[0] >= w[1]),
         "rows must be sorted by descending fused score, got {scores:?}"
@@ -65,7 +65,7 @@ fn test_fused_with_metadata_filter() {
         "SELECT * FROM vecs WHERE vector NEAR_FUSED [$a, $b] AND cat = 'a'",
         r#"{"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0, 0.0]}"#,
     );
-    let ids: Vec<u64> = rows.iter().map(|(id, _, _)| *id).collect();
+    let ids: Vec<u64> = rows.iter().map(|r| r.id).collect();
     assert_eq!(
         ids.len(),
         2,
@@ -88,6 +88,7 @@ fn refusal(sql: &str) -> String {
     )
     .map(|_| ())
     .expect_err("test: refused")
+    .to_string()
 }
 
 #[test]

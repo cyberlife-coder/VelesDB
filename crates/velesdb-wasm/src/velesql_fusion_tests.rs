@@ -87,5 +87,6 @@ fn a_fusion_the_strategy_refuses_is_an_error() {
     let three = vec![vec![(1, 0.5)], vec![(2, 0.7)], vec![(3, 0.1)]];
     let err = apply(&weighted_rrf, three, &[ScoreDirection::HigherIsBetter; 3])
         .expect_err("two weights cannot weigh three branches");
-    assert!(err.contains("FUSION"), "{err}");
+    assert_eq!(err.code(), Some("VELES-009"), "core's fusion error: {err}");
+    assert!(err.to_string().contains("Fusion error"), "{err}");
 }

@@ -163,8 +163,11 @@ fn test_order_by_arithmetic_sorts_by_formula() {
 #[test]
 fn test_order_by_similarity_on_a_named_vector_scores_the_payload_vector() {
     // `ORDER BY similarity(image_vec, $q)` scores the payload's `image_vec`
-    // as core does; the rows without one take the worst key and come after,
-    // by id.
+    // as core does. A row without one has a null key, which every ORDER BY
+    // sorts first under DESC and last under ASC (core's
+    // `SelectOrderBy::directed_score`), by id, and keeps the score its NEAR
+    // gave it: no infinite stand-in is written back. It took the metric's
+    // worst key, sorting last under DESC with a score of -inf.
     let mut db = db_with_vectors();
     execute(
         &mut db,
@@ -172,14 +175,56 @@ fn test_order_by_similarity_on_a_named_vector_scores_the_payload_vector() {
         Some(r#"{"v": [0.0, 0.0, 0.0, 1.0], "iv": [1.0, 0.0, 0.0, 0.0]}"#),
     )
     .expect("test: seed a named vector");
+    for (direction, expected) in [("DESC", vec![1, 2, 3, 4, 5]), ("ASC", vec![5, 1, 2, 3, 4])] {
+        let r = execute(
+            &mut db,
+            &format!(
+                "SELECT * FROM vecs WHERE vector NEAR $q ORDER BY similarity(image_vec, $q) \
+                 {direction}"
+            ),
+            Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
+        )
+        .expect("test: ORDER BY a named vector");
+        let rows: Vec<(u64, f32)> = (0..r.row_count() as usize)
+            .map(|i| {
+                let row = r.row(i).expect("test: row");
+                (row.id(), row.score())
+            })
+            .collect();
+        let ids: Vec<u64> = rows.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, expected, "{direction}");
+        assert!(
+            rows.iter().all(|(_, score)| score.is_finite()),
+            "{direction}: {rows:?}"
+        );
+    }
+}
+
+#[test]
+fn test_order_by_similarity_writes_the_similarity_back_as_the_row_score() {
+    // As core's ORDER BY does: a row ordered by `similarity(vector, $q)`
+    // carries that similarity as its score, not the metadata score its scan
+    // gave it.
+    let mut db = db_with_vectors();
     let r = execute(
         &mut db,
-        "SELECT * FROM vecs WHERE vector NEAR $q ORDER BY similarity(image_vec, $q) DESC",
+        "SELECT * FROM vecs WHERE cat = 'tech' ORDER BY similarity(vector, $q) DESC",
         Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
     )
-    .expect("test: ORDER BY a named vector");
-    let ids: Vec<u64> = (0..r.row_count() as usize)
-        .map(|i| r.row(i).expect("test: row").id())
+    .expect("test: ORDER BY similarity");
+    let rows: Vec<(u64, f32)> = (0..r.row_count() as usize)
+        .map(|i| {
+            let row = r.row(i).expect("test: row");
+            (row.id(), row.score())
+        })
         .collect();
-    assert_eq!(ids, vec![5, 1, 2, 3, 4]);
+    let ids: Vec<u64> = rows.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, vec![1, 2, 3, 4]);
+    let expected = [1.0_f32, 0.9 / 0.82_f32.sqrt(), 0.0, 0.0];
+    for ((id, score), want) in rows.iter().zip(expected) {
+        assert!(
+            (score - want).abs() < 1e-5,
+            "row {id}: score {score}, expected the similarity {want}"
+        );
+    }
 }

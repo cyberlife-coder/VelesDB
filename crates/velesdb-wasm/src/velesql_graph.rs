@@ -15,6 +15,7 @@ use velesdb_core::velesql::{
 };
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::graph_store::WasmEdge;
 use crate::observer::WasmQueryOperationKind;
 use crate::velesql_result::QueryResultRow;
@@ -25,7 +26,7 @@ pub(crate) fn execute_match(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     Ok(match_candidates_gated(db, query, params, None)?
         .into_iter()
         .map(|c| c.row)
@@ -40,7 +41,7 @@ pub(crate) fn match_candidates_gated(
     query: &Query,
     params: &Params,
     scoring: Option<&crate::velesql_match_score::MatchScoring>,
-) -> Result<Vec<crate::velesql_match_orderby::MatchCandidate>, String> {
+) -> Result<Vec<crate::velesql_match_orderby::MatchCandidate>, ExecError> {
     // Read-path gate (audit F-5.4, #1392), asked about every collection the
     // MATCH reads. Zero-overhead without an observer.
     for collection in match_gate_collections(query, params)? {
@@ -53,7 +54,7 @@ pub(crate) fn match_candidates_gated(
 /// the graph it walks ([`crate::velesql_match::match_target`], the rule the
 /// executor uses), then each `@collection` a node reads properties from.
 /// A MATCH without patterns reads nothing and is asked about `""`.
-fn match_gate_collections(query: &Query, params: &Params) -> Result<Vec<String>, String> {
+fn match_gate_collections(query: &Query, params: &Params) -> Result<Vec<String>, ExecError> {
     let Some(clause) = query.match_clause.as_ref() else {
         return Ok(vec![String::new()]);
     };
@@ -82,7 +83,7 @@ fn match_gate_collections(query: &Query, params: &Params) -> Result<Vec<String>,
 pub(crate) fn insert_node(
     db: &mut DatabaseInner,
     stmt: &InsertNodeStatement,
-) -> Result<(), String> {
+) -> Result<(), ExecError> {
     let store = db.graph_store(&stmt.collection);
     let (payload, labels) = split_node_payload_and_labels(&stmt.payload);
     store
@@ -146,14 +147,14 @@ pub(crate) fn insert_edge(
     db: &mut DatabaseInner,
     stmt: &InsertEdgeStatement,
     _params: &Params,
-) -> Result<(), String> {
+) -> Result<(), ExecError> {
     let store = db.graph_store(&stmt.collection);
     let payload = if stmt.properties.is_empty() {
         None
     } else {
-        Some(serde_json::Value::Object(
-            EdgeQuery::literal_properties(&stmt.properties).map_err(|e| e.to_string())?,
-        ))
+        Some(serde_json::Value::Object(EdgeQuery::literal_properties(
+            &stmt.properties,
+        )?))
     };
     store.borrow_mut().insert_edge(
         stmt.edge_id,
@@ -169,11 +170,10 @@ pub(crate) fn insert_edge(
 pub(crate) fn delete_edge(
     db: &mut DatabaseInner,
     stmt: &DeleteEdgeStatement,
-) -> Result<u32, String> {
-    let Some(store) = db.get_graph_store(&stmt.collection) else {
-        return Err(format!("Graph '{}' not found", stmt.collection));
-    };
-    let removed = store.borrow_mut().delete_edge_by_id(stmt.edge_id);
+) -> Result<u32, ExecError> {
+    let removed = db
+        .existing_graph_store(&stmt.collection)?
+        .is_some_and(|store| store.borrow_mut().delete_edge_by_id(stmt.edge_id));
     Ok(u32::from(removed))
 }
 
@@ -184,13 +184,15 @@ pub(crate) fn select_edges(
     db: &DatabaseInner,
     stmt: &SelectEdgesStatement,
     _params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     // Read-path gate (audit F-5.4, #1392) — zero-overhead without an observer.
     db.check_query_access(&stmt.collection, WasmQueryOperationKind::GraphTraversal)?;
-    let store = db
-        .get_graph_store(&stmt.collection)
-        .ok_or_else(|| format!("Graph '{}' not found", stmt.collection))?;
-    let query = EdgeQuery::from_where(stmt.where_clause.as_ref()).map_err(|e| e.to_string())?;
+    let Some(store) = db.existing_graph_store(&stmt.collection)? else {
+        // A collection with no edge yet: the WHERE is still core's to read.
+        EdgeQuery::from_where(stmt.where_clause.as_ref())?;
+        return Ok(Vec::new());
+    };
+    let query = EdgeQuery::from_where(stmt.where_clause.as_ref())?;
     let borrowed = store.borrow();
 
     let limit = usize::try_from(stmt.limit.unwrap_or(u64::MAX)).unwrap_or(usize::MAX);
@@ -202,7 +204,7 @@ pub(crate) fn select_edges(
         .collect()
 }
 
-fn edge_to_row(edge: &WasmEdge) -> Result<QueryResultRow, String> {
+fn edge_to_row(edge: &WasmEdge) -> Result<QueryResultRow, ExecError> {
     let no_properties = serde_json::Value::Object(serde_json::Map::new());
     QueryResultRow::synthetic(EdgeQuery::row(
         edge.id,

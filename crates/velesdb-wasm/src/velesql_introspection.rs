@@ -8,6 +8,7 @@
 use velesdb_core::velesql::{DescribeCollectionStatement, IntrospectionStatement};
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::velesql_explain;
 use crate::velesql_result::QueryResultRow;
 
@@ -15,20 +16,20 @@ use crate::velesql_result::QueryResultRow;
 pub(crate) fn execute(
     db: &DatabaseInner,
     stmt: &IntrospectionStatement,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     match stmt {
         IntrospectionStatement::ShowCollections => show_collections(db),
         IntrospectionStatement::DescribeCollection(s) => describe_collection(db, s),
         IntrospectionStatement::Explain(q) => velesql_explain::explain(db, q),
         // Defensive: `IntrospectionStatement` is `#[non_exhaustive]`.
-        _ => Err(format!(
+        _ => Err(ExecError::refused(format!(
             "Unsupported introspection variant in WASM: {stmt:?}"
-        )),
+        ))),
     }
 }
 
 /// `SHOW COLLECTIONS` — one synthetic row per registered collection.
-fn show_collections(db: &DatabaseInner) -> Result<Vec<QueryResultRow>, String> {
+fn show_collections(db: &DatabaseInner) -> Result<Vec<QueryResultRow>, ExecError> {
     let mut rows = Vec::new();
     for (name, dim, is_metadata) in db.collection_summaries() {
         let kind = if is_metadata { "metadata" } else { "vector" };
@@ -46,7 +47,7 @@ fn show_collections(db: &DatabaseInner) -> Result<Vec<QueryResultRow>, String> {
 fn describe_collection(
     db: &DatabaseInner,
     stmt: &DescribeCollectionStatement,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     // DESCRIBE exposes the collection's metadata (count, metric) — a read the
     // gate decides like any other.
     db.check_query_access(&stmt.name, crate::observer::WasmQueryOperationKind::Select)?;

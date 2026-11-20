@@ -278,7 +278,7 @@ fn test_match_on_empty_graph_returns_zero() {
     // Either 0 rows or a "graph empty" error — both acceptable demo-side.
     match r {
         Ok(result) => assert_eq!(result.row_count(), 0),
-        Err(e) => assert!(e.contains("empty") || e.contains("not found")),
+        Err(e) => assert!(e.to_string().contains("empty") || e.to_string().contains("not found")),
     }
 }
 
@@ -496,13 +496,12 @@ fn test_drop_collection_removes_graph_store() {
     // DROP the collection.
     execute(&mut db, "DROP COLLECTION g", None).expect("test: drop");
 
-    // Recreate and assert the graph store is fresh.
+    // Recreate and assert the graph store is fresh: the collection has no
+    // edge, as in core, rather than the dropped lifecycle's.
     db.create_metadata_collection("g").expect("test: recreate");
-    let err = execute(&mut db, "SELECT EDGES FROM g", None);
-    assert!(
-        err.is_err(),
-        "empty graph store: no edges to select (got: {err:?})"
-    );
+    assert!(!db.has_graph_store("g"), "DROP removed the graph store");
+    let edges = execute(&mut db, "SELECT EDGES FROM g", None).expect("test: select edges");
+    assert_eq!(edges.row_count(), 0, "no stale edge: {}", edges.rows_json());
 }
 
 #[test]
@@ -537,7 +536,7 @@ fn test_truncate_collection_clears_graph_store() {
             r.rows_json()
         ),
         Err(e) => assert!(
-            e.contains("empty") || e.contains("not found"),
+            e.to_string().contains("empty") || e.to_string().contains("not found"),
             "unexpected error: {e}"
         ),
     }
@@ -934,7 +933,7 @@ fn test_match_where_missing_param_returns_error() {
     assert!(err.is_err(), "unbound $unknown must be an error");
     let msg = err.expect_err("test: err");
     assert!(
-        msg.contains("$unknown") || msg.contains("not bound"),
+        msg.to_string().contains("$unknown") || msg.to_string().contains("not bound"),
         "error should mention the unbound parameter, got: {msg}"
     );
 }
@@ -1115,7 +1114,7 @@ fn test_bdd_insert_edge_duplicate_explicit_id_is_rejected() {
     assert!(err.is_err(), "duplicate explicit id must be rejected");
     let msg = err.expect_err("test: err");
     assert!(
-        msg.contains("already exists") && msg.contains('1'),
+        msg.to_string().contains("already exists") && msg.to_string().contains('1'),
         "error should mention the colliding id, got: {msg}"
     );
     // Store unchanged: SELECT EDGES still returns exactly one edge.
@@ -1249,12 +1248,13 @@ fn test_bdd_match_multi_pattern_returns_clear_error() {
     assert!(err.is_err(), "multi-pattern MATCH must be rejected loud");
     let msg = err.expect_err("test: err");
     assert!(
-        msg.contains("Multi-pattern MATCH") || msg.contains("multi-pattern"),
+        msg.to_string().contains("Multi-pattern MATCH")
+            || msg.to_string().contains("multi-pattern"),
         "error must describe the unsupported feature, got: {msg}"
     );
     // The error must also point the user at the persistent core backend.
     assert!(
-        msg.contains("core") || msg.contains("persistence"),
+        msg.to_string().contains("core") || msg.to_string().contains("persistence"),
         "error should reference the persistence-enabled backend, got: {msg}"
     );
 }
@@ -1503,7 +1503,7 @@ fn test_match_rejects_a_non_string_collection_param() {
         Some(r#"{"_collection": 7}"#),
     )
     .expect_err("a numeric _collection must be refused");
-    assert!(err.contains("_collection"), "{err}");
+    assert!(err.to_string().contains("_collection"), "{err}");
 }
 
 // =========================================================================

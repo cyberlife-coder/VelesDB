@@ -145,10 +145,8 @@ fn a_query_vector_scores_the_last_node_and_applies_the_threshold() {
         &mut db,
         "MATCH (a:Person)-[:WROTE]->(d:Doc) RETURN d.name",
         Some(r#"{"_collection": "kg"}"#),
-        Some(MatchScoring {
-            vector: vec![1.0, 0.0],
-            threshold: Some(0.7),
-        }),
+        MatchScoring::from_request(Some(vec![1.0, 0.0]), Some(0.7))
+            .expect("test: a scoring core accepts"),
     )
     .expect("MATCH");
     assert_eq!(
@@ -167,30 +165,96 @@ fn a_query_vector_of_the_wrong_dimension_is_refused() {
         &mut db,
         "MATCH (a:Person)-[:WROTE]->(d:Doc) RETURN d.name",
         Some(r#"{"_collection": "kg"}"#),
-        Some(MatchScoring {
-            vector: vec![1.0, 0.0, 0.0],
-            threshold: None,
-        }),
+        MatchScoring::from_request(Some(vec![1.0, 0.0, 0.0]), None)
+            .expect("test: a scoring core accepts"),
     )
     .expect_err("dimension 3 against 2");
-    assert!(err.contains("dimension"), "{err}");
+    assert_eq!(err.code(), Some("VELES-004"), "{err}");
 }
 
+/// The query vector is checked before the walk, as core checks REST
+/// `/match`'s: a pattern no row matches still refuses it, rather than
+/// answering `[]`.
 #[test]
-fn a_threshold_outside_zero_one_is_refused_as_on_rest() {
+fn a_query_vector_is_checked_even_when_no_row_matches() {
     let mut db = kg("cosine");
-
     let err = execute_match_rows(
+        &mut db,
+        "MATCH (a:Person)-[:NOPE]->(d:Doc) RETURN d.name",
+        Some(r#"{"_collection": "kg"}"#),
+        MatchScoring::from_request(Some(vec![1.0, 0.0, 0.0]), None)
+            .expect("test: a scoring core accepts"),
+    )
+    .expect_err("dimension 3 against 2, whatever the walk finds");
+    assert_eq!(err.code(), Some("VELES-004"), "{err}");
+}
+
+/// The doc ids `executeMatch` keeps on `kg` under euclidean, scored against
+/// `[-1, 0]` (distances: doc 1 ≈ 1.79, doc 2 ≈ 1.90, doc 3 = 2).
+fn euclidean_docs(threshold: Option<f32>) -> Result<Vec<u64>, String> {
+    let mut db = kg("euclidean");
+    // `executeMatch`'s order: the scoring is built (core's threshold rule)
+    // before the MATCH runs.
+    let scoring =
+        MatchScoring::from_request(Some(vec![-1.0, 0.0]), threshold).map_err(|e| e.to_string())?;
+    execute_match_rows(
         &mut db,
         "MATCH (a:Person)-[:WROTE]->(d:Doc) RETURN d.name",
         Some(r#"{"_collection": "kg"}"#),
-        Some(MatchScoring {
-            vector: vec![1.0, 0.0],
-            threshold: Some(1.5),
-        }),
+        scoring,
     )
-    .expect_err("threshold 1.5");
-    assert!(err.contains("threshold"), "{err}");
+    .map_err(|e| e.to_string())
+    .map(|rows| docs(&rows))
+}
+
+#[test]
+fn no_threshold_keeps_every_scored_row_under_a_distance_metric() {
+    assert_eq!(
+        euclidean_docs(None).expect("MATCH"),
+        [1, 2, 3],
+        "nearest first, none dropped"
+    );
+}
+
+#[test]
+fn a_distance_threshold_above_one_applies_as_on_rest() {
+    assert_eq!(euclidean_docs(Some(1.85)).expect("MATCH"), [1]);
+}
+
+#[test]
+fn a_non_finite_threshold_is_refused_as_on_rest() {
+    for threshold in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let err = euclidean_docs(Some(threshold)).expect_err("non-finite threshold");
+        assert!(err.contains("threshold"), "{threshold}: {err}");
+    }
+}
+
+/// `executeMatch` builds its scoring through core's threshold rule
+/// (`velesql::validate_match_threshold`), as REST `/match` does: a threshold
+/// without a vector scores no row and is refused, as is a non-finite one,
+/// with core's `VELES-010`.
+#[test]
+fn match_scoring_from_request_applies_core_s_threshold_rule() {
+    for (vector, threshold) in [
+        (None, Some(0.5)),
+        (None, Some(f32::NAN)),
+        (Some(vec![1.0, 0.0]), Some(f32::INFINITY)),
+    ] {
+        let err = MatchScoring::from_request(vector.clone(), threshold)
+            .expect_err("test: the threshold cannot apply");
+        assert_eq!(
+            err.code(),
+            Some("VELES-010"),
+            "{vector:?} {threshold:?}: {err}"
+        );
+    }
+    assert!(MatchScoring::from_request(None, None)
+        .expect("test: nothing to score")
+        .is_none());
+    let scoring = MatchScoring::from_request(Some(vec![1.0, 0.0]), Some(0.7))
+        .expect("test: a finite threshold with a vector")
+        .expect("test: scored");
+    assert_eq!(scoring.threshold, Some(0.7));
 }
 
 #[test]
@@ -247,10 +311,8 @@ fn a_rejected_path_does_not_hide_a_passing_one_of_the_same_binding() {
         &mut db,
         "MATCH (a:Person)-[:WROTE]->(:Doc) RETURN a.name",
         Some(r#"{"_collection": "kg"}"#),
-        Some(MatchScoring {
-            vector: vec![1.0, 0.0],
-            threshold: Some(0.7),
-        }),
+        MatchScoring::from_request(Some(vec![1.0, 0.0]), Some(0.7))
+            .expect("test: a scoring core accepts"),
     )
     .expect("MATCH");
     assert_eq!(rows.len(), 1, "author 100, once: {rows:?}");

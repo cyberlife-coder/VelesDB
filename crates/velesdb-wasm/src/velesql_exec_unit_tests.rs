@@ -25,7 +25,10 @@ fn test_execute_invalid_sql_returns_error() {
     let mut db = DatabaseInner::new();
     let err = execute(&mut db, "NOT VALID AT ALL", None);
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("parse error"));
+    assert!(err
+        .expect_err("test: err")
+        .to_string()
+        .contains("at position"));
 }
 
 #[test]
@@ -33,7 +36,7 @@ fn test_execute_rejects_train() {
     let mut db = new_db_with_metadata();
     let err = execute(&mut db, "TRAIN QUANTIZER ON docs WITH (type = 'sq8')", None);
     assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("TRAIN"));
+    assert!(err.expect_err("test: err").to_string().contains("TRAIN"));
 }
 
 #[test]

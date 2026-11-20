@@ -141,7 +141,7 @@ fn a_statement_that_is_not_a_match_is_refused() {
 
     let err = execute_match_rows(&mut db, "SELECT * FROM docs LIMIT 1", None, None)
         .expect_err("not a MATCH");
-    assert!(err.contains("MATCH"), "{err}");
+    assert!(err.to_string().contains("MATCH"), "{err}");
 }
 
 /// GIVEN a node inserted with `INSERT NODE` whose payload names its labels

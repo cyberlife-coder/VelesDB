@@ -184,3 +184,20 @@ def test_match_query_refuses_a_non_finite_threshold(temp_db_path, threshold):
         graph.match_query(
             "MATCH (n) RETURN n LIMIT 10", vector=[1.0, 0.0, 0.0, 0.0], threshold=threshold
         )
+
+
+def test_match_query_refuses_a_threshold_without_a_vector(temp_db_path):
+    """Without ``vector`` no row is scored, so a ``threshold`` cannot apply.
+
+    It used to be dropped without a word; core's rule now refuses it, as on
+    REST ``/match`` and WASM ``executeMatch``.
+    """
+    db = velesdb.Database(temp_db_path)
+    collection = db.create_collection("match_threshold_alone", dimension=4, metric="cosine")
+    _seed_collection(collection)
+    with pytest.raises(ValueError, match="threshold"):
+        collection.match_query("MATCH (n) RETURN n LIMIT 10", threshold=0.5)
+    graph = db.create_graph_collection("graph_threshold_alone", dimension=4)
+    graph.upsert_node(1, {"name": "A"}, [1.0, 0.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="threshold"):
+        graph.match_query("MATCH (n) RETURN n LIMIT 10", threshold=0.5)

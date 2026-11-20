@@ -51,7 +51,11 @@ impl Collection {
         Ok(count)
     }
 
-    /// Insert or update metadata-only points (no vectors).
+    /// Insert or update metadata-only points (no vectors). On a vector
+    /// collection this replaces the payloads of stored points, and core
+    /// refuses an id without a vector (`VELES-016`, `ValueError`) and a
+    /// point carrying a non-empty `vector` (`VELES-014`, `ValueError`):
+    /// `upsert` writes a vector.
     #[pyo3(signature = (points))]
     fn upsert_metadata(
         &self,
@@ -67,7 +71,11 @@ impl Collection {
                     "Point at index {index} must have 'payload' field (metadata-only collection)"
                 ))
             })?;
-            core_points.push(Point::metadata_only(id, payload));
+            // A `vector` is handed to core, which refuses it (`VELES-014`):
+            // this write stores payloads only, and dropping the vector here
+            // would store the payload without a word about it.
+            let vector = extract_point_vector(py, point_dict)?;
+            core_points.push(Point::new(id, vector, Some(payload)));
         }
 
         let count = core_points.len();
@@ -269,7 +277,7 @@ impl Collection {
         // observer this is a single `Option` check (behavior unchanged).
         let (points, scope) = py.detach(|| -> PyResult<_> {
             let scope = self.authorize(QueryOperationKind::Select, None, None)?;
-            Ok((self.inner.get(&ids), scope))
+            Ok((self.read_points(&ids), scope))
         })?;
 
         // Phase 3: Convert to Python (GIL held)

@@ -270,6 +270,7 @@ plugin targets.
 | `invoke` rejects with a permission error before reaching the plugin | the capability from step 2 is missing, or `windows` does not list the calling window's label | add `"velesdb:default"` to a capability that covers that window |
 | Panic at startup: `velesdb.toml missing or invalid` | `Builder::with_config_path` fails fast on a missing, unparsable or out-of-range config | fix the path or the values; `Error::ConfigLoad` carries the typed core error |
 | `{ code: "VELES-010", message: "Database error: [VELES-010] Query error: ..." }` | malformed query string sent to `query` | check the syntax against the [VelesQL guides](../../docs/guides/MULTIMODEL_QUERIES.md) |
+| `{ code: "VELES-038", message: "Database error: [VELES-038] Query parameter $v: not bound" }` | the query names a `$v` that `params` does not bind, or binds to a value of the wrong type | pass it in `params`, with the type its position takes (an array of numbers for a vector) |
 
 ## License
 

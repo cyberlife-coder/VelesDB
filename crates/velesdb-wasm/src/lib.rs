@@ -54,6 +54,7 @@ use wasm_bindgen::prelude::*;
 mod agent;
 mod database;
 mod database_graph;
+mod exec_error;
 mod filter;
 mod fusion;
 mod graph;
@@ -228,6 +229,10 @@ mod velesql_exec_hybrid_tests;
 #[cfg(test)]
 #[path = "velesql_exec_behavior_tests.rs"]
 mod velesql_exec_behavior_tests;
+
+#[cfg(test)]
+#[path = "velesql_exec_error_code_tests.rs"]
+mod velesql_exec_error_code_tests;
 
 #[cfg(test)]
 #[path = "velesql_exec_graph_tests.rs"]

@@ -12,6 +12,7 @@ use velesdb_core::velesql::{
 };
 
 use crate::database::DatabaseInner;
+use crate::exec_error::ExecError;
 use crate::velesql_result::QueryResultRow;
 
 /// Executes any supported DDL statement. Index / ANALYZE DDL return a row
@@ -19,34 +20,29 @@ use crate::velesql_result::QueryResultRow;
 pub(crate) fn execute(
     db: &mut DatabaseInner,
     stmt: &DdlStatement,
-) -> Result<Vec<QueryResultRow>, String> {
+) -> Result<Vec<QueryResultRow>, ExecError> {
     match stmt {
-        DdlStatement::CreateCollection(s) => {
-            create_collection(db, s)?;
-            Ok(Vec::new())
-        }
-        DdlStatement::DropCollection(s) => {
-            drop_collection(db, s)?;
-            Ok(Vec::new())
-        }
-        DdlStatement::Truncate(s) => {
-            truncate(db, s)?;
-            Ok(Vec::new())
-        }
-        DdlStatement::CreateIndex(s) => Ok(vec![index_noop_row(
-            "CREATE INDEX",
-            &s.collection,
-            &s.field,
-        )?]),
-        DdlStatement::DropIndex(s) => {
-            Ok(vec![index_noop_row("DROP INDEX", &s.collection, &s.field)?])
-        }
+        DdlStatement::CreateCollection(s) => create_collection(db, s).map(|()| Vec::new()),
+        DdlStatement::DropCollection(s) => drop_collection(db, s).map(|()| Vec::new()),
+        DdlStatement::Truncate(s) => truncate(db, s).map(|()| Vec::new()),
         DdlStatement::Analyze(s) => analyze(db, s).map(|row| vec![row]),
-        DdlStatement::AlterCollection(_) => {
-            Err("ALTER COLLECTION is not supported in WASM yet".to_string())
-        }
+        other => note_or_refuse(other).map(|row| vec![row]),
+    }
+}
+
+/// The DDL WASM does not run: index DDL is accepted as a no-op with a note
+/// row; anything else is refused.
+fn note_or_refuse(stmt: &DdlStatement) -> Result<QueryResultRow, ExecError> {
+    match stmt {
+        DdlStatement::CreateIndex(s) => index_noop_row("CREATE INDEX", &s.collection, &s.field),
+        DdlStatement::DropIndex(s) => index_noop_row("DROP INDEX", &s.collection, &s.field),
+        DdlStatement::AlterCollection(_) => Err(ExecError::refused(
+            "ALTER COLLECTION is not supported in WASM yet",
+        )),
         // Defensive: DdlStatement is #[non_exhaustive].
-        _ => Err(format!("Unsupported DDL variant in WASM: {stmt:?}")),
+        _ => Err(ExecError::refused(format!(
+            "Unsupported DDL variant in WASM: {stmt:?}"
+        ))),
     }
 }
 
@@ -54,36 +50,41 @@ pub(crate) fn execute(
 fn create_collection(
     db: &mut DatabaseInner,
     stmt: &CreateCollectionStatement,
-) -> Result<(), String> {
+) -> Result<(), ExecError> {
     match &stmt.kind {
-        CreateCollectionKind::Metadata => db.create_metadata_collection(&stmt.name),
+        CreateCollectionKind::Metadata => Ok(db.create_metadata_collection(&stmt.name)?),
         CreateCollectionKind::Vector(params) => {
-            // Read as core's DDL executor reads it: an unknown mode is refused.
-            // `m` / `ef_construction` tune an HNSW graph WASM does not build.
-            let mode = params
-                .storage
-                .as_deref()
-                .map(crate::parsing::parse_storage_mode_inner)
-                .transpose()?
-                .unwrap_or(crate::StorageMode::Full);
-            db.create_collection_with_mode(&stmt.name, params.dimension, &params.metric, mode)
+            // Read by core's DDL rule: an unknown metric or mode is core's
+            // `Error::Query`. `m` / `ef_construction` tune an HNSW graph WASM
+            // does not build.
+            let metric = velesdb_core::velesql::resolve_metric(&params.metric)?;
+            let mode = velesdb_core::velesql::resolve_storage_mode(params.storage.as_deref())?;
+            db.create_collection_with_mode(
+                &stmt.name,
+                params.dimension,
+                metric,
+                crate::parsing::core_to_wasm_storage_mode(mode),
+            )
         }
-        CreateCollectionKind::Graph(_) => {
-            Err("Graph collections are not supported in WASM (use GraphStore directly)".to_string())
-        }
-        _ => Err(format!(
+        CreateCollectionKind::Graph(_) => Err(ExecError::refused(
+            "Graph collections are not supported in WASM (use GraphStore directly)",
+        )),
+        _ => Err(ExecError::refused(format!(
             "Unsupported CREATE COLLECTION kind in WASM: {:?}",
             stmt.kind
-        )),
+        ))),
     }
 }
 
 /// Drops the named collection; `IF EXISTS` swallows "not found" errors.
-fn drop_collection(db: &mut DatabaseInner, stmt: &DropCollectionStatement) -> Result<(), String> {
+fn drop_collection(
+    db: &mut DatabaseInner,
+    stmt: &DropCollectionStatement,
+) -> Result<(), ExecError> {
     match db.delete_collection(&stmt.name) {
         Ok(()) => Ok(()),
         Err(_) if stmt.if_exists => Ok(()),
-        Err(e) => Err(e),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -108,7 +109,7 @@ fn drop_collection(db: &mut DatabaseInner, stmt: &DropCollectionStatement) -> Re
 /// removes the entry from `collections` so the old `Rc` is no longer
 /// reachable via `get_collection`. A subsequent `CREATE` with the same
 /// name creates a *new* store that is distinct from the dropped one.
-fn truncate(db: &mut DatabaseInner, stmt: &TruncateStatement) -> Result<(), String> {
+fn truncate(db: &mut DatabaseInner, stmt: &TruncateStatement) -> Result<(), ExecError> {
     let handle = db.get_shared_store(&stmt.collection)?;
     // Clear the inner store in place. This wipes ids, data buffers,
     // payloads, and any sparse index; dimension/metric/storage_mode
@@ -121,7 +122,7 @@ fn truncate(db: &mut DatabaseInner, stmt: &TruncateStatement) -> Result<(), Stri
 }
 
 /// `ANALYZE` returns synthetic statistics about the target collection.
-fn analyze(db: &DatabaseInner, stmt: &AnalyzeStatement) -> Result<QueryResultRow, String> {
+fn analyze(db: &DatabaseInner, stmt: &AnalyzeStatement) -> Result<QueryResultRow, ExecError> {
     let store = db.get_shared_store(&stmt.collection)?;
     let borrowed = store.borrow();
     let payload = serde_json::json!({
@@ -135,7 +136,7 @@ fn analyze(db: &DatabaseInner, stmt: &AnalyzeStatement) -> Result<QueryResultRow
 
 /// Synthesises a result row for accepted-but-no-op index DDL so callers
 /// know the statement parsed and what the WASM backend actually does.
-fn index_noop_row(op: &str, collection: &str, field: &str) -> Result<QueryResultRow, String> {
+fn index_noop_row(op: &str, collection: &str, field: &str) -> Result<QueryResultRow, ExecError> {
     let payload = serde_json::json!({
         "op": op,
         "collection": collection,

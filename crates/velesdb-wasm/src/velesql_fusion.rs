@@ -11,6 +11,7 @@
 //! here: the parser refuses it, and the validator refuses out-of-range
 //! weights; a refusal of the strategy itself surfaces as an error.
 
+use crate::exec_error::ExecError;
 use velesdb_core::fusion::{FusionStrategy, ScoreDirection};
 use velesdb_core::velesql::{FusionClause, FusionStrategyType};
 
@@ -31,10 +32,10 @@ pub(crate) fn apply(
     clause: &FusionClause,
     branches: Vec<RankedBranch>,
     directions: &[ScoreDirection],
-) -> Result<Vec<(u64, f32)>, String> {
+) -> Result<Vec<(u64, f32)>, ExecError> {
     build_strategy(clause)
         .fuse_with_directions(branches, directions)
-        .map_err(|e| format!("USING FUSION: {e}"))
+        .map_err(|e| velesdb_core::Error::from(e).into())
 }
 
 /// Maps the AST clause onto a concrete [`FusionStrategy`].

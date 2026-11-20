@@ -15,6 +15,7 @@
 use velesdb_core::filter::Filter;
 use velesdb_core::velesql::{bind_condition, Condition};
 
+use crate::exec_error::ExecError;
 use crate::velesql_value::Params;
 
 /// A WHERE condition bound to a query's parameters and lowered to core's
@@ -29,10 +30,14 @@ impl WhereFilter {
     /// Names a condition outside the WASM row-filter scope, a parameter that
     /// is missing or bound to an array or object, or a construct core cannot
     /// lower to a row filter.
-    pub(crate) fn compile(cond: &Condition, params: &Params) -> Result<Self, String> {
+    pub(crate) fn compile(cond: &Condition, params: &Params) -> Result<Self, ExecError> {
         reject_out_of_scope(cond)?;
-        let bound = bind_condition(cond, params).map_err(|e| e.to_string())?;
-        Filter::try_from_where(bound).map(Self)
+        let bound = bind_condition(cond, params)?;
+        // Core's `try_from_where` reports its refusal as a bare message (a
+        // scope it cannot lower); it carries no core code to keep.
+        Filter::try_from_where(bound)
+            .map(Self)
+            .map_err(ExecError::refused)
     }
 
     /// Whether the point `id`, with `payload` if it has one, matches. The
@@ -64,7 +69,7 @@ pub(crate) fn truth(
     id: u64,
     payload: Option<&serde_json::Value>,
     params: &Params,
-) -> Result<Option<bool>, String> {
+) -> Result<Option<bool>, ExecError> {
     Ok(WhereFilter::compile(cond, params)?.truth(id, payload))
 }
 
@@ -86,6 +91,37 @@ pub(crate) fn or(left: Option<bool>, right: Option<bool>) -> Option<bool> {
     }
 }
 
+/// The three-valued truth of `cond`, each leaf answered by `leaf`: `AND`,
+/// `OR`, `NOT` and grouping folded with [`and`], [`or`] and `NOT` keeping
+/// UNKNOWN — the one fold of every WHERE that evaluates some leaves itself
+/// (a `similarity()` leaf) and hands the others to [`truth`].
+///
+/// # Errors
+///
+/// The first error `leaf` returns.
+pub(crate) fn fold_truth(
+    cond: &Condition,
+    leaf: &dyn Fn(&Condition) -> Result<Option<bool>, ExecError>,
+) -> Result<Option<bool>, ExecError> {
+    match cond {
+        Condition::And(l, r) => fold_both(l, r, leaf, and),
+        Condition::Or(l, r) => fold_both(l, r, leaf, or),
+        Condition::Not(inner) => fold_truth(inner, leaf).map(|truth| truth.map(|known| !known)),
+        Condition::Group(inner) => fold_truth(inner, leaf),
+        other => leaf(other),
+    }
+}
+
+/// [`fold_truth`] of both sides of a binary node, combined by `combine`.
+fn fold_both(
+    left: &Condition,
+    right: &Condition,
+    leaf: &dyn Fn(&Condition) -> Result<Option<bool>, ExecError>,
+    combine: fn(Option<bool>, Option<bool>) -> Option<bool>,
+) -> Result<Option<bool>, ExecError> {
+    Ok(combine(fold_truth(left, leaf)?, fold_truth(right, leaf)?))
+}
+
 /// Tests whether the given `id` and optional `payload` match the condition.
 ///
 /// Compiles `cond` for this one point: a caller testing many points against
@@ -99,13 +135,13 @@ pub(crate) fn matches(
     id: u64,
     payload: Option<&serde_json::Value>,
     params: &Params,
-) -> Result<bool, String> {
+) -> Result<bool, ExecError> {
     Ok(WhereFilter::compile(cond, params)?.matches(id, payload))
 }
 
 /// Refuses, depth-first, the first condition the WASM executor does not
 /// evaluate as a row filter, by name.
-fn reject_out_of_scope(cond: &Condition) -> Result<(), String> {
+fn reject_out_of_scope(cond: &Condition) -> Result<(), ExecError> {
     match cond {
         Condition::Comparison(_)
         | Condition::In(_)
@@ -117,31 +153,37 @@ fn reject_out_of_scope(cond: &Condition) -> Result<(), String> {
             reject_out_of_scope(r)
         }
         Condition::Not(inner) | Condition::Group(inner) => reject_out_of_scope(inner),
+        other => Err(out_of_scope(other)),
+    }
+}
+
+/// The refusal of a leaf the WASM executor does not evaluate as a row
+/// filter, naming what it is.
+fn out_of_scope(cond: &Condition) -> ExecError {
+    let what = match cond {
         Condition::VectorSearch(_)
         | Condition::VectorFusedSearch(_)
-        | Condition::SparseVectorSearch(_) => Err(
+        | Condition::SparseVectorSearch(_) => {
             "Vector NEAR clauses are handled by the SELECT dispatcher, not by the WHERE filter"
-                .to_string(),
-        ),
-        Condition::Similarity(_) => {
-            Err("similarity() threshold filters are not supported in WASM".to_string())
         }
-        Condition::GraphMatch(_) => {
-            Err("Graph MATCH predicates are not supported in WASM".to_string())
-        }
-        Condition::Match(_) => Err("MATCH (BM25) conditions are not supported in WASM".to_string()),
+        Condition::Similarity(_) => "similarity() threshold filters are not supported in WASM",
+        Condition::GraphMatch(_) => "Graph MATCH predicates are not supported in WASM",
+        Condition::Match(_) => "MATCH (BM25) conditions are not supported in WASM",
         Condition::Contains(_) | Condition::ContainsText(_) => {
-            Err("CONTAINS / CONTAINS_TEXT conditions are not supported in WASM".to_string())
+            "CONTAINS / CONTAINS_TEXT conditions are not supported in WASM"
         }
         Condition::GeoDistance(_) | Condition::GeoBbox(_) => {
-            Err("Geospatial conditions are not supported in WASM".to_string())
+            "Geospatial conditions are not supported in WASM"
         }
         // Defensive catch-all: `Condition` is `#[non_exhaustive]`; any new
         // variant added upstream is rejected until explicitly mapped here.
-        _ => Err(format!(
-            "Unsupported condition variant in WASM WHERE clause: {cond:?}"
-        )),
-    }
+        _ => {
+            return ExecError::refused(format!(
+                "Unsupported condition variant in WASM WHERE clause: {cond:?}"
+            ))
+        }
+    };
+    ExecError::refused(what)
 }
 
 #[cfg(test)]

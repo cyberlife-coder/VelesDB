@@ -40,6 +40,11 @@ fn a_query_needs_the_store_dimension_and_finite_components() {
 
 #[test]
 fn an_ingested_vector_needs_the_store_dimension_and_finite_components() {
+    assert_eq!(
+        code(validate_ingest_vector(&[], 2)),
+        "VELES-016",
+        "no vector"
+    );
     assert_eq!(code(validate_ingest_vector(&[1.0], 2)), "VELES-004");
     assert_eq!(
         code(validate_ingest_vector(&[f32::NAN, 0.0], 2)),
