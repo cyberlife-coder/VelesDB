@@ -13,6 +13,21 @@ pub enum Error {
     #[error("Source connection error: {0}")]
     SourceConnection(String),
 
+    /// A source answered an HTTP request with a non-success status that is
+    /// neither an authentication failure nor a rate limit.
+    ///
+    /// The status is kept as a number so retry policy can decide on it
+    /// rather than on the message text (`retry::is_retryable_error`).
+    #[error("Source connection error: {source_name} error {status}: {body}")]
+    SourceStatus {
+        /// Connector that issued the request (`"Qdrant"`, `"Milvus"`, ...).
+        source_name: String,
+        /// HTTP status code of the response.
+        status: u16,
+        /// What failed, followed by the response body.
+        body: String,
+    },
+
     /// Connection error to destination (`VelesDB`).
     #[error("Destination connection error: {0}")]
     DestinationConnection(String),

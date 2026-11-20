@@ -290,7 +290,11 @@ pub fn handle_http_error(status_code: u16, body: &str, source_name: &str) -> Err
     match status_code {
         429 => Error::RateLimit(60), // Default 60s retry
         401 | 403 => Error::Authentication(format!("{} auth failed: {}", source_name, body)),
-        _ => Error::SourceConnection(format!("{} error {}: {}", source_name, status_code, body)),
+        _ => Error::SourceStatus {
+            source_name: source_name.to_string(),
+            status: status_code,
+            body: body.to_string(),
+        },
     }
 }
 
@@ -375,14 +379,15 @@ pub fn detect_fields_from_sample(
 /// }
 /// ```
 ///
-/// The error message always includes the status code and body text so that
-/// downstream retry logic (which pattern-matches on "429", "500", etc.) works
-/// identically to the hand-written checks it replaces.
+/// The status stays typed (see [`handle_http_error`]) so retry policy can
+/// decide on the code itself.
 ///
 /// # Errors
 ///
-/// Returns `Error::SourceConnection` with a message containing the HTTP status
-/// and response body when the response is not 2xx.
+/// Returns [`handle_http_error`]'s classification of a non-2xx response:
+/// `Error::RateLimit` for 429, `Error::Authentication` for 401/403 and
+/// `Error::SourceStatus` otherwise, with the operation and response body in
+/// the message.
 pub async fn check_response(
     response: reqwest::Response,
     source_name: &str,

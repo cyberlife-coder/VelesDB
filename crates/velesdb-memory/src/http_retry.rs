@@ -13,11 +13,12 @@
 //!
 //! ## Why the classifier looks at variants, never at text
 //!
-//! `velesdb-migrate`'s `is_retryable_error` searches the rendered message for
-//! the words "timeout"/"connection"/"reset". That is a guess about how a
-//! dependency happens to format itself today: a wording change silently flips
-//! a retry decision, and a 404 whose body mentions "connection" is replayed for
-//! nothing. `ureq` exposes everything needed structurally — [`ureq::Error`] is
+//! Searching the rendered message for words like "timeout"/"connection"/"reset"
+//! is a guess about how a dependency happens to format itself today: a wording
+//! change silently flips a retry decision, and a 404 whose body mentions
+//! "connection" is replayed for nothing. `velesdb-migrate`'s
+//! `is_retryable_error` did exactly that until #2833 moved it onto typed HTTP
+//! statuses and error kinds. `ureq` exposes everything needed structurally — [`ureq::Error`] is
 //! a two-variant enum, `Transport::kind()` gives an [`ureq::ErrorKind`], and
 //! `Error::source()` hands back the underlying [`std::io::Error`] — so every
 //! decision below is taken on a variant.
