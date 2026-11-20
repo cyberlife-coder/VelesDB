@@ -9,6 +9,8 @@ const DIM: usize = 64;
 const NODES: u64 = 1_000;
 const OVERWRITES: u64 = 200;
 const K: usize = 10;
+/// How many searchers race the overwrites.
+const SEARCHERS: usize = 3;
 
 /// A pseudo-random `DIM`-d vector, the same for the same `seed`.
 fn seeded_vector(seed: u64) -> Vec<f32> {
@@ -48,29 +50,48 @@ fn test_a_search_racing_embedding_overwrites_never_comes_back_empty() {
     }
     let writing = parking_lot::Mutex::new(seeded_vector(0));
     let done = AtomicBool::new(false);
+    let searched = AtomicUsize::new(0);
     let short = AtomicUsize::new(0);
-    std::thread::scope(|scope| {
-        for _ in 0..3 {
+    let raced = std::thread::scope(|scope| {
+        for _ in 0..SEARCHERS {
             scope.spawn(|| {
                 while !done.load(Ordering::Acquire) {
                     let query = writing.lock().clone();
                     if col.search(&query, K).expect("search").len() < K {
                         short.fetch_add(1, Ordering::Relaxed);
                     }
+                    searched.fetch_add(1, Ordering::AcqRel);
                 }
             });
         }
+        let before = wait_for_every_searcher(&searched);
         for n in 0..OVERWRITES {
             let vector = seeded_vector(NODES + n);
             writing.lock().clone_from(&vector);
             col.upsert_node((n * 7) % NODES, &payload, Some(vector))
                 .expect("overwrite");
         }
+        let raced = searched.load(Ordering::Acquire) - before;
         done.store(true, Ordering::Release);
+        raced
     });
+    assert!(raced > 0, "no search ran while the overwrites did");
     assert_eq!(
         short.load(Ordering::Relaxed),
         0,
-        "searches returned fewer than {K} of {NODES} nodes"
+        "{} of {raced} searches racing the overwrites returned fewer than {K} of {NODES} nodes",
+        short.load(Ordering::Relaxed)
     );
+}
+
+/// Waits until every searcher has finished one search, so the overwrites
+/// start with all of them running, and returns the searches counted so far.
+fn wait_for_every_searcher(searched: &AtomicUsize) -> usize {
+    loop {
+        let seen = searched.load(Ordering::Acquire);
+        if seen >= SEARCHERS {
+            return seen;
+        }
+        std::thread::yield_now();
+    }
 }

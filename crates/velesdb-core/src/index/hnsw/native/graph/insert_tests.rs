@@ -171,29 +171,51 @@ fn test_a_search_racing_an_insert_never_stops_at_the_node_being_linked() {
     }
     let inserting = parking_lot::Mutex::new(seeded_vector(PREFILL));
     let done = std::sync::atomic::AtomicBool::new(false);
+    let searched = std::sync::atomic::AtomicUsize::new(0);
     let short = std::sync::atomic::AtomicUsize::new(0);
-    std::thread::scope(|scope| {
-        for _ in 0..3 {
+    let raced = std::thread::scope(|scope| {
+        for _ in 0..SEARCHERS {
             scope.spawn(|| {
                 while !done.load(Ordering::Acquire) {
                     let query = inserting.lock().clone();
                     if hnsw.search(&query, K, 64).len() < K {
                         short.fetch_add(1, Ordering::Relaxed);
                     }
+                    searched.fetch_add(1, Ordering::AcqRel);
                 }
             });
         }
+        let before = wait_for_every_searcher(&searched);
         for seed in PREFILL..PREFILL + INSERTS {
             let vector = seeded_vector(seed);
             inserting.lock().clone_from(&vector);
             hnsw.insert(&vector).expect("insert");
         }
+        let raced = searched.load(Ordering::Acquire) - before;
         done.store(true, Ordering::Release);
+        raced
     });
+    assert!(raced > 0, "no search ran while the inserts did");
     assert_eq!(
         short.load(Ordering::Relaxed),
         0,
-        "searches returned fewer than {K} of {} nodes",
+        "{} of {raced} searches racing the inserts returned fewer than {K} of {} nodes",
+        short.load(Ordering::Relaxed),
         PREFILL + INSERTS
     );
+}
+
+/// How many searchers race the inserts.
+const SEARCHERS: usize = 3;
+
+/// Waits until every searcher has finished one search, so the inserts start
+/// with all of them running, and returns the searches counted so far.
+fn wait_for_every_searcher(searched: &std::sync::atomic::AtomicUsize) -> usize {
+    loop {
+        let seen = searched.load(Ordering::Acquire);
+        if seen >= SEARCHERS {
+            return seen;
+        }
+        std::thread::yield_now();
+    }
 }
