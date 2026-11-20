@@ -1,8 +1,11 @@
 //! Point operations handlers.
 
+mod ndjson_lines;
 pub mod raw;
 pub mod relations;
 pub mod streaming;
+
+pub use ndjson_lines::NdjsonLineLimit;
 
 pub use raw::upsert_points_raw;
 pub use relations::{get_point_relations, relate_points, set_point_ttl, unrelate_points};
