@@ -531,6 +531,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   double fault is logged as an error and the tracked offset moves past the
   fragment, so later records still read back until the next open.
 
+- **Core: trigram fingerprints hash every byte of the trigram** (core,
+  2026-11-19). `TrigramFingerprint` placed each trigram at `v * C % 256`,
+  the low byte of the product, which depends on the trigram's first byte
+  alone: every trigram sharing a first byte set the same two bits, so the
+  256-bit filter carried about two bits per distinct leading character and
+  `approx_jaccard` — hence `TrigramIndex::score_jaccard_fast` and the
+  threshold of `search_like_ranked` — overestimated long documents
+  several-fold (`"matching"` against a 130-character document: 0.333 for an
+  exact Jaccard of 0.074). Positions are now two bytes of the `MurmurHash3`
+  32-bit finalizer of the trigram; the same pair scores 0.111, and the
+  estimate stays within 0.1 of the exact Jaccard on short and long
+  documents alike. `search_like_ranked` therefore returns fewer long
+  documents for a given threshold. Fingerprints are built in memory on
+  insert and never persisted: no migration.
+
 - **Core: `LruCache`'s O(1) claim has a deterministic guard** (core, tests,
   2026-11-19). #2860 made every operation O(1) and #2854 moved per-size cost
   to the `LruCache-Baseline` benchmark, which CI does not gate, so an O(n)

@@ -5,6 +5,43 @@
 use super::fingerprint::TrigramFingerprint;
 use super::index::{extract_trigrams, TrigramIndex};
 
+/// Exact set Jaccard of the trigrams of `a` and `b` — the ground truth the
+/// fingerprint estimates.
+fn exact_jaccard(a: &str, b: &str) -> f32 {
+    let (trigrams_a, trigrams_b) = (extract_trigrams(a), extract_trigrams(b));
+    let union = trigrams_a.union(&trigrams_b).count();
+    if union == 0 {
+        return 0.0;
+    }
+    trigrams_a.intersection(&trigrams_b).count() as f32 / union as f32
+}
+
+/// Largest absolute gap tolerated between the fingerprint estimate and the
+/// exact Jaccard. The residual is the bloom estimator's own bias: bits shared
+/// by chance (false positives) and bits set by two trigrams of one document
+/// (saturation), both bounded by the 256-bit width — not by the hash, which
+/// must spread every byte of the trigram.
+const APPROX_JACCARD_TOLERANCE: f32 = 0.1;
+
+fn assert_approx_tracks_exact(a: &str, b: &str) {
+    let (exact, approx) = (exact_jaccard(a, b), approx_jaccard(a, b));
+    let diff = (approx - exact).abs();
+    assert!(
+        diff < APPROX_JACCARD_TOLERANCE,
+        "({a}, {b}): approx={approx:.3}, exact={exact:.3}, diff={diff:.3}"
+    );
+}
+
+/// Fingerprint estimate of the Jaccard of `a` and `b`.
+fn approx_jaccard(a: &str, b: &str) -> f32 {
+    let (trigrams_a, trigrams_b) = (extract_trigrams(a), extract_trigrams(b));
+    TrigramFingerprint::from_trigram_set(&trigrams_a).approx_jaccard(
+        &TrigramFingerprint::from_trigram_set(&trigrams_b),
+        trigrams_a.len(),
+        trigrams_b.len(),
+    )
+}
+
 // ========== Construction Tests ==========
 
 #[test]
@@ -135,8 +172,6 @@ fn test_approx_jaccard_identical_text() {
 
 #[test]
 fn test_approx_jaccard_vs_exact() {
-    // Use longer texts where the 256-bit bloom Jaccard estimator has
-    // better signal-to-noise ratio (more trigrams → lower collision rate).
     let pairs = [
         (
             "the quick brown fox jumps over the lazy dog near the river",
@@ -152,32 +187,8 @@ fn test_approx_jaccard_vs_exact() {
         ),
     ];
 
-    for (a, b) in &pairs {
-        let trigrams_a = extract_trigrams(a);
-        let trigrams_b = extract_trigrams(b);
-
-        // Exact Jaccard.
-        let exact_inter = trigrams_a.intersection(&trigrams_b).count();
-        let exact_union = trigrams_a.union(&trigrams_b).count();
-        let exact_jaccard = if exact_union == 0 {
-            0.0
-        } else {
-            exact_inter as f32 / exact_union as f32
-        };
-
-        // Approximate Jaccard.
-        let fp_a = TrigramFingerprint::from_trigram_set(&trigrams_a);
-        let fp_b = TrigramFingerprint::from_trigram_set(&trigrams_b);
-        let approx_jaccard = fp_a.approx_jaccard(&fp_b, trigrams_a.len(), trigrams_b.len());
-
-        // 256-bit bloom Jaccard consistently overestimates due to hash
-        // collisions. For texts with 40+ trigrams the error is typically
-        // under 20%. We allow 25% to account for edge cases.
-        let diff = (approx_jaccard - exact_jaccard).abs();
-        assert!(
-            diff < 0.25,
-            "({a}, {b}): approx={approx_jaccard:.3}, exact={exact_jaccard:.3}, diff={diff:.3}"
-        );
+    for (a, b) in pairs {
+        assert_approx_tracks_exact(a, b);
     }
 }
 
@@ -189,6 +200,50 @@ fn test_approx_jaccard_zero_counts() {
         (jaccard - 0.0).abs() < f32::EPSILON,
         "zero-count Jaccard should be 0.0"
     );
+}
+
+// ========== Hash Dispersion Tests ==========
+
+#[test]
+fn test_trigrams_sharing_first_byte_map_to_distinct_bits() {
+    // Regression: `v * C % 256` kept the low byte of the product, which
+    // depends on `trigram[0]` alone, so every trigram starting with `a` set
+    // the same two bits.
+    let fingerprints: std::collections::HashSet<TrigramFingerprint> = (b'a'..=b'z')
+        .flat_map(|second| (b'a'..=b'z').map(move |third| [b'a', second, third]))
+        .map(|trigram| {
+            let mut fp = TrigramFingerprint::default();
+            fp.insert(&trigram);
+            fp
+        })
+        .collect();
+
+    // 676 trigrams over C(256, 2) + 256 = 32 896 possible bit sets: a uniform
+    // hash yields ~7 expected collisions, so ≥ 650 distinct leaves slack.
+    assert!(
+        fingerprints.len() >= 650,
+        "trigrams `a??` must spread over the fingerprint, got {} distinct bit sets out of 676",
+        fingerprints.len()
+    );
+}
+
+#[test]
+fn test_approx_jaccard_tracks_exact_on_short_and_long_documents() {
+    let query = "matching";
+    let corpus = [
+        "matching",
+        "matching document number 0",
+        "other content 7",
+        "pattern matching in compilers",
+        "matching 1000 lorem ipsum dolor sit amet consectetur adipiscing elit sed do \
+         eiusmod tempor incididunt ut labore et dolore magna aliqua",
+        "the quick brown fox jumps over the lazy dog while matching socks are lost \
+         in the laundry machine every single week",
+    ];
+
+    for doc in corpus {
+        assert_approx_tracks_exact(query, doc);
+    }
 }
 
 // ========== Integration Tests ==========
