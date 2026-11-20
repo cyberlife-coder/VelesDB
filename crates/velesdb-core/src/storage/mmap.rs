@@ -99,6 +99,14 @@ pub struct MmapStorage {
     changes: super::ChangeLog,
 }
 
+// The id index is shared through `Arc` so a graph write can read this
+// store's ids without its guard (`held_ids`). `Arc` hides the index's
+// `parking_lot` locks from the auto trait, but nothing about unwinding
+// changed: those locks never poison, and a panic mid-write leaves the index
+// exactly as it left the owned index before. So the store stays
+// `UnwindSafe`, as it was.
+impl std::panic::UnwindSafe for MmapStorage {}
+
 /// Which ids a vector store holds, read without the store's guard
 /// ([`MmapStorage::held_ids`]): what a graph's write reads of the store it
 /// does not write, under node locks that keep its answer true

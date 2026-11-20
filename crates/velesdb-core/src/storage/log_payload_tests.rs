@@ -1330,3 +1330,13 @@ fn test_wal_position_and_ids_written_since_survive_a_reopen() {
     assert_eq!(reopened.wal_position(), end, "the log end");
     assert_eq!(reopened.ids_written_since(position), vec![2]);
 }
+
+/// Both stores were `UnwindSafe` before their id index became shared
+/// through `Arc`; sharing it must not take the auto trait away (a
+/// downstream `catch_unwind` over a store would stop compiling).
+#[test]
+fn both_stores_stay_unwind_safe() {
+    fn assert_unwind_safe<T: std::panic::UnwindSafe>() {}
+    assert_unwind_safe::<LogPayloadStorage>();
+    assert_unwind_safe::<super::MmapStorage>();
+}

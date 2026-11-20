@@ -94,6 +94,11 @@ pub struct LogPayloadStorage {
     changes: super::ChangeLog,
 }
 
+// Same reasoning as `MmapStorage`: the id index is shared through `Arc` for
+// `held_ids`, its `parking_lot` lock never poisons, and a panic mid-write
+// leaves it as the owned index was left. The store stays `UnwindSafe`.
+impl std::panic::UnwindSafe for LogPayloadStorage {}
+
 use super::wal_entry::WalEntry;
 
 impl LogPayloadStorage {

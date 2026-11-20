@@ -74,16 +74,22 @@ BINARIES = [
     # tables, handlers and REPL state, no dependency changed in any;
     # #2729 (global --output/--quiet/--no-color + exit codes) measured
     # 11.81 MiB on the ubuntu x86_64 runner, under this ceiling.
+    # 12.21 MiB on that runner once core's shared row, ranking and expiry
+    # contracts landed (#2869: one row rule, the exact filtered ranked walk
+    # and its change log, BM25 membership binding for MATCH, one expiry rule
+    # for every read) — core code the CLI embeds, no dependency changed.
     # Ceiling = measured + ~2.5 %.
-    ("velesdb", 12.15 * MIB),  # was 11.51 MiB at 8.0.0, 11.04 at 6.0.0
+    ("velesdb", 12.5 * MIB),  # was 11.51 MiB at 8.0.0, 11.04 at 6.0.0
     # Measured 8.62 MiB at 6.0.0; 9.63 MiB once serde_yaml (RUSTSEC-2024-0449,
     # unmaintained, unsafe-libyaml) gave way to serde-saphyr, a safe-Rust parser.
     # The +1.0 MiB is the parser itself, not the integration: stripped build of
     # velesdb-migrate alone, same toolchain, 4.55 -> 5.48 MiB; in the unstripped
     # `.text`, serde_saphyr 348 KiB, granit_parser 239 KiB, annotate_snippets
     # 106 KiB of +903 KiB (encoding_rs, which `deserialize` pulls in, is linked
-    # out). Ceiling = measured + ~3 %, as for the others.
-    ("velesdb-migrate", 9.9 * MIB),
+    # out). 9.94 MiB on the ubuntu x86_64 runner with #2869's core contracts
+    # (see `velesdb` above; core code only, no dependency changed).
+    # Ceiling = measured + ~3 %, as for the others.
+    ("velesdb-migrate", 10.25 * MIB),
 ]
 
 

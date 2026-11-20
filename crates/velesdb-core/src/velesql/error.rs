@@ -64,6 +64,23 @@ impl ParseError {
             format!("Unknown column '{col}'"),
         )
     }
+
+    /// Creates a missing parameter error.
+    ///
+    /// Kept for source compatibility only: no query produces it, because
+    /// the parser never sees the parameters. An unbound `$name` is an
+    /// execution error, [`crate::Error::QueryParameter`] (`VELES-038`).
+    #[must_use]
+    #[deprecated(
+        since = "8.2.0",
+        note = "never produced: an unbound parameter is `Error::QueryParameter` (VELES-038)"
+    )]
+    pub fn missing_parameter(param: impl Into<String>) -> Self {
+        let p = param.into();
+        #[allow(deprecated)]
+        let kind = ParseErrorKind::MissingParameter;
+        Self::new(kind, 0, p.clone(), format!("Missing parameter '${p}'"))
+    }
 }
 
 impl fmt::Display for ParseError {
@@ -98,6 +115,15 @@ pub enum ParseErrorKind {
     CollectionNotFound,
     /// Vector dimension mismatch (E004).
     DimensionMismatch,
+    /// Missing parameter (E005).
+    ///
+    /// No query produces it: see [`ParseError::missing_parameter`]. It stays
+    /// so the variants keep their discriminants.
+    #[deprecated(
+        since = "8.2.0",
+        note = "never produced: an unbound parameter is `Error::QueryParameter` (VELES-038)"
+    )]
+    MissingParameter,
     /// Type mismatch (E006).
     TypeMismatch,
     /// Query complexity guardrail exceeded (E007).
@@ -113,6 +139,8 @@ impl ParseErrorKind {
             Self::UnknownColumn => "E002",
             Self::CollectionNotFound => "E003",
             Self::DimensionMismatch => "E004",
+            #[allow(deprecated)]
+            Self::MissingParameter => "E005",
             Self::TypeMismatch => "E006",
             Self::ComplexityLimit => "E007",
         }
