@@ -533,6 +533,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `table_alias` is the FROM alias or `None`; `table_aliases` lists each alias
   once, FROM first, then each JOIN in order.
 
+- **`velesdb-migrate` retries the failures that are transient, and only
+  those** (migrate, 2026-11-17). `retry::is_retryable_error` decided by
+  searching the error's text for `500`, `timeout`, `temporary` and similar
+  words. A source body is part of that text, so a `400` whose body quoted
+  `500` was retried three times, and so was an extraction error mentioning
+  dimension `1500`. Meanwhile a `reqwest` connect or timeout failure, whose
+  text reads `error sending request for url (...)`, was never retried.
+  Elasticsearch's request failures and Redis's dropped connections were
+  stringified before the check and were not retried either. The decision now
+  reads types: a non-2xx response becomes the new `Error::SourceStatus` with
+  its numeric status (408, 429, 500, 502, 503 and 504 retry), plus
+  `reqwest`'s timeout/connect/request predicates, transient
+  `io::ErrorKind`s, and `RateLimit`. Status errors print the same text as
+  before. Elasticsearch request failures now print as `HTTP error: ...` (the
+  `reqwest` error itself). `velesdb_migrate::Error` is not
+  `#[non_exhaustive]`, so a downstream exhaustive `match` on it needs a
+  `SourceStatus` arm; a non-2xx response that used to arrive as
+  `SourceConnection(String)` arrives as `SourceStatus`. Weaviate GraphQL
+  errors, which arrive inside an HTTP 200 as free text with no status, are
+  no longer retried: only their wording could have marked them transient.
+  A dropped or refused Redis connection is replaced before the error is
+  returned, so the retry runs on a fresh connection instead of the dead
+  `MultiplexedConnection`, which does not reconnect by itself.
+  Pinned by `retry_tests.rs`,
+  `test_pipeline_qdrant_400_quoting_500_is_not_retried`, which made four
+  scroll calls before the fix and makes one now, and
+  `test_a_retry_after_a_dropped_connection_uses_a_fresh_one`.
+
 - **REST server: the per-IP rate limit refills at the configured rate**
   (REST server, 2026-11-20). `[server] rate_limit = N` is documented as `N`
   requests per second per IP, but the limiter was built with

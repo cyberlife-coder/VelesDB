@@ -508,11 +508,14 @@ async fn test_pipeline_qdrant_sparse_vectors_e2e() {
     );
 }
 
-/// Verify that an HTTP 500 on the Qdrant scroll endpoint fails the pipeline
-/// immediately with no silent retry. The `expect(1)` on the scroll mock is the
-/// key assertion: it proves the connector does not retry on server errors.
-#[tokio::test]
-async fn test_pipeline_qdrant_500_fails_pipeline() {
+/// Runs a Qdrant migration whose `points/scroll` endpoint always answers
+/// `scroll_response`, asserts it was called exactly `expected_scroll_calls`
+/// times (wiremock checks the `expect` on drop), and returns the pipeline's
+/// error message.
+async fn run_failing_qdrant_scroll(
+    scroll_response: ResponseTemplate,
+    expected_scroll_calls: u64,
+) -> String {
     let mock_server = start_mock_server().await;
 
     let collection_info_body = json!({
@@ -528,16 +531,16 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
     });
 
     Mock::given(method("GET"))
-        .and(path("/collections/test_err"))
+        .and(path("/collections/test_scroll"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&collection_info_body))
         .expect(2) // connect() + get_schema()
         .mount(&mock_server)
         .await;
 
     Mock::given(method("POST"))
-        .and(path("/collections/test_err/points/scroll"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
-        .expect(4) // 1 initial + 3 retries (RetryConfig::for_transient_errors)
+        .and(path("/collections/test_scroll/points/scroll"))
+        .respond_with(scroll_response)
+        .expect(expected_scroll_calls)
         .mount(&mock_server)
         .await;
 
@@ -546,13 +549,13 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
     let config = MigrationConfig {
         source: SourceConfig::Qdrant(QdrantConfig {
             url: mock_server.uri(),
-            collection: "test_err".to_string(),
+            collection: "test_scroll".to_string(),
             api_key: None,
             payload_fields: vec![],
         }),
         destination: DestinationConfig {
             path: destination.path().to_path_buf(),
-            collection: "err_docs".to_string(),
+            collection: "scroll_docs".to_string(),
             dimension: 3,
             metric: DistanceMetric::Cosine,
             storage_mode: StorageMode::Full,
@@ -568,12 +571,44 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
 
     let mut pipeline = Pipeline::new(config).expect("pipeline");
     let result = pipeline.run().await;
+    result
+        .expect_err("pipeline must fail when every scroll fails")
+        .to_string()
+}
 
-    assert!(result.is_err(), "pipeline must fail on HTTP 500");
-    let err_msg = result.unwrap_err().to_string();
+/// Verify that an HTTP 500 on the Qdrant scroll endpoint fails the pipeline
+/// after exhausting retries: a server error is retried by
+/// `with_retry(RetryConfig::for_transient_errors())` (3 retries), so the
+/// scroll is called 1 + 3 times.
+#[tokio::test]
+async fn test_pipeline_qdrant_500_fails_pipeline() {
+    let err_msg = run_failing_qdrant_scroll(
+        ResponseTemplate::new(500).set_body_string("Internal Server Error"),
+        4,
+    )
+    .await;
+
     assert!(
         err_msg.contains("500") || err_msg.contains("scroll failed"),
         "error message should mention 500 or scroll failure, got: {err_msg}"
+    );
+}
+
+/// Regression: a client error is not retried, even when its body quotes a
+/// server-error code and the word "timeout" — the retry decision reads the
+/// typed status, never the message. One scroll call, not four.
+#[tokio::test]
+async fn test_pipeline_qdrant_400_quoting_500_is_not_retried() {
+    let err_msg = run_failing_qdrant_scroll(
+        ResponseTemplate::new(400)
+            .set_body_string("Bad Request: limit must be <= 500, timeout too long"),
+        1,
+    )
+    .await;
+
+    assert!(
+        err_msg.contains("error 400"),
+        "error message should carry the 400 status, got: {err_msg}"
     );
 }
 
@@ -582,68 +617,14 @@ async fn test_pipeline_qdrant_500_fails_pipeline() {
 /// `with_retry(RetryConfig::for_transient_errors())` (3 retries).
 #[tokio::test]
 async fn test_pipeline_qdrant_429_fails_pipeline() {
-    let mock_server = start_mock_server().await;
+    let err_msg = run_failing_qdrant_scroll(
+        ResponseTemplate::new(429)
+            .insert_header("Retry-After", "1")
+            .set_body_string("Too Many Requests"),
+        4,
+    )
+    .await;
 
-    let collection_info_body = json!({
-        "result": {
-            "vectors_count": 10,
-            "points_count": 10,
-            "config": {
-                "params": {
-                    "vectors": { "size": 3 }
-                }
-            }
-        }
-    });
-
-    Mock::given(method("GET"))
-        .and(path("/collections/test_rate"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&collection_info_body))
-        .expect(2) // connect() + get_schema()
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("POST"))
-        .and(path("/collections/test_rate/points/scroll"))
-        .respond_with(
-            ResponseTemplate::new(429)
-                .insert_header("Retry-After", "1")
-                .set_body_string("Too Many Requests"),
-        )
-        .expect(4) // 1 initial + 3 retries (RetryConfig::for_transient_errors)
-        .mount(&mock_server)
-        .await;
-
-    let destination = TempDir::new().expect("destination dir");
-
-    let config = MigrationConfig {
-        source: SourceConfig::Qdrant(QdrantConfig {
-            url: mock_server.uri(),
-            collection: "test_rate".to_string(),
-            api_key: None,
-            payload_fields: vec![],
-        }),
-        destination: DestinationConfig {
-            path: destination.path().to_path_buf(),
-            collection: "rate_docs".to_string(),
-            dimension: 3,
-            metric: DistanceMetric::Cosine,
-            storage_mode: StorageMode::Full,
-            graph_collection: None,
-        },
-        options: MigrationOptions {
-            batch_size: 10,
-            workers: 1,
-            ..MigrationOptions::default()
-        },
-        relations: vec![],
-    };
-
-    let mut pipeline = Pipeline::new(config).expect("pipeline");
-    let result = pipeline.run().await;
-
-    assert!(result.is_err(), "pipeline must fail on HTTP 429");
-    let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("Rate limit"),
         "HTTP 429 should surface as RateLimit error, got: {err_msg}"
