@@ -187,11 +187,18 @@ candidate ceiling described below.
 An `ORDER BY ... LIMIT k` ranks every row the statement admits before it
 truncates (`collection/search/query/fetch_window.rs`):
 
-- A search stops at `OFFSET + LIMIT` rows only for one `similarity()` key read
-  `DESC` that it already ranks by: a `NEAR`, or an index-bounded
-  `similarity(vector, $v) > t` / `>= t` threshold, read by `similarity()` or
-  by `similarity(<col>, $q)` on that vector; or a `SPARSE_NEAR` alone read by
-  `similarity()` under a metric where higher is more similar. Vector searches
+- A search can fetch a prefix for a descending `similarity()` key when a
+  `NEAR`, an index-bounded `similarity(vector, $v) > t` / `>= t` threshold,
+  or a standalone `SPARSE_NEAR` already ranks by that score. An unfiltered
+  native `NEAR` can also apply secondary keys to the prefix when retrieval is
+  exhaustive and the collection fits below the fetch ceiling.
+  An explicit similarity on the same vector can also use this shortcut when
+  the fetch uses the same scoring calculation. PQ or OPQ codes, the
+  index's cosine or Jaccard rounding and device reductions can change the
+  order. In those cases
+  an explicit similarity key and a similarity threshold read the original
+  vectors across the admitted rows. Bare `similarity()` keeps the score of
+  its NEAR search. Vector searches
   read past equal scores at the cut. The sparse ranking already orders equal
   scores by ascending id. The HNSW candidate search remains approximate.
   A dense `NEAR` with a metadata post-filter can return fewer than the
@@ -204,7 +211,10 @@ truncates (`collection/search/query/fetch_window.rs`):
   order, the exact `similarity()` scan (under `OR` / `NOT`, a named vector, a
   `<` / `<=` bound) — takes the ordered scan. It stores O(candidate count)
   IDs and buffers O(`OFFSET + LIMIT` + batch size) hydrated rows as it ranks
-  every admitted row. The exact `similarity()` scan retains its server limit
+  every admitted row. When a GPU graph traversal supplies native scores,
+  the scan also stores an ID and score for each hit that traversal returned.
+  Additional admitted rows use the CPU graph scoring path.
+  The exact `similarity()` scan retains its server limit
   on candidate count. On stable data the window equals a full sort. The scan
   takes separate read locks per batch, so concurrent writes can affect which
   row values it observes. (A premature fetch limit was fixed on 2026-06-14

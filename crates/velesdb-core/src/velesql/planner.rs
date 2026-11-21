@@ -209,8 +209,9 @@ impl QueryPlanner {
 
     /// Records a CBO feedback observation (issue #469).
     ///
-    /// Called after each vector query with the dataset size, ef_search used,
-    /// and the actual wall-clock duration. The feedback loop adjusts
+    /// Vector dispatch supplies the dataset size, `ef_search` estimate and
+    /// wall-clock duration. Ordered scans collect their own latency in the
+    /// general vector query statistics. The feedback loop adjusts
     /// `ms_per_cost_unit` via EMA with α=0.05 after `MIN_SAMPLES` observations.
     pub fn record_cbo_feedback(&self, dataset_size: usize, ef_search: usize, actual_ms: f64) {
         self.cbo_feedback.record(dataset_size, ef_search, actual_ms);

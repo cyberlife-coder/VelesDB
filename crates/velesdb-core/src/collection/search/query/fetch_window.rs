@@ -21,12 +21,36 @@
 //! fills that ceiling is reported, never silent
 //! (`Collection::warn_if_window_capped`).
 
-use super::{ExtractedComponents, MAX_LIMIT};
+use super::{ExtractedComponents, QuerySearchOptions, MAX_LIMIT};
 use crate::collection::types::Collection;
 use crate::error::Result;
-use crate::point::SearchResult;
 use crate::velesql::text_match::TextRanking;
-use crate::velesql::{OrderByExpr, SelectStatement};
+use crate::velesql::{OrderByExpr, SelectOrderBy, SelectStatement};
+
+pub(super) fn filtered_search_depth(limit: usize, over_fetch: usize) -> usize {
+    limit.saturating_mul(over_fetch).min(MAX_LIMIT)
+}
+
+/// The native threshold cascade grows the same candidate window for row
+/// and score-only reads. Its caller decides whether the ranked boundary
+/// already proves that no further candidate can pass.
+pub(super) fn fill_similarity_window<T>(
+    total: usize,
+    limit: usize,
+    leaves: usize,
+    mut fetch: impl FnMut(usize) -> Result<(Vec<T>, bool)>,
+) -> Result<Vec<T>> {
+    let mut k = limit
+        .saturating_mul(10 * leaves.max(1))
+        .clamp(1, total.max(1));
+    loop {
+        let (rows, exhausted) = fetch(k)?;
+        if rows.len() >= limit || exhausted || k >= total {
+            return Ok(rows);
+        }
+        k = k.saturating_mul(2).min(total);
+    }
+}
 
 /// How a SELECT reads the rows its window runs over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +59,8 @@ pub(super) enum FetchWindow {
     /// cut: they are the window's.
     Bounded(usize),
     /// The ordered scan reads every admitted row and keeps the window.
-    OrderedScan,
+    /// A default PQ NEAR contributes its native primary scores.
+    OrderedScan { pq_scores: bool },
     /// The fetch reads up to [`MAX_LIMIT`] rows, and the window is selected
     /// from those.
     Exhaustive,
@@ -60,6 +85,15 @@ enum FetchRanking<'a> {
     /// A fusion of two rankings, each read to a depth the window sets: its
     /// first rows at one depth are not the first rows at another.
     Fused,
+}
+
+/// Where the dense dispatch gets its primary score.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum NearPath {
+    Rows,
+    Search,
+    PostFilter,
+    Bitmap,
 }
 
 impl FetchRanking<'_> {
@@ -139,6 +173,16 @@ impl FetchRanking<'_> {
     const fn scannable(&self) -> bool {
         matches!(self, Self::Unranked | Self::Vector { .. })
     }
+
+    fn window(&self, matching: bool, fetch_limit: usize) -> FetchWindow {
+        if matching {
+            FetchWindow::Bounded(fetch_limit)
+        } else if self.scannable() {
+            FetchWindow::OrderedScan { pq_scores: false }
+        } else {
+            FetchWindow::Exhaustive
+        }
+    }
 }
 
 impl Collection {
@@ -147,9 +191,10 @@ impl Collection {
     pub(super) fn select_fetch_window(
         &self,
         stmt: &SelectStatement,
-        extracted: &ExtractedComponents,
+        extracted: &mut ExtractedComponents,
         params: &std::collections::HashMap<String, serde_json::Value>,
         fetch_limit: usize,
+        search_opts: &mut QuerySearchOptions,
     ) -> FetchWindow {
         if stmt.reshapes_rows_before_window() {
             return FetchWindow::Exhaustive;
@@ -158,13 +203,179 @@ impl Collection {
             return FetchWindow::Bounded(fetch_limit);
         };
         let ranking = FetchRanking::of(stmt, extracted);
-        if self.ranks_as_ordered(&ranking, order_by, params) {
-            FetchWindow::Bounded(fetch_limit)
-        } else if ranking.scannable() {
-            FetchWindow::OrderedScan
-        } else {
-            FetchWindow::Exhaustive
+        let window = ranking.window(
+            self.ranks_as_ordered(&ranking, order_by, params),
+            fetch_limit,
+        );
+        let FetchRanking::Vector { .. } = ranking else {
+            return window;
+        };
+        // A NEAR already ranks by its primary score, including an ADC score.
+        if extracted.vector_search.is_some()
+            && bare_score_first(order_by)
+            && (order_by.len() == 1
+                || self.complete_native_prefix(extracted, search_opts, fetch_limit))
+        {
+            return FetchWindow::Bounded(fetch_limit);
         }
+        if let Some(pq_scores) =
+            self.ordered_native_scores(stmt, extracted, search_opts, fetch_limit)
+        {
+            return FetchWindow::OrderedScan { pq_scores };
+        }
+        if matches!(window, FetchWindow::Bounded(_)) {
+            search_opts.vector_score_source = super::super::vector::VectorScoreSource::Original;
+        }
+        window
+    }
+
+    /// A search over rounded index scores or PQ codes cannot cut an order
+    /// on original stored vectors. A threshold alone owns its original score;
+    /// under a NEAR the candidates keep the native primary score as well.
+    fn ordered_native_scores(
+        &self,
+        stmt: &SelectStatement,
+        extracted: &mut ExtractedComponents,
+        search_opts: &QuerySearchOptions,
+        limit: usize,
+    ) -> Option<bool> {
+        // Required anchors choose between original-vector and bitmap scores
+        // only after MATCH. The scan resolves them once with its WHERE cache.
+        if Self::anchored_near(extracted) {
+            if !self.anchored_scores_can_differ() {
+                return None;
+            }
+            extracted.ordered_index_scores = Some(super::options::OrderedIndexScores::Anchors);
+            return Some(false);
+        }
+        self.ordered_search_scores(stmt, extracted, search_opts, limit)
+    }
+
+    fn ordered_search_scores(
+        &self,
+        stmt: &SelectStatement,
+        extracted: &mut ExtractedComponents,
+        search_opts: &QuerySearchOptions,
+        limit: usize,
+    ) -> Option<bool> {
+        let (rounded, pq) = self.distinct_index_scores(search_opts)?;
+        let path = self.near_score_path(stmt, extracted, limit);
+        if path == NearPath::Rows {
+            return None;
+        }
+        let pq = pq && path != NearPath::Bitmap;
+        if !rounded && !pq {
+            return None;
+        }
+        if extracted.vector_search.is_none() {
+            return Some(false);
+        }
+        if rounded {
+            extracted.ordered_index_scores = Some(super::options::OrderedIndexScores::Index(
+                self.near_index_scores(path, extracted, search_opts),
+            ));
+        }
+        Some(pq)
+    }
+
+    fn anchored_near(extracted: &ExtractedComponents) -> bool {
+        extracted.vector_search.is_some()
+            && extracted.similarity_conditions.is_empty()
+            && !extracted.graph_match_predicates.is_empty()
+            && extracted.filter_condition.as_ref().is_some_and(|cond| {
+                !super::graph_prefilter::collect_required_graph_predicates(cond).is_empty()
+            })
+    }
+
+    fn anchored_scores_can_differ(&self) -> bool {
+        let rounded = matches!(
+            self.storage.config.read().metric,
+            crate::DistanceMetric::Cosine | crate::DistanceMetric::Jaccard
+        );
+        #[cfg(feature = "gpu")]
+        let rounded = rounded || self.storage.index.graph_scores_may_use_device();
+        rounded
+    }
+
+    fn distinct_index_scores(&self, opts: &QuerySearchOptions) -> Option<(bool, bool)> {
+        let config = self.storage.config.read();
+        // The cosine arena can be normalized on insert. Graph traversal
+        // round-trips Jaccard through 1 - similarity and the inverse.
+        let rounded = matches!(
+            config.metric,
+            crate::DistanceMetric::Cosine | crate::DistanceMetric::Jaccard
+        );
+        let can_use_pq = config.pq_search_oversampling() != 0 && !opts.has_quality_overrides();
+        drop(config);
+        #[cfg(feature = "gpu")]
+        let rounded = rounded
+            || self.storage.index.device_scoring_eligible(
+                opts.resolved_quality(self.runtime_search_quality()),
+                opts.force_rerank,
+            );
+        let pq = can_use_pq
+            && !self.storage.pq_cache.read().is_empty()
+            && self.storage.pq_quantizer.read().is_some();
+        (rounded || pq).then_some((rounded, pq))
+    }
+
+    fn near_index_scores(
+        &self,
+        path: NearPath,
+        extracted: &ExtractedComponents,
+        opts: &QuerySearchOptions,
+    ) -> crate::index::hnsw::index::IndexRowScores {
+        let quality = opts.resolved_quality(self.runtime_search_quality());
+        if let Some(bitmap) = extracted
+            .ordered_prefilter
+            .as_ref()
+            .and_then(|p| p.bitmap.as_ref())
+        {
+            return self.filtered_row_scores(bitmap, opts, quality);
+        }
+        let rerank = (path == NearPath::Search)
+            .then_some(opts.force_rerank)
+            .flatten();
+        self.storage.index.full_depth_row_scores(quality, rerank)
+    }
+
+    fn near_score_path(
+        &self,
+        stmt: &SelectStatement,
+        extracted: &mut ExtractedComponents,
+        limit: usize,
+    ) -> NearPath {
+        // The similarity cascade searches first, then checks all predicates.
+        if !extracted.similarity_conditions.is_empty() {
+            return NearPath::Search;
+        }
+        let Some(cond) = extracted.filter_condition.as_ref() else {
+            return NearPath::Search;
+        };
+        if !extracted.graph_match_predicates.is_empty() && Self::condition_contains_or(cond) {
+            return NearPath::Search;
+        }
+        let Some(metadata) = Self::extract_metadata_filter(cond) else {
+            return NearPath::Search;
+        };
+        let (strategy, _) = self.compute_cbo_strategy(stmt, Some(cond), limit);
+        if strategy == crate::velesql::ExecutionStrategy::GraphFirst {
+            return NearPath::Rows;
+        }
+        let covers_scan = !Self::index_reads_dotted_field(&metadata);
+        let filter = crate::filter::Filter::new(metadata.into());
+        let bitmap = self.build_prefilter_bitmap(&filter);
+        let path = if bitmap.is_some() {
+            NearPath::Bitmap
+        } else {
+            NearPath::PostFilter
+        };
+        extracted.ordered_prefilter = Some(super::options::OrderedPrefilter {
+            filter,
+            bitmap,
+            covers_scan,
+        });
+        path
     }
 
     /// Whether `ranking` returns rows in the order of `order_by`: one key,
@@ -180,6 +391,26 @@ impl Collection {
         };
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
         only.descending && ranking.orders_like(&only.expr, params, higher_is_better)
+    }
+
+    /// A secondary key can use the native prefix only when the retrieval is
+    /// exhaustive and neither its page nor its boundary tie can hit the cap.
+    fn complete_native_prefix(
+        &self,
+        extracted: &ExtractedComponents,
+        opts: &QuerySearchOptions,
+        limit: usize,
+    ) -> bool {
+        if !extracted.is_unfiltered_near() || limit >= MAX_LIMIT || self.vector_count() >= MAX_LIMIT
+        {
+            return false;
+        }
+        let pq = !opts.has_quality_overrides()
+            && self.storage.config.read().pq_search_oversampling() != 0;
+        !pq && self.storage.index.searches_arena_exhaustively(
+            opts.resolved_quality(self.runtime_search_quality()),
+            opts.force_rerank,
+        )
     }
 
     /// Reports a fetch that read `fetched` rows — the [`MAX_LIMIT`] ceiling
@@ -210,6 +441,16 @@ impl Collection {
     }
 }
 
+pub(super) fn bare_score_first(order: &[SelectOrderBy]) -> bool {
+    matches!(
+        order.first(),
+        Some(SelectOrderBy {
+            expr: OrderByExpr::SimilarityBare,
+            descending: true
+        })
+    )
+}
+
 /// The rows `fetch(n)` reads, best first, for a window of `leading` rows
 /// that an `ORDER BY` of `stmt` ranks: read on past the window while the
 /// last row read ties the window's last one, so the tie rule — ascending id
@@ -219,11 +460,11 @@ impl Collection {
 /// # Errors
 ///
 /// What `fetch` returns.
-pub(super) fn fetch_past_ties(
+pub(super) fn fetch_past_ties<T: super::super::live::LiveHit>(
     stmt: &SelectStatement,
     leading: usize,
-    mut fetch: impl FnMut(usize) -> Result<Vec<SearchResult>>,
-) -> Result<Vec<SearchResult>> {
+    mut fetch: impl FnMut(usize) -> Result<Vec<T>>,
+) -> Result<Vec<T>> {
     if stmt.order_by.is_none() || leading == 0 || leading >= MAX_LIMIT {
         return fetch(leading);
     }
@@ -236,7 +477,7 @@ pub(super) fn fetch_past_ties(
                 .get(leading - 1)
                 .zip(rows.last())
                 .is_some_and(|(last_kept, last_read)| {
-                    crate::distance::rank_scores(last_kept.score, last_read.score, true).is_eq()
+                    crate::distance::rank_scores(last_kept.score(), last_read.score(), true).is_eq()
                 });
         if !splits_a_tie || want >= MAX_LIMIT {
             return Ok(rows);

@@ -242,19 +242,6 @@ impl Collection {
                 .query_planner
                 .stats()
                 .update_vector_latency(vector_latency_us);
-
-            // Issue #469: CBO calibration feedback — record actual ms vs cost estimate.
-            let actual_ms = elapsed.as_secs_f64() * 1000.0;
-            let dataset_size = self.vector_count();
-            let ef_search = fctx
-                .stmt
-                .with_clause
-                .as_ref()
-                .and_then(crate::velesql::WithClause::get_ef_search)
-                .unwrap_or(100);
-            self.query
-                .query_planner
-                .record_cbo_feedback(dataset_size, ef_search, actual_ms);
         }
         self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(())
@@ -338,6 +325,8 @@ impl Collection {
             });
 
         Ok(ExtractedComponents {
+            ordered_index_scores: None,
+            ordered_prefilter: None,
             vector_search,
             similarity_conditions,
             filter_condition,

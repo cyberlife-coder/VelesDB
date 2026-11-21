@@ -106,6 +106,21 @@ fn reports_post_filter_for_wide_band_with_overrides() {
     assert_eq!(strategy, Some(FilterStrategy::PostFilter));
 }
 
+#[test]
+fn scoring_an_ordered_scan_reports_only_a_filter_dispatch_that_ran() {
+    let (db, _dir) = setup();
+    let near = "SELECT * FROM docs WHERE vector NEAR $v AND b_wide = 'y'";
+    let hint = "LIMIT 5 WITH (mode='balanced')";
+    assert_eq!(
+        analyzed_strategy(&db, &format!("{near} {hint}")),
+        Some(FilterStrategy::PostFilter)
+    );
+    for key in ["similarity()", "similarity(vector, $v)"] {
+        let sorted = format!("{near} ORDER BY {key} ASC {hint}");
+        assert_eq!(analyzed_strategy(&db, &sorted), None, "{sorted}");
+    }
+}
+
 /// The divergence this field exists to surface: without quality overrides
 /// the executor always runs the bitmap when one exists — even at 90%
 /// selectivity, where the override path post-filters.

@@ -192,3 +192,49 @@ fn test_anchor_bitmap_search_returns_no_pending_point_outside_its_anchors() {
     );
     assert_eq!(hits.len(), K);
 }
+
+#[test]
+fn projected_large_anchor_bitmap_keeps_metadata_exact_scores_and_wide_ids_outside_it() {
+    let (_dir, col) = setup_collection(2);
+    let points = (1..=32u16)
+        .map(|id| {
+            Point::new(
+                u64::from(id),
+                vec![1.0, f32::from(id)],
+                Some(serde_json::json!({"slice": id % 4})),
+            )
+        })
+        .collect::<Vec<_>>();
+    col.upsert(points).expect("vectors");
+    col.create_index("slice").expect("metadata bitmap");
+    let sql = crate::velesql::Parser::parse("SELECT * FROM c WHERE slice = 0").expect("predicate");
+    let cond = sql.select.where_clause.as_ref();
+    let wide = u64::from(u32::MAX) + 5;
+    let mut ids: Vec<_> = (1..=10_001).collect();
+    ids.push(wide);
+    let anchors = col
+        .ordered_anchors(ids.len(), cond)
+        .expect("large anchor route");
+    assert!(anchors.in_native_bitmap(4));
+    assert!(!anchors.in_native_bitmap(3));
+    assert!(!anchors.in_native_bitmap(wide));
+    let q = [1.0, 1.0];
+    let pairs = col
+        .ordered_anchor_hits(&ids, &anchors, &q, 3, DistanceMetric::Cosine)
+        .expect("IDs and scores");
+    let all = ids.into_iter().collect();
+    let rows = col
+        .search_near_with_anchor_ids(&q, &all, cond, 3)
+        .expect("native hydrated rows");
+    assert_eq!(pairs.len(), 3);
+    assert!(pairs.iter().all(|r| r.id % 4 == 0));
+    assert_eq!(
+        pairs
+            .iter()
+            .map(|r| (r.id, r.score.to_bits()))
+            .collect::<Vec<_>>(),
+        rows.iter()
+            .map(|r| (r.point.id, r.score.to_bits()))
+            .collect::<Vec<_>>()
+    );
+}

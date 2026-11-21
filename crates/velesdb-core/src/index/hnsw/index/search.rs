@@ -10,6 +10,10 @@ use crate::validation::validate_dimension_match;
 use std::sync::atomic::Ordering;
 
 impl HnswIndex {
+    pub(super) fn exact_small_index(&self) -> bool {
+        self.len() <= 100 && self.enable_vector_storage && self.graph_vector_count() > 0
+    }
+
     /// Sets a soft latency target (microseconds) for two-stage reranking adaptation.
     ///
     /// A value of `0` disables latency-aware adaptation.
@@ -247,25 +251,10 @@ impl HnswIndex {
         // (#2268): Perfect and small collections get the filtered exact scan,
         // Adaptive and AutoTune get the two-phase escalation — filtered, so
         // an escalated phase still respects `allowed_ids`.
-        if matches!(quality, SearchQuality::Perfect)
-            || (self.len() <= 100 && self.enable_vector_storage && self.graph_vector_count() > 0)
-        {
+        if self.bitmap_row_scores(quality) == super::IndexRowScores::Bitmap {
             return self.full_scan_with_bitmap(query, k, allowed_ids);
         }
-        let ef_search = if let SearchQuality::Adaptive { min_ef, .. } = quality {
-            min_ef.max(k)
-        } else if matches!(quality, SearchQuality::AutoTune) {
-            crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k).0
-        } else {
-            quality.ef_search_for_scale(k, self.len())
-        };
-        let max_ef = match quality {
-            SearchQuality::Adaptive { max_ef, .. } => max_ef,
-            SearchQuality::AutoTune => {
-                crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k).1
-            }
-            _ => ef_search,
-        };
+        let (ef_search, max_ef) = self.bitmap_ef_range(quality, k);
         // Over-fetch to compensate for bitmap filtering
         let candidates_k = k.saturating_mul(4).max(ef_search);
 
@@ -275,21 +264,9 @@ impl HnswIndex {
         // Adaptive/AutoTune phase 2: a scattered spread marks the query as
         // hard, so ef widens the same way the unfiltered path escalates —
         // filtered, because the bitmap contract must survive escalation.
-        if max_ef > ef_search && results.len() >= 2 {
-            let score_a = results.first().map_or(0.0, |r| r.score);
-            let score_b = results.last().map_or(0.0, |r| r.score);
-            if should_escalate(self.metric, score_a, score_b) {
-                let escalated_ef = ef_search.saturating_mul(2).min(max_ef);
-                if escalated_ef > ef_search {
-                    let escalated_k = candidates_k.saturating_mul(2).min(10_000);
-                    results = self.search_hnsw_only_filtered(
-                        query,
-                        escalated_k,
-                        escalated_ef,
-                        allowed_ids,
-                    );
-                }
-            }
+        if let Some(ef) = self.escalated_bitmap_ef(ef_search, max_ef, &results) {
+            let escalated_k = candidates_k.saturating_mul(2).min(10_000);
+            results = self.search_hnsw_only_filtered(query, escalated_k, ef, allowed_ids);
         }
 
         // Adaptive retry: if too few results survived the bitmap filter,
@@ -316,6 +293,32 @@ impl HnswIndex {
 
         self.metric.top_k_scored_results(&mut results, k);
         Ok(results)
+    }
+
+    fn bitmap_ef_range(&self, quality: SearchQuality, k: usize) -> (usize, usize) {
+        match quality {
+            SearchQuality::Adaptive { min_ef, max_ef } => (min_ef.max(k), max_ef),
+            SearchQuality::AutoTune => {
+                crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k)
+            }
+            _ => {
+                let ef = quality.ef_search_for_scale(k, self.len());
+                (ef, ef)
+            }
+        }
+    }
+
+    fn escalated_bitmap_ef(
+        &self,
+        current: usize,
+        maximum: usize,
+        results: &[ScoredResult],
+    ) -> Option<usize> {
+        let next = current.saturating_mul(2).min(maximum);
+        let [first, .., last] = results else {
+            return None;
+        };
+        (next > current && should_escalate(self.metric, first.score, last.score)).then_some(next)
     }
 
     /// Determines whether two-stage reranking should be used.
@@ -488,7 +491,7 @@ impl HnswIndex {
             return self.search_brute_force(query, k).map(Some);
         }
 
-        if self.len() <= 100 && self.enable_vector_storage && self.graph_vector_count() > 0 {
+        if self.exact_small_index() {
             return self.search_brute_force(query, k).map(Some);
         }
 

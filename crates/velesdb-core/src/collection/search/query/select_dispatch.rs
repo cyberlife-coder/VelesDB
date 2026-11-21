@@ -186,18 +186,12 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         extracted: &ExtractedComponents,
         limit: usize,
-        ctx: &crate::guardrails::QueryContext,
+        search_opts: &super::QuerySearchOptions,
     ) -> Result<(usize, Vec<SearchResult>)> {
         let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
-        let skip_metadata_prefilter_for_graph_or = has_graph_predicates
-            && stmt
-                .where_clause
-                .as_ref()
-                .is_some_and(Self::condition_contains_or);
+        let skip_metadata_prefilter_for_graph_or =
+            Self::graph_or_reads_all_candidates(stmt, extracted);
         let execution_limit = main_select_execution_limit(extracted, limit);
-        let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())?
-            .with_fusion(stmt.fusion_clause.clone())
-            .with_executed_strategy_probe(ctx);
         let (cbo_strategy, cbo_over_fetch) =
             self.compute_cbo_strategy(stmt, extracted.filter_condition.as_ref(), limit);
 
@@ -218,7 +212,7 @@ impl Collection {
             extracted,
             execution_limit,
             skip_metadata_prefilter_for_graph_or,
-            &search_opts,
+            search_opts,
             cbo_strategy,
             cbo_over_fetch,
             &mut graph_cache,
@@ -251,6 +245,20 @@ impl Collection {
         if let Some(results) = anchored {
             return Ok(results);
         }
+        // The window planner already resolved this VectorFirst NEAR's
+        // metadata restriction when distinguishing f32 from ADC scores.
+        if let Some((vector, prepared)) = extracted
+            .vector_search
+            .as_deref()
+            .zip(extracted.ordered_prefilter.as_ref())
+        {
+            let depth = super::fetch_window::filtered_search_depth(execution_limit, cbo_over_fetch);
+            let bitmap =
+                super::super::vector_filter::SearchBitmap::Prepared(prepared.bitmap.as_ref());
+            return self
+                .search_projected_with_filter(vector, depth, &prepared.filter, search_opts, bitmap)
+                .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e));
+        }
         // Anchored hybrid: graph MATCH + text MATCH + NEAR vector.
         // The standard anchored path skips text-MATCH shapes; handle
         // them here by restricting hybrid fusion to the anchor set so
@@ -272,6 +280,17 @@ impl Collection {
             cbo_over_fetch,
         )
         .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
+    }
+
+    pub(super) fn graph_or_reads_all_candidates(
+        stmt: &crate::velesql::SelectStatement,
+        extracted: &ExtractedComponents,
+    ) -> bool {
+        !extracted.graph_match_predicates.is_empty()
+            && stmt
+                .where_clause
+                .as_ref()
+                .is_some_and(Self::condition_contains_or)
     }
 
     /// Applies the exact WHERE post-filter when graph predicates are present,
@@ -606,7 +625,7 @@ fn anchored_fetch_applies(
 /// queries never reach here; they are dispatched by `try_early_return_path`).
 /// This window only applies when the GraphFirst anchored fetch declined
 /// (`try_anchored_fetch`).
-fn main_select_execution_limit(extracted: &ExtractedComponents, limit: usize) -> usize {
+pub(super) fn main_select_execution_limit(extracted: &ExtractedComponents, limit: usize) -> usize {
     let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
     let has_ranked_fetch =
         extracted.vector_search.is_some() || !extracted.similarity_conditions.is_empty();

@@ -1536,6 +1536,12 @@ Window functions are evaluated **after** `WHERE`, `GROUP BY`, `HAVING`, and
 Each window call pre-captures its inputs and emits one output value per
 input row; the outer `ORDER BY` then sees those values as ordinary
 projected columns.
+With a JOIN, the window ranks the joined rows. A parent with several
+matching children can have a different rank on each result row. The native
+engine applies its JOIN candidate ceiling even when the outer query asks
+for a single row.
+Explicitly selected input columns remain available when a window alias
+reuses their qualifier.
 
 Grammar: `grammar.pest:window_item`, `grammar.pest:over_clause`.
 Evaluator: `crates/velesdb-core/src/velesql/window_evaluator.rs`.
@@ -1655,18 +1661,30 @@ and MATCH alike, in core and WASM. Such a row keeps the score its plan gave
 it, without a `vector_score`: no stand-in score is written back.
 For computed SELECT similarity scores, a NaN sorts after every numeric
 score in either direction. Positive and negative zero tie, and equal
-scores use the next sort key, then ascending row id.
+scores use the next sort key, then ascending row id. Rows of a join that
+also share the same base id keep their input order across pages.
 
 Like every ORDER BY, it ranks every row the statement admits before
-`OFFSET` and `LIMIT` cut them. A search stops at `OFFSET + LIMIT` rows only
-when the ORDER BY is one `similarity()` key, read `DESC`, that the search
-already ranks by: a `NEAR`, or a `similarity(vector, $v) > t` (or `>=`)
-threshold on the row's own vector, which an index bounds — read by
-`similarity()` or by `similarity(<col>, $q)` on that vector — or a
-`SPARSE_NEAR` alone, read by `similarity()` under a metric where a higher
-score is more similar. Sparse hits break ties by ascending id. For vector
-searches the engine reads past equal scores at the cut, then orders ties by
-ascending id. The HNSW candidate search remains approximate.
+`OFFSET` and `LIMIT` cut them. For `ORDER BY similarity() DESC`, a
+`NEAR` can fetch the requested prefix in retrieval order. An index-bounded
+`similarity(vector, $v) > t` (or `>=`) threshold and a standalone
+`SPARSE_NEAR` can also use a prefix when their scores have the requested
+order. An unfiltered native `NEAR` can use secondary keys on this prefix
+when retrieval is exhaustive and the entire collection fits below the fetch
+ceiling. The engine then reads through the boundary tie before applying the
+secondary keys and ascending row id. When the ordered scan ranks an
+unfiltered `NEAR` with secondary keys, its score calculation is independent
+of the requested page. Sparse hits already break ties by id.
+
+A descending `similarity(vector, $q)` on the same query vector can use the
+bounded fetch when retrieval uses the same scoring calculation. An explicit
+similarity key and a similarity threshold read the original vectors. They
+scan the admitted rows when PQ or OPQ codes, cosine or Jaccard rounding,
+or a device reduction could change the order. Bare `similarity()` on a
+`NEAR` uses the retrieval score. If a native ordered scan admits additional
+rows beyond the hits returned by a GPU graph traversal, it scores those
+rows on the CPU and keeps the GPU traversal's scores for its returned hits.
+The HNSW candidate search remains approximate.
 With a metadata post-filter, `NEAR` tests the live candidates within its
 search budget. It can return fewer than `LIMIT` even when more rows match.
 The bounded fetch and its extension for ties stop at `MAX_SELECT_LIMIT`

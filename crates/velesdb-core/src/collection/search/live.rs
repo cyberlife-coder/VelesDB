@@ -198,39 +198,73 @@ fn judge(
     judged
 }
 
+/// Projection of the same judged, live candidates. Only a row read copies vectors.
+pub(super) trait LiveHit: Sized {
+    fn score(&self) -> f32;
+    fn finish(
+        kept: Vec<(u64, f32)>,
+        vectors: &MmapStorage,
+        payloads: &LogPayloadStorage,
+    ) -> Vec<Self>;
+    fn tag(_hits: &mut [Self]) {}
+}
+
+impl LiveHit for SearchResult {
+    fn score(&self) -> f32 {
+        self.score
+    }
+
+    fn finish(
+        kept: Vec<(u64, f32)>,
+        vectors: &MmapStorage,
+        payloads: &LogPayloadStorage,
+    ) -> Vec<Self> {
+        super::resolve::hydrate_rows(kept, vectors, payloads)
+    }
+
+    fn tag(hits: &mut [Self]) {
+        super::tag_vector_component_scores(hits);
+    }
+}
+
+impl LiveHit for ScoredResult {
+    fn score(&self) -> f32 {
+        self.score
+    }
+
+    fn finish(kept: Vec<(u64, f32)>, _: &MmapStorage, _: &LogPayloadStorage) -> Vec<Self> {
+        kept.into_iter().map(Self::from).collect()
+    }
+}
+
 impl Collection {
-    /// The `k` nearest live rows `nearest(n)` finds, hydrated and tagged with
-    /// their `vector_score` ([`Self::nearest_live_rows`]).
+    /// The `k` nearest live rows `nearest(n)` finds, projected by `T` ([`Self::nearest_live_rows`]).
     ///
     /// # Errors
     ///
     /// What `nearest` returns.
-    pub(super) fn nearest_live(
+    pub(super) fn nearest_live<T: LiveHit>(
         &self,
         want: &Nearest<'_>,
         nearest: impl Fn(usize) -> Result<Vec<ScoredResult>>,
-    ) -> Result<Vec<SearchResult>> {
+    ) -> Result<Vec<T>> {
         self.nearest_live_where(want, |_, _| true, nearest)
     }
 
     /// The `k` nearest live rows `accept` takes among the `budget` nearest
-    /// live rows `nearest(n)` finds, hydrated and tagged with their
-    /// `vector_score` ([`Self::nearest_live_rows`]).
+    /// live rows `nearest(n)` finds, projected by `T` ([`Self::nearest_live_rows`]).
     ///
     /// # Errors
     ///
     /// What `nearest` returns.
-    pub(super) fn nearest_live_where(
+    pub(super) fn nearest_live_where<T: LiveHit>(
         &self,
         want: &Nearest<'_>,
         accept: impl Fn(u64, Option<&serde_json::Value>) -> bool,
         nearest: impl Fn(usize) -> Result<Vec<ScoredResult>>,
-    ) -> Result<Vec<SearchResult>> {
-        let mut results =
-            self.nearest_live_rows(want, accept, nearest, |kept, vectors, payloads| {
-                super::resolve::hydrate_rows(kept, vectors, payloads)
-            })?;
-        super::tag_vector_component_scores(&mut results);
+    ) -> Result<Vec<T>> {
+        let mut results = self.nearest_live_rows(want, accept, nearest, T::finish)?;
+        T::tag(&mut results);
         Ok(results)
     }
 
@@ -245,16 +279,7 @@ impl Collection {
         want: &Nearest<'_>,
         nearest: impl Fn(usize) -> Result<Vec<ScoredResult>>,
     ) -> Result<Vec<ScoredResult>> {
-        self.nearest_live_rows(
-            want,
-            |_, _| true,
-            nearest,
-            |kept, _, _| {
-                kept.into_iter()
-                    .map(|(id, score)| ScoredResult::new(id, score))
-                    .collect()
-            },
-        )
+        self.nearest_live(want, nearest)
     }
 
     /// The `k` nearest live rows `accept` takes among the `budget` nearest

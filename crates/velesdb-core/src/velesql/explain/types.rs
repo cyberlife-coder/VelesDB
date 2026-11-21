@@ -204,7 +204,7 @@ pub struct FusionInfo {
 /// Runtime-observed CBO calibration from the EMA feedback loop (issue #469).
 ///
 /// Populated in EXPLAIN ANALYZE output once the feedback loop has seen at
-/// least `MIN_SAMPLES` (10) vector queries on this collection.  Absent for
+/// least `MIN_SAMPLES` (10) calibration samples on this collection. Absent for
 /// plain EXPLAIN (no execution) and for collections that have not yet been
 /// queried enough to warm the EMA.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -139,10 +139,29 @@ use std::collections::HashSet;
 /// [`Collection::dispatch_and_finalize`] to stay within the parameter limit.
 struct DispatchFinalizeArgs<'a> {
     extracted: &'a ExtractedComponents,
+    search_opts: &'a QuerySearchOptions,
     limit: usize,
     fetch_limit: usize,
     is_vgb: bool,
     ctx: &'a crate::guardrails::QueryContext,
+}
+
+impl DispatchFinalizeArgs<'_> {
+    fn finalization<'a>(
+        &'a self,
+        stmt: &'a crate::velesql::SelectStatement,
+        params: &'a std::collections::HashMap<String, serde_json::Value>,
+        let_bindings: &'a [crate::velesql::LetBinding],
+    ) -> QueryFinalizationContext<'a> {
+        QueryFinalizationContext {
+            stmt,
+            params,
+            limit: self.limit,
+            extracted: self.extracted,
+            ctx: self.ctx,
+            let_bindings,
+        }
+    }
 }
 
 impl Collection {
@@ -277,7 +296,7 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let stmt = &query.select;
         let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
-        let extracted = Self::extract_query_components(stmt, params)?;
+        let mut extracted = Self::extract_query_components(stmt, params)?;
 
         // A covering secondary index can supply the finished ORDER BY page.
         // The scan checks the filter and sort shape before applying OFFSET/LIMIT.
@@ -288,15 +307,27 @@ impl Collection {
         // The fetch stops at LIMIT + OFFSET only when the rows it stops at
         // are the window's (`fetch_window.rs`); an ORDER BY it does not rank
         // by takes the ordered scan, which ranks every admitted row.
-        let is_vgb = stmt.is_vector_group_by();
-        let effective_fetch_limit =
-            match self.select_fetch_window(stmt, &extracted, params, fetch_limit) {
-                fetch_window::FetchWindow::Bounded(rows) => rows,
-                fetch_window::FetchWindow::Exhaustive => MAX_LIMIT,
-                fetch_window::FetchWindow::OrderedScan => {
-                    return self.execute_ordered_scan(query, params, &extracted, limit, ctx);
-                }
-            };
+        let mut search_opts = QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())?
+            .with_fusion(stmt.fusion_clause.clone())
+            .with_executed_strategy_probe(ctx);
+        let window =
+            self.select_fetch_window(stmt, &mut extracted, params, fetch_limit, &mut search_opts);
+        let mut args = DispatchFinalizeArgs {
+            extracted: &extracted,
+            search_opts: &search_opts,
+            limit,
+            fetch_limit,
+            is_vgb: stmt.is_vector_group_by(),
+            ctx,
+        };
+        args.fetch_limit = match window {
+            fetch_window::FetchWindow::Bounded(rows) => rows,
+            fetch_window::FetchWindow::Exhaustive => MAX_LIMIT,
+            fetch_window::FetchWindow::OrderedScan { pq_scores } => {
+                let context = args.finalization(stmt, params, &query.let_bindings);
+                return self.execute_ordered_scan(&context, &search_opts, pq_scores);
+            }
+        };
 
         // Early-return paths or LET-binding guard for special query shapes.
         if let Some(results) = self.try_early_return_or_guard_let(
@@ -304,23 +335,13 @@ impl Collection {
             stmt,
             params,
             &extracted,
-            effective_fetch_limit,
+            args.fetch_limit,
             ctx,
         )? {
             return Ok(results);
         }
 
-        self.dispatch_and_finalize::<MAX_LIMIT>(
-            query,
-            params,
-            &DispatchFinalizeArgs {
-                extracted: &extracted,
-                limit,
-                fetch_limit: effective_fetch_limit,
-                is_vgb,
-                ctx,
-            },
-        )
+        self.dispatch_and_finalize::<MAX_LIMIT>(query, params, &args)
     }
 
     /// Runs the main dispatch, optional vector GROUP BY, and finalization
@@ -338,7 +359,7 @@ impl Collection {
         let mut most_fetched = 0;
         let mut results = fetch_window::fetch_past_ties(stmt, args.fetch_limit, |rows| {
             let (fetched, results) =
-                self.dispatch_main_select(stmt, params, args.extracted, rows, args.ctx)?;
+                self.dispatch_main_select(stmt, params, args.extracted, rows, args.search_opts)?;
             most_fetched = most_fetched.max(fetched);
             Ok(results)
         })?;
@@ -356,15 +377,22 @@ impl Collection {
 
         self.finalize_query_results(
             &mut results,
-            &QueryFinalizationContext {
-                stmt: &stmt,
-                params,
-                limit: args.limit,
-                extracted: args.extracted,
-                ctx: args.ctx,
-                let_bindings: &query.let_bindings,
-            },
+            &args.finalization(&stmt, params, &query.let_bindings),
         )?;
+        // The ef_search cost estimate belongs to vector dispatch. The separate
+        // ordered scan shares finalization and records its latency there.
+        if args.extracted.vector_search.is_some() {
+            let ef_search = stmt
+                .with_clause
+                .as_ref()
+                .and_then(crate::velesql::WithClause::get_ef_search)
+                .unwrap_or(100);
+            self.query.query_planner.record_cbo_feedback(
+                self.vector_count(),
+                ef_search,
+                args.ctx.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
         Ok(results)
     }
 

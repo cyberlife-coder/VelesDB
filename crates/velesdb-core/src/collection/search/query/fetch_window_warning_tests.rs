@@ -2,7 +2,7 @@
 
 use super::super::FetchWindow;
 use super::{fixture_row, query_params};
-use crate::collection::search::query::DispatchFinalizeArgs;
+use crate::collection::search::query::{DispatchFinalizeArgs, QuerySearchOptions};
 use crate::collection::Collection;
 use crate::guardrails::{QueryContext, QueryLimits};
 use crate::velesql::Parser;
@@ -15,10 +15,16 @@ fn hybrid_window_warnings<const CEILING: usize>(col: &Collection) -> usize {
     crate::velesql::QueryValidator::validate(&query).expect("test: valid SELECT");
     let params = query_params();
     let select = &query.select;
-    let extracted =
+    let mut extracted =
         Collection::extract_query_components(select, &params).expect("test: query components");
     assert_eq!(
-        col.select_fetch_window(select, &extracted, &params, 1),
+        col.select_fetch_window(
+            select,
+            &mut extracted,
+            &params,
+            1,
+            &mut QuerySearchOptions::default()
+        ),
         FetchWindow::Exhaustive
     );
     let sparse = extracted
@@ -69,16 +75,26 @@ fn main_window_warnings(col: &Collection, sql: &str, winner: u64) -> usize {
     let params = query_params();
     let bound = col.bind_select(&query, &params).expect("test: bind");
     let query = bound.as_ref().unwrap_or(&query);
-    let extracted = Collection::extract_query_components(&query.select, &params)
+    let mut extracted = Collection::extract_query_components(&query.select, &params)
         .expect("test: query components");
-    let fetch_limit = match col.select_fetch_window(&query.select, &extracted, &params, 1) {
+    let mut search_opts = super::super::super::QuerySearchOptions::default();
+    let fetch_limit = match col.select_fetch_window(
+        &query.select,
+        &mut extracted,
+        &params,
+        1,
+        &mut search_opts,
+    ) {
         FetchWindow::Bounded(rows) => rows,
         FetchWindow::Exhaustive => CEILING,
-        FetchWindow::OrderedScan => panic!("test: expected ranked dispatch"),
+        FetchWindow::OrderedScan { .. } => {
+            panic!("test: expected ranked dispatch")
+        }
     };
     let ctx = QueryContext::new(QueryLimits::new().with_max_cardinality(1));
     let args = DispatchFinalizeArgs {
         extracted: &extracted,
+        search_opts: &search_opts,
         limit: 1,
         fetch_limit,
         is_vgb: false,

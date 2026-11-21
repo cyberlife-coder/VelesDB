@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 
 use crate::collection::graph::{GraphEdge, GraphSchema};
 use crate::collection::search::query::where_eval::GraphMatchEvalCache;
-use crate::collection::search::query::MAX_LIMIT;
+use crate::collection::search::query::{QuerySearchOptions, MAX_LIMIT};
 use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
 use crate::velesql::Parser;
@@ -70,15 +70,90 @@ fn ids(col: &Collection, sql: &str) -> Vec<u64> {
         .collect()
 }
 
+fn two_ranked_nodes() -> (tempfile::TempDir, Collection) {
+    let (dir, col) = graph(Some(2));
+    col.upsert([
+        crate::point::Point::new(1, vec![1.0, 0.0], None),
+        crate::point::Point::new(2, vec![0.0, 1.0], None),
+    ])
+    .expect("test: seed two ranked nodes");
+    (dir, col)
+}
+
+#[test]
+fn ordered_near_only_calibrates_the_index_on_the_ranked_search_path() {
+    let (_dir, col) = two_ranked_nodes();
+    let planner = &col.query.query_planner;
+    let near = "SELECT * FROM rows WHERE vector NEAR $q";
+
+    assert_eq!(ids(&col, &format!("{near} ORDER BY id DESC LIMIT 1")), [2]);
+    assert_eq!(planner.stats().vector_query_count(), 1);
+    assert_eq!(
+        planner.cbo_sample_count(),
+        0,
+        "the scan never used the index"
+    );
+
+    let ranked = format!("{near} ORDER BY similarity() DESC LIMIT 1");
+    assert_eq!(ids(&col, &ranked), [1]);
+    assert_eq!(planner.stats().vector_query_count(), 2);
+    assert_eq!(planner.cbo_sample_count(), 1);
+}
+
+#[test]
+fn ordered_dense_search_enforces_the_effective_quality_at_the_capacity_boundary() {
+    let (_dir, col) = two_ranked_nodes();
+    let params = HashMap::from([("q".to_owned(), json!([1.0, 0.0]))]);
+    for (predicate, order, first) in [
+        ("vector NEAR $q", "ASC", 2),
+        ("vector NEAR $q", "DESC", 1),
+        ("similarity(vector, $q) >= 0.0", "ASC", 2),
+        ("similarity(vector, $q) >= 0.0", "DESC", 1),
+    ] {
+        let sql =
+            format!("SELECT * FROM rows WHERE {predicate} ORDER BY similarity() {order} LIMIT 1");
+        let perfect = format!("{sql} WITH (mode = 'perfect')");
+        for cap in [1, 2] {
+            col.set_runtime_limits(crate::collection::RuntimeLimits {
+                max_perfect_mode_vectors: cap,
+                ..crate::collection::RuntimeLimits::default()
+            });
+            let result = col.execute_query_str(&perfect, &params);
+            if cap == 2 {
+                assert_eq!(result.expect("at capacity")[0].point.id, first);
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(crate::Error::GuardRail {
+                            kind: crate::error::GuardRailKind::Capacity,
+                            ..
+                        })
+                    ),
+                    "{perfect}: {result:?}"
+                );
+                let overridden = format!("{sql} WITH (mode = 'perfect', ef_search = 64)");
+                assert_eq!(ids(&col, &overridden), [first]);
+            }
+        }
+    }
+}
+
 /// Plan the real ordered scan with a one-candidate exact-similarity ceiling.
 fn planned_ids(col: &Collection, predicate: &str) -> crate::error::Result<Vec<u64>> {
     let sql = format!("SELECT * FROM rows AS r WHERE {predicate} ORDER BY price LIMIT 1");
     let query = Parser::parse(&sql).expect("test: query");
     let params = HashMap::from([("q".to_owned(), json!([1.0, 0.0]))]);
-    let extracted = Collection::extract_query_components(&query.select, &params)?;
+    let mut extracted = Collection::extract_query_components(&query.select, &params)?;
     assert!(matches!(
-        col.select_fetch_window(&query.select, &extracted, &params, 1),
-        super::super::fetch_window::FetchWindow::OrderedScan
+        col.select_fetch_window(
+            &query.select,
+            &mut extracted,
+            &params,
+            1,
+            &mut QuerySearchOptions::default()
+        ),
+        super::super::fetch_window::FetchWindow::OrderedScan { pq_scores: false }
     ));
     let plan = col.ordered_scan_plan::<1>(
         &query.select,
