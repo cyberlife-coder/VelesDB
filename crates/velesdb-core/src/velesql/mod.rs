@@ -103,9 +103,9 @@ mod orderby_multi_tests;
 #[cfg(test)]
 mod parallel_aggregation_tests;
 mod param_binding;
-#[cfg(feature = "persistence")]
-pub(crate) use param_binding::bind_query_condition;
-pub use param_binding::{bind_condition, bind_match_clause, bind_value, bind_vector};
+pub use param_binding::{
+    bind_condition, bind_match_clause, bind_query_condition, bind_value, bind_vector,
+};
 pub(crate) use param_binding::{bind_dml_value, bind_dml_vector};
 pub(crate) mod condition_tree;
 mod edge_query;

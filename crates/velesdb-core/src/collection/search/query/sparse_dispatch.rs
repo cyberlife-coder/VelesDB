@@ -239,7 +239,6 @@ impl Collection {
             .finalize_ranked_results(stmt, params, results)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         self.check_guardrails_and_record(ctx, results.len())?;
-        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(results)
     }
 

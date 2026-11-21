@@ -58,14 +58,18 @@ fn held_rows(
     stmt: &SelectStatement,
     params: &Params,
 ) -> Result<Vec<OwnedScanRow>, ExecError> {
+    let filter = stmt
+        .where_clause
+        .as_ref()
+        .map(|cond| velesql_where::WhereFilter::compile(cond, params))
+        .transpose()?;
     let mut kept = Vec::with_capacity(rows.len());
     for row in rows {
         let row = OwnedScanRow::new(row.point.id, row.score, row.point.payload);
-        let holds = match &stmt.where_clause {
-            Some(cond) => velesql_where::matches(cond, row.id, row.payload.as_ref(), params)?,
-            None => true,
-        };
-        if holds {
+        if filter
+            .as_ref()
+            .is_none_or(|filter| filter.matches(row.id, row.payload.as_ref()))
+        {
             kept.push(row);
         }
     }

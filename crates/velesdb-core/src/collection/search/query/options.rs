@@ -185,5 +185,6 @@ pub(in crate::collection::search::query) struct QueryFinalizationContext<'a> {
     pub(in crate::collection::search::query) limit: usize,
     pub(in crate::collection::search::query) extracted: &'a ExtractedComponents,
     pub(in crate::collection::search::query) ctx: &'a crate::guardrails::QueryContext,
+    pub(in crate::collection::search::query) started_at: std::time::Instant,
     pub(in crate::collection::search::query) let_bindings: &'a [crate::velesql::LetBinding],
 }

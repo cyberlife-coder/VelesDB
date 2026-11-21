@@ -74,7 +74,6 @@ impl Collection {
             return Ok(None);
         };
         self.check_guardrails_and_record(ctx, results.len())?;
-        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(Some(results))
     }
 

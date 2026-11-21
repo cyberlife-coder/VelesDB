@@ -9,32 +9,126 @@ use crate::{Result, SearchResult};
 
 use super::Database;
 
+#[cfg(test)]
+#[path = "join_clock_tests.rs"]
+mod clock_tests;
+
+/// The leading collection owns the final output quota of a statement containing a JOIN.
+pub(super) struct JoinedRead<'a> {
+    leading: &'a str,
+    ctx: crate::guardrails::QueryContext,
+}
+
+impl<'a> JoinedRead<'a> {
+    pub(super) fn begin(
+        query: &'a crate::velesql::Query,
+        leading: &crate::collection::Collection,
+    ) -> Option<Self> {
+        let other_selects = query
+            .compound
+            .iter()
+            .flat_map(|set| &set.operations)
+            .map(|(_, select)| select);
+        if std::iter::once(&query.select)
+            .chain(other_selects)
+            .all(|select| select.joins.is_empty())
+        {
+            return None;
+        }
+        Some(Self {
+            leading: &query.select.from,
+            ctx: leading.guard_rails().create_context(),
+        })
+    }
+
+    /// Every operand supplies candidates until the outer JOIN or set operation has its page.
+    fn operand(
+        &self,
+        db: &Database,
+        query: &crate::velesql::Query,
+        collection: &crate::collection::Collection,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
+    ) -> Result<Vec<SearchResult>> {
+        let ctx = collection
+            .prepare_query_context(query, "default")?
+            .for_join_input();
+        let rows = if query.select.joins.is_empty() {
+            collection.execute_in_query_context(query, params, &ctx)?.0
+        } else {
+            db.execute_joined_select(query.clone(), &query.select, collection, params, &ctx)?
+        };
+        if query.select.from != self.leading {
+            collection.guard_rails().circuit_breaker.record_success();
+        }
+        if let (Some(slot), Some(strategy)) = (probe, ctx.executed_filter_strategy()) {
+            slot.record(strategy);
+        }
+        Ok(rows)
+    }
+
+    pub(super) fn finish(
+        &self,
+        collection: &crate::collection::Collection,
+        returned: usize,
+    ) -> Result<()> {
+        collection.finish_returned_rows(&self.ctx, returned)
+    }
+}
+
 impl Database {
+    /// Runs one operand against its base collection under the statement's output window.
+    pub(super) fn execute_select_operand(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        probe: Option<&crate::database::StrategyProbeSlot>,
+        leading: (&str, &crate::collection::Collection),
+        joined: Option<&JoinedRead<'_>>,
+    ) -> Result<Vec<SearchResult>> {
+        let other;
+        let collection = if query.select.from == leading.0 {
+            leading.1
+        } else {
+            other = self.resolve_collection(&query.select.from)?;
+            &other
+        };
+        if let Some(joined) = joined {
+            return joined.operand(self, query, collection, params, probe);
+        }
+        match probe {
+            Some(slot) => collection.execute_query_probed(query, params, slot),
+            None => collection.execute_query(query, params),
+        }
+    }
+
     /// A SELECT with JOINs (`single_query`, its compound removed; `select`
     /// as written): its joined rows, windowed. As in SQL, DISTINCT, ORDER BY,
     /// OFFSET and LIMIT window the joined rows, so the base query runs
     /// without them ([`JoinWindow`]).
-    pub(super) fn execute_joined_select(
+    fn execute_joined_select(
         &self,
         mut single_query: crate::velesql::Query,
         select: &crate::velesql::SelectStatement,
         base_collection: &crate::collection::Collection,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        probe: Option<&crate::database::StrategyProbeSlot>,
+        ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
         let deferred_let = defer_join_windows(&mut single_query);
         let window = JoinWindow::take(&mut single_query.select);
         let validate_let = deferred_let
             .as_ref()
             .is_some_and(|bindings| !bindings.is_empty());
-        let rows = self.joined_rows(single_query, select, params, probe, validate_let)?;
-        window.apply(
+        let rows = self.joined_rows(single_query, select, params, Some(ctx), validate_let)?;
+        let rows = window.apply(
             rows,
             select,
             base_collection,
             params,
             deferred_let.as_deref(),
-        )
+        )?;
+        base_collection.check_read_deadline(ctx)?;
+        Ok(rows)
     }
 
     /// The joined rows of `query` (a SELECT with JOINs, its window removed),
@@ -45,7 +139,7 @@ impl Database {
         mut query: crate::velesql::Query,
         budget_select: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        probe: Option<&crate::database::StrategyProbeSlot>,
+        ctx: Option<&crate::guardrails::QueryContext>,
         validate_deferred_let: bool,
     ) -> Result<Vec<SearchResult>> {
         let base_collection = self.resolve_collection(&query.select.from)?;
@@ -75,7 +169,7 @@ impl Database {
             params,
         };
         loop {
-            let base = Self::base_rows(&base_collection, &mut query, fetch.rows, params, probe)?;
+            let base = Self::base_rows(&base_collection, &mut query, fetch.rows, params, ctx)?;
             let base_len = base.len();
             let joined = self.join_base_rows(base, &plan)?;
             if fetch.is_enough(base_len, joined.len()) {
@@ -86,17 +180,22 @@ impl Database {
     }
 
     /// The first `fetch` base rows of `query` (its joins and join-side
-    /// predicates removed), through the strategy probe when one is given.
+    /// predicates removed), under the caller's JOIN context when it has one.
     fn base_rows(
         collection: &crate::collection::Collection,
         query: &mut crate::velesql::Query,
         fetch: usize,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        probe: Option<&crate::database::StrategyProbeSlot>,
+        ctx: Option<&crate::guardrails::QueryContext>,
     ) -> Result<Vec<SearchResult>> {
         query.select.limit = Some(u64::try_from(fetch).unwrap_or(u64::MAX));
-        match probe {
-            Some(slot) => collection.execute_query_probed(query, params, slot),
+        match ctx {
+            Some(ctx) => {
+                crate::velesql::QueryValidator::validate(query)?;
+                collection
+                    .execute_in_query_context(query, params, ctx)
+                    .map(|(rows, _)| rows)
+            }
             None => collection.execute_query(query, params),
         }
     }
@@ -181,9 +280,7 @@ impl Database {
     ///
     /// [`PushdownAnalysis::joined_row_filters`]: crate::collection::search::query::pushdown::PushdownAnalysis::joined_row_filters
     ///
-    /// Parameter placeholders are resolved before the analysis so pushed-down
-    /// filters never silently convert them to NULL at the `ColumnStore` layer
-    /// (the collection pipeline resolves its own copy independently).
+    /// All sides and retries read the same bound parameters and `NOW()` instant.
     fn prepare_join_pushdown(
         single_query: &mut crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
@@ -193,7 +290,8 @@ impl Database {
     )> {
         Self::resolve_join_text_matches(&mut single_query.select)?;
         if let Some(cond) = single_query.select.where_clause.take() {
-            single_query.select.where_clause = Some(crate::velesql::bind_condition(&cond, params)?);
+            single_query.select.where_clause =
+                Some(crate::velesql::bind_query_condition(&cond, params)?);
         }
 
         let analysis = Self::analyze_join_pushdown_for_select(&single_query.select);

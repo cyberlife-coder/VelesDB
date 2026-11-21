@@ -408,7 +408,7 @@ impl Database {
         // asks the observer once per collection the statement reads — its
         // target, each set-operation operand, each JOIN's secondary side, each
         // MATCH `@collection` — before anything is read. Compound / JOIN
-        // sub-executions re-enter `execute_single_select`, not
+        // sub-executions re-enter `execute_select_operand`, not
         // `execute_query`, so the gate never double-fires. Non-read statements
         // (DDL/DML/admin/train/introspection) keep their own gates and are not
         // gated here (Requirement 3.5); `SELECT EDGES`, a read routed as DML,
@@ -715,23 +715,34 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
-        if query.compound.is_none() {
-            return self.execute_single_select(query, params, probe);
-        }
-        // Compound semantics are velesql's (`velesql::execute_compound`),
-        // shared with `Collection::execute_query` and WASM. A compound runs
-        // several selects, so no single strategy is reported: the probe stays
-        // untouched. The first operand's collection gives the metric direction
-        // and orders the combined rows.
         let first = self.resolve_collection(&query.select.from)?;
-        let higher_is_better = first.config().metric.higher_is_better();
-        crate::velesql::execute_compound(
-            query,
-            higher_is_better,
-            u64::try_from(crate::collection::search::query::MAX_LIMIT).unwrap_or(u64::MAX),
-            |operand| self.execute_single_select(operand, params, None),
-            |rows, order_by| first.apply_order_by(rows, order_by, params),
-        )
+        let joined = super::query_engine_join::JoinedRead::begin(query, &first);
+        // A compound has several strategies. Only a single SELECT can publish one.
+        let probe = probe.filter(|_| query.compound.is_none());
+        let run = |operand: &crate::velesql::Query| {
+            self.execute_select_operand(
+                operand,
+                params,
+                probe,
+                (&query.select.from, &first),
+                joined.as_ref(),
+            )
+        };
+        let rows = if query.compound.is_some() {
+            crate::velesql::execute_compound(
+                query,
+                first.config().metric.higher_is_better(),
+                u64::try_from(crate::collection::search::query::MAX_LIMIT).unwrap_or(u64::MAX),
+                run,
+                |rows, order_by| first.apply_order_by(rows, order_by, params),
+            )?
+        } else {
+            run(query)?
+        };
+        if let Some(joined) = joined {
+            joined.finish(&first, rows.len().min(self.config.search.max_results))?;
+        }
+        Ok(rows)
     }
 
     /// Collects sorted, deduplicated collection names referenced by a query,
@@ -808,29 +819,6 @@ impl Database {
         name: &str,
     ) -> Result<crate::collection::Collection> {
         self.resolve_collection(name)
-    }
-
-    /// Executes a single SELECT (no compound): the base collection's query,
-    /// or the JOIN path ([`Self::execute_joined_select`]).
-    fn execute_single_select(
-        &self,
-        query: &crate::velesql::Query,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        probe: Option<&crate::database::StrategyProbeSlot>,
-    ) -> Result<Vec<SearchResult>> {
-        let base_collection = self.resolve_collection(&query.select.from)?;
-
-        let mut single_query = query.clone();
-        single_query.compound = None;
-
-        if single_query.select.joins.is_empty() {
-            return match probe {
-                Some(slot) => base_collection.execute_query_probed(&single_query, params, slot),
-                None => base_collection.execute_query(&single_query, params),
-            };
-        }
-
-        self.execute_joined_select(single_query, &query.select, &base_collection, params, probe)
     }
 
     // NOTE: analyze_join_pushdown_for_select, apply_post_join_filters

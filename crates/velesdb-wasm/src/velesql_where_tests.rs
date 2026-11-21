@@ -1,4 +1,13 @@
 use super::*;
+
+fn matches(
+    cond: &Condition,
+    id: u64,
+    payload: Option<&serde_json::Value>,
+    params: &Params,
+) -> Result<bool, ExecError> {
+    Ok(WhereFilter::compile(cond, params)?.matches(id, payload))
+}
 use crate::velesql_value::parse_params;
 use velesdb_core::velesql::Parser;
 

@@ -99,6 +99,7 @@ fn main_window_warnings(col: &Collection, sql: &str, winner: u64) -> usize {
         fetch_limit,
         is_vgb: false,
         ctx: &ctx,
+        started_at: ctx.select_started_at(),
     };
     window_warnings(winner, || {
         col.dispatch_and_finalize::<CEILING>(query, &params, &args)

@@ -175,6 +175,131 @@ fn seed_indexed_join_fixtures(db: &Database) {
 }
 
 #[test]
+fn joined_window_charges_the_returned_page() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_indexed_join_fixtures(&db);
+    db.update_guardrails(&crate::guardrails::QueryLimits::new().with_max_cardinality(1));
+    let sql = "SELECT i.id AS child, ROW_NUMBER() OVER (ORDER BY i.id) AS rn FROM products p \
+               JOIN inventory i ON i.sku = p.sku ORDER BY i.id DESC LIMIT 1";
+    let rows = run_sql(&db, sql).expect("two inputs can supply a one-row window");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].point.payload.as_ref().unwrap()["rn"], 2);
+}
+
+#[test]
+fn joined_window_counts_every_returned_child_of_one_base_row() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_indexed_join_fixtures(&db);
+    let sql = "SELECT i.id AS child, ROW_NUMBER() OVER (ORDER BY i.id) AS rn FROM products p \
+               JOIN inventory i ON i.sku = p.sku WHERE p.id = 1 ORDER BY i.id LIMIT 2";
+    assert_eq!(run_sql(&db, sql).unwrap().len(), 2);
+    db.update_guardrails(&crate::guardrails::QueryLimits::new().with_max_cardinality(1));
+    let products = db.resolve_collection("products").unwrap();
+    let breaker = &products.guard_rails().circuit_breaker;
+    breaker.reconfigure(2, 60);
+    breaker.record_failure();
+    assert!(matches!(
+        run_sql(&db, sql),
+        Err(crate::Error::GuardRail {
+            kind: crate::error::GuardRailKind::Cardinality,
+            ..
+        })
+    ));
+    breaker.record_failure();
+    assert!(
+        matches!(
+            run_sql(&db, "SELECT * FROM products LIMIT 1"),
+            Err(crate::Error::GuardRail {
+                kind: crate::error::GuardRailKind::CircuitOpen,
+                ..
+            })
+        ),
+        "a refused joined page must preserve the previous failure"
+    );
+}
+
+#[test]
+fn joined_cardinality_observes_the_deployment_page() {
+    let dir = tempdir().unwrap();
+    let mut config = crate::config::VelesConfig::default();
+    config.search.max_results = 1;
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+    seed_indexed_join_fixtures(&db);
+    db.update_guardrails(&crate::guardrails::QueryLimits::new().with_max_cardinality(1));
+    let sql = "SELECT i.id AS child, ROW_NUMBER() OVER (ORDER BY i.id) AS rn FROM products p \
+               JOIN inventory i ON i.sku = p.sku WHERE p.id = 1 ORDER BY i.id DESC LIMIT 2";
+    let rows = run_sql(&db, sql).expect("the deployment returns one joined row");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].point.payload.as_ref().unwrap()["rn"], 2);
+}
+
+#[test]
+fn joined_operand_cardinality_observes_the_compound_page() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_indexed_join_fixtures(&db);
+    let arm = "SELECT i.id AS child, ROW_NUMBER() OVER (ORDER BY i.id) AS rn FROM products p \
+               JOIN inventory i ON i.sku = p.sku WHERE p.id = 1";
+    let run = |limit| {
+        run_sql(
+            &db,
+            &format!("{arm} UNION ALL {arm} ORDER BY child DESC LIMIT {limit}"),
+        )
+    };
+    assert_eq!(run(4).unwrap().len(), 4);
+    db.update_guardrails(&crate::guardrails::QueryLimits::new().with_max_cardinality(1));
+    assert_eq!(
+        run(1).expect("the compound returns one joined row").len(),
+        1
+    );
+    assert!(matches!(
+        run(2),
+        Err(crate::Error::GuardRail {
+            kind: crate::error::GuardRailKind::Cardinality,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn a_later_operand_on_the_same_collection_keeps_its_client_timeout() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_indexed_join_fixtures(&db);
+    let products = db.resolve_collection("products").unwrap();
+    let _clock = crate::guardrails::QueryClockSkewGuard::activate(products.guard_rails(), 10);
+    let sql = "SELECT p.id FROM products p JOIN inventory i ON i.sku = p.sku \
+               UNION ALL SELECT id FROM products LIMIT 2";
+    assert_eq!(run_sql(&db, sql).unwrap().len(), 2);
+    assert!(matches!(
+        run_sql(&db, &format!("{sql} WITH (timeout_ms=1)")),
+        Err(crate::Error::GuardRail {
+            kind: crate::error::GuardRailKind::Timeout(crate::error::TimeoutBudget::Client),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn the_second_collection_records_its_successful_compound_read() {
+    use crate::guardrails::CircuitState;
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_indexed_join_fixtures(&db);
+    let inventory = db.resolve_collection("inventory").unwrap();
+    let breaker = &inventory.guard_rails().circuit_breaker;
+    breaker.reconfigure(1, 0);
+    breaker.record_failure();
+    assert_eq!(breaker.state(), CircuitState::Open);
+    let sql = "SELECT p.id FROM products p JOIN inventory i ON i.sku = p.sku \
+               UNION ALL SELECT id FROM inventory LIMIT 2";
+    assert_eq!(run_sql(&db, sql).unwrap().len(), 2);
+    assert_eq!(breaker.state(), CircuitState::Closed);
+}
+
+#[test]
 fn indexed_inner_join_emits_one_row_per_match() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();

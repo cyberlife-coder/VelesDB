@@ -82,18 +82,20 @@ pub fn bind_condition<S: BuildHasher>(
     bind_condition_with(cond, &|value| bind_value(value, params))
 }
 
-/// Binds a read's scalar operands. Every NOW() in the WHERE uses one instant
+/// Binds a read's scalar operands. Every `NOW()` in the WHERE uses one instant
 /// shared by candidate selection and row evaluation. Only the execution copy
 /// gets concrete bounds, so a cached parse obtains fresh bounds on every read.
-#[cfg(feature = "persistence")]
-pub(crate) fn bind_query_condition<S: BuildHasher>(
+///
+/// # Errors
+///
+/// Returns the first scalar parameter error reported by [`bind_value`].
+pub fn bind_query_condition<S: BuildHasher>(
     cond: &Condition,
     params: &HashMap<String, serde_json::Value, S>,
 ) -> Result<Condition> {
     bind_query_condition_with_clock(cond, params, super::clock::now_epoch_seconds)
 }
 
-#[cfg(feature = "persistence")]
 fn bind_query_condition_with_clock<S: BuildHasher>(
     cond: &Condition,
     params: &HashMap<String, serde_json::Value, S>,

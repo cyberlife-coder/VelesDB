@@ -12,7 +12,6 @@ fn param() -> Value {
     Value::Parameter("p".to_string())
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn a_cached_time_window_reads_the_clock_once_per_execution() {
     let sql = "SELECT * FROM rows WHERE ts BETWEEN NOW() - INTERVAL '1 second' AND NOW()";
@@ -35,7 +34,6 @@ fn a_cached_time_window_reads_the_clock_once_per_execution() {
     assert_eq!(bind_condition(&syntax, &HashMap::new()).unwrap(), syntax);
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn nested_temporal_operands_share_the_clock_with_lists_and_comparisons() {
     let parse = |predicate: &str| {

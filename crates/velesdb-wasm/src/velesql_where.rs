@@ -1,8 +1,8 @@
 //! WHERE clause evaluation over JSON payloads for the WASM VelesQL executor.
 //!
 //! A WHERE condition is bound and lowered by core, then matched by core's
-//! payload filter, the very one the server runs: [`bind_condition`] binds its
-//! `$name` operands, [`Filter::try_from_where`] lowers it, and
+//! payload filter, the very one the server runs: [`bind_query_condition`] binds its
+//! `$name` and temporal operands, [`Filter::try_from_where`] lowers it, and
 //! [`Filter::matches_point`] tests a point. A predicate therefore answers in
 //! the browser what it answers on the server — in SQL's three-valued logic,
 //! so `x != 'a'` excludes a payload without `x` as `x = 'a'` does, LIKE honours `\` escapes and its guardrails, numbers compare
@@ -13,7 +13,7 @@
 //! dispatches them before calling this matcher (see `velesql_select.rs`).
 
 use velesdb_core::filter::Filter;
-use velesdb_core::velesql::{bind_condition, Condition};
+use velesdb_core::velesql::{bind_query_condition, Condition};
 
 use crate::exec_error::ExecError;
 use crate::velesql_value::Params;
@@ -32,7 +32,7 @@ impl WhereFilter {
     /// lower to a row filter.
     pub(crate) fn compile(cond: &Condition, params: &Params) -> Result<Self, ExecError> {
         reject_out_of_scope(cond)?;
-        let bound = bind_condition(cond, params)?;
+        let bound = bind_query_condition(cond, params)?;
         // Core's `try_from_where` reports its refusal as a bare message (a
         // scope it cannot lower); it carries no core code to keep.
         Filter::try_from_where(bound)
@@ -120,23 +120,6 @@ fn fold_both(
     combine: fn(Option<bool>, Option<bool>) -> Option<bool>,
 ) -> Result<Option<bool>, ExecError> {
     Ok(combine(fold_truth(left, leaf)?, fold_truth(right, leaf)?))
-}
-
-/// Tests whether the given `id` and optional `payload` match the condition.
-///
-/// Compiles `cond` for this one point: a caller testing many points against
-/// the same condition compiles a [`WhereFilter`] once instead.
-///
-/// # Errors
-///
-/// See [`WhereFilter::compile`].
-pub(crate) fn matches(
-    cond: &Condition,
-    id: u64,
-    payload: Option<&serde_json::Value>,
-    params: &Params,
-) -> Result<bool, ExecError> {
-    Ok(WhereFilter::compile(cond, params)?.matches(id, payload))
 }
 
 /// Refuses, depth-first, the first condition the WASM executor does not

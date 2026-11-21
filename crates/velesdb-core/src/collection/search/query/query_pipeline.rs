@@ -183,7 +183,7 @@ impl Collection {
     ///
     /// Creates a [`QueryContext`](crate::guardrails::QueryContext) with optional
     /// timeout override from `WITH (timeout_ms=N)`.
-    pub(super) fn prepare_query_context(
+    pub(crate) fn prepare_query_context(
         &self,
         query: &crate::velesql::Query,
         client_id: &str,
@@ -219,7 +219,7 @@ impl Collection {
         fctx: &QueryFinalizationContext<'_>,
     ) -> Result<()> {
         // Run pushdown analysis for diagnostic tracing at Collection level.
-        // The actual pushdown execution happens in Database::execute_single_select().
+        // Database::execute_select_operand runs JOIN pushdown.
         let _analysis = self.analyze_join_pushdown(fctx.stmt);
         *results = self.apply_select_postprocessing(
             fctx.stmt,
@@ -234,7 +234,7 @@ impl Collection {
 
         // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
         if fctx.extracted.vector_search.is_some() {
-            let elapsed = fctx.ctx.elapsed();
+            let elapsed = fctx.started_at.elapsed();
             // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
             #[allow(clippy::cast_possible_truncation)]
             let vector_latency_us = elapsed.as_micros() as u64;
@@ -243,7 +243,6 @@ impl Collection {
                 .stats()
                 .update_vector_latency(vector_latency_us);
         }
-        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(())
     }
 
@@ -361,13 +360,30 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
         result_count: usize,
     ) -> Result<()> {
-        ctx.check_timeout()
-            .map_err(crate::error::Error::from)
-            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
+        if ctx.is_join_input() {
+            return self.check_read_deadline(ctx);
+        }
+        self.finish_returned_rows(ctx, result_count)
+    }
+
+    /// Charges the final rows and records one successfully completed read.
+    pub(crate) fn finish_returned_rows(
+        &self,
+        ctx: &crate::guardrails::QueryContext,
+        result_count: usize,
+    ) -> Result<()> {
+        self.check_read_deadline(ctx)?;
         ctx.check_cardinality(result_count)
             .map_err(crate::error::Error::from)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
+        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(())
+    }
+
+    pub(crate) fn check_read_deadline(&self, ctx: &crate::guardrails::QueryContext) -> Result<()> {
+        ctx.check_timeout()
+            .map_err(crate::error::Error::from)
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
     }
 
     /// Executes a query with instrumentation and returns plan + actual stats.

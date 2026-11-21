@@ -144,6 +144,7 @@ struct DispatchFinalizeArgs<'a> {
     fetch_limit: usize,
     is_vgb: bool,
     ctx: &'a crate::guardrails::QueryContext,
+    started_at: std::time::Instant,
 }
 
 impl DispatchFinalizeArgs<'_> {
@@ -159,6 +160,7 @@ impl DispatchFinalizeArgs<'_> {
             limit: self.limit,
             extracted: self.extracted,
             ctx: self.ctx,
+            started_at: self.started_at,
             let_bindings,
         }
     }
@@ -244,12 +246,20 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         client_id: &str,
     ) -> Result<(Vec<SearchResult>, Option<crate::velesql::FilterStrategy>)> {
-        // Phase 1: Pre-checks and context setup.
         let ctx = self.prepare_query_context(query, client_id)?;
+        self.execute_in_query_context(query, params, &ctx)
+    }
 
+    /// Executes an already validated read under its statement's deadline and guard rails.
+    pub(crate) fn execute_in_query_context(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<(Vec<SearchResult>, Option<crate::velesql::FilterStrategy>)> {
         // MATCH queries take a completely separate path (no extraction needed).
         if let Some(results) =
-            self.try_dispatch_match(query, params, &ctx, &match_exec::MatchSources::default())?
+            self.try_dispatch_match(query, params, ctx, &match_exec::MatchSources::default())?
         {
             return Ok((results, None));
         }
@@ -258,7 +268,7 @@ impl Collection {
         let query = resolved_query.as_ref().unwrap_or(query);
 
         // Phase 2-3: SELECT extraction, early-return, dispatch, and finalization.
-        let results = self.execute_select_pipeline(query, params, &ctx)?;
+        let results = self.execute_select_pipeline(query, params, ctx)?;
         Ok((results, ctx.executed_filter_strategy()))
     }
 
@@ -295,6 +305,7 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
         let stmt = &query.select;
+        let started_at = ctx.select_started_at();
         let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
         let mut extracted = Self::extract_query_components(stmt, params)?;
 
@@ -319,6 +330,7 @@ impl Collection {
             fetch_limit,
             is_vgb: stmt.is_vector_group_by(),
             ctx,
+            started_at,
         };
         self.execute_fetch_window(query, params, window, args)
     }
@@ -402,7 +414,7 @@ impl Collection {
             self.query.query_planner.record_cbo_feedback(
                 self.vector_count(),
                 ef_search,
-                args.ctx.elapsed().as_secs_f64() * 1000.0,
+                args.started_at.elapsed().as_secs_f64() * 1000.0,
             );
         }
         Ok(results)

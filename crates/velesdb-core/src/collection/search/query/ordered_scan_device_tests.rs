@@ -166,6 +166,7 @@ fn native_pair_oracle(col: &Collection, predicate: &str, hint: &str) -> (bool, V
         limit: 2,
         extracted: &planned,
         ctx: &QueryContext::new(QueryLimits::new()),
+        started_at: std::time::Instant::now(),
         let_bindings: &[],
     };
     let pairs = col
