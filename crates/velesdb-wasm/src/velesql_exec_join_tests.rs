@@ -81,6 +81,36 @@ fn test_left_join_keeps_unmatched_left_rows() {
     assert_eq!(r.row_count(), 4);
 }
 
+#[test]
+fn named_vector_order_sorts_a_null_extended_join_side() {
+    let mut db = DatabaseInner::new();
+    db.create_metadata_collection("docs").expect("test: docs");
+    db.create_metadata_collection("tags").expect("test: tags");
+    execute(
+        &mut db,
+        "INSERT INTO docs (id, tag_id) VALUES (1, 10), (2, 20), (3, 30)",
+        None,
+    )
+    .expect("test: docs");
+    execute(
+        &mut db,
+        "INSERT INTO tags (id, emb) VALUES (10, $far), (20, $near)",
+        Some(r#"{"far":[0,1], "near":[1,0]}"#),
+    )
+    .expect("test: tags");
+    for (direction, expected) in [("ASC", [1, 2, 3]), ("DESC", [3, 2, 1])] {
+        let sql = format!(
+            "SELECT * FROM docs AS d LEFT JOIN tags AS t ON d.tag_id = t.id \
+                           ORDER BY similarity(t.emb, $q) {direction}"
+        );
+        let rows = execute(&mut db, &sql, Some(r#"{"q":[1,0]}"#)).expect("test: LEFT JOIN");
+        let ids: Vec<_> = (0..rows.row_count() as usize)
+            .map(|index| rows.row(index).expect("test: row").id())
+            .collect();
+        assert_eq!(ids, expected);
+    }
+}
+
 // =========================================================================
 // Edge cases
 // =========================================================================

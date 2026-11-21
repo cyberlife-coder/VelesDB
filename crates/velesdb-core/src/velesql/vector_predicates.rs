@@ -51,15 +51,15 @@ pub fn validate_vector_predicates(condition: &Condition) -> Result<()> {
 }
 
 /// The vector the payload holds under `field`, for a named-vector
-/// `similarity(field, $v)`: `None` when the point has no such field (it
-/// simply has no vector for it).
+/// `similarity(field, $v)`: `None` for an absent or null field, including
+/// the nulls a JOIN supplies on its unmatched side.
 ///
 /// # Errors
 ///
-/// [`Error::Query`] when the field holds something other than an array of
-/// numbers.
+/// [`Error::Query`] when a non-null field holds something other than an
+/// array of numbers.
 pub fn payload_vector(payload: &serde_json::Value, field: &str) -> Result<Option<Vec<f32>>> {
-    let Some(value) = payload.get(field) else {
+    let Some(value) = super::row_field(payload, field).filter(|value| !value.is_null()) else {
         return Ok(None);
     };
     let Some(array) = value.as_array() else {

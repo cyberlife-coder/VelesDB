@@ -275,10 +275,10 @@ impl Collection {
             .collect()
     }
 
-    /// Returns the top `limit` point IDs for `field_name` in index order
-    /// (ascending, or descending when `descending`), **only when the index
-    /// fully covers** the collection (every point carries the field). Returns
-    /// `None` when no such index exists or coverage is incomplete.
+    /// Returns the ordered IDs through the end of `page`, including rows
+    /// before its offset so the caller can check expiry. An empty page or
+    /// one starting past the last row needs no IDs. Both still require a
+    /// fully covering index. A missing or incomplete index returns `None`.
     ///
     /// Backs the index-backed `ORDER BY <field> LIMIT k` fast path
     /// (EPIC-081 phase 2): the returned IDs are a snapshot, so the secondary
@@ -288,9 +288,26 @@ impl Collection {
         &self,
         field_name: &str,
         descending: bool,
-        limit: usize,
+        page: std::ops::Range<usize>,
     ) -> Option<Vec<u64>> {
         let point_count = self.len();
+        let prefix_len = if page.is_empty() || page.start >= point_count {
+            0
+        } else {
+            page.end
+        };
+        self.covered_index_prefix(field_name, descending, prefix_len, point_count)
+    }
+
+    /// Reads up to `limit` IDs under the same lock that checks coverage of
+    /// the `point_count` rows the caller already counted.
+    pub(in crate::collection) fn covered_index_prefix(
+        &self,
+        field_name: &str,
+        descending: bool,
+        limit: usize,
+        point_count: usize,
+    ) -> Option<Vec<u64>> {
         let indexes = self.query.secondary_indexes.read();
         indexes
             .get(field_name)?

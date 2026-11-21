@@ -239,24 +239,26 @@ impl SelectOrderBy {
         ascending: std::cmp::Ordering,
         higher_is_better: bool,
     ) -> std::cmp::Ordering {
-        let is_similarity = matches!(
-            self.expr,
-            OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare
-        );
-        if self.descending == (is_similarity && !higher_is_better) {
-            ascending
-        } else {
+        if self.higher_values_first(higher_is_better) {
             ascending.reverse()
+        } else {
+            ascending
         }
     }
 
-    /// Orders two rows' scores under this item: two scores as
-    /// [`Self::directed`] orders them, and a `None` score — a row the item
-    /// cannot score, such as a row without a vector under
-    /// `similarity(vector, $q)` — as a null value, which every ORDER BY sorts
-    /// after every value under `ASC` and before every value under `DESC`
-    /// ([`compare_scores`](crate::velesql::compare_scores); `VELESQL_SPEC.md`,
-    /// "Value order and NULLs"), whatever the metric.
+    fn higher_values_first(&self, higher_is_better: bool) -> bool {
+        let similarity = matches!(
+            self.expr,
+            OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare
+        );
+        self.descending != (similarity && !higher_is_better)
+    }
+
+    /// Orders numeric scores in the item's direction, with signed zeros tied
+    /// and a NaN after every number in either direction. A row the item cannot
+    /// score, such as a row without a vector under `similarity(vector, $q)`,
+    /// has a null key. A null sorts last under `ASC` and first under `DESC`,
+    /// whatever the metric (`VELESQL_SPEC.md`, "Value order and NULLs").
     #[must_use]
     pub fn directed_score(
         &self,
@@ -265,7 +267,9 @@ impl SelectOrderBy {
         higher_is_better: bool,
     ) -> std::cmp::Ordering {
         match (a, b) {
-            (Some(a), Some(b)) => self.directed(a.total_cmp(&b), higher_is_better),
+            (Some(a), Some(b)) => {
+                crate::distance::rank_scores(a, b, self.higher_values_first(higher_is_better))
+            }
             // A null follows the keyword, not the metric.
             _ if self.descending => crate::velesql::compare_scores(a, b).reverse(),
             _ => crate::velesql::compare_scores(a, b),
@@ -459,15 +463,16 @@ impl SelectStatement {
         has_aggs || self.group_by.is_some()
     }
 
-    /// Returns `true` when this SELECT reshapes its ranked rows before its
-    /// `LIMIT` / `OFFSET` window — `DISTINCT` deduplicates them, a vector
-    /// `GROUP BY` ([`Self::is_vector_group_by`]) groups them — so the window
-    /// bounds the rows it returns, never the candidates it reads. The single
-    /// test core's query pipeline and the WASM executor size a search's fetch
-    /// by.
+    /// Whether the SELECT must read past its output window to deduplicate
+    /// rows, group vector hits, or compute a window function over its partition.
     #[must_use]
     pub fn reshapes_rows_before_window(&self) -> bool {
-        self.distinct == DistinctMode::All || self.is_vector_group_by()
+        self.distinct == DistinctMode::All
+            || self.is_vector_group_by()
+            || matches!(
+                &self.columns,
+                SelectColumns::Mixed { window_functions, .. } if !window_functions.is_empty()
+            )
     }
 
     /// Returns `true` for a vector `GROUP BY`: `GROUP BY` over the results of

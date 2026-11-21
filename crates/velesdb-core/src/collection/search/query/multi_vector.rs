@@ -26,8 +26,8 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Query` if the field is not `"vector"` and the payload
-    /// value exists but is not a JSON array of numbers.
+    /// Returns `Error::Query` for a non-null named field whose value is
+    /// outside the JSON array-of-numbers representation.
     pub(crate) fn get_vector_for_field(
         &self,
         point_id: u64,

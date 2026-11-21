@@ -40,6 +40,7 @@ mod execution_paths;
 mod extraction;
 #[cfg(test)]
 mod extraction_tests;
+mod fetch_window;
 mod fused_dispatch;
 mod graph_prefilter;
 mod hybrid_sparse;
@@ -71,9 +72,12 @@ mod multi_vector_tests;
 mod near_disjunction_tests;
 mod options;
 mod ordered_index_scan;
+mod ordered_scan;
 mod ordering;
 #[cfg(test)]
 mod ordering_tests;
+#[cfg(test)]
+mod ordering_window_tests;
 pub mod parallel_traversal;
 #[cfg(test)]
 mod parallel_traversal_tests;
@@ -275,27 +279,24 @@ impl Collection {
         let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
         let extracted = Self::extract_query_components(stmt, params)?;
 
-        // EPIC-081 phase 2: serve a plain `ORDER BY <indexed_field> LIMIT k` from
-        // the field's ordered secondary index instead of the exhaustive
-        // MAX_LIMIT fetch + sort. Gated hard (single plain Field key, fully
-        // covered index, no WHERE/JOIN/graph/vector/sparse/DISTINCT/aggregate);
-        // OFFSET/LIMIT are applied inside the scan, so it returns the finished
-        // page directly. Falls through unchanged otherwise.
+        // A covering secondary index can supply the finished ORDER BY page.
+        // The scan checks the filter and sort shape before applying OFFSET/LIMIT.
         if let Some(results) = self.try_ordered_index_scan(query, stmt, &extracted, ctx)? {
             return Ok(results);
         }
 
-        // DISTINCT and a vector GROUP BY reshape the fetched rows before the
-        // window, so the window bounds what they return, never what they read:
-        // a fetch cut at LIMIT + OFFSET deduplicated or grouped only the top
-        // of the ranking (`SELECT DISTINCT cat … LIMIT 2` returned one row
-        // when the two best hits shared a category).
+        // The fetch stops at LIMIT + OFFSET only when the rows it stops at
+        // are the window's (`fetch_window.rs`); an ORDER BY it does not rank
+        // by takes the ordered scan, which ranks every admitted row.
         let is_vgb = stmt.is_vector_group_by();
-        let effective_fetch_limit = if stmt.reshapes_rows_before_window() {
-            MAX_LIMIT
-        } else {
-            fetch_limit
-        };
+        let effective_fetch_limit =
+            match self.select_fetch_window(stmt, &extracted, params, fetch_limit) {
+                fetch_window::FetchWindow::Bounded(rows) => rows,
+                fetch_window::FetchWindow::Exhaustive => MAX_LIMIT,
+                fetch_window::FetchWindow::OrderedScan => {
+                    return self.execute_ordered_scan(query, params, &extracted, limit, ctx);
+                }
+            };
 
         // Early-return paths or LET-binding guard for special query shapes.
         if let Some(results) = self.try_early_return_or_guard_let(
@@ -309,7 +310,7 @@ impl Collection {
             return Ok(results);
         }
 
-        self.dispatch_and_finalize(
+        self.dispatch_and_finalize::<MAX_LIMIT>(
             query,
             params,
             &DispatchFinalizeArgs {
@@ -327,15 +328,21 @@ impl Collection {
     ///
     /// Split out of [`Self::execute_select_pipeline`] so each stays within the
     /// cyclomatic-complexity budget.
-    fn dispatch_and_finalize(
+    fn dispatch_and_finalize<const CEILING: usize>(
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
         args: &DispatchFinalizeArgs<'_>,
     ) -> Result<Vec<SearchResult>> {
         let stmt = &query.select;
-        let mut results =
-            self.dispatch_main_select(stmt, params, args.extracted, args.fetch_limit, args.ctx)?;
+        let mut most_fetched = 0;
+        let mut results = fetch_window::fetch_past_ties(stmt, args.fetch_limit, |rows| {
+            let (fetched, results) =
+                self.dispatch_main_select(stmt, params, args.extracted, rows, args.ctx)?;
+            most_fetched = most_fetched.max(fetched);
+            Ok(results)
+        })?;
+        self.warn_if_window_capped_at(stmt, most_fetched, CEILING);
 
         // Vector GROUP BY post-processing: group results by parent field
         // before ORDER BY / LIMIT / OFFSET are applied, which then sort the

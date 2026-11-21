@@ -286,9 +286,9 @@ impl SecondaryIndex {
     /// are absent, so callers MUST restrict use to fully-covered fields and
     /// fall back to the full scan otherwise.
     // Consumed by the `ORDER BY <field> LIMIT k` pushdown (routing at
-    // `Collection::try_ordered_index_scan`, gated by
-    // `order_by_requires_exhaustive_fetch`) — phase 2 of the ordered-index
-    // EPIC, see docs/planning/CORE_PARITY_REMEDIATION.md.
+    // `Collection::try_ordered_index_scan`, ahead of the ordered scan
+    // `Collection::select_fetch_window` gives such an `ORDER BY`) — phase 2
+    // of the ordered-index EPIC, see docs/planning/CORE_PARITY_REMEDIATION.md.
     #[cfg(test)]
     #[must_use]
     pub fn ordered_ids(&self, descending: bool, limit: usize) -> Vec<u64> {
