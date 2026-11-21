@@ -36,18 +36,10 @@ impl Collection {
             return Ok(Some(results));
         }
 
-        // A scalar ORDER BY ranks rows only after the fetch, so the sparse and
-        // fused fetches below must not stop at `limit` first — the reason
-        // `try_not_similarity_or_union` widens its scan.
-        let limit = if Self::order_by_requires_exhaustive_fetch(stmt) {
-            MAX_LIMIT
-        } else {
-            limit
-        };
-
         // Phase 5: Sparse-only or hybrid dense+sparse execution.
         if let Some(ref svs) = extracted.sparse_vector_search {
-            let results = self.dispatch_sparse_query(stmt, params, extracted, svs, limit, ctx)?;
+            let results =
+                self.dispatch_sparse_query::<MAX_LIMIT>(stmt, params, extracted, svs, limit, ctx)?;
             return Ok(Some(results));
         }
 
@@ -82,16 +74,6 @@ impl Collection {
             cond,
             has_graph_predicates,
             ctx,
-        };
-
-        // A scalar (non-similarity) ORDER BY ranks rows only in
-        // `finalize_early_results`, so capping the fetch at `limit` first would
-        // truncate before the sort (same defect as the main-dispatch path).
-        // Fetch exhaustively so the sort precedes truncation.
-        let limit = if Self::order_by_requires_exhaustive_fetch(stmt) {
-            MAX_LIMIT
-        } else {
-            limit
         };
 
         self.run_similarity_scan_early(&early_ctx, limit).map(Some)
@@ -148,6 +130,7 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let mut results = execute_fn(self)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
+        self.warn_if_window_capped(early.stmt, results.len());
         if early.has_graph_predicates {
             results = self
                 .apply_where_condition_to_results_with_cache(
@@ -159,21 +142,6 @@ impl Collection {
                 )
                 .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         }
-        self.finalize_early_results(results, early)
-    }
-
-    /// The SELECT post-processing of the scan's rows
-    /// ([`Self::finalize_ranked_results`]), then the guard-rails.
-    fn finalize_early_results(
-        &self,
-        results: Vec<SearchResult>,
-        early: &EarlyReturnCtx<'_>,
-    ) -> Result<Vec<SearchResult>> {
-        let results = self
-            .finalize_ranked_results(early.stmt, early.params, results)
-            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
-        self.check_guardrails_and_record(early.ctx, results.len())?;
-        self.runtime.guard_rails.circuit_breaker.record_success();
-        Ok(results)
+        self.finalize_ranked_and_check(early.stmt, early.params, results, early.ctx)
     }
 }

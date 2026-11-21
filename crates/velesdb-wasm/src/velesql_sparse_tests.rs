@@ -120,6 +120,37 @@ fn db_with_similarities() -> DatabaseInner {
     db
 }
 
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn sparse_rows_are_ranked_before_the_final_limit() {
+    let mut db = db_with_similarities();
+    let rows = execute(
+        &mut db,
+        "SELECT id, ROW_NUMBER() OVER (ORDER BY id DESC) AS rn FROM s \
+         WHERE vector SPARSE_NEAR {7: 1.0} LIMIT 1",
+        None,
+    )
+    .expect("test: sparse window");
+    let projected: serde_json::Value =
+        serde_json::from_str(&rows.rows_json()).expect("test: projected rows");
+    assert_eq!(projected[0]["id"], 1);
+    assert_eq!(projected[0]["rn"], 3);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn an_external_order_can_select_the_last_sparse_hit() {
+    let mut db = db_with_similarities();
+    for search in [
+        "vector SPARSE_NEAR {7: 1.0}",
+        "vector NEAR $q AND vector SPARSE_NEAR {7: 1.0}",
+        "vector NEAR_FUSED [$q, $q]",
+    ] {
+        let sql = format!("SELECT * FROM s WHERE {search} ORDER BY id DESC LIMIT 1");
+        assert_eq!(ids(&mut db, &sql).expect("test: search"), [3], "{sql}");
+    }
+}
+
 /// A `similarity()` threshold beside `SPARSE_NEAR` bounds the points either
 /// branch may return, evaluated as the dense SELECT path evaluates it — it
 /// used to fail with "similarity() threshold filters are not supported".

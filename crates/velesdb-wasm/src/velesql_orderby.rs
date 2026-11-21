@@ -14,8 +14,8 @@
 //!
 //! `similarity(field, $v)` scores each row as core's ordering does: `vector`
 //! the row's own vector, another field the payload's named vector
-//! ([`velesdb_core::velesql::payload_vector`]), a row without one taking the
-//! worst key so it sorts last under `DESC`. It needs the rows' collection
+//! ([`velesdb_core::velesql::payload_vector`]). A row without one has a null
+//! key, last under `ASC` and first under `DESC`. It needs the rows' collection
 //! ([`OrderVectors`]); where the rows are no collection's points (groups) it
 //! is refused, as is an aggregate ORDER BY outside an aggregation.
 
@@ -269,6 +269,9 @@ fn compare_rows(
     for (idx, spec) in specs.iter().enumerate() {
         let ord = match keys.get(idx).and_then(Option::as_ref) {
             Some(scores) => spec.directed_score(scores[ia], scores[ib], higher_is_better),
+            None if matches!(spec.expr, OrderByExpr::SimilarityBare) => {
+                spec.directed_score(Some(a.score), Some(b.score), higher_is_better)
+            }
             None => spec.directed(compare_with_spec(a, b, spec), higher_is_better),
         };
         if ord != Ordering::Equal {
@@ -283,14 +286,13 @@ fn compare_rows(
 fn compare_with_spec(a: &SearchResult, b: &SearchResult, spec: &SelectOrderBy) -> Ordering {
     match &spec.expr {
         OrderByExpr::Field(name) => compare_field(a, b, name),
-        OrderByExpr::SimilarityBare => compare_scores(a, b),
         OrderByExpr::Arithmetic(expr) => {
             let va = eval_arithmetic(expr, a);
             let vb = eval_arithmetic(expr, b);
             compare_f32(va, vb)
         }
-        // Similarity / Aggregate were rejected by `validate_order_by`; treat
-        // as equal defensively (the non_exhaustive enum may add variants).
+        // `compare_rows` handles similarity keys. `validate_order_by`
+        // rejects aggregates and unsupported variants before sorting.
         _ => Ordering::Equal,
     }
 }
@@ -311,11 +313,6 @@ fn compare_field(a: &SearchResult, b: &SearchResult, name: &str) -> Ordering {
     let va = extract_payload_field(a, name);
     let vb = extract_payload_field(b, name);
     velesdb_core::velesql::compare_json_values(va.as_ref(), vb.as_ref())
-}
-
-/// Compares two rows by search score (NaN-safe, NaN sorts last in ASC).
-fn compare_scores(a: &SearchResult, b: &SearchResult) -> Ordering {
-    compare_f32(a.score, b.score)
 }
 
 /// NaN-safe f32 comparison (NaN sorts last in ASC).

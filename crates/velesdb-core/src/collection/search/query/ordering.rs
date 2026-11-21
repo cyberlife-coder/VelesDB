@@ -34,58 +34,62 @@ impl Collection {
         order_by: &[crate::velesql::SelectOrderBy],
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<()> {
-        self.apply_order_by_with_let(results, order_by, params, &[])
+        self.apply_order_by_with_let(results, order_by, params, &[], results.len())
     }
 
-    /// Apply ORDER BY with pre-evaluated LET bindings (VelesQL v1.10 Phase 3).
+    /// Apply ORDER BY with pre-evaluated LET bindings (VelesQL v1.10 Phase 3),
+    /// ordering only the `leading` first rows.
     ///
     /// `let_bindings` contains per-result pre-evaluated `(name, value)` pairs
     /// stored as `[result_idx][(name, value)]`. If empty, behaves identically
     /// to [`Self::apply_order_by`].
+    ///
+    /// The `leading` best rows of the whole slice come first, in order — the
+    /// rows a window of `OFFSET + LIMIT` keeps — and the rest follow in no
+    /// defined order: a selection over every row, then a sort of those
+    /// `leading` only ([`rank_leading`]). `leading >= results.len()` sorts
+    /// them all.
     pub(crate) fn apply_order_by_with_let(
         &self,
         results: &mut [SearchResult],
         order_by: &[crate::velesql::SelectOrderBy],
         params: &std::collections::HashMap<String, serde_json::Value>,
         per_result_let: &[Vec<(String, f32)>],
+        leading: usize,
     ) -> Result<()> {
+        if let Some((scores, recomputed)) =
+            self.rank_rows(results, order_by, params, per_result_let, leading)?
+        {
+            write_back_similarity_scores(results, scores, recomputed);
+        }
+        Ok(())
+    }
+
+    /// Orders the `leading` best rows of `results` first, as
+    /// [`Self::apply_order_by_with_let`] does, without writing any score
+    /// back: the rows keep the scores their plan gave them, so ranking them
+    /// again — a window narrowed in steps (`ordered_scan.rs`) — compares
+    /// them as it did the first time. Returns the first similarity column's
+    /// scores in output order, with whether that column recomputed them
+    /// (`similarity(field, $v)`); `None` when there is none.
+    pub(super) fn rank_rows(
+        &self,
+        results: &mut [SearchResult],
+        order_by: &[crate::velesql::SelectOrderBy],
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        per_result_let: &[Vec<(String, f32)>],
+        leading: usize,
+    ) -> Result<Option<(Vec<Option<f32>>, bool)>> {
         if order_by.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
         let similarity_scores_map = self.precompute_similarity_scores(results, order_by, params)?;
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
-
-        // Decorate-then-sort for plain payload fields: resolve each row's
-        // key ONCE instead of re-walking the (BTreeMap-backed) payload JSON
-        // inside the comparator — O(n) resolutions where the comparator paid
-        // O(n log n) x2. LET-bound and builtin-score fields keep the
-        // per-comparison path: they read per-row f32 contexts, not payload
-        // JSON, so there is nothing to decorate.
-        let field_keys: Vec<Option<Vec<Option<&serde_json::Value>>>> = order_by
-            .iter()
-            .map(|ob| match &ob.expr {
-                crate::velesql::OrderByExpr::Field(field_name)
-                    if per_result_let.is_empty() && is_payload_field(field_name) =>
-                {
-                    Some(
-                        results
-                            .iter()
-                            .map(|r| {
-                                r.point
-                                    .payload
-                                    .as_ref()
-                                    .and_then(|p| crate::velesql::row_field(p, field_name))
-                            })
-                            .collect(),
-                    )
-                }
-                _ => None,
-            })
-            .collect();
+        let field_keys = decorate_field_keys(results, order_by, per_result_let);
 
         let mut indices: Vec<usize> = (0..results.len()).collect();
-        indices.sort_unstable_by(|&i, &j| {
+        rank_leading(&mut indices, leading, |&i, &j| {
             Self::compare_by_order_columns(
                 i,
                 j,
@@ -113,13 +117,7 @@ impl Collection {
         // Apply the sort permutation in-place using cycle decomposition.
         // Avoids cloning every SearchResult (no heap allocation for vector data).
         apply_permutation_in_place(results, &mut indices);
-
-        // Write back pre-computed scores.
-        if let Some((scores, recomputed)) = sorted_scores {
-            write_back_similarity_scores(results, scores, recomputed);
-        }
-
-        Ok(())
+        Ok(sorted_scores)
     }
 
     /// Pre-computes similarity scores for all ORDER BY similarity() columns:
@@ -153,8 +151,9 @@ impl Collection {
     }
 
     /// Scores every result row against `order_vec` using the vector selected by
-    /// `field`: the default vector when `field == "vector"`, otherwise the named
-    /// payload vector for that row's point id (multi-vector support, P1-A).
+    /// `field`: its primary vector when `field == "vector"`, otherwise the
+    /// named vector in its hydrated payload. A joined or compound row carries
+    /// the values to rank even when another row shares its point id.
     ///
     /// A row whose vector is missing (a graph node without an embedding),
     /// `None`, or length-mismatched has no score: `None`, a null key that
@@ -166,20 +165,18 @@ impl Collection {
         field: &str,
         order_vec: &[f32],
     ) -> Result<Vec<Option<f32>>> {
+        let metric = self.storage.config.read().metric;
         results
             .iter()
             .map(|r| {
-                let vec: std::borrow::Cow<[f32]> = if field == crate::velesql::PRIMARY_VECTOR_FIELD
-                {
-                    std::borrow::Cow::Borrowed(&r.point.vector)
-                } else {
-                    match self.get_vector_for_field(r.point.id, field)? {
-                        Some(v) => std::borrow::Cow::Owned(v),
-                        None => return Ok(None),
-                    }
+                if field == crate::velesql::PRIMARY_VECTOR_FIELD {
+                    return Ok(metric.checked_calculate(&r.point.vector, order_vec));
+                }
+                let Some(payload) = &r.point.payload else {
+                    return Ok(None);
                 };
-                // `None` covers the length-mismatched and empty cases.
-                Ok(self.compute_metric_score(&vec, order_vec))
+                let vector = crate::velesql::payload_vector(payload, field)?;
+                Ok(vector.and_then(|v| metric.checked_calculate(&v, order_vec)))
             })
             .collect()
     }
@@ -372,6 +369,61 @@ type SimilarityKeys = std::collections::HashMap<usize, Vec<Option<f32>>>;
 /// score variable nor `id`, the point id.
 fn is_payload_field(name: &str) -> bool {
     name != "id" && !crate::velesql::is_builtin_score_variable(name)
+}
+
+/// Decorate-then-sort for plain payload fields: each row's key of every
+/// plain payload-field column, resolved ONCE instead of re-walking the
+/// (BTreeMap-backed) payload JSON inside the comparator — O(n) resolutions
+/// where the comparator paid O(n log n) x2. LET-bound and builtin-score
+/// fields keep the per-comparison path: they read per-row f32 contexts, not
+/// payload JSON, so there is nothing to decorate (`None`).
+fn decorate_field_keys<'r>(
+    results: &'r [SearchResult],
+    order_by: &[crate::velesql::SelectOrderBy],
+    per_result_let: &[Vec<(String, f32)>],
+) -> Vec<Option<Vec<Option<&'r serde_json::Value>>>> {
+    order_by
+        .iter()
+        .map(|ob| match &ob.expr {
+            crate::velesql::OrderByExpr::Field(field_name)
+                if per_result_let.is_empty() && is_payload_field(field_name) =>
+            {
+                Some(
+                    results
+                        .iter()
+                        .map(|r| {
+                            r.point
+                                .payload
+                                .as_ref()
+                                .and_then(|p| crate::velesql::row_field(p, field_name))
+                        })
+                        .collect(),
+                )
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Puts the `leading` least elements of `indices` under `compare` first, in
+/// order; the rest follow in no defined order. `compare` is a total order
+/// (every ORDER BY ends on the unique point id), so the leading elements are
+/// exactly those a full sort puts there: a selection over all `n`, then a
+/// sort of the `leading` alone, instead of sorting all `n`.
+fn rank_leading(
+    indices: &mut [usize],
+    leading: usize,
+    mut compare: impl FnMut(&usize, &usize) -> Ordering,
+) {
+    if leading == 0 {
+        return;
+    }
+    if leading < indices.len() {
+        indices.select_nth_unstable_by(leading - 1, &mut compare);
+        indices[..leading].sort_unstable_by(compare);
+    } else {
+        indices.sort_unstable_by(compare);
+    }
 }
 
 /// Applies a permutation to `slice` in-place using cycle decomposition.

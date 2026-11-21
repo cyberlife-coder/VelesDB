@@ -158,7 +158,7 @@ impl Collection {
     ///
     /// LET bindings require [`Self::finalize_query_results`] which early-return paths
     /// bypass. Returns an explicit error for unsupported combinations.
-    fn validate_let_binding_support(extracted: &ExtractedComponents) -> Result<()> {
+    pub(super) fn validate_let_binding_support(extracted: &ExtractedComponents) -> Result<()> {
         let unsupported = if extracted.sparse_vector_search.is_some() {
             Some("SPARSE_NEAR")
         } else if extracted.fused_search.is_some() {
@@ -221,8 +221,6 @@ impl Collection {
         // Run pushdown analysis for diagnostic tracing at Collection level.
         // The actual pushdown execution happens in Database::execute_single_select().
         let _analysis = self.analyze_join_pushdown(fctx.stmt);
-        self.check_guardrails_and_record(fctx.ctx, results.len())?;
-
         *results = self.apply_select_postprocessing(
             fctx.stmt,
             std::mem::take(results),
@@ -230,6 +228,9 @@ impl Collection {
             fctx.limit,
             fctx.let_bindings,
         )?;
+        // The guard-rails count the rows the statement returns, after its
+        // window, on every path (`Self::finalize_ranked_and_check`).
+        self.check_guardrails_and_record(fctx.ctx, results.len())?;
 
         // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
         if fctx.extracted.vector_search.is_some() {

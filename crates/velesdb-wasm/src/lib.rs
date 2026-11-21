@@ -231,6 +231,10 @@ mod velesql_exec_hybrid_tests;
 mod velesql_exec_behavior_tests;
 
 #[cfg(test)]
+#[path = "velesql_order_window_tests.rs"]
+mod velesql_order_window_tests;
+
+#[cfg(test)]
 #[path = "velesql_exec_error_code_tests.rs"]
 mod velesql_exec_error_code_tests;
 

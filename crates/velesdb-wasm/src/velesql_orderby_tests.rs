@@ -20,6 +20,35 @@ fn sort(stmt_order: Vec<SelectOrderBy>, rows: &mut [SearchResult]) {
 }
 
 #[test]
+fn similarity_score_order_keeps_nan_after_numbers_in_both_directions() {
+    for descending in [true, false] {
+        for higher in [true, false] {
+            let mut rows = vec![
+                mk(5, -f32::NAN, serde_json::Value::Null),
+                mk(4, f32::NAN, serde_json::Value::Null),
+                mk(3, -0.0, serde_json::Value::Null),
+                mk(2, 0.0, serde_json::Value::Null),
+                mk(1, 1.0, serde_json::Value::Null),
+            ];
+            let mut stmt = SelectStatement::empty();
+            stmt.order_by = Some(vec![SelectOrderBy {
+                expr: OrderByExpr::SimilarityBare,
+                descending,
+            }]);
+            sort_rows(&stmt, &mut rows, &OrderContext::without_vectors(higher))
+                .expect("test: sort");
+            let ids: Vec<_> = rows.iter().map(|r| r.point.id).collect();
+            let expected = if descending == higher {
+                [1, 2, 3, 4, 5]
+            } else {
+                [2, 3, 1, 4, 5]
+            };
+            assert_eq!(ids, expected);
+        }
+    }
+}
+
+#[test]
 fn test_sort_by_id_asc() {
     let mut rows = vec![
         mk(3, 0.0, serde_json::json!({})),

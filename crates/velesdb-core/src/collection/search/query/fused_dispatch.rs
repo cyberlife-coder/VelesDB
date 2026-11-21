@@ -40,10 +40,8 @@ impl Collection {
             .and_then(Self::extract_metadata_filter)
             .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
         let results = self.multi_query_search(&slices, limit, strategy, filter.as_ref())?;
-        self.check_guardrails_and_record(ctx, results.len())?;
-        let results = self.finalize_ranked_results(stmt, params, results)?;
-        self.runtime.guard_rails.circuit_breaker.record_success();
-        Ok(results)
+        self.warn_if_window_capped(stmt, results.len());
+        self.finalize_ranked_and_check(stmt, params, results, ctx)
     }
 }
 

@@ -34,19 +34,35 @@ use super::row_universe::RowUniverse;
 
 /// The first `similarity()` leaf of a clause, resolved: what every row is
 /// ranked and scored by.
-struct RankingLeaf {
-    field: String,
-    query: Vec<f32>,
+pub(super) struct RankingLeaf {
+    pub(super) field: String,
+    pub(super) query: Vec<f32>,
+}
+
+/// What a scanned row is scored by.
+#[derive(Clone, Copy)]
+pub(super) enum RowScore<'a> {
+    /// A `similarity()` leaf: a row it cannot score carries
+    /// [`crate::velesql::METADATA_MATCH_SCORE`] and no component.
+    Leaf(&'a RankingLeaf),
+    /// A `NEAR`'s query vector, on the row's own vector, as
+    /// [`Collection::scan_and_score_by_vector`] scores it: a NaN takes the
+    /// metric's worst score.
+    Near(&'a [f32]),
+    /// Nothing: every row carries [`crate::velesql::METADATA_MATCH_SCORE`].
+    Unscored,
 }
 
 /// Per-scan invariants, hoisted once.
-struct ScanCtx<'a> {
-    vector_storage: &'a crate::storage::MmapStorage,
-    payload_storage: &'a crate::storage::LogPayloadStorage,
-    universe: RowUniverse,
-    metric: crate::distance::DistanceMetric,
-    now_secs: u64,
-    ranking: Option<&'a RankingLeaf>,
+pub(super) struct ScanCtx<'a> {
+    pub(super) vector_storage: &'a crate::storage::MmapStorage,
+    pub(super) payload_storage: &'a crate::storage::LogPayloadStorage,
+    pub(super) universe: RowUniverse,
+    pub(super) metric: crate::distance::DistanceMetric,
+    pub(super) now_secs: u64,
+    pub(super) score: RowScore<'a>,
+    /// The FROM side's names a graph predicate's anchor resolves against.
+    pub(super) from_aliases: &'a [String],
 }
 
 /// The rows a scan keeps: the `limit` best scored ones, and up to `limit`
@@ -111,18 +127,16 @@ impl Collection {
     /// generous ceiling the query is a likely DoS vector, so it is
     /// **rejected** rather than merely warned. This is a SERVER-controlled
     /// constant and cannot be raised by the query.
-    const SIMILARITY_SCAN_MAX: usize = 5_000_000;
+    pub(super) const SIMILARITY_SCAN_MAX: usize = 5_000_000;
 
-    /// Rejects a scan whose candidate count exceeds
-    /// [`Self::SIMILARITY_SCAN_MAX`] (#901).
-    fn guard_similarity_scan(total_count: usize) -> Result<()> {
-        if total_count > Self::SIMILARITY_SCAN_MAX {
+    /// Rejects a scan whose candidate count exceeds the server ceiling (#901).
+    fn guard_similarity_scan(total_count: usize, ceiling: usize) -> Result<()> {
+        if total_count > ceiling {
             return Err(crate::error::Error::Config(format!(
                 "this similarity() query would scan {total_count} vectors, exceeding the \
-                 server scan limit of {}. Add a more selective metadata filter or \
+                 server scan limit of {ceiling}. Add a more selective metadata filter or \
                  use a positive similarity() threshold on the point's own vector \
-                 (index-accelerated).",
-                Self::SIMILARITY_SCAN_MAX
+                 (index-accelerated)."
             )));
         }
         Ok(())
@@ -141,7 +155,7 @@ impl Collection {
     }
 
     /// The leaf a scan ranks and scores by: the first `similarity()`.
-    fn ranking_leaf(
+    pub(super) fn ranking_leaf(
         condition: &Condition,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Option<RankingLeaf>> {
@@ -152,9 +166,9 @@ impl Collection {
     }
 
     /// The ids a scan visits, in id order: the `candidates` when given, else
-    /// every row ([`Self::row_ids`]), refused above
-    /// [`Self::SIMILARITY_SCAN_MAX`].
-    fn similarity_scan_ids(
+    /// every row ([`Self::row_ids`]). Both executors use
+    /// [`Self::SIMILARITY_SCAN_MAX`] as their candidate ceiling.
+    pub(super) fn similarity_scan_ids<const MAX: usize>(
         &self,
         candidates: Option<&HashSet<u64>>,
         limit: usize,
@@ -163,9 +177,9 @@ impl Collection {
             Some(ids) => ids.iter().copied().collect(),
             None => self.row_ids(),
         };
-        ids.sort_unstable();
-        Self::guard_similarity_scan(ids.len())?;
+        Self::guard_similarity_scan(ids.len(), MAX)?;
         Self::warn_large_scan(ids.len(), limit);
+        ids.sort_unstable();
         Ok(ids)
     }
 
@@ -192,7 +206,8 @@ impl Collection {
         candidates: Option<&HashSet<u64>>,
     ) -> Result<Vec<SearchResult>> {
         let ranking = Self::ranking_leaf(condition, params)?;
-        let all_ids = self.similarity_scan_ids(candidates, limit)?;
+        let all_ids =
+            self.similarity_scan_ids::<{ Self::SIMILARITY_SCAN_MAX }>(candidates, limit)?;
 
         // LOCK ORDER: metric snapshot (config, rank 1) first, then
         // vector_storage (2) before payload_storage (3) — the order a real
@@ -219,13 +234,14 @@ impl Collection {
             universe,
             metric,
             now_secs,
-            ranking: ranking.as_ref(),
+            score: ranking.as_ref().map_or(RowScore::Unscored, RowScore::Leaf),
+            from_aliases: &[],
         };
         let mut rows = ScanRows::new(limit, metric.higher_is_better());
         for id in all_ids {
             if let Some((row, scored)) = self.scan_candidate(
                 id,
-                condition,
+                Some(condition),
                 params,
                 &scan,
                 &match_guards,
@@ -237,12 +253,13 @@ impl Collection {
         Ok(rows.into_ranked())
     }
 
-    /// Evaluates one candidate against the full condition; when it holds,
-    /// the hydrated row and whether the ranking leaf scored it.
-    fn scan_candidate(
+    /// Evaluates one candidate against the full condition (none: every row
+    /// holds); when it holds, the hydrated row and whether its score scored
+    /// it.
+    pub(super) fn scan_candidate(
         &self,
         id: u64,
-        condition: &Condition,
+        condition: Option<&Condition>,
         params: &HashMap<String, serde_json::Value>,
         scan: &ScanCtx<'_>,
         guards: &super::match_exec::MatchStorageGuards<'_>,
@@ -256,21 +273,23 @@ impl Collection {
         {
             return Ok(None);
         }
-        if !self.evaluate_where_condition_for_record(
-            condition,
-            id,
-            payload.as_ref(),
-            vector.as_deref(),
-            params,
-            &[],
-            graph_cache,
-            Some(guards),
-        )? {
+        let holds = match condition {
+            Some(condition) => self.evaluate_where_condition_for_record(
+                condition,
+                id,
+                payload.as_ref(),
+                vector.as_deref(),
+                params,
+                scan.from_aliases,
+                graph_cache,
+                Some(guards),
+            )?,
+            None => true,
+        };
+        if !holds {
             return Ok(None);
         }
-        let score = scan
-            .ranking
-            .and_then(|leaf| ranking_score(leaf, vector.as_deref(), payload.as_ref(), scan.metric));
+        let score = row_score(scan.score, vector.as_deref(), payload.as_ref(), scan.metric);
         let mut row = SearchResult::new(
             Point {
                 id,
@@ -286,6 +305,36 @@ impl Collection {
             crate::collection::search::tag_vector_component_scores(std::slice::from_mut(&mut row));
         }
         Ok(Some((row, score.is_some())))
+    }
+}
+
+/// The score `score` gives a row: `None` when it gives none.
+fn row_score(
+    score: RowScore<'_>,
+    own: Option<&[f32]>,
+    payload: Option<&serde_json::Value>,
+    metric: crate::distance::DistanceMetric,
+) -> Option<f32> {
+    match score {
+        RowScore::Leaf(leaf) => ranking_score(leaf, own, payload, metric),
+        RowScore::Near(query) => {
+            let raw = metric.checked_calculate(own?, query)?;
+            Some(if raw.is_nan() {
+                worst_score(metric)
+            } else {
+                raw
+            })
+        }
+        RowScore::Unscored => None,
+    }
+}
+
+/// The metric's worst score, which a NaN takes so it never outranks a row.
+fn worst_score(metric: crate::distance::DistanceMetric) -> f32 {
+    if metric.higher_is_better() {
+        f32::NEG_INFINITY
+    } else {
+        f32::INFINITY
     }
 }
 
