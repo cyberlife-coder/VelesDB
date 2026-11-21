@@ -111,12 +111,15 @@ fn bind_query_condition_with_clock<S: BuildHasher>(
 /// Rebuilds the condition with each scalar operand bound in declaration order.
 fn bind_condition_with(
     cond: &Condition,
-    bind: &impl Fn(&Value) -> Result<Value>,
+    bind: &dyn Fn(&Value) -> Result<Value>,
 ) -> Result<Condition> {
     let boxed = |inner: &Condition| bind_condition_with(inner, bind).map(Box::new);
+    let binary = |left: &Condition, right: &Condition, join: fn(_, _) -> Condition| {
+        Ok(join(boxed(left)?, boxed(right)?))
+    };
     match cond {
-        Condition::And(left, right) => Ok(Condition::And(boxed(left)?, boxed(right)?)),
-        Condition::Or(left, right) => Ok(Condition::Or(boxed(left)?, boxed(right)?)),
+        Condition::And(left, right) => binary(left, right, Condition::And),
+        Condition::Or(left, right) => binary(left, right, Condition::Or),
         Condition::Not(inner) => boxed(inner).map(Condition::Not),
         Condition::Group(inner) => boxed(inner).map(Condition::Group),
         leaf => bind_leaf(leaf, bind),
@@ -124,28 +127,33 @@ fn bind_condition_with(
 }
 
 /// [`bind_condition`] on a leaf: binds its scalar operands, if it has any.
-fn bind_leaf(leaf: &Condition, bind: &impl Fn(&Value) -> Result<Value>) -> Result<Condition> {
+fn bind_leaf(leaf: &Condition, bind: &dyn Fn(&Value) -> Result<Value>) -> Result<Condition> {
+    let bind_list = |values: &[Value]| values.iter().map(bind).collect::<Result<Vec<_>>>();
     match leaf {
         Condition::Comparison(cmp) => Ok(Condition::Comparison(Comparison {
             column: cmp.column.clone(),
             operator: cmp.operator,
             value: bind(&cmp.value)?,
         })),
-        Condition::In(inc) => Ok(Condition::In(InCondition {
-            column: inc.column.clone(),
-            values: inc.values.iter().map(bind).collect::<Result<_>>()?,
-            negated: inc.negated,
-        })),
+        Condition::In(inc) => bind_list(&inc.values).map(|values| {
+            Condition::In(InCondition {
+                column: inc.column.clone(),
+                values,
+                negated: inc.negated,
+            })
+        }),
         Condition::Between(btw) => Ok(Condition::Between(BetweenCondition {
             column: btw.column.clone(),
             low: bind(&btw.low)?,
             high: bind(&btw.high)?,
         })),
-        Condition::Contains(c) => Ok(Condition::Contains(ContainsCondition {
-            column: c.column.clone(),
-            mode: c.mode,
-            values: c.values.iter().map(bind).collect::<Result<_>>()?,
-        })),
+        Condition::Contains(c) => bind_list(&c.values).map(|values| {
+            Condition::Contains(ContainsCondition {
+                column: c.column.clone(),
+                mode: c.mode,
+                values,
+            })
+        }),
         other => Ok(other.clone()),
     }
 }

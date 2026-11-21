@@ -120,24 +120,18 @@ pub(crate) enum CandidateWindow {
 
 impl CandidateWindow {
     pub(crate) fn for_search(stmt: &SelectStatement, ranks_by_descending_similarity: bool) -> Self {
-        use velesdb_core::velesql::{OrderByExpr, DEFAULT_SELECT_LIMIT, MAX_SELECT_LIMIT};
+        use velesdb_core::velesql::{DEFAULT_SELECT_LIMIT, MAX_SELECT_LIMIT};
         if stmt.is_aggregation_query() {
             return Self::Requested(usize::MAX);
         }
-        let preserves_order = match stmt.order_by.as_deref() {
-            None => true,
-            Some([key]) => {
-                ranks_by_descending_similarity
-                    && key.descending
-                    && matches!(key.expr, OrderByExpr::SimilarityBare)
-            }
-            Some(_) => false,
-        };
         let requested = stmt
             .limit
             .unwrap_or(DEFAULT_SELECT_LIMIT)
             .saturating_add(stmt.offset.unwrap_or(0));
-        if stmt.reshapes_rows_before_window() || !preserves_order || requested > MAX_SELECT_LIMIT {
+        if stmt.reshapes_rows_before_window()
+            || !search_preserves_order(stmt, ranks_by_descending_similarity)
+            || requested > MAX_SELECT_LIMIT
+        {
             Self::Capped
         } else {
             Self::Requested(usize::try_from(requested).unwrap_or(usize::MAX))
@@ -165,6 +159,19 @@ impl CandidateWindow {
         web_sys::console::warn_1(&warning.into());
         #[cfg(not(target_arch = "wasm32"))]
         eprintln!("{warning}");
+    }
+}
+
+/// A ranked prefix preserves an explicit order only when both use the same single key.
+fn search_preserves_order(stmt: &SelectStatement, ranks_by_descending_similarity: bool) -> bool {
+    match stmt.order_by.as_deref() {
+        None => true,
+        Some([key]) => {
+            ranks_by_descending_similarity
+                && key.descending
+                && matches!(key.expr, velesdb_core::velesql::OrderByExpr::SimilarityBare)
+        }
+        Some(_) => false,
     }
 }
 

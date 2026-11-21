@@ -312,7 +312,7 @@ impl Collection {
             .with_executed_strategy_probe(ctx);
         let window =
             self.select_fetch_window(stmt, &mut extracted, params, fetch_limit, &mut search_opts);
-        let mut args = DispatchFinalizeArgs {
+        let args = DispatchFinalizeArgs {
             extracted: &extracted,
             search_opts: &search_opts,
             limit,
@@ -320,12 +320,24 @@ impl Collection {
             is_vgb: stmt.is_vector_group_by(),
             ctx,
         };
+        self.execute_fetch_window(query, params, window, args)
+    }
+
+    /// Runs the selected candidate window and finalizes its rows.
+    fn execute_fetch_window(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        window: fetch_window::FetchWindow,
+        mut args: DispatchFinalizeArgs<'_>,
+    ) -> Result<Vec<SearchResult>> {
+        let stmt = &query.select;
         args.fetch_limit = match window {
             fetch_window::FetchWindow::Bounded(rows) => rows,
             fetch_window::FetchWindow::Exhaustive => MAX_LIMIT,
             fetch_window::FetchWindow::OrderedScan { pq_scores } => {
                 let context = args.finalization(stmt, params, &query.let_bindings);
-                return self.execute_ordered_scan(&context, &search_opts, pq_scores);
+                return self.execute_ordered_scan(&context, args.search_opts, pq_scores);
             }
         };
 
@@ -334,9 +346,9 @@ impl Collection {
             query,
             stmt,
             params,
-            &extracted,
+            args.extracted,
             args.fetch_limit,
-            ctx,
+            args.ctx,
         )? {
             return Ok(results);
         }

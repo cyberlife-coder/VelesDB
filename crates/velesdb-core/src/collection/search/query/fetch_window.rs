@@ -210,12 +210,7 @@ impl Collection {
         let FetchRanking::Vector { .. } = ranking else {
             return window;
         };
-        // A NEAR already ranks by its primary score, including an ADC score.
-        if extracted.vector_search.is_some()
-            && bare_score_first(order_by)
-            && (order_by.len() == 1
-                || self.complete_native_prefix(extracted, search_opts, fetch_limit))
-        {
+        if self.native_prefix_orders_page(order_by, extracted, search_opts, fetch_limit) {
             return FetchWindow::Bounded(fetch_limit);
         }
         if let Some(pq_scores) =
@@ -391,6 +386,19 @@ impl Collection {
         };
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
         only.descending && ranking.orders_like(&only.expr, params, higher_is_better)
+    }
+
+    /// A NEAR already ranks by its primary score, including an ADC score.
+    fn native_prefix_orders_page(
+        &self,
+        order: &[SelectOrderBy],
+        extracted: &ExtractedComponents,
+        opts: &QuerySearchOptions,
+        limit: usize,
+    ) -> bool {
+        extracted.vector_search.is_some()
+            && bare_score_first(order)
+            && (order.len() == 1 || self.complete_native_prefix(extracted, opts, limit))
     }
 
     /// A secondary key can use the native prefix only when the retrieval is

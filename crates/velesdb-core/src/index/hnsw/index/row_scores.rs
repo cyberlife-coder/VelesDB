@@ -121,12 +121,7 @@ impl HnswIndex {
     ) {
         if let IndexRowScores::Rerank { device } = source {
             let rescored = self.rerank_admitted_rows(query, candidates, device);
-            let mut next = rescored.iter().peekable();
-            for row in candidates {
-                if let Some(hit) = next.next_if(|hit| hit.id == row.id) {
-                    row.score = hit.score;
-                }
-            }
+            apply_reranked_scores(candidates, &rescored);
             return;
         }
         let inner = self.inner.read();
@@ -174,5 +169,16 @@ impl HnswIndex {
         #[cfg(not(feature = "gpu"))]
         let _ = device;
         self.rerank_candidates_simd(query, rows)
+    }
+}
+
+/// Both rerankers return the mapped rows in input order. An unmapped row
+/// retains the caller's current-storage score.
+fn apply_reranked_scores(candidates: &mut [ScoredResult], rescored: &[ScoredResult]) {
+    let mut next = rescored.iter().peekable();
+    for row in candidates {
+        if let Some(hit) = next.next_if(|hit| hit.id == row.id) {
+            row.score = hit.score;
+        }
     }
 }

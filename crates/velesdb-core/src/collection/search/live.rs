@@ -358,6 +358,8 @@ impl Collection {
     ///
     /// LOCK ORDER: vector_storage(2), read, released; then as
     /// `Collection::walk_admitted`.
+    // Keep the exhaustive fallback out of each specialized ANN search path.
+    #[inline(never)]
     fn exact_nearest_live<T>(
         &self,
         want: &Nearest<'_>,
