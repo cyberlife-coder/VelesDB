@@ -92,7 +92,10 @@ pub(super) fn indexed_range(
     if matches!((low, high), (Included(a), Included(b)) if a > b) {
         return Some(RoaringBitmap::new());
     }
-    let bitmap = index.range_bitmap(low, high, max_ids);
+    let bitmap = match max_ids {
+        Some(limit) => index.range_bitmap_with_limit(low, high, Some(limit)),
+        None => index.range_bitmap(low, high),
+    };
     drop(guard);
     bitmap
 }

@@ -16,8 +16,8 @@ use super::native::{CachedSimdDistance, NativeHnsw, ResumableSearch};
 use crate::distance::DistanceMetric;
 use std::path::Path;
 
-#[path = "native_inner_scores.rs"]
-mod scores;
+#[path = "native_inner_backend.rs"]
+mod backend;
 
 // Nodes placed in the arena and not linked into the graph yet: crash recovery
 // finds them, the async builder's drain links them (#2246, #2264).
@@ -453,8 +453,6 @@ impl NativeHnswInner {
         self.search(query, k, ef_search)
     }
 
-    /// GPU routing policy shared by [`Self::search_auto`] and
-    /// [`Self::search_resumable`]: attempts device layer-0 traversal when the
     /// Forced layer-0 CSR rebuild after `insert_batch_parallel` (#2075).
     /// Standard backend only — the quantized backends own a different
     /// traversal path.
@@ -470,41 +468,6 @@ impl NativeHnswInner {
         if placed_ok {
             self.rebuild_base_csr();
         }
-    }
-
-    /// Standard backend crosses the GPU threshold. `None` means "take the CPU
-    /// path" — either the feature is off, the backend/scale does not qualify,
-    /// or the GPU attempt failed and search falls through.
-    ///
-    /// `query.len()` is authoritative for the index dimension: a query of
-    /// wrong length would fail distance evaluation anyway.
-    // Both allows have the same single reason: this body is entirely inside
-    // `#[cfg(feature = "gpu")]`, so with the feature off nothing in the
-    // signature is read -- neither the parameters nor the receiver. The
-    // receiver's allow was missing, which made
-    // `cargo clippy -p velesdb-core --lib --features persistence -- -D warnings
-    // -D clippy::pedantic` fail on a clean tree. The workspace allows
-    // `unused_self`, but a `-D clippy::pedantic` on the command line overrides
-    // it, so the attribute is what that strict form needs; CI never sees the
-    // gap because it lints one feature set, and that set always has `gpu`.
-    #[allow(unused_variables)] // Reason: parameters unused when `gpu` is off
-    #[allow(clippy::unused_self)] // Reason: receiver unused when `gpu` is off
-    fn try_gpu_route(
-        &self,
-        query: &[f32],
-        k: usize,
-        ef_search: usize,
-    ) -> Option<Vec<(usize, f32)>> {
-        #[cfg(feature = "gpu")]
-        if self.gpu_traversal_eligible(query.len()) {
-            return self.search_gpu(query, k, ef_search);
-        }
-        None
-    }
-
-    #[cfg(feature = "gpu")]
-    pub(super) fn gpu_traversal_eligible(&self, dimension: usize) -> bool {
-        matches!(&self.backend, HnswBackend::Standard(graph) if crate::gpu::should_traverse_gpu(graph.len(), dimension))
     }
 
     /// Phase-1 search that keeps its traversal state for a possible escalation.
@@ -560,20 +523,6 @@ impl NativeHnswInner {
             HnswBackend::RaBitQ(rabitq) => rabitq.search(query, k, ef_search),
             HnswBackend::Sq8(sq8) => sq8.search(query, k, ef_search),
         }
-    }
-
-    /// Attempts GPU-accelerated search on the Standard backend.
-    ///
-    /// Returns `None` if GPU is unavailable, the metric is unsupported,
-    /// or any GPU operation fails. The caller should fall back to CPU search.
-    #[cfg(feature = "gpu")]
-    fn search_gpu(&self, query: &[f32], k: usize, ef_search: usize) -> Option<Vec<(usize, f32)>> {
-        let hnsw = match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw,
-            HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => return None,
-        };
-
-        hnsw.search_gpu(query, k, ef_search, self.metric)
     }
 }
 
@@ -725,6 +674,59 @@ impl NativeHnswInner {
         };
 
         Ok(Self { backend, metric })
+    }
+}
+
+impl NativeHnswInner {
+    /// Transforms raw HNSW distance to the appropriate score.
+    ///
+    /// For **Standard** backend: applies metric-specific transform.
+    /// For `RaBitQ` backend: identity (scores already transformed).
+    #[inline]
+    #[must_use]
+    pub fn transform_score(&self, raw_distance: f32) -> f32 {
+        match &self.backend {
+            HnswBackend::Standard(hnsw) => hnsw.transform_score(raw_distance),
+            HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => raw_distance,
+        }
+    }
+
+    /// Returns the number of elements in the index.
+    #[inline]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.scoring_graph().len()
+    }
+
+    /// Computes the raw distance between two vectors.
+    #[inline]
+    #[must_use]
+    pub fn compute_distance(&self, a: &[f32], b: &[f32]) -> f32 {
+        self.scoring_graph().compute_distance(a, b)
+    }
+
+    /// Executes a closure with zero-copy access to the contiguous vector storage.
+    ///
+    /// Returns `R::default()` if vector storage is not yet initialized.
+    #[inline]
+    pub fn with_contiguous_vectors<R: Default>(
+        &self,
+        f: impl FnOnce(&crate::perf_optimizations::ContiguousVectors) -> R,
+    ) -> R {
+        self.scoring_graph().with_vectors_read(f)
+    }
+
+    /// Executes a closure with read access to the contiguous vector storage.
+    ///
+    /// Alias for [`with_contiguous_vectors`](Self::with_contiguous_vectors)
+    /// with explicit read semantics for clarity at call sites.
+    #[cfg(test)]
+    #[inline]
+    pub fn with_contiguous_vectors_read<R: Default>(
+        &self,
+        f: impl FnOnce(&crate::perf_optimizations::ContiguousVectors) -> R,
+    ) -> R {
+        self.with_contiguous_vectors(f)
     }
 }
 

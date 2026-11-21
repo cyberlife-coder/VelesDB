@@ -270,10 +270,20 @@ impl SecondaryIndex {
     /// Uses `BTreeMap::range()` for efficient ordered iteration. This powers
     /// Gt, Gte, Lt, Lte, and BETWEEN pre-filters. Returns `Some(empty)` when no
     /// keys fall within the range, and `None` when any in-range ID exceeds
-    /// [`u32::MAX`] or the next bucket would exceed `max_ids`. Without a
-    /// limit, the union skips bucket cardinality checks.
+    /// [`u32::MAX`].
     #[must_use]
-    pub(crate) fn range_bitmap(
+    pub fn range_bitmap(
+        &self,
+        from: Bound<&JsonValue>,
+        to: Bound<&JsonValue>,
+    ) -> Option<roaring::RoaringBitmap> {
+        self.range_bitmap_with_limit(from, to, None)
+    }
+
+    /// Also abandons the union when the next bucket would exceed the candidate
+    /// limit. An unlimited read skips bucket cardinality checks.
+    #[must_use]
+    pub(crate) fn range_bitmap_with_limit(
         &self,
         from: Bound<&JsonValue>,
         to: Bound<&JsonValue>,
