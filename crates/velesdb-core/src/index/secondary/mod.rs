@@ -187,6 +187,25 @@ impl From<Vec<u64>> for IdSet {
     }
 }
 
+/// Unions complete buckets until either an ID cannot be represented or the
+/// next bucket would cost more than the caller's remaining candidate count.
+fn range_bitmap_from_buckets<'a>(
+    buckets: impl Iterator<Item = &'a IdSet>,
+    mut remaining: Option<u64>,
+) -> Option<roaring::RoaringBitmap> {
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for ids in buckets {
+        if !ids.overflow.is_empty() {
+            return None;
+        }
+        if let Some(left) = &mut remaining {
+            *left = left.checked_sub(ids.bitmap.len())?;
+        }
+        bitmap |= &ids.bitmap;
+    }
+    Some(bitmap)
+}
+
 /// Secondary index implementation.
 #[derive(Debug)]
 pub(crate) enum SecondaryIndex {
@@ -251,25 +270,22 @@ impl SecondaryIndex {
     /// Uses `BTreeMap::range()` for efficient ordered iteration. This powers
     /// Gt, Gte, Lt, Lte, and BETWEEN pre-filters. Returns `Some(empty)` when no
     /// keys fall within the range, and `None` when any in-range ID exceeds
-    /// [`u32::MAX`] (incomplete — callers must fall back to a full scan).
+    /// [`u32::MAX`] or the next bucket would exceed `max_ids`. Without a
+    /// limit, the union skips bucket cardinality checks.
     #[must_use]
-    pub fn range_bitmap(
+    pub(crate) fn range_bitmap(
         &self,
         from: Bound<&JsonValue>,
         to: Bound<&JsonValue>,
+        max_ids: Option<u64>,
     ) -> Option<roaring::RoaringBitmap> {
         match self {
             Self::BTree(tree) => {
                 let guard = tree.read();
-                let mut bm = roaring::RoaringBitmap::new();
-                for ids in guard.range((from, to)).map(|(_, v)| v) {
-                    if !ids.overflow.is_empty() {
-                        return None;
-                    }
-                    bm |= &ids.bitmap;
-                }
+                let bitmap =
+                    range_bitmap_from_buckets(guard.range((from, to)).map(|(_, ids)| ids), max_ids);
                 drop(guard);
-                Some(bm)
+                bitmap
             }
         }
     }

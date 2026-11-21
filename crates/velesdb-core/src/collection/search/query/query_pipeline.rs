@@ -261,7 +261,8 @@ impl Collection {
     }
 
     /// Returns a copy of `query` whose WHERE is bound, or `None` when it has
-    /// no WHERE clause: its scalar parameter placeholders resolved, every
+    /// no WHERE clause: its scalar parameters and temporal operands resolved
+    /// for this execution, every
     /// column its FROM side's name qualifies written as this collection's
     /// own ([`crate::velesql::resolve_base_qualifiers`] — `d.cat` in
     /// `FROM docs d` is the row's `cat`, as it is for a JOIN's base query),
@@ -289,7 +290,7 @@ impl Collection {
             return Ok(None);
         };
         let resolved = crate::velesql::resolve_base_qualifiers(
-            &crate::velesql::bind_condition(cond, params)?,
+            &crate::velesql::bind_query_condition(cond, params)?,
             crate::velesql::base_side(&query.select),
         );
         let bound = self.bind_where_text_matches(&resolved, reader);

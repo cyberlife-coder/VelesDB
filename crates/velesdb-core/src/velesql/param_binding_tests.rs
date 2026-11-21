@@ -12,6 +12,63 @@ fn param() -> Value {
     Value::Parameter("p".to_string())
 }
 
+#[cfg(feature = "persistence")]
+#[test]
+fn a_cached_time_window_reads_the_clock_once_per_execution() {
+    let sql = "SELECT * FROM rows WHERE ts BETWEEN NOW() - INTERVAL '1 second' AND NOW()";
+    let syntax = Parser::parse(sql).unwrap().select.where_clause.unwrap();
+    let time = std::cell::Cell::new(10);
+    for current in [10, 11] {
+        let bound = bind_query_condition_with_clock(&syntax, &HashMap::new(), || {
+            let tick = time.get();
+            time.set(tick + 1);
+            tick
+        })
+        .unwrap();
+        let Condition::Between(bounds) = bound else {
+            panic!("test: missing interval");
+        };
+        assert_eq!(bounds.low, Value::Integer(current - 1));
+        assert_eq!(bounds.high, Value::Integer(current));
+        assert_eq!(time.get(), current + 1);
+    }
+    assert_eq!(bind_condition(&syntax, &HashMap::new()).unwrap(), syntax);
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn nested_temporal_operands_share_the_clock_with_lists_and_comparisons() {
+    let parse = |predicate: &str| {
+        Parser::parse(&format!("SELECT * FROM rows WHERE {predicate}"))
+            .unwrap()
+            .select
+            .where_clause
+            .unwrap()
+    };
+    let syntax =
+        parse("NOT (ts < NOW() OR (stamp IN (NOW() + INTERVAL '1 second', $p) AND ts >= NOW()))");
+    let expected = parse(&format!(
+        "NOT (ts < 42 OR (stamp IN (43, {}) AND ts >= 42))",
+        u64::MAX
+    ));
+    let reads = std::cell::Cell::new(0);
+    let actual = bind_query_condition_with_clock(&syntax, &params(json!(u64::MAX)), || {
+        reads.set(reads.get() + 1);
+        42
+    });
+    assert_eq!(actual.unwrap(), expected);
+    assert_eq!(reads.get(), 1);
+
+    let fixed = parse("seconds >= INTERVAL '2 minutes' AND published = '2026-11-21'");
+    let bound = bind_query_condition_with_clock(&fixed, &HashMap::new(), || {
+        panic!("fixed dates and durations do not observe the clock")
+    });
+    assert_eq!(
+        bound.unwrap(),
+        parse("seconds >= 120 AND published = '2026-11-21'")
+    );
+}
+
 #[test]
 fn a_number_binds_as_the_narrowest_type_that_holds_it() {
     assert_eq!(

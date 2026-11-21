@@ -79,92 +79,75 @@ pub fn bind_condition<S: BuildHasher>(
     cond: &Condition,
     params: &HashMap<String, serde_json::Value, S>,
 ) -> Result<Condition> {
-    match cond {
-        Condition::And(left, right) => {
-            bind_pair(left, right, params).map(|(l, r)| Condition::And(l, r))
-        }
-        Condition::Or(left, right) => {
-            bind_pair(left, right, params).map(|(l, r)| Condition::Or(l, r))
-        }
-        Condition::Not(inner) => bind_boxed(inner, params).map(Condition::Not),
-        Condition::Group(inner) => bind_boxed(inner, params).map(Condition::Group),
-        leaf => bind_leaf(leaf, params),
-    }
+    bind_condition_with(cond, &|value| bind_value(value, params))
 }
 
-/// [`bind_condition`] on a combinator's operand.
-fn bind_boxed<S: BuildHasher>(
+/// Binds a read's scalar operands. Every NOW() in the WHERE uses one instant
+/// shared by candidate selection and row evaluation. Only the execution copy
+/// gets concrete bounds, so a cached parse obtains fresh bounds on every read.
+#[cfg(feature = "persistence")]
+pub(crate) fn bind_query_condition<S: BuildHasher>(
     cond: &Condition,
     params: &HashMap<String, serde_json::Value, S>,
-) -> Result<Box<Condition>> {
-    bind_condition(cond, params).map(Box::new)
+) -> Result<Condition> {
+    bind_query_condition_with_clock(cond, params, super::clock::now_epoch_seconds)
 }
 
-/// [`bind_condition`] on a binary combinator's two operands, left first.
-fn bind_pair<S: BuildHasher>(
-    left: &Condition,
-    right: &Condition,
+#[cfg(feature = "persistence")]
+fn bind_query_condition_with_clock<S: BuildHasher>(
+    cond: &Condition,
     params: &HashMap<String, serde_json::Value, S>,
-) -> Result<(Box<Condition>, Box<Condition>)> {
-    Ok((bind_boxed(left, params)?, bind_boxed(right, params)?))
+    clock: impl Fn() -> i64,
+) -> Result<Condition> {
+    let now = std::cell::OnceCell::new();
+    bind_condition_with(cond, &|value| match value {
+        Value::Temporal(expr) => Ok(Value::Integer(
+            expr.epoch_seconds_with(&|| *now.get_or_init(&clock)),
+        )),
+        _ => bind_value(value, params),
+    })
+}
+
+/// Rebuilds the condition with each scalar operand bound in declaration order.
+fn bind_condition_with(
+    cond: &Condition,
+    bind: &impl Fn(&Value) -> Result<Value>,
+) -> Result<Condition> {
+    let boxed = |inner: &Condition| bind_condition_with(inner, bind).map(Box::new);
+    match cond {
+        Condition::And(left, right) => Ok(Condition::And(boxed(left)?, boxed(right)?)),
+        Condition::Or(left, right) => Ok(Condition::Or(boxed(left)?, boxed(right)?)),
+        Condition::Not(inner) => boxed(inner).map(Condition::Not),
+        Condition::Group(inner) => boxed(inner).map(Condition::Group),
+        leaf => bind_leaf(leaf, bind),
+    }
 }
 
 /// [`bind_condition`] on a leaf: binds its scalar operands, if it has any.
-fn bind_leaf<S: BuildHasher>(
-    leaf: &Condition,
-    params: &HashMap<String, serde_json::Value, S>,
-) -> Result<Condition> {
+fn bind_leaf(leaf: &Condition, bind: &impl Fn(&Value) -> Result<Value>) -> Result<Condition> {
     match leaf {
-        Condition::Comparison(cmp) => bind_comparison(cmp, params).map(Condition::Comparison),
-        Condition::In(in_cond) => bind_in(in_cond, params).map(Condition::In),
-        Condition::Between(btw) => bind_between(btw, params).map(Condition::Between),
-        Condition::Contains(contains) => bind_contains(contains, params).map(Condition::Contains),
+        Condition::Comparison(cmp) => Ok(Condition::Comparison(Comparison {
+            column: cmp.column.clone(),
+            operator: cmp.operator,
+            value: bind(&cmp.value)?,
+        })),
+        Condition::In(inc) => Ok(Condition::In(InCondition {
+            column: inc.column.clone(),
+            values: inc.values.iter().map(bind).collect::<Result<_>>()?,
+            negated: inc.negated,
+        })),
+        Condition::Between(btw) => Ok(Condition::Between(BetweenCondition {
+            column: btw.column.clone(),
+            low: bind(&btw.low)?,
+            high: bind(&btw.high)?,
+        })),
+        Condition::Contains(c) => Ok(Condition::Contains(ContainsCondition {
+            column: c.column.clone(),
+            mode: c.mode,
+            values: c.values.iter().map(bind).collect::<Result<_>>()?,
+        })),
         other => Ok(other.clone()),
     }
-}
-
-fn bind_comparison<S: BuildHasher>(
-    cmp: &Comparison,
-    params: &HashMap<String, serde_json::Value, S>,
-) -> Result<Comparison> {
-    Ok(Comparison {
-        column: cmp.column.clone(),
-        operator: cmp.operator,
-        value: bind_value(&cmp.value, params)?,
-    })
-}
-
-fn bind_in<S: BuildHasher>(
-    in_cond: &InCondition,
-    params: &HashMap<String, serde_json::Value, S>,
-) -> Result<InCondition> {
-    Ok(InCondition {
-        column: in_cond.column.clone(),
-        values: bind_values(&in_cond.values, params)?,
-        negated: in_cond.negated,
-    })
-}
-
-fn bind_between<S: BuildHasher>(
-    btw: &BetweenCondition,
-    params: &HashMap<String, serde_json::Value, S>,
-) -> Result<BetweenCondition> {
-    Ok(BetweenCondition {
-        column: btw.column.clone(),
-        low: bind_value(&btw.low, params)?,
-        high: bind_value(&btw.high, params)?,
-    })
-}
-
-fn bind_contains<S: BuildHasher>(
-    contains: &ContainsCondition,
-    params: &HashMap<String, serde_json::Value, S>,
-) -> Result<ContainsCondition> {
-    Ok(ContainsCondition {
-        column: contains.column.clone(),
-        mode: contains.mode,
-        values: bind_values(&contains.values, params)?,
-    })
 }
 
 /// Binds the `$name` values of every inline pattern property of `clause`,
@@ -306,14 +289,6 @@ pub(crate) fn bind_dml_vector<S: BuildHasher>(
 /// The refusal of a subquery in a DML cell.
 fn dml_subquery_refused() -> Error {
     Error::Query("Subquery values are not supported in INSERT/UPDATE".to_string())
-}
-
-/// Binds every value of a list through [`bind_value`].
-fn bind_values<S: BuildHasher>(
-    values: &[Value],
-    params: &HashMap<String, serde_json::Value, S>,
-) -> Result<Vec<Value>> {
-    values.iter().map(|v| bind_value(v, params)).collect()
 }
 
 #[cfg(test)]

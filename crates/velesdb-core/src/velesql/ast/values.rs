@@ -136,17 +136,21 @@ impl TemporalExpr {
     /// the clock, so an `INTERVAL` alone is a pure duration.
     #[must_use]
     pub fn to_epoch_seconds(&self) -> i64 {
+        self.epoch_seconds_with(&crate::velesql::clock::now_epoch_seconds)
+    }
+
+    pub(crate) fn epoch_seconds_with(&self, now: &impl Fn() -> i64) -> i64 {
         match self {
-            Self::Now => crate::velesql::clock::now_epoch_seconds(),
+            Self::Now => now(),
             Self::Interval(iv) => iv.to_seconds(),
             // Saturating: an extreme operand clamps to the i64 range instead
             // of panicking (debug) or wrapping to a meaningless instant (release).
             Self::Subtract(left, right) => left
-                .to_epoch_seconds()
-                .saturating_sub(right.to_epoch_seconds()),
+                .epoch_seconds_with(now)
+                .saturating_sub(right.epoch_seconds_with(now)),
             Self::Add(left, right) => left
-                .to_epoch_seconds()
-                .saturating_add(right.to_epoch_seconds()),
+                .epoch_seconds_with(now)
+                .saturating_add(right.epoch_seconds_with(now)),
         }
     }
 }

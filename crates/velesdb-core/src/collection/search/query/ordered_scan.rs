@@ -273,7 +273,7 @@ impl Collection {
             return filter.condition.point_ids().map(HashSet::from_iter);
         }
         if has_range {
-            if let Some(bitmap) = self.build_prefilter_bitmap(&filter) {
+            if let Some(bitmap) = self.ordered_range_bitmap(&filter) {
                 return Some(bitmap.iter().map(u64::from).collect());
             }
         }

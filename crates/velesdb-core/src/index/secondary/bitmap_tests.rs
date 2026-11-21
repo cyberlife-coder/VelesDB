@@ -20,6 +20,32 @@ mod tests {
     }
 
     #[test]
+    fn range_budget_stops_at_the_first_bucket_that_exceeds_it() {
+        use crate::index::secondary::range_bitmap_from_buckets;
+        let buckets = [
+            IdSet::from(vec![1, 2]),
+            IdSet::from(vec![3]),
+            IdSet::from(vec![4, 5]),
+        ];
+        for (budget, visits, complete) in [
+            (Some(1), 1, false),
+            (Some(2), 2, false),
+            (Some(5), 3, true),
+            (None, 3, true),
+        ] {
+            let mut visited = 0;
+            let bitmap =
+                range_bitmap_from_buckets(buckets.iter().inspect(|_| visited += 1), budget);
+            assert_eq!(visited, visits, "budget {budget:?}");
+            assert_eq!(
+                bitmap.map(|ids| ids.len()),
+                complete.then_some(5),
+                "budget {budget:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_to_bitmap_returns_matching_ids() {
         let key = JsonValue::String("tech".to_string());
         let index = make_btree_index(vec![(key.clone(), vec![1, 5, 42])]);
@@ -68,7 +94,7 @@ mod tests {
 
         assert!(
             index
-                .range_bitmap(Bound::Unbounded, Bound::Unbounded)
+                .range_bitmap(Bound::Unbounded, Bound::Unbounded, None)
                 .is_none(),
             "range bitmap must be None when an in-range ID exceeds u32::MAX"
         );
@@ -130,7 +156,7 @@ mod tests {
 
         // (30, +inf) => IDs 4, 5
         let bm = index
-            .range_bitmap(Bound::Excluded(&key30), Bound::Unbounded)
+            .range_bitmap(Bound::Excluded(&key30), Bound::Unbounded, None)
             .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 2);
         assert!(bm.contains(4));
@@ -145,7 +171,7 @@ mod tests {
 
         // [30, +inf) => IDs 3, 4, 5
         let bm = index
-            .range_bitmap(Bound::Included(&key30), Bound::Unbounded)
+            .range_bitmap(Bound::Included(&key30), Bound::Unbounded, None)
             .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 3);
         assert!(bm.contains(3));
@@ -161,7 +187,7 @@ mod tests {
 
         // (-inf, 30) => IDs 1, 2
         let bm = index
-            .range_bitmap(Bound::Unbounded, Bound::Excluded(&key30))
+            .range_bitmap(Bound::Unbounded, Bound::Excluded(&key30), None)
             .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 2);
         assert!(bm.contains(1));
@@ -176,7 +202,7 @@ mod tests {
 
         // (-inf, 30] => IDs 1, 2, 3
         let bm = index
-            .range_bitmap(Bound::Unbounded, Bound::Included(&key30))
+            .range_bitmap(Bound::Unbounded, Bound::Included(&key30), None)
             .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 3);
         assert!(bm.contains(1));
@@ -193,7 +219,7 @@ mod tests {
 
         // [20, 40] => IDs 2, 3, 4
         let bm = index
-            .range_bitmap(Bound::Included(&key20), Bound::Included(&key40))
+            .range_bitmap(Bound::Included(&key20), Bound::Included(&key40), None)
             .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 3);
         assert!(bm.contains(2));
@@ -209,7 +235,7 @@ mod tests {
 
         // (999, +inf) => empty
         let bm = index
-            .range_bitmap(Bound::Excluded(&key999), Bound::Unbounded)
+            .range_bitmap(Bound::Excluded(&key999), Bound::Unbounded, None)
             .expect("test: ids within u32 range");
         assert!(bm.is_empty());
     }
@@ -221,7 +247,7 @@ mod tests {
 
         // (-inf, +inf) => all IDs
         let bm = index
-            .range_bitmap(Bound::Unbounded, Bound::Unbounded)
+            .range_bitmap(Bound::Unbounded, Bound::Unbounded, None)
             .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 5);
     }
@@ -247,7 +273,7 @@ mod tests {
         // (incomplete) instead of silently dropping the high id.
         assert!(
             index
-                .range_bitmap(Bound::Excluded(&low_bound), Bound::Unbounded)
+                .range_bitmap(Bound::Excluded(&low_bound), Bound::Unbounded, None)
                 .is_none(),
             "range bitmap must be None when any in-range id overflows u32"
         );
@@ -255,7 +281,11 @@ mod tests {
         // A sub-range that excludes the overflowing posting list stays exact.
         let above_overflow_bound = JsonValue::Number(crate::index::secondary::F64Key::from(15.0));
         let bm = index
-            .range_bitmap(Bound::Excluded(&above_overflow_bound), Bound::Unbounded)
+            .range_bitmap(
+                Bound::Excluded(&above_overflow_bound),
+                Bound::Unbounded,
+                None,
+            )
             .expect("test: ids within u32 range");
         assert_eq!(bm.len(), 1);
         assert!(bm.contains(2));
