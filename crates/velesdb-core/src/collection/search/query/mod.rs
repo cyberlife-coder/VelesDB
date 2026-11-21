@@ -279,12 +279,8 @@ impl Collection {
         let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
         let extracted = Self::extract_query_components(stmt, params)?;
 
-        // EPIC-081 phase 2: serve a plain `ORDER BY <indexed_field> LIMIT k` from
-        // the field's ordered secondary index instead of the exhaustive
-        // MAX_LIMIT fetch + sort. Gated hard (single plain Field key, fully
-        // covered index, no WHERE/JOIN/graph/vector/sparse/DISTINCT/aggregate);
-        // OFFSET/LIMIT are applied inside the scan, so it returns the finished
-        // page directly. Falls through unchanged otherwise.
+        // A covering secondary index can supply the finished ORDER BY page.
+        // The scan checks the filter and sort shape before applying OFFSET/LIMIT.
         if let Some(results) = self.try_ordered_index_scan(query, stmt, &extracted, ctx)? {
             return Ok(results);
         }

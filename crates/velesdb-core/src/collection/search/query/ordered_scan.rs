@@ -236,14 +236,49 @@ impl Collection {
         }
         let metadata_only =
             extracted.vector_search.is_none() && extracted.similarity_conditions.is_empty();
-        let indexed = metadata_only
+        Ok(metadata_only
             .then(|| Self::extract_metadata_filter(cond))
             .flatten()
-            .and_then(|metadata| {
-                let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata));
-                self.try_index_accelerated_ids(&filter)
-            });
-        Ok(indexed.map(|ids| ids.into_iter().collect()))
+            .and_then(|metadata| self.ordered_metadata_candidates(metadata)))
+    }
+
+    /// A superset of matching ids when an index can narrow the metadata filter.
+    /// `scan_candidate` checks each candidate against the full WHERE.
+    fn ordered_metadata_candidates(
+        &self,
+        metadata: crate::velesql::Condition,
+    ) -> Option<HashSet<u64>> {
+        use crate::velesql::{condition_tree::any_subtree, CompareOp, Comparison, Condition};
+
+        let has_range = any_subtree(&metadata, &|leaf| {
+            matches!(
+                leaf,
+                Condition::Between(_)
+                    | Condition::Comparison(Comparison {
+                        operator: CompareOp::Gt | CompareOp::Gte | CompareOp::Lt | CompareOp::Lte,
+                        ..
+                    })
+            )
+        });
+        // Secondary indexes read a literal top-level key (`backfill_single_payload`).
+        // A WHERE with that dotted spelling follows a nested path.
+        let nested = any_subtree(&metadata, &|leaf| match leaf {
+            Condition::Comparison(c) => c.column.contains('.'),
+            Condition::Between(c) => c.column.contains('.'),
+            Condition::In(c) => c.column.contains('.'),
+            _ => false,
+        });
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata));
+        if nested {
+            return filter.condition.point_ids().map(HashSet::from_iter);
+        }
+        if has_range {
+            if let Some(bitmap) = self.build_prefilter_bitmap(&filter) {
+                return Some(bitmap.iter().map(u64::from).collect());
+            }
+        }
+        self.try_index_accelerated_ids(&filter)
+            .map(HashSet::from_iter)
     }
 
     /// Every row id of `universe`, read under the storage guards.
@@ -269,12 +304,16 @@ impl Collection {
         graph_cache: &mut super::where_eval::GraphMatchEvalCache,
     ) -> Result<Vec<SearchResult>> {
         let condition = stmt.where_clause.as_ref();
-        let metric = self.storage.config.read().metric;
+        // NEAR narrows the outer rows, but a MATCH may reach any stored graph node.
+        let (metric, graph_rows) = {
+            let config = self.storage.config.read();
+            (config.metric, RowUniverse::of(&config))
+        };
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
         let guards = super::match_exec::MatchStorageGuards::single(
             metric,
-            plan.universe,
+            graph_rows,
             &vector_storage,
             &payload_storage,
         );

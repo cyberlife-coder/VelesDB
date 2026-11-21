@@ -1259,6 +1259,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_covered_index_copies_only_ids_needed_by_a_possible_page() {
+        use crate::point::Point;
+        use serde_json::json;
+
+        let (collection, _temp) = create_test_collection();
+        let points = [(1, 30), (2, 10), (3, 20)].map(|(id, year)| {
+            let mut payload = json!({"year": year});
+            if id == 1 {
+                payload["partial"] = json!(true);
+            }
+            Point::new(id, vec![0.1; 128], Some(payload))
+        });
+        collection.upsert(points).expect("test: rows");
+        for field in ["year", "partial"] {
+            collection.create_index(field).expect("test: create index");
+        }
+        let prefix = |field, page| collection.ordered_ids_if_covered(field, false, page);
+        assert_eq!(prefix("year", 1..2), Some(vec![2, 3]));
+        for field in ["partial", "missing"] {
+            assert_eq!(prefix(field, 1..1), None);
+        }
+        let empty_pages = [1..1, 3..4, 4..5].map(|page| prefix("year", page));
+        assert_eq!(empty_pages, [Some(vec![]), Some(vec![]), Some(vec![])]);
+    }
+
     /// Regression (EPIC-081 ph3d / adversarial finding C1): a bulk overwrite of
     /// an already-indexed point must REMOVE the prior indexed value, not just
     /// insert the new one. A stale old-value entry would put the id in two
@@ -1282,7 +1308,7 @@ mod tests {
             .expect("seed upsert");
         collection.create_index("year").expect("create_index");
         assert_eq!(
-            collection.ordered_ids_if_covered("year", false, 10),
+            collection.ordered_ids_if_covered("year", false, 0..10),
             Some(vec![1]),
             "precondition: single indexed point is covered"
         );
@@ -1294,7 +1320,7 @@ mod tests {
             .expect("bulk overwrite");
 
         assert_eq!(
-            collection.ordered_ids_if_covered("year", false, 10),
+            collection.ordered_ids_if_covered("year", false, 0..10),
             Some(vec![1]),
             "bulk overwrite must drop the stale 2000-bucket entry so coverage \
              (Σ buckets == point_count) still holds — else the live tree diverges \

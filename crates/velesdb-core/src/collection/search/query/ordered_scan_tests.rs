@@ -22,13 +22,13 @@ use crate::velesql::Parser;
 /// Rows past the `MAX_LIMIT` ceiling.
 const PAST_CEILING: u64 = 5;
 
-fn graph() -> (tempfile::TempDir, Collection) {
+fn graph(embedding_dim: Option<usize>) -> (tempfile::TempDir, Collection) {
     let dir = tempfile::tempdir().expect("test: tempdir");
     let col = Collection::create_graph_collection(
         PathBuf::from(dir.path()),
         "rows",
         GraphSchema::schemaless(),
-        None,
+        embedding_dim,
         DistanceMetric::Cosine,
     )
     .expect("test: graph");
@@ -40,7 +40,7 @@ fn graph() -> (tempfile::TempDir, Collection) {
 /// to `[1, 0]` and the cheapest node are the lowest ids, the least similar
 /// and the dearest the highest.
 fn past_the_ceiling() -> (tempfile::TempDir, Collection) {
-    let (dir, col) = graph();
+    let (dir, col) = graph(None);
     let rows = u64::try_from(MAX_LIMIT).expect("test: ceiling") + PAST_CEILING;
     let ids: Vec<u64> = (1..=rows).collect();
     for chunk in ids.chunks(10_000) {
@@ -92,7 +92,7 @@ fn planned_ids(col: &Collection, predicate: &str) -> crate::error::Result<Vec<u6
 
 #[test]
 fn ordered_scan_keeps_the_exact_similarity_candidate_ceiling() {
-    let (_dir, col) = graph();
+    let (_dir, col) = graph(None);
     let payload = json!({"price": 1});
     let exact = "similarity(vector, $q) < 0.5";
     col.store_node_payload(1, &payload).expect("test: node");
@@ -107,6 +107,30 @@ fn ordered_scan_keeps_the_exact_similarity_candidate_ceiling() {
     for predicate in ["price = 1", "similarity(vector, $q) > 0.5"] {
         assert_eq!(planned_ids(&col, predicate).expect("ordinary scan"), [1, 2]);
     }
+}
+
+#[test]
+fn an_ordered_near_traverses_edges_to_payload_only_nodes() {
+    let (_dir, col) = graph(Some(2));
+    let embedded =
+        [1, 2].map(|id| crate::point::Point::new(id, vec![1.0, 0.0], Some(json!({"price": id}))));
+    col.upsert(embedded).expect("test: embedded nodes");
+    col.store_node_payload(3, &json!({"price": 3}))
+        .expect("test: payload-only node");
+    let edge = GraphEdge::new(1, 1, 3, "CITES").expect("test: edge");
+    col.add_edge(edge).expect("test: add edge");
+
+    let all = "SELECT * FROM rows AS r WHERE";
+    let edge = "MATCH (r)-[:CITES]->(other)";
+    let near = "vector NEAR $q";
+    assert_eq!(ids(&col, &format!("{all} {edge} ORDER BY price")), [1]);
+    assert_eq!(ids(&col, &format!("{all} {near} ORDER BY price")), [1, 2]);
+    let not_match = format!("{all} {near} AND NOT {edge} ORDER BY similarity() ASC");
+    let disjunction = format!("{all} {near} AND (price = 99 OR {edge}) ORDER BY price");
+    assert_eq!(
+        (ids(&col, &not_match), ids(&col, &disjunction)),
+        (vec![2], vec![1])
+    );
 }
 
 #[test]
@@ -134,4 +158,22 @@ fn an_order_ranks_every_admitted_row_past_the_ceiling() {
     for (sql, want) in cases {
         assert_eq!(ids(&col, &sql), want, "{sql}");
     }
+    let ceiling = top - PAST_CEILING;
+    let crossing = format!("{all} ORDER BY price ASC LIMIT 3 OFFSET {}", ceiling - 1);
+    let beyond = format!("{all} ORDER BY price DESC LIMIT 2 OFFSET {ceiling}");
+    let deep_pages = || (ids(&col, &crossing), ids(&col, &beyond));
+    let expected = (
+        vec![ceiling, ceiling + 1, ceiling + 2],
+        vec![PAST_CEILING, PAST_CEILING - 1],
+    );
+    assert_eq!(deep_pages(), expected, "unindexed");
+    col.create_index("price").expect("test: backfill price");
+    assert_eq!(
+        col.ordered_ids_if_covered("price", true, 0..1),
+        Some(vec![top])
+    );
+    assert_eq!(deep_pages(), expected, "covering index");
 }
+
+#[path = "ordered_scan_range_tests.rs"]
+mod range_candidates;

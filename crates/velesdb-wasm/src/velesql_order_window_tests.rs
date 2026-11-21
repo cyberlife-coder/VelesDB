@@ -29,7 +29,7 @@ fn vector(id: u64) -> String {
 
 /// Whether row `id` stores no `emb` (`docs`) or no embedding (`kg`).
 fn unscored(id: u64) -> bool {
-    id.is_multiple_of(5)
+    id.is_multiple_of(4)
 }
 
 fn ids(db: &mut DatabaseInner, sql: &str, params: &str) -> Vec<u64> {
@@ -89,7 +89,7 @@ fn expected(
     limit: usize,
 ) -> Vec<u64> {
     let mut rows: Vec<u64> = admitted.collect();
-    let key = |id: u64| (!scored(id), std::cmp::Reverse(rank(id)));
+    let key = |id: u64| std::cmp::Reverse(scored(id).then(|| rank(id)));
     rows.sort_by(|&a, &b| {
         let ascending = key(a).cmp(&key(b));
         let directed = if descending {
@@ -139,7 +139,8 @@ fn a_scan_without_where_ranks_every_row() {
     assert_windows("FROM docs", "similarity(vector, $q)", &|_| true, &|_| true);
 }
 
-#[test]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
 fn a_named_vector_ranks_rows_without_one_as_null_keys() {
     assert_windows(
         "FROM docs WHERE id > 0",
@@ -147,6 +148,30 @@ fn a_named_vector_ranks_rows_without_one_as_null_keys() {
         &|_| true,
         &|id| !unscored(id),
     );
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn equal_null_keys_keep_ascending_ids_in_both_directions() {
+    let mut db = docs();
+    for direction in ["ASC", "DESC"] {
+        let sql = format!(
+            "SELECT * FROM docs WHERE id IN (16, 4, 12, 8) \
+             ORDER BY similarity(emb, $q) {direction} LIMIT 2 OFFSET 1"
+        );
+        assert_eq!(ids(&mut db, &sql, QUERY), [8, 12], "{sql}");
+        assert_eq!(
+            expected(
+                [16, 4, 12, 8].into_iter(),
+                |id| !unscored(id),
+                direction == "DESC",
+                1,
+                2
+            ),
+            [8, 12],
+            "oracle for {direction}"
+        );
+    }
 }
 
 #[test]
