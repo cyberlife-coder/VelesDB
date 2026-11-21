@@ -92,7 +92,7 @@ impl Database {
         select.offset = None;
         select.limit = None;
         let budget = select.clone();
-        let rows = self.joined_rows(rows_query, &budget, params, None)?;
+        let rows = self.joined_rows(rows_query, &budget, params, None, false)?;
         crate::collection::Collection::aggregate_rows(query, &rows, params)
     }
 }

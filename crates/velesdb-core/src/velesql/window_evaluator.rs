@@ -41,6 +41,10 @@ use crate::SearchResult;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
+#[path = "window_inputs.rs"]
+mod inputs;
+pub use inputs::WindowInputs;
+
 /// Pre-computed per-row snapshot of the inputs a single window function
 /// reads from the result set.
 ///

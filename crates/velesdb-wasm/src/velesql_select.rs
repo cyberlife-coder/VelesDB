@@ -670,13 +670,14 @@ fn window_plain(
     if stmt.distinct == DistinctMode::All {
         results = apply_distinct(results, &stmt.columns);
     }
+    let order = velesql_orderby::RowOrder::prepare(stmt, &results, order)?;
     velesql_project::inject_window_functions(stmt, &mut results)?;
-    velesql_orderby::sort_rows(stmt, &mut results, order)?;
-    Ok(apply_limit_offset(
-        stmt,
-        results,
-        velesdb_core::velesql::DEFAULT_SELECT_LIMIT,
-    ))
+    let inputs = order.apply(&mut results);
+    let mut results =
+        apply_limit_offset(stmt, results, velesdb_core::velesql::DEFAULT_SELECT_LIMIT);
+    let offset = usize::try_from(stmt.offset.unwrap_or_default()).unwrap_or(usize::MAX);
+    inputs.publish(&mut results, &stmt.columns, offset);
+    Ok(results)
 }
 
 /// Applies OFFSET/LIMIT, using `default_limit` when the statement omits LIMIT.

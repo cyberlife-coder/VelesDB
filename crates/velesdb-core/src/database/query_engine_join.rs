@@ -22,9 +22,19 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
+        let deferred_let = defer_join_windows(&mut single_query);
         let window = JoinWindow::take(&mut single_query.select);
-        let rows = self.joined_rows(single_query, select, params, probe)?;
-        window.apply(rows, &select.columns, base_collection, params)
+        let validate_let = deferred_let
+            .as_ref()
+            .is_some_and(|bindings| !bindings.is_empty());
+        let rows = self.joined_rows(single_query, select, params, probe, validate_let)?;
+        window.apply(
+            rows,
+            select,
+            base_collection,
+            params,
+            deferred_let.as_deref(),
+        )
     }
 
     /// The joined rows of `query` (a SELECT with JOINs, its window removed),
@@ -36,15 +46,16 @@ impl Database {
         budget_select: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
+        validate_deferred_let: bool,
     ) -> Result<Vec<SearchResult>> {
         let base_collection = self.resolve_collection(&query.select.from)?;
         let joins = query.select.joins.clone();
-        let (analysis, post_join_filters) = Self::prepare_join_pushdown(&mut query, params)?;
-        let post_join_filters = self.bind_post_join_text_matches(
+        let (analysis, post_join_filters) = self.prepare_join_filters(
+            &mut query,
             &base_collection,
-            &query.select,
             &joins,
-            post_join_filters,
+            params,
+            validate_deferred_let,
         )?;
         let row_budget = Self::join_row_budget(budget_select, &post_join_filters);
         // A RIGHT or FULL join tells an unmatched joined point only against
@@ -141,6 +152,27 @@ impl Database {
         Ok(results)
     }
 
+    /// Prepare the predicates for each side and validate any LET that will run
+    /// on the joined rows against the same base query that normally checks it.
+    fn prepare_join_filters(
+        &self,
+        query: &mut crate::velesql::Query,
+        base: &crate::collection::Collection,
+        joins: &[crate::velesql::JoinClause],
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        validate_deferred_let: bool,
+    ) -> Result<(
+        crate::collection::search::query::pushdown::PushdownAnalysis,
+        Vec<crate::velesql::Condition>,
+    )> {
+        let (analysis, filters) = Self::prepare_join_pushdown(query, params)?;
+        if validate_deferred_let {
+            crate::collection::Collection::validate_deferred_let(&query.select, params)?;
+        }
+        let filters = self.bind_post_join_text_matches(base, &query.select, joins, filters)?;
+        Ok((analysis, filters))
+    }
+
     /// Resolves which side each text `MATCH` reads
     /// ([`Self::resolve_join_text_matches`]) and the WHERE parameters, runs
     /// pushdown analysis, and strips from the base query every predicate the
@@ -195,7 +227,7 @@ impl Database {
     ///
     /// When the query has an explicit LIMIT, no post-join filters, and no
     /// ORDER BY (which could reorder past the window), the bound is the
-    /// effective `LIMIT + OFFSET`. GROUP BY / HAVING / DISTINCT also disqualify
+    /// effective `LIMIT + OFFSET`. GROUP BY / HAVING / DISTINCT and window functions also disqualify
     /// the bounded shape: SQL LIMIT bounds output *groups/rows*, not input rows,
     /// so truncating joined input to `LIMIT` would drop rows that belong to
     /// groups still inside the window. Otherwise downstream stages may reorder or
@@ -208,12 +240,11 @@ impl Database {
         post_join_filters: &[crate::velesql::Condition],
     ) -> usize {
         use crate::collection::search::query::JOIN_ROW_CEILING;
-        use crate::velesql::DistinctMode;
         let bounded_shape = post_join_filters.is_empty()
             && select.order_by.is_none()
             && select.group_by.is_none()
             && select.having.is_none()
-            && select.distinct == DistinctMode::None;
+            && !select.reshapes_rows_before_window();
         match select.limit {
             Some(limit) if bounded_shape => {
                 let limit = usize::try_from(limit).unwrap_or(JOIN_ROW_CEILING);
@@ -281,6 +312,24 @@ fn keeps_unmatched_side_rows(joins: &[crate::velesql::JoinClause]) -> bool {
         .any(|join| matches!(join.join_type, JoinType::Right | JoinType::Full))
 }
 
+/// Window partitions consist of the joined rows admitted by WHERE and
+/// DISTINCT. Keep their SELECT outputs and dependent LETs off the base scan.
+fn defer_join_windows(
+    query: &mut crate::velesql::Query,
+) -> Option<Vec<crate::velesql::LetBinding>> {
+    let crate::velesql::SelectColumns::Mixed {
+        window_functions, ..
+    } = &mut query.select.columns
+    else {
+        return None;
+    };
+    if window_functions.is_empty() {
+        return None;
+    }
+    window_functions.clear();
+    Some(std::mem::take(&mut query.let_bindings))
+}
+
 /// The clauses a JOIN applies to its joined rows rather than to the base
 /// collection: DISTINCT, ORDER BY, OFFSET, LIMIT (the SELECT default when
 /// absent).
@@ -306,19 +355,23 @@ impl JoinWindow {
     fn apply(
         self,
         mut rows: Vec<SearchResult>,
-        columns: &crate::velesql::SelectColumns,
+        select: &crate::velesql::SelectStatement,
         collection: &crate::collection::Collection,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        deferred_let: Option<&[crate::velesql::LetBinding]>,
     ) -> Result<Vec<SearchResult>> {
+        let limit = usize::try_from(self.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
+            .unwrap_or(usize::MAX);
+        if let Some(bindings) = deferred_let {
+            return collection.apply_select_postprocessing(select, rows, params, limit, bindings);
+        }
         if self.distinct == crate::velesql::DistinctMode::All {
-            rows = crate::velesql::distinct_evaluator::apply_distinct(rows, columns);
+            rows = crate::velesql::distinct_evaluator::apply_distinct(rows, &select.columns);
         }
         if let Some(order_by) = &self.order_by {
             collection.apply_order_by(&mut rows, order_by, params)?;
         }
         let offset = usize::try_from(self.offset.unwrap_or(0)).unwrap_or(usize::MAX);
-        let limit = usize::try_from(self.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
-            .unwrap_or(usize::MAX);
         Ok(rows.into_iter().skip(offset).take(limit).collect())
     }
 }

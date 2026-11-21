@@ -19,7 +19,8 @@
 //!   similarity-score materialization, window-alias dedup).
 
 use velesdb_core::point::{Point, SearchResult};
-use velesdb_core::velesql::json_path::{column_value, payload_path};
+use velesdb_core::velesql::json_path::payload_path;
+use velesdb_core::velesql::window_evaluator::WindowInputs;
 
 use crate::js_value::row_id_json;
 use velesdb_core::velesql::{
@@ -132,7 +133,7 @@ fn project_wildcard(result: &SearchResult) -> serde_json::Value {
 /// `SELECT col1, col2 [AS alias]`: only the named fields.
 fn project_columns(result: &SearchResult, columns: &[Column]) -> serde_json::Value {
     let mut map = JsonMap::new();
-    insert_named_columns(&mut map, result, columns);
+    insert_named_columns(&mut map, result, columns, &[]);
     serde_json::Value::Object(map)
 }
 
@@ -158,7 +159,7 @@ fn project_mixed(
     if !qualified_wildcards.is_empty() {
         insert_wildcard_fields(&mut map, result, &window_aliases);
     }
-    insert_named_columns(&mut map, result, columns);
+    insert_named_columns(&mut map, result, columns, window_functions);
     for expr in similarity_scores {
         let key = expr.alias.as_deref().unwrap_or("similarity");
         map.insert(key.to_string(), score_value(result));
@@ -185,13 +186,18 @@ fn insert_wildcard_fields(map: &mut JsonMap, result: &SearchResult, skip: &[&str
 }
 
 /// Inserts each named column under its alias (or its own name).
-fn insert_named_columns(map: &mut JsonMap, result: &SearchResult, columns: &[Column]) {
-    for col in columns {
+fn insert_named_columns(
+    map: &mut JsonMap,
+    result: &SearchResult,
+    columns: &[Column],
+    windows: &[WindowFunction],
+) {
+    for (col, value) in WindowInputs::selected_columns(result, columns, windows) {
         let key = col.alias.as_deref().unwrap_or(&col.name);
         let value = if col.name == "id" {
             row_id_json(result.point.id)
         } else {
-            column_value(result, &col.name)
+            value
         };
         map.insert(key.to_string(), value);
     }

@@ -4,6 +4,50 @@ use crate::velesql::OrderByExpr;
 use serde_json::json;
 
 #[test]
+fn window_alias_keeps_the_input_embedding() {
+    use crate::point::Point;
+    use crate::velesql::Parser;
+
+    let (_dir, col) = crate::test_fixtures::fixtures::setup_collection(2);
+    let points = [(1, [0.0, 1.0]), (2, [1.0, 0.0])]
+        .into_iter()
+        .map(|(id, emb)| {
+            let payload = json!({ "emb": emb, "meta": { "emb": emb } });
+            Point::new(id, vec![1.0, 0.0], Some(payload))
+        });
+    col.upsert(points).expect("test: seed embeddings");
+    let params = std::collections::HashMap::from([("q".to_owned(), json!([1.0, 0.0]))]);
+    for (prefix, alias, order, expected) in [
+        ("", "rn", "similarity(emb, $q) DESC", 2),
+        ("", "emb", "similarity(emb, $q) DESC", 2),
+        ("", "meta", "similarity(meta.emb, $q) DESC", 2),
+        ("", "emb", "emb ASC", 1),
+        ("", "emb", "emb DESC", 2),
+        ("", "meta", "(meta * 2) DESC", 2),
+        ("LET k = emb * 2 ", "emb", "k DESC", 2),
+    ] {
+        let sql = format!(
+            "{prefix}SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS {alias} \
+             FROM docs ORDER BY {order} LIMIT 1"
+        );
+        let query = Parser::parse(&sql).expect("test: parse window query");
+        let rows = col
+            .execute_query(&query, &params)
+            .expect("test: order window");
+        assert_eq!(rows.len(), 1, "{sql}");
+        assert_eq!(rows[0].point.id, expected, "{sql}");
+        assert_eq!(
+            rows[0].point.payload.as_ref().unwrap()[alias],
+            expected,
+            "{sql}"
+        );
+        if order.starts_with("similarity(") {
+            assert_eq!(rows[0].component_score("vector_score"), Some(1.0), "{sql}");
+        }
+    }
+}
+
+#[test]
 fn similarity_score_order_keeps_nan_last_and_signed_zeros_tied() {
     use std::cmp::Ordering::{Equal, Greater, Less};
     for descending in [true, false] {

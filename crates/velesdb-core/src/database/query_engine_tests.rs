@@ -242,6 +242,15 @@ fn test_join_row_budget_distinct_uses_ceiling() {
 }
 
 #[test]
+fn test_join_row_budget_window_reads_the_partition_before_limit() {
+    let select = select_of(
+        "SELECT d.id, ROW_NUMBER() OVER (ORDER BY m.tag DESC) AS r \
+         FROM docs d LEFT JOIN meta m ON d.id=m.id LIMIT 1",
+    );
+    assert_eq!(Database::join_row_budget(&select, &[]), JOIN_ROW_CEILING);
+}
+
+#[test]
 fn test_join_row_budget_order_by_uses_ceiling() {
     // ORDER BY can reorder past the window: still falls back to the ceiling.
     let select =

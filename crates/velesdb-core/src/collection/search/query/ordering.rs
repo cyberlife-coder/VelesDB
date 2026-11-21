@@ -57,12 +57,26 @@ impl Collection {
         per_result_let: &[Vec<(String, f32)>],
         leading: usize,
     ) -> Result<()> {
+        let mut keys = self.precompute_similarity_scores(results, order_by, params)?;
+        self.apply_prepared_order(results, order_by, &mut keys, per_result_let, leading);
+        Ok(())
+    }
+
+    /// Applies similarity keys captured from these rows before window aliases
+    /// were injected. Scalar and LET keys read the current rows.
+    pub(super) fn apply_prepared_order(
+        &self,
+        results: &mut [SearchResult],
+        order_by: &[crate::velesql::SelectOrderBy],
+        keys: &mut PreparedOrderKeys,
+        per_result_let: &[Vec<(String, f32)>],
+        leading: usize,
+    ) {
         if let Some((scores, recomputed)) =
-            self.rank_rows(results, order_by, params, per_result_let, leading)?
+            self.rank_prepared_rows(results, order_by, keys, per_result_let, leading)
         {
             write_back_similarity_scores(results, scores, recomputed);
         }
-        Ok(())
     }
 
     /// Orders the `leading` best rows of `results` first, as
@@ -80,11 +94,22 @@ impl Collection {
         per_result_let: &[Vec<(String, f32)>],
         leading: usize,
     ) -> Result<Option<(Vec<Option<f32>>, bool)>> {
+        let mut keys = self.precompute_similarity_scores(results, order_by, params)?;
+        Ok(self.rank_prepared_rows(results, order_by, &mut keys, per_result_let, leading))
+    }
+
+    fn rank_prepared_rows(
+        &self,
+        results: &mut [SearchResult],
+        order_by: &[crate::velesql::SelectOrderBy],
+        keys: &mut PreparedOrderKeys,
+        per_result_let: &[Vec<(String, f32)>],
+        leading: usize,
+    ) -> Option<(Vec<Option<f32>>, bool)> {
         if order_by.is_empty() {
-            return Ok(None);
+            return None;
         }
 
-        let similarity_scores_map = self.precompute_similarity_scores(results, order_by, params)?;
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
         let field_keys = decorate_field_keys(results, order_by, per_result_let);
 
@@ -95,40 +120,38 @@ impl Collection {
                 j,
                 results,
                 order_by,
-                &similarity_scores_map,
+                keys,
                 higher_is_better,
                 per_result_let,
                 &field_keys,
             )
-            // Deterministic tie-break: rows whose ORDER BY keys are all equal are
-            // ordered by ascending point id, regardless of ASC/DESC on the keys.
-            // This makes ORDER BY fully deterministic and — crucially — matches the
-            // index-backed `ordered_ids` walk (ascending id within an equal-key
-            // bucket), so the index fast path returns the same id sequence as this
-            // full-scan sort (EPIC-081 phase 2).
+            // Match the secondary index's ascending point IDs within each
+            // equal-key bucket. A JOIN or UNION ALL can repeat an ID, in
+            // which case equal rows retain their input order on every page.
             .then_with(|| results[i].point.id.cmp(&results[j].point.id))
+            .then_with(|| i.cmp(&j))
         });
 
         // Pre-compute sorted scores before the permutation destroys the
         // original-position mapping (indices[i] = original slot for output i).
-        let sorted_scores =
-            extract_sorted_similarity_scores(order_by, &similarity_scores_map, &indices);
+        let sorted_scores = extract_sorted_similarity_scores(order_by, &keys.similarity, &indices);
 
         // Apply the sort permutation in-place using cycle decomposition.
         // Avoids cloning every SearchResult (no heap allocation for vector data).
+        keys.window.ordered(&indices[..indices.len().min(leading)]);
         apply_permutation_in_place(results, &mut indices);
-        Ok(sorted_scores)
+        sorted_scores
     }
 
     /// Pre-computes similarity scores for all ORDER BY similarity() columns:
     /// per column, each row's score, `None` for a row the column cannot
     /// score (a null key).
-    fn precompute_similarity_scores(
+    pub(super) fn precompute_similarity_scores(
         &self,
         results: &[SearchResult],
         order_by: &[crate::velesql::SelectOrderBy],
         params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<SimilarityKeys> {
+    ) -> Result<PreparedOrderKeys> {
         use crate::velesql::OrderByExpr;
         let mut map = std::collections::HashMap::new();
         for (idx, ob) in order_by.iter().enumerate() {
@@ -147,7 +170,10 @@ impl Collection {
                 OrderByExpr::Field(_) | OrderByExpr::Aggregate(_) | OrderByExpr::Arithmetic(_) => {}
             }
         }
-        Ok(map)
+        Ok(PreparedOrderKeys {
+            similarity: map,
+            window: crate::velesql::window_evaluator::WindowInputs::default(),
+        })
     }
 
     /// Scores every result row against `order_vec` using the vector selected by
@@ -188,14 +214,16 @@ impl Collection {
         j: usize,
         results: &[SearchResult],
         order_by: &[crate::velesql::SelectOrderBy],
-        similarity_scores: &SimilarityKeys,
+        keys: &PreparedOrderKeys,
         higher_is_better: bool,
         per_result_let: &[Vec<(String, f32)>],
         field_keys: &[Option<Vec<Option<&serde_json::Value>>>],
     ) -> Ordering {
         for (idx, ob) in order_by.iter().enumerate() {
-            let directed_cmp = if let Some(scores) = similarity_scores.get(&idx) {
+            let directed_cmp = if let Some(scores) = keys.similarity.get(&idx) {
                 ob.directed_score(scores[i], scores[j], higher_is_better)
+            } else if let Some(cmp) = keys.window.compare(idx, i, j) {
+                ob.directed(cmp, higher_is_better)
             } else {
                 let keys = field_keys.get(idx).and_then(Option::as_ref);
                 let cmp = Self::compare_values(ob, keys, i, j, results, per_result_let);
@@ -365,6 +393,11 @@ impl Collection {
 /// score, `None` for a row the column cannot score.
 type SimilarityKeys = std::collections::HashMap<usize, Vec<Option<f32>>>;
 
+pub(super) struct PreparedOrderKeys {
+    similarity: SimilarityKeys,
+    pub(super) window: crate::velesql::window_evaluator::WindowInputs,
+}
+
 /// Whether an ORDER BY `name` reads a payload field: neither a built-in
 /// score variable nor `id`, the point id.
 fn is_payload_field(name: &str) -> bool {
@@ -407,7 +440,7 @@ fn decorate_field_keys<'r>(
 
 /// Puts the `leading` least elements of `indices` under `compare` first, in
 /// order; the rest follow in no defined order. `compare` is a total order
-/// (every ORDER BY ends on the unique point id), so the leading elements are
+/// (point ID and original position break any ties), so the leading elements are
 /// exactly those a full sort puts there: a selection over all `n`, then a
 /// sort of the `leading` alone, instead of sorting all `n`.
 fn rank_leading(

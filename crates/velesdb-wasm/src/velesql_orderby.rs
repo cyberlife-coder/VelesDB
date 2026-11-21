@@ -84,27 +84,54 @@ pub(crate) fn sort_rows(
     rows: &mut [SearchResult],
     ctx: &OrderContext<'_>,
 ) -> Result<(), ExecError> {
-    let Some(specs) = stmt.order_by.as_ref() else {
-        return Ok(());
-    };
-    if specs.is_empty() {
-        return Ok(());
-    }
-    validate_order_by(specs, ctx.vectors.is_some())?;
-    let keys = similarity_keys(specs, rows, ctx)?;
-    if keys.iter().all(Option::is_none) {
-        rows.sort_by(|a, b| compare_rows(a, b, specs, ctx.higher_is_better, &[], 0, 0));
-        return Ok(());
-    }
-    // Decorate-sort-undecorate: the precomputed keys follow their row.
-    let mut order: Vec<usize> = (0..rows.len()).collect();
-    order.sort_by(|&i, &j| {
-        compare_rows(&rows[i], &rows[j], specs, ctx.higher_is_better, &keys, i, j)
-    });
-    let sorted: Vec<SearchResult> = order.iter().map(|&i| rows[i].clone()).collect();
-    rows.clone_from_slice(&sorted);
-    write_back_similarity(specs, &keys, &order, rows);
+    RowOrder::prepare(stmt, rows, ctx)?.apply(rows);
     Ok(())
+}
+
+/// Vector keys belong to the input rows. Window evaluation can write scalar
+/// aliases before sorting, as long as the rows keep their positions.
+pub(crate) struct RowOrder<'a> {
+    specs: &'a [SelectOrderBy],
+    keys: Vec<SimilarityKeys>,
+    window: velesdb_core::velesql::window_evaluator::WindowInputs,
+    higher_is_better: bool,
+}
+
+impl<'a> RowOrder<'a> {
+    pub(crate) fn prepare(
+        stmt: &'a SelectStatement,
+        rows: &[SearchResult],
+        ctx: &OrderContext<'_>,
+    ) -> Result<Self, ExecError> {
+        let specs = stmt.order_by.as_deref().unwrap_or_default();
+        validate_order_by(specs, ctx.vectors.is_some())?;
+        Ok(Self {
+            specs,
+            keys: similarity_keys(specs, rows, ctx)?,
+            window: velesdb_core::velesql::window_evaluator::WindowInputs::capture(stmt, rows),
+            higher_is_better: ctx.higher_is_better,
+        })
+    }
+
+    pub(crate) fn apply(
+        mut self,
+        rows: &mut [SearchResult],
+    ) -> velesdb_core::velesql::window_evaluator::WindowInputs {
+        if self.specs.is_empty() {
+            return self.window;
+        }
+        if self.keys.iter().all(Option::is_none) && !self.window.needs_positions() {
+            rows.sort_by(|a, b| compare_rows(a, b, &self, 0, 0));
+            return self.window;
+        }
+        let mut order: Vec<usize> = (0..rows.len()).collect();
+        order.sort_by(|&i, &j| compare_rows(&rows[i], &rows[j], &self, i, j));
+        let sorted: Vec<SearchResult> = order.iter().map(|&i| rows[i].clone()).collect();
+        rows.clone_from_slice(&sorted);
+        write_back_similarity(self.specs, &self.keys, &order, rows);
+        self.window.ordered(&order);
+        self.window
+    }
 }
 
 /// Writes the first similarity ORDER BY item's key back as each row's score,
@@ -260,19 +287,22 @@ fn validate_order_by(specs: &[SelectOrderBy], has_vectors: bool) -> Result<(), E
 fn compare_rows(
     a: &SearchResult,
     b: &SearchResult,
-    specs: &[SelectOrderBy],
-    higher_is_better: bool,
-    keys: &[SimilarityKeys],
+    order: &RowOrder<'_>,
     ia: usize,
     ib: usize,
 ) -> Ordering {
-    for (idx, spec) in specs.iter().enumerate() {
-        let ord = match keys.get(idx).and_then(Option::as_ref) {
-            Some(scores) => spec.directed_score(scores[ia], scores[ib], higher_is_better),
-            None if matches!(spec.expr, OrderByExpr::SimilarityBare) => {
+    let higher_is_better = order.higher_is_better;
+    for (idx, spec) in order.specs.iter().enumerate() {
+        let ord = match (
+            order.keys.get(idx).and_then(Option::as_ref),
+            order.window.compare(idx, ia, ib),
+        ) {
+            (Some(scores), _) => spec.directed_score(scores[ia], scores[ib], higher_is_better),
+            (_, Some(cmp)) => spec.directed(cmp, higher_is_better),
+            _ if matches!(spec.expr, OrderByExpr::SimilarityBare) => {
                 spec.directed_score(Some(a.score), Some(b.score), higher_is_better)
             }
-            None => spec.directed(compare_with_spec(a, b, spec), higher_is_better),
+            _ => spec.directed(compare_with_spec(a, b, spec), higher_is_better),
         };
         if ord != Ordering::Equal {
             return ord;

@@ -458,7 +458,7 @@ impl Collection {
     /// compatibility mode), swap step 1 and step 2 and wrap behind a feature
     /// flag. Regression coverage is in
     /// `window_function_tests::test_distinct_runs_before_window_functions`.
-    pub(super) fn apply_select_postprocessing(
+    pub(crate) fn apply_select_postprocessing(
         &self,
         stmt: &crate::velesql::SelectStatement,
         mut results: Vec<SearchResult>,
@@ -471,17 +471,11 @@ impl Collection {
         if stmt.distinct == crate::velesql::DistinctMode::All {
             results = distinct_evaluator::apply_distinct(results, &stmt.columns);
         }
-        // Step 2: Window functions — after DISTINCT, before ORDER BY/LIMIT.
-        if let Some(wfs) = Self::extract_window_functions(&stmt.columns) {
-            crate::velesql::window_evaluator::evaluate(&mut results, wfs)?;
-        }
-        // Step 3: ORDER BY (with optional LET bindings), over every row,
-        // ordering the ones the window keeps. SQL-standard: OFFSET applied
-        // after ORDER BY, before LIMIT.
+        // Window functions and ORDER BY operate on the distinct rows.
         let skip = stmt
             .offset
             .map_or(0, |offset| usize::try_from(offset).unwrap_or(usize::MAX));
-        self.apply_order_by_step(
+        let inputs = self.apply_window_order(
             stmt,
             &mut results,
             params,
@@ -500,29 +494,45 @@ impl Collection {
             inject_let_into_payloads(&mut results, &per_result_let);
         }
 
+        inputs.publish(&mut results, &stmt.columns, skip);
         Ok(results)
     }
 
-    /// Apply ORDER BY over every row, with the LET bindings in scope,
-    /// ordering the `leading` best first — the rows the window keeps
-    /// ([`Collection::apply_order_by_with_let`]).
-    fn apply_order_by_step(
+    /// Capture vector sort keys from the input rows. Window evaluation writes
+    /// aliases in place without moving rows; scalar and LET keys then see them.
+    fn apply_window_order(
         &self,
         stmt: &crate::velesql::SelectStatement,
         results: &mut [SearchResult],
         params: &std::collections::HashMap<String, serde_json::Value>,
         let_bindings: &[crate::velesql::LetBinding],
         leading: usize,
-    ) -> Result<()> {
-        let Some(ref order_by) = stmt.order_by else {
-            return Ok(());
-        };
+    ) -> Result<crate::velesql::window_evaluator::WindowInputs> {
+        let order_by = stmt.order_by.as_deref().unwrap_or_default();
+        let mut keys = self.precompute_similarity_scores(results, order_by, params)?;
+        if let Some(wfs) = Self::extract_window_functions(&stmt.columns) {
+            keys.window = crate::velesql::window_evaluator::WindowInputs::capture(stmt, results);
+            crate::velesql::window_evaluator::evaluate(results, wfs)?;
+        }
+        if order_by.is_empty() {
+            return Ok(keys.window);
+        }
         let per_result_let = if let_bindings.is_empty() {
             Vec::new()
         } else {
             Self::evaluate_let_for_results(let_bindings, results)
         };
-        self.apply_order_by_with_let(results, order_by, params, &per_result_let, leading)
+        self.apply_prepared_order(results, order_by, &mut keys, &per_result_let, leading);
+        Ok(keys.window)
+    }
+
+    /// Check the base query's LET restrictions when a JOIN will evaluate its
+    /// bindings on the joined rows; the base executor no longer carries them.
+    pub(crate) fn validate_deferred_let(
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        Self::validate_let_binding_support(&Self::extract_query_components(stmt, params)?)
     }
 
     /// Evaluates LET bindings for every result, producing per-result binding maps.

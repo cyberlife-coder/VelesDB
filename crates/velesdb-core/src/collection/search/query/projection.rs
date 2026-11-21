@@ -6,6 +6,7 @@
 
 use crate::point::SearchResult;
 use crate::velesql::json_path::column_value;
+use crate::velesql::window_evaluator::WindowInputs;
 use crate::velesql::{SelectColumns, SimilarityScoreExpr};
 
 /// Projects a list of `SearchResult` according to the parsed SELECT expressions.
@@ -124,7 +125,7 @@ fn project_mixed(
     if !qualified_wildcards.is_empty() {
         insert_qualified_wildcards(&mut map, result, &window_aliases);
     }
-    insert_named_columns(&mut map, result, columns);
+    insert_named_columns(&mut map, result, columns, window_functions);
     insert_similarity_scores(&mut map, result, similarity_scores);
     insert_window_values(&mut map, result, window_functions);
 
@@ -153,10 +154,10 @@ fn insert_named_columns(
     map: &mut serde_json::Map<String, serde_json::Value>,
     result: &SearchResult,
     columns: &[crate::velesql::Column],
+    windows: &[crate::velesql::WindowFunction],
 ) {
-    for col in columns {
+    for (col, value) in WindowInputs::selected_columns(result, columns, windows) {
         let output_key = col.alias.as_deref().unwrap_or(&col.name);
-        let value = column_value(result, &col.name);
         map.insert(output_key.to_string(), value);
     }
 }

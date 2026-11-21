@@ -14,6 +14,47 @@ use crate::velesql_exec::execute;
 const ROWS: u64 = 40;
 const QUERY: &str = r#"{"q": [1.0, 0.0]}"#;
 
+#[test]
+fn window_alias_keeps_the_input_embedding() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("docs", 2, "cosine")
+        .expect("test: docs");
+    let store = db.get_shared_store("docs").expect("test: store");
+    for (id, emb) in [(1, [0.0, 1.0]), (2, [1.0, 0.0])] {
+        crate::store_insert::insert_with_payload(
+            &mut store.borrow_mut(),
+            id,
+            &[0.0, 1.0],
+            Some(serde_json::json!({"emb": emb, "meta": {"emb": emb}})),
+        );
+    }
+    for (alias, order, first) in [
+        ("rn", "similarity(emb, $q) DESC", 2),
+        ("emb", "similarity(emb, $q) DESC", 2),
+        ("meta", "similarity(meta.emb, $q) DESC", 2),
+        ("emb", "emb ASC", 1),
+        ("emb", "emb DESC", 2),
+        ("meta", "(meta * 2) DESC", 2),
+    ] {
+        let sql = format!(
+            "SELECT id, similarity() AS s, ROW_NUMBER() OVER (ORDER BY id) AS {alias} \
+             FROM docs WHERE vector NEAR $q ORDER BY {order} LIMIT 1"
+        );
+        let result = execute(&mut db, &sql, Some(QUERY)).expect("test: order window");
+        let rows: serde_json::Value =
+            serde_json::from_str(&result.rows_json()).expect("test: rows");
+        assert_eq!(result.row_count(), 1, "{sql}");
+        assert_eq!(rows[0]["id"], first, "{sql}");
+        assert_eq!(rows[0][alias], first, "{sql}");
+        let score = if order.starts_with("similarity(") {
+            1.0
+        } else {
+            0.0
+        };
+        assert_eq!(rows[0]["s"], score, "{sql}");
+    }
+}
+
 /// The rank of row `id` in similarity to `[1, 0]`: its vector is
 /// `[1, rank / 10]`, so a smaller rank is more similar. `17 · id mod 41`
 /// permutes `1..=40`, far from the id order.
