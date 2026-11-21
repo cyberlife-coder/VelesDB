@@ -17,27 +17,27 @@
 use super::condition_tree::map_leaf_columns;
 use super::{Condition, SelectStatement};
 
-/// The name `select`'s FROM side goes by: its alias, else its table.
+/// The FROM side's own alias, `None` when the FROM table has none.
 ///
-/// `from_alias` lists every alias in scope, the FROM's first when it has one,
-/// then the JOINs' (`SelectStatement::from_alias`): its first entry is the
-/// FROM's alias only when no JOIN is aliased by it. Reading the first entry
-/// alone named an unaliased FROM after the first aliased JOIN — `FROM docs
-/// JOIN tags t` scoped the base rows under `t`, which the join then
-/// overwrote, so `docs.cat` read nothing.
+/// The parser appends one entry to `from_alias` per explicitly aliased JOIN,
+/// after the FROM alias if present. An extra leading entry therefore belongs
+/// to the FROM, including when a JOIN declares the same name.
+#[must_use]
+pub fn base_alias(select: &SelectStatement) -> Option<&str> {
+    let first = select.from_alias.first()?;
+    let join_aliases = select
+        .joins
+        .iter()
+        .filter(|join| join.alias.is_some())
+        .count();
+    (select.from_alias.len() > join_aliases).then_some(first.as_str())
+}
+
+/// The name `select`'s FROM side goes by: its alias ([`base_alias`]), else
+/// its table.
 #[must_use]
 pub fn base_side(select: &SelectStatement) -> &str {
-    let from_alias = select
-        .from_alias
-        .first()
-        .map(String::as_str)
-        .filter(|alias| {
-            !select
-                .joins
-                .iter()
-                .any(|join| join.alias.as_deref() == Some(alias))
-        });
-    super::side_alias(from_alias, &select.from)
+    super::side_alias(base_alias(select), &select.from)
 }
 
 /// `column` without its qualifier when that qualifier is `base`, the FROM

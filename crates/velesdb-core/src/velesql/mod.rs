@@ -132,7 +132,7 @@ pub use set_operation::{
 };
 #[cfg(feature = "persistence")]
 pub(crate) use side_qualifier::base_column;
-pub use side_qualifier::{base_side, resolve_base_qualifiers};
+pub use side_qualifier::{base_alias, base_side, resolve_base_qualifiers};
 pub use similarity_threshold::{similarity_holds, SIMILARITY_EQ_TOLERANCE};
 pub use vector_predicates::{
     payload_vector, validate_vector_predicates, METADATA_MATCH_SCORE, PRIMARY_VECTOR_FIELD,

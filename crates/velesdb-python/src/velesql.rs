@@ -199,34 +199,24 @@ impl ParsedStatement {
         }
     }
 
-    /// Get the collection alias if present (for self-joins).
+    /// Get the alias of the FROM collection, never a JOIN's.
     ///
     /// Returns:
-    ///     str or None: First collection alias, or None if not aliased
+    ///     str or None: The FROM alias, or None when the FROM collection is
+    ///     not aliased (even if a JOIN is: ``FROM docs JOIN tags t`` gives None)
     #[getter]
     fn table_alias(&self) -> Option<String> {
-        self.inner.select.from_alias.first().cloned()
+        velesdb_core::velesql::base_alias(&self.inner.select).map(str::to_owned)
     }
 
-    /// Get all aliases visible in scope (FROM alias + JOIN aliases).
+    /// Get the FROM alias, if present, followed by each declared JOIN alias.
+    /// Repeated names occupy one entry per declaration.
     ///
     /// Returns:
     ///     list[str]: All aliases, empty if none
     #[getter]
     fn table_aliases(&self) -> Vec<String> {
-        self.inner
-            .select
-            .from_alias
-            .iter()
-            .cloned()
-            .chain(
-                self.inner
-                    .select
-                    .joins
-                    .iter()
-                    .filter_map(|join| join.alias.clone()),
-            )
-            .collect()
+        self.inner.select.from_alias.clone()
     }
 
     /// Get the list of selected columns — one entry per SELECT-list item.

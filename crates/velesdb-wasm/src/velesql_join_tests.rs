@@ -120,3 +120,25 @@ fn a_self_join_keeps_each_sides_fields_under_its_alias() {
     assert_eq!(ann["e"]["name"], serde_json::json!("Ann"));
     assert_eq!(ann["m"]["name"], serde_json::json!("Bo"));
 }
+
+/// An unaliased FROM is read under its table name beside an aliased JOIN:
+/// `from_alias` lists the JOIN alias too, so its first entry is no base.
+#[test]
+fn an_unaliased_base_reads_under_its_table_beside_an_aliased_join() {
+    let mut db = DatabaseInner::new();
+    seed(&mut db);
+    let stmt = parse("SELECT * FROM users JOIN orders AS o ON users.id = o.user_id");
+    let rows = joined_rows(&db, &stmt, &Params::new()).expect("test: join");
+    let sides: Vec<(serde_json::Value, serde_json::Value)> = rows
+        .iter()
+        .map(|r| {
+            let payload = r.payload.as_ref().expect("test: payload");
+            (payload["users"]["id"].clone(), payload["o"]["id"].clone())
+        })
+        .collect();
+    let expected: Vec<(serde_json::Value, serde_json::Value)> = [(1, 10), (1, 11), (2, 12)]
+        .into_iter()
+        .map(|(u, o)| (serde_json::json!(u), serde_json::json!(o)))
+        .collect();
+    assert_eq!(sides, expected);
+}

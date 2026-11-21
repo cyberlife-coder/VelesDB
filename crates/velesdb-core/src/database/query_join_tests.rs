@@ -288,6 +288,57 @@ fn an_array_join_key_matches_though_the_column_is_indexed() {
 }
 
 // =========================================================================
+// Base side of a join — the FROM table, whatever the JOINs are aliased
+// =========================================================================
+
+/// An unaliased FROM is read under its table name even when the JOIN is
+/// aliased: `from_alias` lists the JOIN alias too, and taking its first
+/// entry scoped the base rows under `p`, leaving `inventory.*` unreadable.
+#[test]
+fn an_unaliased_base_reads_under_its_table_beside_an_aliased_join() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_indexed_join_fixtures(&db);
+
+    let rows = run_sql(
+        &db,
+        "SELECT * FROM inventory JOIN products AS p ON inventory.sku = p.sku \
+         ORDER BY inventory.id ASC LIMIT 10",
+    )
+    .unwrap();
+    let sides: Vec<(Option<u64>, Option<u64>)> = rows
+        .iter()
+        .map(|r| {
+            let payload = r.point.payload.as_ref().unwrap();
+            (
+                payload["inventory"]["id"].as_u64(),
+                payload["p"]["id"].as_u64(),
+            )
+        })
+        .collect();
+    assert_eq!(sides, [(Some(10), Some(1)), (Some(11), Some(1))]);
+}
+
+/// A predicate on a LEFT JOIN's alias holds on the joined rows. Read as a
+/// base-collection name (`from_alias` lists JOIN aliases too), it ran on the
+/// base rows, where `p` is absent, so `p.id IS NULL` let every row through.
+#[test]
+fn an_outer_join_alias_predicate_holds_on_the_joined_rows() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_indexed_join_fixtures(&db);
+
+    let rows = run_sql(
+        &db,
+        "SELECT * FROM inventory LEFT JOIN products AS p ON inventory.sku = p.sku \
+         WHERE p.id IS NULL LIMIT 10",
+    )
+    .unwrap();
+    let ids: Vec<u64> = rows.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, [12], "only the `nice` row has no product");
+}
+
+// =========================================================================
 // A text MATCH in a JOIN: the side its qualifier names
 // =========================================================================
 
@@ -368,11 +419,13 @@ fn a_joined_side_match_tests_that_sides_hits() {
     let db = Database::open(dir.path()).unwrap();
     seed_text_join_fixtures(&db);
 
-    let rows = run_sql(
-        &db,
+    for sql in [
         "SELECT * FROM tags AS t JOIN docs AS d ON t.id = d.id WHERE d.content MATCH 'apple' \
          ORDER BY id LIMIT 10",
-    )
-    .unwrap();
-    assert_eq!(result_ids(&rows), [1, 3, 6]);
+        "SELECT * FROM tags LEFT JOIN docs AS d ON tags.id = d.id WHERE d.content MATCH 'apple' \
+         ORDER BY tags.id LIMIT 10",
+    ] {
+        let rows = run_sql(&db, sql).expect(sql);
+        assert_eq!(result_ids(&rows), [1, 3, 6], "{sql}");
+    }
 }

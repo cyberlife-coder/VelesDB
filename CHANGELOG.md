@@ -1306,6 +1306,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **VelesQL: a JOIN's alias is never taken for the FROM side** (core,
+  Python, 2026-11-20). `SelectStatement::from_alias` lists every alias in
+  scope — the FROM alias, then each JOIN alias — yet two readers still took
+  the whole list for the FROM side. JOIN pushdown named the base collection
+  by it, so a predicate on an outer join's alias (`LEFT JOIN products p …
+  WHERE p.id IS NULL`) ran on the base rows, where `p` is absent, and every
+  row passed; it now holds on the joined rows. The Python
+  `ParsedStatement.table_alias` read its first entry, the JOIN alias in
+  `FROM docs JOIN tags t`, and `table_aliases` listed each JOIN alias twice.
+  Core gains `velesql::base_alias` (the FROM's own alias, `None` when only
+  JOINs are aliased), which `velesql::base_side` is now built on: one
+  resolver for every reader. `table_alias` retains the FROM alias when a
+  JOIN reuses its name. `table_aliases` lists one entry per declaration.
+  A text `MATCH` on an aliased JOIN beside an unaliased FROM now reads the
+  joined collection's text index through the original JOIN declarations.
+
 - **Payload WAL: a write that fails partway through a record no longer
   costs the records written after it** (core, 2026-11-20, #2850). A record
   at least as large as the `BufWriter`'s buffer goes straight to the file, so

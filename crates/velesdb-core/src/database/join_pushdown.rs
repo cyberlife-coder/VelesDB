@@ -19,8 +19,13 @@ impl Database {
     ) -> crate::collection::search::query::pushdown::PushdownAnalysis {
         let join_tables =
             crate::collection::search::query::pushdown::pushable_join_tables(&stmt.joins);
-        let graph_vars: std::collections::HashSet<String> =
-            stmt.from_alias.iter().cloned().collect();
+        // The base side only: a JOIN alias is a join side, never the base
+        // collection, even under an outer join that keeps it out of
+        // `join_tables` — its predicate then holds on the joined rows.
+        let graph_vars: std::collections::HashSet<String> = crate::velesql::base_alias(stmt)
+            .map(str::to_owned)
+            .into_iter()
+            .collect();
         let analysis = stmt.where_clause.as_ref().map_or_else(
             crate::collection::search::query::pushdown::PushdownAnalysis::default,
             |wc| {
@@ -46,8 +51,8 @@ impl Database {
     /// side's id, which a joined row carries under the side's alias
     /// (`velesql::merge_side`) — through the one membership routine every
     /// binding of a `MATCH` writes (`Collection::text_match_membership`),
-    /// each side's hits for a query read once. `select` is the base query,
-    /// whose FROM names the base side.
+    /// each side's hits for a query read once. `select` carries the original
+    /// FROM and JOIN declarations.
     ///
     /// # Errors
     ///
@@ -57,16 +62,15 @@ impl Database {
         &self,
         base_collection: &crate::collection::Collection,
         select: &crate::velesql::SelectStatement,
-        joins: &[crate::velesql::JoinClause],
         filters: Vec<crate::velesql::Condition>,
     ) -> Result<Vec<crate::velesql::Condition>> {
         use crate::velesql::text_match;
         if !filters.iter().any(text_match::holds_text_match) {
             return Ok(filters);
         }
-        let sides = JoinSides::of(select, joins);
+        let sides = JoinSides::of(select);
         let mut collections = vec![base_collection.clone()];
-        for join in joins {
+        for join in &select.joins {
             collections.push(self.resolve_collection(&join.table)?);
         }
         let mut hits: Vec<TextHits> = collections.iter().map(|_| TextHits::default()).collect();
@@ -101,7 +105,7 @@ impl Database {
         if !crate::velesql::text_match::holds_text_match(condition) {
             return Ok(());
         }
-        let sides = JoinSides::of(select, &select.joins);
+        let sides = JoinSides::of(select);
         let resolved = crate::velesql::text_match::map_text_matches(condition, &mut |leaf| {
             let mut leaf = leaf.clone();
             if sides.side_of(&leaf)? == JoinSides::BASE {
@@ -152,12 +156,10 @@ impl<'s> JoinSides<'s> {
     /// The FROM side's position.
     const BASE: usize = 0;
 
-    fn of(
-        select: &'s crate::velesql::SelectStatement,
-        joins: &'s [crate::velesql::JoinClause],
-    ) -> Self {
+    fn of(select: &'s crate::velesql::SelectStatement) -> Self {
         let base = crate::velesql::base_side(select);
-        let joined = joins
+        let joined = select
+            .joins
             .iter()
             .map(|join| crate::velesql::side_alias(join.alias.as_deref(), &join.table));
         Self {

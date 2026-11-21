@@ -1813,7 +1813,11 @@ class ParsedStatement:
 
     collection_name: Optional[str]
     table_alias: Optional[str]
+    """Alias of the FROM collection, never a JOIN's; ``None`` when the FROM
+    collection is unaliased (``FROM docs JOIN tags t`` gives ``None``)."""
     table_aliases: List[str]
+    """The FROM alias, if present, followed by each declared JOIN alias.
+    ``FROM docs d JOIN tags d`` gives ``["d", "d"]``."""
     columns: List[str]
     limit: Optional[int]
     offset: Optional[int]

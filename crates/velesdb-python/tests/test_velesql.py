@@ -180,8 +180,53 @@ def test_velesql_table_alias():
         "SELECT a.id FROM products a JOIN products b ON a.category = b.category"
     )
     
-    # Table alias should be accessible
     assert parsed.collection_name == "products"
+    assert parsed.table_alias == "a"
+    assert parsed.table_aliases == ["a", "b"]
+
+
+@pytest.mark.parametrize(
+    ("sql", "table_alias", "table_aliases"),
+    [
+        pytest.param(
+            "SELECT * FROM docs JOIN tags t ON t.id = docs.tag_id",
+            None,
+            ["t"],
+            id="unaliased-from-aliased-join",
+        ),
+        pytest.param(
+            "SELECT * FROM docs d JOIN tags t ON t.id = d.tag_id",
+            "d",
+            ["d", "t"],
+            id="aliased-from-aliased-join",
+        ),
+        pytest.param(
+            "SELECT * FROM docs AS d JOIN tags AS d USING (id)",
+            "d",
+            ["d", "d"],
+            id="join-reuses-from-alias",
+        ),
+        pytest.param(
+            "SELECT * FROM docs JOIN tags t ON t.id = docs.tag_id "
+            "JOIN users u ON u.id = docs.owner_id",
+            None,
+            ["t", "u"],
+            id="multiple-joins",
+        ),
+        pytest.param("SELECT * FROM docs AS d", "d", ["d"], id="single-aliased"),
+        pytest.param("SELECT * FROM docs", None, [], id="single-unaliased"),
+    ],
+)
+def test_table_alias_names_the_from_side_and_aliases_follow_declaration_order(
+    sql, table_alias, table_aliases
+):
+    """The FROM alias and the ordered list of all alias declarations are exposed separately."""
+    from velesdb import VelesQL
+
+    parsed = VelesQL.parse(sql)
+
+    assert parsed.table_alias == table_alias
+    assert parsed.table_aliases == table_aliases
 
 
 def test_a_parameter_error_raises_velesql_parameter_error(temp_db):

@@ -28,35 +28,29 @@ impl Database {
     }
 
     /// The joined rows of `query` (a SELECT with JOINs, its window removed),
-    /// WHERE applied, in base order. `budget_select` is the SELECT as written,
-    /// whose window bounds how many joined rows are needed.
+    /// WHERE applied, in base order. `select` supplies the original JOIN
+    /// scope and the window that bounds how many joined rows are needed.
     pub(super) fn joined_rows(
         &self,
         mut query: crate::velesql::Query,
-        budget_select: &crate::velesql::SelectStatement,
+        select: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
         let base_collection = self.resolve_collection(&query.select.from)?;
-        let joins = query.select.joins.clone();
         let (analysis, post_join_filters) = Self::prepare_join_pushdown(&mut query, params)?;
-        let post_join_filters = self.bind_post_join_text_matches(
-            &base_collection,
-            &query.select,
-            &joins,
-            post_join_filters,
-        )?;
-        let row_budget = Self::join_row_budget(budget_select, &post_join_filters);
+        let post_join_filters =
+            self.bind_post_join_text_matches(&base_collection, select, post_join_filters)?;
+        let row_budget = Self::join_row_budget(select, &post_join_filters);
         // A RIGHT or FULL join tells an unmatched joined point only against
         // every base row, so it reads them all at once.
-        let mut fetch = BaseFetch::new(if keeps_unmatched_side_rows(&joins) {
+        let mut fetch = BaseFetch::new(if keeps_unmatched_side_rows(&select.joins) {
             BaseFetch::CEILING
         } else {
             row_budget
         });
         let plan = JoinPlan {
-            select: budget_select,
-            joins: &joins,
+            select,
             analysis: &analysis,
             post_join_filters: &post_join_filters,
             row_budget,
@@ -103,7 +97,7 @@ impl Database {
         let mut results = scope_base_rows(base, from_alias);
         let mut prior_aliases = vec![from_alias];
         let mut after_outer_join = false;
-        for join in plan.joins {
+        for join in &select.joins {
             // Each join side is filtered by the pushed predicates on ITS
             // columns only: another side's predicate would empty its store.
             let sides = crate::collection::search::query::pushdown::extract_join_tables(
@@ -229,9 +223,8 @@ impl Database {
 
 /// What joining a SELECT's base rows reads ([`Database::joined_rows`]).
 struct JoinPlan<'a> {
-    /// The SELECT as written (its FROM alias, its window).
+    /// The SELECT with its original FROM, JOINs and result window.
     select: &'a crate::velesql::SelectStatement,
-    joins: &'a [crate::velesql::JoinClause],
     analysis: &'a crate::collection::search::query::pushdown::PushdownAnalysis,
     /// The predicates that hold on the joined rows.
     post_join_filters: &'a [crate::velesql::Condition],
