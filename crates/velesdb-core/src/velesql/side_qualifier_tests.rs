@@ -54,9 +54,14 @@ fn an_unaliased_from_has_no_base_alias_though_a_join_is_aliased() {
 
 #[test]
 fn an_aliased_from_is_the_base_alias_beside_an_aliased_join() {
-    let stmt = select("SELECT * FROM docs d JOIN tags t ON t.id = d.tag_id");
-    assert_eq!(base_alias(&stmt), Some("d"));
-    assert_eq!(base_side(&stmt), "d");
+    for sql in [
+        "SELECT * FROM docs d JOIN tags t ON t.id = d.tag_id",
+        "SELECT * FROM docs AS d JOIN tags AS d USING (id)",
+    ] {
+        let stmt = select(sql);
+        assert_eq!(base_alias(&stmt), Some("d"));
+        assert_eq!(base_side(&stmt), "d");
+    }
 }
 
 #[test]

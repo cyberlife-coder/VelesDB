@@ -209,8 +209,8 @@ impl ParsedStatement {
         velesdb_core::velesql::base_alias(&self.inner.select).map(str::to_owned)
     }
 
-    /// Get every alias visible in scope, each once: the FROM alias, then
-    /// each JOIN alias in order.
+    /// Get the FROM alias, if present, followed by each declared JOIN alias.
+    /// Repeated names occupy one entry per declaration.
     ///
     /// Returns:
     ///     list[str]: All aliases, empty if none

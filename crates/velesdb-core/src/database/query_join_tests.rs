@@ -419,11 +419,13 @@ fn a_joined_side_match_tests_that_sides_hits() {
     let db = Database::open(dir.path()).unwrap();
     seed_text_join_fixtures(&db);
 
-    let rows = run_sql(
-        &db,
+    for sql in [
         "SELECT * FROM tags AS t JOIN docs AS d ON t.id = d.id WHERE d.content MATCH 'apple' \
          ORDER BY id LIMIT 10",
-    )
-    .unwrap();
-    assert_eq!(result_ids(&rows), [1, 3, 6]);
+        "SELECT * FROM tags LEFT JOIN docs AS d ON tags.id = d.id WHERE d.content MATCH 'apple' \
+         ORDER BY tags.id LIMIT 10",
+    ] {
+        let rows = run_sql(&db, sql).expect(sql);
+        assert_eq!(result_ids(&rows), [1, 3, 6], "{sql}");
+    }
 }

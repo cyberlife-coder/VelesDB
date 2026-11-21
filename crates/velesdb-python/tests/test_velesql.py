@@ -201,6 +201,12 @@ def test_velesql_table_alias():
             id="aliased-from-aliased-join",
         ),
         pytest.param(
+            "SELECT * FROM docs AS d JOIN tags AS d USING (id)",
+            "d",
+            ["d", "d"],
+            id="join-reuses-from-alias",
+        ),
+        pytest.param(
             "SELECT * FROM docs JOIN tags t ON t.id = docs.tag_id "
             "JOIN users u ON u.id = docs.owner_id",
             None,
@@ -211,11 +217,10 @@ def test_velesql_table_alias():
         pytest.param("SELECT * FROM docs", None, [], id="single-unaliased"),
     ],
 )
-def test_table_alias_names_the_from_side_and_aliases_list_each_once(
+def test_table_alias_names_the_from_side_and_aliases_follow_declaration_order(
     sql, table_alias, table_aliases
 ):
-    """``table_alias`` is the FROM table's alias, never a JOIN's;
-    ``table_aliases`` lists every alias once, FROM first, then each JOIN."""
+    """The FROM alias and the ordered list of all alias declarations are exposed separately."""
     from velesdb import VelesQL
 
     parsed = VelesQL.parse(sql)

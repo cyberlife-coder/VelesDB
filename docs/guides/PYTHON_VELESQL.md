@@ -81,7 +81,7 @@ Key parameters for `ParsedStatement`:
 | `order_by` | `list[tuple[str, str]]` | (column, "ASC"/"DESC") pairs |
 | `group_by` | `list[str]` | GROUP BY columns |
 | `table_alias` | `str` or `None` | Alias of the FROM collection (never a JOIN's), `None` if unaliased |
-| `table_aliases` | `list[str]` | Every alias in scope, each once: FROM first, then each JOIN |
+| `table_aliases` | `list[str]` | One entry per alias declaration, FROM first and then JOINs in order, including repeated names |
 | `join_count` | `int` | Number of JOIN clauses |
 | `is_select()` | `bool` | True for SELECT queries |
 | `is_match()` | `bool` | True for MATCH (graph) queries |
