@@ -332,7 +332,7 @@ impl Collection {
             drop(vector_storage);
             match Nearest::next_ask(asked, want.reachable(self.vector_count())) {
                 Some(next) => asked = next,
-                None => return Ok(self.exact_nearest_live(want, accept, finish)),
+                None => return Ok(self.exact_nearest_live(want, &accept, finish)),
             }
         }
     }
@@ -365,7 +365,7 @@ impl Collection {
     fn exact_nearest_live<T>(
         &self,
         want: &Nearest<'_>,
-        accept: impl Fn(u64, Option<&serde_json::Value>) -> bool,
+        accept: &dyn Fn(u64, Option<&serde_json::Value>) -> bool,
         finish: impl Fn(Vec<(u64, f32)>, &MmapStorage, &LogPayloadStorage) -> T,
     ) -> T {
         #[cfg(test)]
