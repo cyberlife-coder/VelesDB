@@ -365,3 +365,38 @@ fn comparing_wildcard_rows_preserves_their_payload_member_order() {
         original
     );
 }
+
+#[test]
+fn nested_vector_projection_does_not_duplicate_its_sort_input_before_limit() {
+    let query = parse(
+        "SELECT t.*, meta.v, a AS tag FROM docs AS t UNION ALL
+         SELECT t.*, meta.v, a AS tag FROM more AS t ORDER BY similarity(meta.v,[1,0]) LIMIT 1",
+    );
+    let items = [json!([1, 0]), json!([0, 1])];
+    let mut inputs = items
+        .iter()
+        .enumerate()
+        .map(|(i, v)| vec![row(i as u64, 0.0, json!({"meta": {"v": v}, "a": 7}))]);
+    let page =
+        execute_compound::<()>(
+            &query,
+            true,
+            10,
+            |_| Ok(inputs.next().expect("two operands")),
+            |rows, order| {
+                assert_eq!((rows.len(), order.len()), (2, 1));
+                for (row, vector) in rows.iter().zip(&items) {
+                    let payload = row.point.payload.as_ref().expect("stored metadata");
+                    assert_eq!(payload["meta"]["v"], *vector);
+                    assert_eq!(crate::velesql::row_field(payload, "meta.v"), Some(vector));
+                    let fields = payload.as_object().expect("object payload");
+                    assert!(fields.values().filter(|value| *value == vector).count() <= 1,
+                    "the selected value and its sort key need at most one copy beyond the source");
+                }
+                Ok(())
+            },
+        )
+        .expect("projected page");
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].point.payload.as_ref().unwrap()["meta.v"], items[0]);
+}

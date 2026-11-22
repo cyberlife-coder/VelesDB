@@ -323,6 +323,24 @@
         {"id": 62, "vector": [1, 0], "payload": {"a": 5, "b": 9, "v": [1, 0]}},
         {"id": 63, "vector": [1, 0], "payload": {"a": 5, "b": 9, "v": [1, 0]}}
       ]
+    },
+    {
+      "collection": "typed_rows", "dimension": 2, "metric": "cosine",
+      "points": [
+        {"id": 70, "vector": [1, 0], "payload": {"meta": {"v": 3}, "meta.v": [0, 1]}},
+        {"id": 71, "vector": [1, 0], "payload": {"meta": {"v": 4}, "meta.v": [1, 0]}},
+        {"id": 72, "vector": [1, 0], "payload": {"meta": {"v": [1, 0]}, "meta.v": [0, 1]}},
+        {"id": 73, "vector": [1, 0], "payload": {"meta": {"v": [0, 1]}, "meta.v": [1, 0]}},
+        {"id": 74, "vector": [1, 0], "payload": {"meta": {"v": 3}, "meta.v": [0.6, 0.8], "aux": {"v": 6}, "aux.v": [0, 1]}},
+        {"id": 75, "vector": [1, 0], "payload": {"meta": {"v": 4}, "meta.v": [0, 1], "aux": {"v": 8}, "aux.v": [1, 0]}},
+        {"id": 77, "vector": [1, 0], "payload": {"id": null}}
+      ]
+    },
+    {
+      "collection": "typed_rows_low", "dimension": 2, "metric": "cosine",
+      "points": [
+        {"id": 75, "vector": [1, 0], "payload": {"meta": {"v": 4}, "meta.v": [0, 1], "aux": {"v": 8}, "aux.v": [0, 1]}}
+      ]
     }
   ],
   "join_cases": [
@@ -1794,6 +1812,54 @@
       "query": "SELECT wild_left.*, similarity() AS id, RANK() OVER (ORDER BY id) AS id FROM wild_left WHERE vector NEAR [1,0] AND id=62 INTERSECT SELECT wild_right.*, similarity() AS id, RANK() OVER (ORDER BY id) AS id FROM wild_right WHERE vector NEAR [0,1] AND id=62 ORDER BY id ASC",
       "expect_rows": [{"a": 5, "b": 9, "v": [1, 0], "id": 1}],
       "note": "A window named id replaces different operand scores with the same rank."
+    },
+    {
+      "id": "P070",
+      "query": "SELECT t.*, meta.v FROM typed_rows AS t WHERE id=70 UNION ALL SELECT t.*, meta.v FROM typed_rows AS t WHERE id=71 ORDER BY similarity(meta.v,$x) DESC LIMIT 1",
+      "expect_rows": [{"id": 71, "meta": {"v": 4}, "meta.v": 4}],
+      "note": "The named vector reads the literal key before the selected scalar path replaces it in the result."
+    },
+    {
+      "id": "P071",
+      "query": "SELECT t.*, meta.v FROM typed_rows AS t WHERE id=72 UNION ALL SELECT t.*, meta.v FROM typed_rows AS t WHERE id=73 ORDER BY similarity(meta.v,$x) ASC LIMIT 1",
+      "expect_rows": [{"id": 72, "meta": {"v": [1, 0]}, "meta.v": [1, 0]}],
+      "note": "An opposite vector at the nested path is published after sorting by the literal vector."
+    },
+    {
+      "id": "P072",
+      "query": "SELECT t.*, a AS id, id AS original_id FROM wild_left AS t WHERE id=62 UNION ALL SELECT t.*, b AS other, id AS raw_id FROM wild_right AS t WHERE id=63 ORDER BY id ASC",
+      "expect_rows": [{"id": 5, "a": 5, "b": 9, "v": [1, 0], "original_id": 62}, {"id": 9, "a": 5, "b": 9, "v": [1, 0], "original_id": 63}],
+      "note": "The displayed ID and the independently named physical point ID retain their positions across operands."
+    },
+    {
+      "id": "P073",
+      "query": "SELECT t.*, meta.v FROM typed_rows AS t WHERE id=74 UNION ALL SELECT t.*, aux.v FROM typed_rows AS t WHERE id=75 ORDER BY similarity(meta.v,$x) DESC LIMIT 1",
+      "expect_rows": [{"id": 75, "meta": {"v": 4}, "meta.v": 8, "aux": {"v": 8}, "aux.v": [1, 0]}],
+      "note": "Each operand supplies its own named vector and its separately selected nested value at the same position."
+    },
+    {
+      "id": "P074",
+      "query": "SELECT t.*, id FROM wild_left AS t WHERE id=62 UNION SELECT t.*, a FROM wild_left AS t WHERE id=62 ORDER BY id ASC",
+      "expect_rows": [{"id": 62, "a": 5, "b": 9, "v": [1, 0]}, {"id": 5, "a": 5, "b": 9, "v": [1, 0]}],
+      "note": "An explicit ID position may receive another column from the second operand while both physical point IDs stay equal."
+    },
+    {
+      "id": "P075",
+      "query": "SELECT meta.v, id AS sample, RANK() OVER (PARTITION BY id ORDER BY id) AS aux FROM typed_rows WHERE id=74 UNION ALL SELECT aux.v AS rhs, id AS rhs_sample, RANK() OVER (PARTITION BY id ORDER BY id) AS aux FROM typed_rows WHERE id=75 ORDER BY similarity(meta.v,$x) DESC, id ASC LIMIT 1",
+      "expect_rows": [{"meta.v": 8, "sample": 75, "aux": 1}],
+      "note": "A different vector source on the right retains its literal value when a window replaces its parent."
+    },
+    {
+      "id": "P076",
+      "query": "SELECT meta.v, id AS sample, RANK() OVER (PARTITION BY id ORDER BY id) AS aux FROM typed_rows WHERE id=74 UNION ALL SELECT aux.v AS rhs, id AS rhs_sample, RANK() OVER (PARTITION BY id ORDER BY id) AS aux FROM typed_rows_low WHERE id=75 ORDER BY similarity(meta.v,$x) DESC, id ASC LIMIT 1",
+      "expect_rows": [{"meta.v": 3, "sample": 74, "aux": 1}],
+      "note": "Changing only the right literal vector flips the page; its nested scalar and rank stay the same."
+    },
+    {
+      "id": "P077",
+      "query": "SELECT meta.v, id AS sample FROM typed_rows WHERE id=74 UNION ALL SELECT id, id AS sample FROM typed_rows WHERE id IN (75,77) ORDER BY similarity(meta.v,$x) DESC, id ASC LIMIT 2",
+      "expect_rows": [{"meta.v": 75, "sample": 75}, {"meta.v": 77, "sample": 77}],
+      "note": "An absent or null vector named id has the same score. The selected id column still reads the physical point ID."
     }
   ],
   "vector_group_cases": [

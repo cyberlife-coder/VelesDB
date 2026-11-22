@@ -22,12 +22,44 @@ pub(super) struct CompoundProjection<'a> {
 
 #[path = "compound_sort_slots.rs"]
 mod sort_slots;
-pub(super) use sort_slots::{exchange_member, VectorSortSlots};
+pub(super) use sort_slots::{
+    exchange_member, orders_named_vector, reads_vector_input, VectorSortSlots,
+};
+use sort_slots::{has_positional_vector, retains_vector_input, source_within};
 
 struct VisibleColumn<'a> {
     position: usize,
     source: &'a str,
     output: &'a str,
+}
+
+impl VisibleColumn<'_> {
+    fn reuses_member(&self) -> bool {
+        self.source == self.output && self.source != "id" && !self.source.contains('.')
+    }
+
+    fn reads_point_id(&self, query: &Query) -> bool {
+        if self.source != "id" {
+            return false;
+        }
+        if !qualified_wildcard(&query.select.columns) {
+            return true;
+        }
+        let (columns, _) = super::set_operation::select_fields(&query.select.columns);
+        columns
+            .iter()
+            .any(|col| source_within(&col.name, self.output))
+            && query
+                .compound
+                .iter()
+                .flat_map(|c| &c.operations)
+                .all(|(_, operand)| {
+                    super::set_operation::select_fields(&operand.columns)
+                        .0
+                        .get(self.position)
+                        .is_some_and(|col| col.name == "id")
+                })
+    }
 }
 
 /// A repeated source, or a selected path below another selected source, needs
@@ -82,13 +114,29 @@ impl<'a> CompoundProjection<'a> {
         let published =
             qualified_wildcard(&query.select.columns) || window_publishes_columns(columns, windows);
         needs_positional_slots(query, columns, published, &rank_inputs).then(|| {
-            let mut layout = Self::from_sources(columns, windows, scores, published);
-            layout.bind_ranks(windows, &rank_inputs);
-            if published || !rank_inputs.is_empty() {
-                layout.bind_vector_sources(columns, query);
+            let mut layout = Self::from_sources(query, columns, windows, scores, published);
+            if !published && rank_inputs.is_empty() {
+                layout.preserve_disjoint_paths(columns);
             }
+            layout.bind_ranks(windows, &rank_inputs);
+            layout.bind_vector_sources(columns, query);
             layout
         })
+    }
+
+    // The columns-only projector follows nested source paths. Preserve those
+    // paths when the layout exists solely to realign another operand's vector.
+    fn preserve_disjoint_paths(&mut self, columns: &'a [Column]) {
+        if sources_overlap(columns) {
+            return;
+        }
+        for (binding, col) in self.named.iter_mut().zip(columns) {
+            if let Some((_, field)) = binding {
+                if *field == ProjectedField::Published(&col.name) && col.name.contains('.') {
+                    *field = ProjectedField::Source(&col.name);
+                }
+            }
+        }
     }
 
     fn bind_ranks(&mut self, windows: &'a [WindowFunction], inputs: &[String]) {
@@ -118,23 +166,46 @@ impl<'a> CompoundProjection<'a> {
             if sim.field == super::PRIMARY_VECTOR_FIELD {
                 continue;
             }
-            let mut selected = columns
+            let selected = columns
                 .iter()
                 .enumerate()
                 .filter(|(i, col)| col.name == sim.field && self.named[*i].is_some());
-            if selected
+            let direct = selected
                 .clone()
-                .any(|(i, col)| self.named[i].is_some_and(|(_, slot)| slot.name() == col.name))
-            {
-                continue;
+                .find(|(i, col)| self.named[*i].is_some_and(|(_, slot)| slot.name() == col.name));
+            if let Some((position, column)) = direct.or_else(|| selected.into_iter().next()) {
+                self.bind_positional_vector(query, &column.name, position, direct.is_some());
             }
-            if let Some((i, col)) = selected.next() {
-                self.positional_vectors.push((&col.name, i));
+        }
+    }
+
+    fn bind_positional_vector(
+        &mut self,
+        query: &Query,
+        name: &'a str,
+        position: usize,
+        direct: bool,
+    ) {
+        let other_source = query
+            .compound
+            .iter()
+            .flat_map(|c| &c.operations)
+            .any(|(_, operand)| {
+                super::set_operation::select_fields(&operand.columns)
+                    .0
+                    .get(position)
+                    .is_some_and(|col| col.name != name)
+            });
+        if other_source {
+            self.positional_vectors.push((name, position));
+            if direct && !self.auxiliary.contains(&name) {
+                self.auxiliary.push(name);
             }
         }
     }
 
     fn from_sources(
+        query: &Query,
         columns: &'a [Column],
         windows: &'a [WindowFunction],
         scores: &'a [SimilarityScoreExpr],
@@ -163,7 +234,7 @@ impl<'a> CompoundProjection<'a> {
             positional_vectors: Vec::new(),
         };
         if published {
-            layout.bind_published(&visible);
+            layout.bind_published(&visible, query);
             return layout;
         }
         let mut used = computed;
@@ -180,12 +251,12 @@ impl<'a> CompoundProjection<'a> {
 
     /// The public SELECT projector reads a captured window's columns by their
     /// output names, even when its caller only supplies the first SELECT.
-    fn bind_published(&mut self, visible: &[VisibleColumn<'a>]) {
+    fn bind_published(&mut self, visible: &[VisibleColumn<'a>], query: &Query) {
         for col in visible {
-            let field = if col.source == "id" {
+            let field = if col.reads_point_id(query) {
                 ProjectedField::Source("id")
             } else {
-                if col.source != col.output {
+                if !col.reuses_member() {
                     self.auxiliary.push(col.output);
                 }
                 ProjectedField::Published(col.output)
@@ -317,9 +388,7 @@ pub fn compound_rank_inputs(query: &Query, columns: &SelectColumns) -> Vec<Strin
             .alias
             .as_deref()
             .unwrap_or(wf.function_type.default_alias());
-        let retained = order
-            .iter()
-            .any(|item| reads_vector_input(&item.expr, name))
+        let retained = retains_vector_input(query, columns, order, name)
             || wildcard_retains_input(query, columns, name, position);
         if retained && !names.iter().any(|n| n == name) {
             names.push(name.to_owned());
@@ -351,18 +420,6 @@ fn wildcard_retains_input(
                 .unwrap_or(wf.function_type.default_alias())
                 != name
         })
-}
-
-pub(super) fn reads_vector_input(expr: &OrderByExpr, slot: &str) -> bool {
-    let OrderByExpr::Similarity(sim) = expr else {
-        return false;
-    };
-    sim.field != super::PRIMARY_VECTOR_FIELD
-        && (sim.field == slot
-            || sim
-                .field
-                .split_once('.')
-                .is_some_and(|(root, _)| root == slot))
 }
 
 fn occupy_order_names<'a>(expr: &'a OrderByExpr, occupied: &mut FxHashSet<&'a str>) {
@@ -416,11 +473,6 @@ impl OrderName {
     }
 }
 
-pub(super) fn orders_named_vector(query: &Query) -> bool {
-    super::compound_window(query).order_by.unwrap_or_default().iter()
-        .any(|item| matches!(&item.expr, OrderByExpr::Similarity(sim) if sim.field != super::PRIMARY_VECTOR_FIELD))
-}
-
 pub(super) fn qualified_wildcard(columns: &SelectColumns) -> bool {
     matches!(columns, SelectColumns::Mixed { qualified_wildcards, .. } if !qualified_wildcards.is_empty())
 }
@@ -440,7 +492,7 @@ fn needs_positional_slots(
     if published {
         return orders_named_vector(query);
     }
-    columns.len() >= 2 && sources_overlap(columns)
+    (columns.len() >= 2 && sources_overlap(columns)) || has_positional_vector(query)
 }
 
 fn window_publishes_columns(columns: &[Column], windows: &[WindowFunction]) -> bool {

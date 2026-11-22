@@ -13,9 +13,9 @@
 //! - **Columns.** Positional, named by the first operand: a later operand's
 //!   listed column `i` lands under the first operand's column `i`, so the
 //!   first operand's projection and the window's `ORDER BY` read it.
-//! - **Identity.** Two rows are the same row when their projected values are:
-//!   the listed columns, compared by position, or the id and payload for `*`
-//!   ([`row_key`]), window outputs included. `UNION`, `INTERSECT` and
+//! - **Identity.** Set operators compare listed outputs by position, including
+//!   windows. A wildcard includes the point id and payload. Explicit outputs
+//!   alongside it replace payload members of the same name. `UNION`, `INTERSECT` and
 //!   `EXCEPT` return distinct rows; `UNION ALL` keeps every row. A row met
 //!   twice keeps its first position and the better of its scores, with that
 //!   score's breakdown (`vector_score`, ...).
@@ -49,13 +49,16 @@ enum OperandField<'a> {
     Rank(&'a str),
     RankInput(&'a str),
     RankPath(&'a str, &'a str, ProjectedField<'a>),
+    Vector(&'a str, Option<ProjectedField<'a>>),
 }
 
 impl<'a> OperandField<'a> {
     fn storage(self) -> ProjectedField<'a> {
         match self {
             Self::Column(field) | Self::RankPath(_, _, field) => field,
-            Self::Rank(name) | Self::RankInput(name) => ProjectedField::Published(name),
+            Self::Vector(name, _) | Self::Rank(name) | Self::RankInput(name) => {
+                ProjectedField::Published(name)
+            }
         }
     }
 
@@ -77,9 +80,18 @@ impl<'a> OperandField<'a> {
                 .is_some_and(|p| p.get(name).is_some())
     }
 
+    fn vector(self, name: &'a str) -> Self {
+        match self {
+            Self::RankInput(_) => self,
+            Self::RankPath(_, _, field) => Self::Vector(name, Some(field)),
+            _ => Self::Vector(name, None),
+        }
+    }
+
     fn read(self, row: &SearchResult) -> std::borrow::Cow<'_, serde_json::Value> {
         let (name, index) = match self {
             Self::Column(field) => return field.read(row),
+            Self::Vector(name, retained) => return Self::read_vector(row, name, retained),
             Self::RankPath(root, tail, field) => {
                 if let Some(serde_json::Value::Array(pair)) =
                     row.point.payload.as_ref().and_then(|p| p.get(root))
@@ -99,6 +111,21 @@ impl<'a> OperandField<'a> {
             serde_json::Value::Array(pair) => pair.get(index),
             scalar => Some(scalar),
         });
+        std::borrow::Cow::Borrowed(value.unwrap_or(&serde_json::Value::Null))
+    }
+    fn read_vector<'r>(
+        row: &'r SearchResult,
+        name: &'a str,
+        retained: Option<ProjectedField<'a>>,
+    ) -> std::borrow::Cow<'r, serde_json::Value> {
+        let payload = row.point.payload.as_ref();
+        if let Some(value) = payload.and_then(|p| p.get(name)) {
+            return std::borrow::Cow::Borrowed(value);
+        }
+        if let (Some((root, tail)), Some(field)) = (name.split_once('.'), retained) {
+            return Self::RankPath(root, tail, field).read(row);
+        }
+        let value = payload.and_then(|p| super::json_path::payload_path(p, name));
         std::borrow::Cow::Borrowed(value.unwrap_or(&serde_json::Value::Null))
     }
 }
@@ -149,13 +176,34 @@ pub fn operand_queries(query: &Query, ceiling: u64) -> Vec<Query> {
     operands
 }
 
-/// The identity of `result` as a row of a SELECT projecting `columns`: the
-/// projected values in order, window outputs included, or, for `*`, the id
-/// and the full payload.
+/// Builds an equality key for one operand row. Listed columns and evaluated
+/// windows contribute their values in projection order. A wildcard keys the
+/// point ID and the supplied payload, including members covered by explicit
+/// aliases. Selected similarity scores also contribute to the key.
 ///
-/// An operand's rows come out of the SELECT post-processing, so its window
-/// functions are already evaluated into the row — unlike a SELECT's own
-/// DISTINCT, which runs before them and so leaves them out of its key.
+/// [`execute_compound`] aligns operands by position and compares the outputs
+/// published over a qualified wildcard. For `t.*, a AS label`, the operand key
+/// includes the stored `label`. The compound publishes `a` under that name.
+///
+/// ```
+/// use velesdb_core::{Error, Point, SearchResult};
+/// use velesdb_core::velesql::{execute_compound, row_key, Parser};
+///
+/// # fn main() -> velesdb_core::Result<()> {
+/// let query = Parser::parse(
+///     "SELECT t.*, a AS label FROM lhs AS t UNION SELECT t.*, a AS label FROM rhs AS t",
+/// )?;
+/// let row = |label: &str| {
+///     let payload = serde_json::json!({"a": 11, "label": label});
+///     SearchResult::new(Point::new(7, vec![], Some(payload)), 1.0)
+/// };
+/// let columns = &query.select.columns;
+/// assert_ne!(row_key(&row("lhs"), columns), row_key(&row("rhs"), columns));
+/// let rows = execute_compound::<Error>(&query, true, 2,
+///     |operand| Ok(vec![row(&operand.select.from)]), |_, _| Ok(()))?;
+/// assert_eq!(rows.len(), 1);
+/// # Ok(()) }
+/// ```
 #[must_use]
 pub fn row_key(result: &SearchResult, columns: &SelectColumns) -> String {
     let (listed, include_score) = key_columns(columns);
@@ -184,7 +232,8 @@ pub fn row_key(result: &SearchResult, columns: &SelectColumns) -> String {
 /// direction, which ranks them without one.
 ///
 /// Applications using `Database::execute_query` or `Collection::execute_query`
-/// pass the whole compound. A custom executor runs the supplied operand. Its
+/// pass the whole compound. A custom executor returns the supplied operand's
+/// rows and leaves set comparison to this function. The operand's
 /// column aliases may have been adjusted for positional alignment. When evaluating
 /// its windows, call [`super::compound_rank_inputs`] with the original compound
 /// and the supplied columns. The [window callback example](super::window_evaluator::evaluate_compound_windows)
@@ -276,9 +325,10 @@ fn aligned_rows(
     let renames: Vec<_> = operands
         .iter()
         .map(|operand| {
+            let ranks = super::compound_rank_inputs(query, &operand.select.columns);
             (
-                column_renames(&operand.select.columns, query, layout),
-                super::compound_rank_inputs(query, &operand.select.columns),
+                column_renames(&operand.select.columns, query, layout, &ranks),
+                ranks,
                 slots.map_or_else(Vec::new, |s| {
                     s.replaced_members(select_fields(&operand.select.columns).0)
                 }),
@@ -399,6 +449,7 @@ fn column_renames<'a>(
     columns: &'a SelectColumns,
     query: &'a Query,
     layout: Option<&CompoundProjection<'a>>,
+    ranks: &[String],
 ) -> Vec<(OperandField<'a>, ProjectedField<'a>)> {
     let first = &query.select.columns;
     if super::compound_projection::qualified_wildcard(first) {
@@ -421,7 +472,8 @@ fn column_renames<'a>(
                 return false;
             }
             if own.storage() == *first {
-                return changed.contains(first);
+                return changed.contains(first)
+                    || matches!(own, OperandField::Rank(name) if ranks.iter().any(|saved| saved == name));
             }
             changed.insert(*first);
             true
@@ -440,9 +492,9 @@ fn add_positional_vectors<'a>(
 ) {
     let (cols, _) = select_fields(columns);
     for &(name, i) in layout.positional_vectors() {
-        if cols.get(i).is_some_and(|col| col.name != name) {
+        if let Some(col) = cols.get(i).filter(|col| col.name != name) {
             if let Some(source) = listed_fields(columns).nth(i) {
-                renames.push((source, ProjectedField::Published(name)));
+                renames.push((source.vector(&col.name), ProjectedField::Published(name)));
             }
         }
     }

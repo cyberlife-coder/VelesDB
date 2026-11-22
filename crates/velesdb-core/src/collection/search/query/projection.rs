@@ -12,7 +12,9 @@ use crate::velesql::{SelectColumns, SimilarityScoreExpr};
 /// Projects a list of `SearchResult` according to the parsed SELECT expressions.
 ///
 /// Returns `serde_json::Value::Object` rows with only the requested fields.
-/// The `id` field is always the system point ID (takes precedence over payload).
+/// Reading the `id` column yields the system point ID. A wildcard also uses
+/// the point ID for `id` when the payload contains that name. An explicit
+/// output such as `a AS id` can replace `id` in the projected object.
 #[must_use]
 pub fn project_results(
     results: &[SearchResult],

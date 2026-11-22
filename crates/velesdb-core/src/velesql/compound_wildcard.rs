@@ -23,6 +23,9 @@ pub(super) fn wildcard_bindings<'a>(
         .filter_map(|(i, (source, output))| {
             let field = ProjectedField::Published(output);
             let dest = layout.map_or(Some(field), |l| l.destination(i, field))?;
+            if dest == ProjectedField::Source("id") {
+                return None;
+            }
             let source = match source {
                 OperandField::RankInput(name)
                     if !order.iter().any(|item| {
