@@ -84,10 +84,9 @@ impl<'a> CompoundProjection<'a> {
             SelectColumns::Mixed {
                 columns,
                 window_functions,
-                qualified_wildcards,
                 similarity_scores,
                 ..
-            } if qualified_wildcards.is_empty() => (
+            } => (
                 columns.as_slice(),
                 window_functions.as_slice(),
                 similarity_scores.as_slice(),
@@ -474,10 +473,18 @@ fn needs_positional_slots(
     published: bool,
     ranks: &[String],
 ) -> bool {
+    if !ranks.is_empty() {
+        return true;
+    }
+    if matches!(&query.select.columns, SelectColumns::Mixed { qualified_wildcards, .. }
+        if !qualified_wildcards.is_empty())
+    {
+        return false;
+    }
     if published {
         return orders_named_vector(query);
     }
-    !ranks.is_empty() || (columns.len() >= 2 && sources_overlap(columns))
+    columns.len() >= 2 && sources_overlap(columns)
 }
 
 fn window_publishes_columns(columns: &[Column], windows: &[WindowFunction]) -> bool {

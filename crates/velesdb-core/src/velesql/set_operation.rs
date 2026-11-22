@@ -127,7 +127,9 @@ pub fn operand_queries(query: &Query, ceiling: u64) -> Vec<Query> {
 #[must_use]
 pub fn row_key(result: &SearchResult, columns: &SelectColumns) -> String {
     let (listed, include_score) = key_columns(columns);
-    if !listed.is_empty() {
+    let lists_windows = matches!(columns, SelectColumns::Mixed { window_functions, qualified_wildcards, .. }
+        if !window_functions.is_empty() && qualified_wildcards.is_empty());
+    if !listed.is_empty() || lists_windows {
         return projected_values_key(
             result,
             &mut listed_fields(columns).map(|field| field.read(result)),
@@ -148,6 +150,15 @@ pub fn row_key(result: &SearchResult, columns: &SelectColumns) -> String {
 /// windowed as the module docs set out. `order_by` sorts the combined rows by
 /// the window's `ORDER BY`; `higher_is_better` is the first operand's metric
 /// direction, which ranks them without one.
+///
+/// Applications using `Database::execute_query` or `Collection::execute_query`
+/// pass the whole compound. A custom executor runs the supplied operand. Its
+/// column aliases may have been adjusted for positional alignment. When evaluating
+/// its windows, call [`super::compound_rank_inputs`] with the original compound
+/// and the supplied columns. The [window callback example](super::window_evaluator::evaluate_compound_windows)
+/// shows how to keep a sort input before a window publishes its rank over it.
+/// The `order_by` callback sorts by the expressions it receives, whose field
+/// names may also have been adjusted for positional alignment.
 ///
 /// # Errors
 ///
@@ -253,10 +264,10 @@ fn combine_operands<E>(
     higher_is_better: bool,
     run: &mut dyn FnMut(&Query) -> Result<Vec<SearchResult>, E>,
 ) -> Result<Vec<KeyedRow>, E> {
-    let mut combined = keyed(run(&operands[0])?, &operands[0].select, 0);
+    let mut combined = keyed(run(&operands[0])?, &operands[0].select, 0, query);
     let operators = query.compound.iter().flat_map(|c| c.operations.iter());
     for ((operator, _), (index, operand)) in operators.zip(operands.iter().enumerate().skip(1)) {
-        let right = keyed(run(operand)?, &operand.select, index);
+        let right = keyed(run(operand)?, &operand.select, index, query);
         combined = combine(combined, right, *operator, higher_is_better);
     }
     Ok(combined)
@@ -437,7 +448,7 @@ fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = OperandField<'
             columns,
             window_functions,
             ..
-        } if !columns.is_empty() => (columns.as_slice(), window_functions.as_slice()),
+        } => (columns.as_slice(), window_functions.as_slice()),
         _ => (&[][..], &[][..]),
     };
     let named = WindowInputs::projection_fields(cols, windows).map(move |(col, field)| {
@@ -467,10 +478,57 @@ fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = OperandField<'
 }
 
 /// Keys each row of an operand by its projection.
-fn keyed(rows: Vec<SearchResult>, select: &SelectStatement, operand: usize) -> Vec<KeyedRow> {
+fn keyed(
+    rows: Vec<SearchResult>,
+    select: &SelectStatement,
+    operand: usize,
+    query: &Query,
+) -> Vec<KeyedRow> {
+    let mut inputs = Vec::new();
+    if matches!(&select.columns, SelectColumns::Mixed { qualified_wildcards, .. }
+        if !qualified_wildcards.is_empty())
+    {
+        inputs.extend(
+            super::compound_rank_inputs(query, &select.columns)
+                .into_iter()
+                .map(|name| (name, serde_json::Value::Null)),
+        );
+    }
     rows.into_iter()
-        .map(|row| (row_key(&row, &select.columns), row, operand))
+        .map(|mut row| {
+            let key = if inputs.is_empty() {
+                row_key(&row, &select.columns)
+            } else {
+                swap_wildcard_ranks(&mut row, &mut inputs);
+                let key = row_key(&row, &select.columns);
+                swap_wildcard_ranks(&mut row, &mut inputs);
+                key
+            };
+            (key, row, operand)
+        })
         .collect()
+}
+
+/// Temporarily expose just the public rank in a wildcard's payload for
+/// its set key. The second swap returns the captured inputs for ordering.
+fn swap_wildcard_ranks(row: &mut SearchResult, inputs: &mut [(String, serde_json::Value)]) {
+    let Some(payload) = row.point.payload.as_mut() else {
+        return;
+    };
+    for (name, saved) in inputs {
+        let Some(value) = payload.get_mut(name.as_str()) else {
+            continue;
+        };
+        let (pair, rank) = if saved.is_array() {
+            (saved, value)
+        } else {
+            (value, saved)
+        };
+        if let Some(first) = pair.get_mut(0) {
+            std::mem::swap(first, rank);
+            std::mem::swap(pair, rank);
+        }
+    }
 }
 
 /// The last operand of `query` (the query itself without a compound).

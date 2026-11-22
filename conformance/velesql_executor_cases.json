@@ -1619,6 +1619,36 @@
       "query": "SELECT meta.price AS child, meta AS whole, RANK() OVER (ORDER BY id) AS meta FROM named WHERE id=41 UNION ALL SELECT meta.price AS p, id AS n, RANK() OVER (ORDER BY id) AS rn FROM named WHERE id=42",
       "expect_rows": [{"child": 30, "whole": 1, "meta": 1}, {"child": 7, "whole": 42, "meta": 1}],
       "note": "A captured scalar published under whole keeps the value supplied by the second operand while the rank is shown under meta."
+    },
+    {
+      "id": "P046",
+      "query": "SELECT ROW_NUMBER() OVER (ORDER BY id DESC) AS meta, RANK() OVER (ORDER BY id ASC) AS place FROM set_vectors WHERE id<=42 UNION ALL SELECT ROW_NUMBER() OVER (ORDER BY id DESC) AS meta, RANK() OVER (ORDER BY id ASC) AS place FROM set_vectors WHERE id=43 ORDER BY similarity(meta.v,$x) DESC, meta DESC",
+      "expect_rows": [{"meta": 1, "place": 1}, {"meta": 2, "place": 1}, {"meta": 1, "place": 2}],
+      "note": "Both windows keep their ranks while the combined rows are ordered by the original nested vector."
+    },
+    {
+      "id": "P047",
+      "query": "SELECT set_vectors.*, ROW_NUMBER() OVER (ORDER BY id DESC) AS meta FROM set_vectors WHERE id<=42 UNION ALL SELECT set_vectors.*, ROW_NUMBER() OVER (ORDER BY id DESC) AS meta FROM set_vectors WHERE id=43 ORDER BY similarity(meta.v,$x) DESC, meta DESC LIMIT 1 OFFSET 1",
+      "expect_rows": [{"a": 3, "b": 8, "id": 41, "meta": 2, "v1": [0.6, 0.8], "v2": [0, 1]}],
+      "note": "A qualified wildcard retains its fields and publishes the window rank after vector ordering."
+    },
+    {
+      "id": "P048",
+      "query": "SELECT RANK() OVER (ORDER BY id) AS meta FROM set_vectors WHERE id=41 INTERSECT SELECT RANK() OVER (ORDER BY id) AS meta FROM set_vectors WHERE id=42 ORDER BY similarity(meta.v,$x) DESC",
+      "expect_rows": [{"meta": 1}],
+      "note": "The same projected rank intersects across different point IDs."
+    },
+    {
+      "id": "P049",
+      "query": "SELECT set_vectors.*, RANK() OVER (ORDER BY id) AS meta FROM set_vectors WHERE id=41 UNION SELECT set_vectors.*, RANK() OVER (ORDER BY id) AS meta FROM set_vectors WHERE id=42 ORDER BY similarity(meta.v,$x) DESC LIMIT 2",
+      "expect_rows": [{"a": 3, "b": 8, "id": 41, "meta": 1, "v1": [0.6, 0.8], "v2": [0, 1]}, {"a": 4, "b": 7, "id": 42, "meta": 1, "v1": [0, 1], "v2": [1, 0]}],
+      "note": "Wildcard rows with different IDs remain distinct when their displayed ranks agree."
+    },
+    {
+      "id": "P050",
+      "query": "SELECT named.*, RANK() OVER (ORDER BY id) AS alt, RANK() OVER (ORDER BY id) AS units FROM named WHERE id=41 INTERSECT SELECT set_rows.*, RANK() OVER (ORDER BY id) AS alt, RANK() OVER (ORDER BY id) AS units FROM set_rows WHERE id=41 ORDER BY similarity(alt,$x) DESC",
+      "expect_rows": [{"alt": 1, "id": 41, "meta": {"price": 30}, "units": 1}],
+      "note": "Two wildcard projections agree on the ID, metadata and ranks even when one rank hides a vector present on just one side."
     }
   ],
   "vector_group_cases": [

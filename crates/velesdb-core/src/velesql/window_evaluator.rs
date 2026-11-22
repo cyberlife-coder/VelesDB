@@ -108,6 +108,60 @@ pub fn evaluate(
 
 /// Evaluates an operand's window functions after preserving the source fields
 /// its compound will rank. The selected ranks remain scalar for local ordering.
+///
+/// A [`super::execute_compound`] callback captures inputs after operand DISTINCT.
+/// If local ordering permutes rows, pass their original positions to
+/// [`WindowInputs::ordered`]. After applying the local page, call
+/// [`WindowInputs::publish`] with that page's offset.
+///
+/// # Examples
+///
+/// Each operand supplies one row. Its rank shadows the root of the named
+/// vector used to order the combined rows.
+///
+/// ```
+/// use velesdb_core::{DistanceMetric, Error, Point, Result, SearchResult};
+/// use velesdb_core::velesql::{
+///     compound_rank_inputs, execute_compound, payload_vector, OrderByExpr, Parser, SelectColumns,
+///     window_evaluator::{evaluate_compound_windows, WindowInputs},
+/// };
+///
+/// # fn main() -> Result<()> {
+/// let query = Parser::parse(
+///     "SELECT id, RANK() OVER (ORDER BY id) AS meta FROM a UNION ALL
+///      SELECT id, RANK() OVER (ORDER BY id) AS meta FROM b
+///      ORDER BY similarity(meta.v, [1, 0]) DESC",
+/// )?;
+/// let rows = execute_compound::<Error>(&query, true, 2, |operand| {
+///     let (id, v) = if operand.select.from == "a" { (1, [0, 1]) } else { (9, [1, 0]) };
+///     let payload = serde_json::json!({ "meta": { "v": v } });
+///     let mut rows = vec![SearchResult::new(Point::new(id, vec![], Some(payload)), 0.0)];
+///     if let SelectColumns::Mixed { window_functions, .. } = &operand.select.columns {
+///         let names = compound_rank_inputs(&query, &operand.select.columns);
+///         let mut inputs = WindowInputs::capture(&operand.select, &rows);
+///         evaluate_compound_windows(&mut rows, window_functions, &mut inputs, &names)?;
+///         inputs.publish(&mut rows, &operand.select.columns, 0);
+///     }
+///     Ok(rows)
+/// }, |rows, order| {
+///     let OrderByExpr::Similarity(sim) = &order[0].expr else {
+///         return Err(Error::Query("expected a vector order".into()));
+///     };
+///     let score = |row: &SearchResult| -> Result<f32> {
+///         let payload = row.point.payload.as_ref().ok_or_else(|| Error::Query("missing payload".into()))?;
+///         let vector = payload_vector(payload, &sim.field)?
+///             .ok_or_else(|| Error::Query(format!("missing {}", sim.field)))?;
+///         Ok(DistanceMetric::Cosine.calculate(&vector, &[1.0, 0.0]))
+///     };
+///     if score(&rows[0])? < score(&rows[1])? { rows.swap(0, 1); }
+///     Ok(())
+/// })?;
+/// assert_eq!([rows[0].point.id, rows[1].point.id], [9, 1]);
+/// for row in rows {
+///     assert_eq!(row.point.payload.as_ref().and_then(|p| p["meta"].as_u64()), Some(1));
+/// }
+/// # Ok(()) }
+/// ```
 pub fn evaluate_compound_windows(
     results: &mut [SearchResult],
     window_functions: &[WindowFunction],
