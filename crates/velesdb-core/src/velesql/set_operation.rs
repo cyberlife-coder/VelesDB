@@ -37,8 +37,8 @@ use super::json_path::ProjectedField;
 use super::window_evaluator::WindowInputs;
 use super::{Query, SelectColumns, SelectOrderBy, SelectStatement, SetOperator};
 
-/// A row with its identity under its operand's projection.
-type KeyedRow = (String, SearchResult);
+/// A surviving row keeps its own operand's positional schema until ordering.
+type KeyedRow = (String, SearchResult, usize);
 
 /// The window the last operand's clauses put on the combined rows.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -125,22 +125,23 @@ pub fn execute_compound<E>(
     order_by: impl FnOnce(&mut [SearchResult], &[SelectOrderBy]) -> Result<(), E>,
 ) -> Result<Vec<SearchResult>, E> {
     let mut operands = operand_queries(query, ceiling);
-    let operators = query.compound.iter().flat_map(|c| c.operations.iter());
-    let first = &query.select.columns;
-    let layout = CompoundProjection::for_query(query);
-    let mut combined = keyed_operand(
-        &mut operands[0],
-        first,
-        layout.as_ref(),
-        false,
-        &mut run_operand,
-    )?;
-    for ((operator, _), operand) in operators.zip(&mut operands[1..]) {
-        let right = keyed_operand(operand, first, layout.as_ref(), true, &mut run_operand)?;
-        combined = combine(combined, right, *operator, higher_is_better);
+    for operand in &mut operands {
+        preserve_operand_positions(&mut operand.select.columns);
     }
-    let mut rows: Vec<SearchResult> = combined.into_iter().map(|(_, row)| row).collect();
+    let combined = combine_operands(query, &operands, higher_is_better, &mut run_operand)?;
     let window = compound_window(query);
+    let mut layout = CompoundProjection::for_query(query);
+    let slots = layout.as_ref().and_then(|layout| {
+        layout.vector_sort_slots(
+            window.order_by?,
+            listed_fields(&query.select.columns),
+            combined.iter().map(|(_, row, _)| row),
+        )
+    });
+    if let (Some(layout), Some(slots)) = (&mut layout, &slots) {
+        layout.redirect_slots(slots);
+    }
+    let mut rows = aligned_rows(combined, &operands, &query.select.columns, layout.as_ref());
     match window.order_by {
         Some(order) => {
             let mapped = layout.as_ref().map(|layout| layout.order(order));
@@ -150,22 +151,45 @@ pub fn execute_compound<E>(
     }
     let offset = usize::try_from(window.offset).unwrap_or(usize::MAX);
     let limit = usize::try_from(window.limit.unwrap_or(ceiling).min(ceiling)).unwrap_or(usize::MAX);
-    Ok(rows.into_iter().skip(offset).take(limit).collect())
+    let mut page: Vec<_> = rows.into_iter().skip(offset).take(limit).collect();
+    if let Some(slots) = &slots {
+        slots.publish(&mut page);
+    }
+    Ok(page)
 }
 
-fn keyed_operand<'a, E>(
-    operand: &mut Query,
-    first: &'a SelectColumns,
-    layout: Option<&CompoundProjection<'a>>,
-    later_operand: bool,
-    run: &mut impl FnMut(&Query) -> Result<Vec<SearchResult>, E>,
+fn aligned_rows(
+    combined: Vec<KeyedRow>,
+    operands: &[Query],
+    first: &SelectColumns,
+    layout: Option<&CompoundProjection<'_>>,
+) -> Vec<SearchResult> {
+    let renames: Vec<_> = operands
+        .iter()
+        .map(|operand| column_renames(&operand.select.columns, first, layout))
+        .collect();
+    combined
+        .into_iter()
+        .map(|(_, mut row, operand)| {
+            align_columns(&mut row, &renames[operand]);
+            row
+        })
+        .collect()
+}
+
+fn combine_operands<E>(
+    query: &Query,
+    operands: &[Query],
+    higher_is_better: bool,
+    run: &mut dyn FnMut(&Query) -> Result<Vec<SearchResult>, E>,
 ) -> Result<Vec<KeyedRow>, E> {
-    let preserved = preserve_operand_positions(&mut operand.select.columns);
-    let mut rows = keyed(run(operand)?, &operand.select);
-    if later_operand || preserved || layout.is_some() {
-        align_columns(&mut rows, &operand.select.columns, first, layout);
+    let mut combined = keyed(run(&operands[0])?, &operands[0].select, 0);
+    let operators = query.compound.iter().flat_map(|c| c.operations.iter());
+    for ((operator, _), (index, operand)) in operators.zip(operands.iter().enumerate().skip(1)) {
+        let right = keyed(run(operand)?, &operand.select, index);
+        combined = combine(combined, right, *operator, higher_is_better);
     }
-    Ok(rows)
+    Ok(combined)
 }
 
 /// Combines two keyed row sets under `operator`.
@@ -181,9 +205,9 @@ fn combine(
             let right = best_rows(&right, higher_is_better);
             let kept = left
                 .into_iter()
-                .filter_map(|(key, mut row)| {
+                .filter_map(|(key, mut row, operand)| {
                     adopt_if_better(&mut row, right.get(key.as_str())?, higher_is_better);
-                    Some((key, row))
+                    Some((key, row, operand))
                 })
                 .collect();
             distinct(kept, higher_is_better)
@@ -192,7 +216,7 @@ fn combine(
             let right = best_rows(&right, higher_is_better);
             let kept = left
                 .into_iter()
-                .filter(|(key, _)| !right.contains_key(key.as_str()))
+                .filter(|(key, _, _)| !right.contains_key(key.as_str()))
                 .collect();
             distinct(kept, higher_is_better)
         }
@@ -205,12 +229,12 @@ fn combine(
 fn distinct(rows: Vec<KeyedRow>, higher_is_better: bool) -> Vec<KeyedRow> {
     let mut position: HashMap<String, usize> = HashMap::with_capacity(rows.len());
     let mut out: Vec<KeyedRow> = Vec::with_capacity(rows.len());
-    for (key, row) in rows {
+    for (key, row, operand) in rows {
         if let Some(&at) = position.get(&key) {
             adopt_if_better(&mut out[at].1, &row, higher_is_better);
         } else {
             position.insert(key.clone(), out.len());
-            out.push((key, row));
+            out.push((key, row, operand));
         }
     }
     out
@@ -219,7 +243,7 @@ fn distinct(rows: Vec<KeyedRow>, higher_is_better: bool) -> Vec<KeyedRow> {
 /// Each key's best-scored row among `rows`.
 fn best_rows(rows: &[KeyedRow], higher_is_better: bool) -> HashMap<&str, &SearchResult> {
     let mut best: HashMap<&str, &SearchResult> = HashMap::with_capacity(rows.len());
-    for (key, row) in rows {
+    for (key, row, _) in rows {
         best.entry(key.as_str())
             .and_modify(|kept| {
                 if is_better(row.score, kept.score, higher_is_better) {
@@ -253,16 +277,15 @@ fn rank_by_score(rows: &mut [SearchResult], higher_is_better: bool) {
 /// Writes each row's listed column `i` under the first operand's column `i`
 /// (a compound's columns are positional). Rows of a `*` operand, or under a
 /// first operand's `id`, which reads the point id, are left as they are.
-fn align_columns<'a>(
-    rows: &mut [KeyedRow],
-    columns: &SelectColumns,
+fn column_renames<'a>(
+    columns: &'a SelectColumns,
     first: &'a SelectColumns,
     layout: Option<&CompoundProjection<'a>>,
-) {
+) -> Vec<(ProjectedField<'a>, ProjectedField<'a>)> {
     // An identity assignment still restores a window output if an earlier
     // position writes the same name. Read its value before any assignment.
     let mut changed = rustc_hash::FxHashSet::default();
-    let renames: Vec<_> = listed_fields(columns)
+    listed_fields(columns)
         .zip(
             listed_fields(first)
                 .enumerate()
@@ -279,22 +302,23 @@ fn align_columns<'a>(
             changed.insert(*first);
             true
         })
-        .collect();
+        .collect()
+}
+
+fn align_columns(row: &mut SearchResult, renames: &[(ProjectedField<'_>, ProjectedField<'_>)]) {
     if renames.is_empty() {
         return;
     }
-    for (_, row) in rows {
-        let values: Vec<_> = renames
-            .iter()
-            .map(|(own, first)| (*first, own.read(row).into_owned()))
-            .collect();
-        let payload = row.point.payload.get_or_insert(serde_json::Value::Null);
-        if !payload.is_object() {
-            *payload = serde_json::Value::Object(serde_json::Map::new());
-        }
-        for (first, value) in values {
-            first.write(payload, value);
-        }
+    let values: Vec<_> = renames
+        .iter()
+        .map(|(own, first)| (*first, own.read(row).into_owned()))
+        .collect();
+    let payload = row.point.payload.get_or_insert(serde_json::Value::Null);
+    if !payload.is_object() {
+        *payload = serde_json::Value::Object(serde_json::Map::new());
+    }
+    for (first, value) in values {
+        first.write(payload, value);
     }
 }
 
@@ -321,9 +345,9 @@ fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = ProjectedField
 }
 
 /// Keys each row of an operand by its projection.
-fn keyed(rows: Vec<SearchResult>, select: &SelectStatement) -> Vec<KeyedRow> {
+fn keyed(rows: Vec<SearchResult>, select: &SelectStatement, operand: usize) -> Vec<KeyedRow> {
     rows.into_iter()
-        .map(|row| (row_key(&row, &select.columns), row))
+        .map(|row| (row_key(&row, &select.columns), row, operand))
         .collect()
 }
 

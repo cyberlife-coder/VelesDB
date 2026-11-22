@@ -14,6 +14,28 @@ use crate::SearchResult;
 pub(super) struct CompoundProjection<'a> {
     // Hidden positions still participate in the operand's set key.
     named: Vec<Option<(&'a str, ProjectedField<'a>)>>,
+    // Only a value stored away from its positional source can shadow
+    // an unrelated named vector. A realigned source is the vector to rank.
+    auxiliary: Vec<&'a str>,
+}
+
+/// Scalar values whose normal output slots shadow a vector input. The
+/// alternative literal keys exist only while the compound is being ordered.
+pub(super) struct VectorSortSlots<'a>(Vec<(&'a str, String)>);
+
+impl VectorSortSlots<'_> {
+    pub(super) fn publish(&self, page: &mut [SearchResult]) {
+        for payload in page
+            .iter_mut()
+            .filter_map(|row| row.point.payload.as_mut()?.as_object_mut())
+        {
+            for (output, temporary) in &self.0 {
+                if let Some(value) = payload.remove(temporary) {
+                    payload.insert((*output).to_owned(), value);
+                }
+            }
+        }
+    }
 }
 
 struct VisibleColumn<'a> {
@@ -97,6 +119,7 @@ impl<'a> CompoundProjection<'a> {
             .collect();
         let mut layout = Self {
             named: vec![None; columns.len()],
+            auxiliary: Vec::new(),
         };
         let mut used = computed;
         for kind in OrderName::BY_RESTRICTION {
@@ -138,6 +161,9 @@ impl<'a> CompoundProjection<'a> {
         for (col, slot) in pending.into_iter().zip(free) {
             used.insert(slot);
             self.named[col.position] = Some((col.output, ProjectedField::Published(slot)));
+            if col.source != slot {
+                self.auxiliary.push(slot);
+            }
         }
     }
 
@@ -149,6 +175,63 @@ impl<'a> CompoundProjection<'a> {
         self.named
             .get(position)
             .map_or(Some(fallback), |binding| binding.map(|(_, slot)| slot))
+    }
+
+    /// A named vector reads its literal field first, then its dotted source
+    /// path. Defer a write to either that literal or its root until the sort
+    /// has read the original vector. A primary vector lives on the point.
+    pub(super) fn vector_sort_slots<'r>(
+        &self,
+        order: &[SelectOrderBy],
+        fields: impl Iterator<Item = ProjectedField<'a>>,
+        rows: impl Iterator<Item = &'r SearchResult>,
+    ) -> Option<VectorSortSlots<'a>> {
+        let shadowed: Vec<_> = self
+            .auxiliary
+            .iter()
+            .copied()
+            .filter(|slot| {
+                order
+                    .iter()
+                    .any(|item| reads_vector_input(&item.expr, slot))
+            })
+            .collect();
+        if shadowed.is_empty() {
+            return None;
+        }
+        let mut occupied: FxHashSet<&str> = rows
+            .filter_map(|row| row.point.payload.as_ref()?.as_object())
+            .flat_map(|payload| payload.keys().map(String::as_str))
+            .filter(|name| name.starts_with('.'))
+            .collect();
+        for &(output, field) in self.named.iter().flatten() {
+            let (ProjectedField::Source(name) | ProjectedField::Published(name)) = field;
+            occupied.extend([output, name]);
+        }
+        for field in fields {
+            let (ProjectedField::Source(name) | ProjectedField::Published(name)) = field;
+            occupied.insert(name);
+        }
+        for item in order {
+            occupy_order_names(&item.expr, &mut occupied);
+        }
+        // A literal dotted key can shadow only a lookup of that exact name.
+        let available = (0_usize..)
+            .map(|i| format!(".{i}"))
+            .filter(|k| !occupied.contains(k.as_str()));
+        Some(VectorSortSlots(
+            shadowed.into_iter().zip(available).collect(),
+        ))
+    }
+
+    pub(super) fn redirect_slots(&mut self, slots: &'a VectorSortSlots<'_>) {
+        for (_, field) in self.named.iter_mut().flatten() {
+            if let ProjectedField::Published(name) = field {
+                if let Some((_, key)) = slots.0.iter().find(|(slot, _)| slot == name) {
+                    *field = ProjectedField::Published(key);
+                }
+            }
+        }
     }
 
     pub(super) fn order(&self, items: &[SelectOrderBy]) -> Vec<SelectOrderBy> {
@@ -201,6 +284,45 @@ impl<'a> CompoundProjection<'a> {
                 map.insert(name.to_owned(), field.read(row).into_owned());
             }
         }
+    }
+}
+
+fn reads_vector_input(expr: &OrderByExpr, slot: &str) -> bool {
+    let OrderByExpr::Similarity(sim) = expr else {
+        return false;
+    };
+    sim.field != super::PRIMARY_VECTOR_FIELD
+        && (sim.field == slot
+            || sim
+                .field
+                .split_once('.')
+                .is_some_and(|(root, _)| root == slot))
+}
+
+fn occupy_order_names<'a>(expr: &'a OrderByExpr, occupied: &mut FxHashSet<&'a str>) {
+    match expr {
+        OrderByExpr::Field(name) => {
+            occupied.insert(name);
+        }
+        OrderByExpr::Similarity(sim) => {
+            occupied.insert(&sim.field);
+        }
+        OrderByExpr::Arithmetic(arithmetic) => {
+            let mut pending = vec![arithmetic];
+            while let Some(node) = pending.pop() {
+                match node {
+                    ArithmeticExpr::Variable(name) => {
+                        occupied.insert(name);
+                    }
+                    ArithmeticExpr::BinaryOp { left, right, .. } => {
+                        pending.extend([left.as_ref(), right.as_ref()]);
+                    }
+                    ArithmeticExpr::Similarity(order) => occupy_order_names(order, occupied),
+                    ArithmeticExpr::Literal(_) => {}
+                }
+            }
+        }
+        OrderByExpr::Aggregate(_) | OrderByExpr::SimilarityBare => {}
     }
 }
 

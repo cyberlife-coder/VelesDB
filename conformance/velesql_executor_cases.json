@@ -282,6 +282,16 @@
         { "id": 44, "vector": [1.0, 0.0], "payload": { "units": 5 } },
         { "id": 45, "vector": [0.0, 1.0], "payload": { "units": 7 } }
       ]
+    },
+    {
+      "collection": "set_vectors",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 41, "vector": [1, 0], "payload": { "v1": [0.6, 0.8], "v2": [0, 1], "meta": { "v": [1, 0] }, "a": 3, "b": 8 } },
+        { "id": 42, "vector": [1, 0], "payload": { "v1": [0, 1], "v2": [1, 0], "meta": { "v": [1, 0] }, "a": 4, "b": 7 } },
+        { "id": 43, "vector": [1, 0], "payload": { "v1": [1, 0], "a": 6 } }
+      ]
     }
   ],
   "join_cases": [
@@ -1555,6 +1565,24 @@
       "query": "SELECT meta.price AS meta, units AS x, RANK() OVER (ORDER BY id) AS meta FROM set_rows WHERE id=41 UNION SELECT meta.price AS meta, units AS x, RANK() OVER (ORDER BY id) AS meta FROM set_rows WHERE id=42",
       "expect_rows": [{"x": 5, "meta": 1}, {"x": 5, "meta": 1}],
       "note": "The nested values remain distinct while the window output keeps the shared visible name."
+    },
+    {
+      "id": "P037",
+      "query": "SELECT meta.price AS alt, meta.price AS dup, id FROM named WHERE id<=42 UNION ALL SELECT meta.price, id, id FROM named WHERE id=43 ORDER BY similarity(alt,$x) DESC, id ASC LIMIT 2",
+      "expect_rows": [{"alt": 7, "dup": 7, "id": 42}, {"alt": 14, "dup": 43, "id": 43}],
+      "note": "The compound ranks each operand's named vector even when the projected scalar uses its name. Its second operand supplies two independent output values."
+    },
+    {
+      "id": "P038",
+      "query": "SELECT v1 AS chosen, v1 AS dup, id FROM set_vectors WHERE id=41 UNION ALL SELECT v2,v2,id FROM set_vectors WHERE id=42 ORDER BY similarity(v1,$x) DESC LIMIT 1",
+      "expect_rows": [{"chosen": [1, 0], "dup": [1, 0], "id": 42}],
+      "note": "A selected vector's own source is positional. The second operand supplies v2 for v1."
+    },
+    {
+      "id": "P039",
+      "query": "SELECT a AS meta, a AS v1, a AS tag, id FROM set_vectors UNION ALL SELECT b,b,b,id FROM set_vectors WHERE id=42 ORDER BY similarity(meta.v,$x) DESC, similarity(v1,$x) DESC, meta ASC, id ASC",
+      "expect_rows": [{"meta": 6, "v1": 6, "tag": 6, "id": 43}, {"meta": 3, "v1": 3, "tag": 3, "id": 41}, {"meta": 4, "v1": 4, "tag": 4, "id": 42}, {"meta": 7, "v1": 7, "tag": 7, "id": 42}],
+      "note": "A missing first vector sorts first under DESC. Its ties use the second vector, then the scalar alias, including the two output rows sharing id 42."
     }
   ],
   "vector_group_cases": [

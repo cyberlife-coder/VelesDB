@@ -3,7 +3,7 @@ use super::*;
 use serde_json::json;
 
 use crate::point::Point;
-use crate::velesql::Parser;
+use crate::velesql::{OrderByExpr, Parser};
 
 fn row(id: u64, score: f32, payload: serde_json::Value) -> SearchResult {
     SearchResult::new(Point::metadata_only(id, payload), score)
@@ -250,6 +250,63 @@ fn a_later_operands_values_take_the_first_operands_column_names() {
         .map(|r| &r.point.payload.as_ref().expect("test: payload")["year"])
         .collect();
     assert_eq!(years, [&json!(2020), &json!(30)]);
+}
+
+#[test]
+fn vector_sort_slots_preserve_user_keys_on_rows_sharing_an_id() {
+    let query = parse(
+        r#"SELECT a AS meta, a AS dup FROM docs UNION ALL SELECT b, c FROM other
+           ORDER BY similarity(meta.vec, [1, 0]) DESC, dup ASC, ".2" ASC"#,
+    );
+    let first = json!({"a": 3, "meta": {"vec": [0, 1]}, ".0": "first", ".1": null});
+    let second = json!({"b": 4, "c": 8, "meta": {"vec": [1, 0]}, ".0": "second", ".1": null});
+    let mut calls = [vec![row(7, 0.0, first)], vec![row(7, 0.0, second)]].into_iter();
+    let ordered = execute_compound::<()>(
+        &query,
+        true,
+        100,
+        |_| Ok(calls.next().expect("one row set per operand")),
+        |rows, order| {
+            let OrderByExpr::Field(scalar) = &order[1].expr else {
+                panic!("scalar key")
+            };
+            let values: Vec<_> = rows
+                .iter()
+                .map(|row| {
+                    let payload = row.point.payload.as_ref().expect("a payload");
+                    assert!(crate::velesql::row_field(payload, ".2").is_none());
+                    (payload["meta"]["vec"].clone(), payload[scalar].clone())
+                })
+                .collect();
+            assert_eq!(
+                values,
+                [(json!([0, 1]), json!(3)), (json!([1, 0]), json!(8))]
+            );
+            rows.reverse();
+            Ok(())
+        },
+    )
+    .expect("compound");
+    let payloads: Vec<_> = ordered.into_iter().map(|row| row.point.payload).collect();
+    assert_eq!(
+        payloads,
+        [
+            Some(json!({"a": 4, "b": 4, "c": 8, "meta": 8, ".0": "second", ".1": null})),
+            Some(json!({"a": 3, "meta": 3, ".0": "first", ".1": null})),
+        ]
+    );
+}
+
+#[test]
+fn a_vector_sort_preserves_a_window_name_from_an_empty_first_operand() {
+    let query = r#"SELECT a AS meta, a AS dup, RANK() OVER (ORDER BY a) AS ".0" FROM docs
+        UNION ALL SELECT b, c, RANK() OVER (ORDER BY c) AS rn FROM other
+        ORDER BY similarity(meta.vec, [1, 0]) DESC"#;
+    let payload = json!({"b": 7, "c": 8, "rn": 1, "meta": {"vec": [1, 0]}});
+    let rows = run(query, vec![vec![], vec![row(7, 0.0, payload)]], true);
+    let actual = rows[0].point.payload.as_ref().expect("a payload");
+    assert_eq!(actual[".0"], 1);
+    assert_eq!(actual["meta"], 8);
 }
 
 /// A NaN score ranks after every number in both directions, whatever its

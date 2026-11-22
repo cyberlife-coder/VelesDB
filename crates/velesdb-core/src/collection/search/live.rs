@@ -162,6 +162,8 @@ impl Judged {
 /// `k` are kept. Every candidate the index returned is judged, however many
 /// live ones that makes: a search merging pending points unfiltered returns
 /// more than it asked for, and the filter may refuse those nearest.
+// Keep the batch's candidate loop out of its specialized index-search callers.
+#[inline(never)]
 fn judge(
     candidates: &[ScoredResult],
     want: &Nearest<'_>,
