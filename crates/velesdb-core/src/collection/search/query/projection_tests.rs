@@ -166,6 +166,28 @@ fn test_project_results_multiple() {
 }
 
 #[test]
+fn raw_projection_reads_the_source_even_if_output_names_are_present() {
+    let query =
+        crate::velesql::Parser::parse("SELECT meta AS whole, meta.v AS child FROM docs").unwrap();
+    let raw = [
+        make_result(
+            1,
+            0.0,
+            serde_json::json!({"meta":{"v":7},"meta.v":9,"whole":0,"child":8}),
+        ),
+        make_result(2, 0.0, serde_json::json!({"meta":"scalar","child":8})),
+        make_result(3, 0.0, serde_json::json!({"whole":0,"child":8})),
+    ];
+    let expected = vec![
+        serde_json::json!({"whole":{"v":7},"child":7}),
+        serde_json::json!({"whole":"scalar","child":null}),
+        serde_json::json!({"whole":null,"child":null}),
+    ];
+    assert_eq!(project_results(&raw, &query.select.columns), expected);
+    assert_eq!(project_query_results(&raw, &query), expected);
+}
+
+#[test]
 fn test_order_by_similarity_bare_sorts_by_existing_score() {
     // This test validates the integration with ordering.rs SimilarityBare
     let results = vec![

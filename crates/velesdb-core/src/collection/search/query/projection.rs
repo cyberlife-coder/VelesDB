@@ -24,6 +24,21 @@ pub fn project_results(
         .collect()
 }
 
+/// Projects rows returned by executing `query`, including independent
+/// positional values produced by a compound SELECT.
+#[must_use]
+pub fn project_query_results(
+    results: &[SearchResult],
+    query: &crate::velesql::Query,
+) -> Vec<serde_json::Value> {
+    if query.compound.is_none() {
+        return project_results(results, &query.select.columns);
+    }
+    crate::velesql::project_query_rows(query, results, project_single)
+        .map(|(_, output)| output)
+        .collect()
+}
+
 /// Projects a single `SearchResult` into a JSON row.
 fn project_single(result: &SearchResult, select_exprs: &SelectColumns) -> serde_json::Value {
     match select_exprs {

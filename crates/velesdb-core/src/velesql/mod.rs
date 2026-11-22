@@ -107,6 +107,7 @@ pub use param_binding::{
     bind_condition, bind_match_clause, bind_query_condition, bind_value, bind_vector,
 };
 pub(crate) use param_binding::{bind_dml_value, bind_dml_vector};
+mod compound_projection;
 pub(crate) mod condition_tree;
 mod edge_query;
 mod hash_join;
@@ -119,6 +120,7 @@ mod side_qualifier;
 mod similarity_threshold;
 pub(crate) mod text_match;
 mod vector_predicates;
+pub use compound_projection::project_query_rows;
 #[cfg(feature = "persistence")]
 pub(crate) use edge_query::literal_id;
 pub use edge_query::EdgeQuery;

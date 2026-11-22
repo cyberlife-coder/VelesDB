@@ -11,7 +11,7 @@ pub use explain::{__path_explain, explain};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
 use velesdb_core::collection::search::query::projection;
-use velesdb_core::velesql::{DmlStatement, Query, SelectColumns};
+use velesdb_core::velesql::{DmlStatement, Query};
 
 use crate::types::{QueryRequest, QueryResponse, QueryResponseMeta, VELESQL_CONTRACT_VERSION};
 use crate::AppState;
@@ -142,7 +142,7 @@ fn dispatch_parsed_query(
         }
     };
 
-    build_query_response(state, start, results, &parsed.select.columns)
+    build_query_response(state, start, results, parsed)
 }
 
 /// Execute a DDL, graph/delete DML, introspection, admin, or TRAIN query.
@@ -163,7 +163,7 @@ fn execute_mutation_query(
     start: std::time::Instant,
 ) -> axum::response::Response {
     match state.db.execute_query(parsed, params) {
-        Ok(results) => build_query_response(state, start, results, &parsed.select.columns),
+        Ok(results) => build_query_response(state, start, results, parsed),
         Err(e) => {
             state.operational_metrics.inc_errors();
             velesql_execution_error(
@@ -236,7 +236,7 @@ fn build_query_response(
     state: &Arc<AppState>,
     start: std::time::Instant,
     results: Vec<velesdb_core::SearchResult>,
-    select_columns: &SelectColumns,
+    query: &Query,
 ) -> axum::response::Response {
     let elapsed = start.elapsed();
     let timing_ms = elapsed.as_secs_f64() * 1000.0;
@@ -246,7 +246,7 @@ fn build_query_response(
     state
         .query_duration_histogram
         .observe(elapsed.as_secs_f64());
-    let projected = projection::project_results(&results, select_columns);
+    let projected = projection::project_query_results(&results, query);
     let rows_returned = projected.len();
 
     Json(QueryResponse {

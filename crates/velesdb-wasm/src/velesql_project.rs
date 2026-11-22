@@ -96,6 +96,16 @@ pub(crate) fn project(
         .collect()
 }
 
+/// Projects a compound with its positional output schema.
+pub(crate) fn project_compound(
+    query: &velesdb_core::velesql::Query,
+    rows: &[SearchResult],
+) -> Result<Vec<QueryResultRow>, ExecError> {
+    velesdb_core::velesql::project_query_rows(query, rows, project_single)
+        .map(|(result, row)| QueryResultRow::from_projected(result.point.id, result.score, &row))
+        .collect()
+}
+
 /// Projects one result into a JSON row — mirror of `projection::project_single`.
 fn project_single(result: &SearchResult, columns: &SelectColumns) -> serde_json::Value {
     match columns {

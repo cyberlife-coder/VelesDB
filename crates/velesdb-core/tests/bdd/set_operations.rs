@@ -180,6 +180,32 @@ fn setup_let_collection(db: &Database) {
 // UNION: combines results from two queries
 // =========================================================================
 
+#[test]
+fn union_keys_the_qualified_projection_of_a_joined_window() {
+    let (_dir, db) = create_test_db();
+    setup_two_collections(&db);
+    let operand = |id| {
+        format!(
+            "SELECT b.category AS label, RANK() OVER (ORDER BY id) AS b \
+         FROM alpha a LEFT JOIN beta b ON a.id=b.id WHERE a.id={id}"
+        )
+    };
+    let sql = format!("{} UNION {}", operand(2), operand(3));
+    let query = velesdb_core::velesql::Parser::parse(&sql).expect("test: parse");
+    let rows = execute_sql(&db, &sql).expect("test: execute");
+    let shown = velesdb_core::collection::search::query::projection::project_results(
+        &rows,
+        &query.select.columns,
+    );
+    assert_eq!(
+        shown,
+        [
+            json!({"label": null, "b": 1}),
+            json!({"label": "science", "b": 1})
+        ]
+    );
+}
+
 /// GIVEN two collections `alpha` (ids 1,2,3) and `beta` (ids 3,4,5), whose
 ///       point 3 differs (`tech` in alpha, `science` in beta)
 /// WHEN `SELECT * … UNION SELECT * …`

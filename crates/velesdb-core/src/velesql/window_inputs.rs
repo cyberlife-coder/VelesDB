@@ -1,7 +1,7 @@
-use crate::velesql::json_path::column_value;
+use crate::velesql::json_path::{column_value, ProjectedField};
 use crate::velesql::{
-    base_side, compare_json_values, row_field, side_alias, Column, OrderByExpr, SelectColumns,
-    SelectStatement, WindowFunction,
+    compare_json_values, row_field, Column, OrderByExpr, SelectColumns, SelectStatement,
+    WindowFunction,
 };
 use crate::SearchResult;
 use serde_json::Value;
@@ -19,7 +19,7 @@ pub struct WindowInputs {
 }
 
 impl WindowInputs {
-    /// Capture only qualified columns of a side a window will overwrite.
+    /// Capture the input paths a window output will overwrite.
     #[must_use]
     pub fn capture(stmt: &SelectStatement, rows: &[SearchResult]) -> Self {
         let SelectColumns::Mixed {
@@ -43,7 +43,7 @@ impl WindowInputs {
                 let OrderByExpr::Field(name) = &item.expr else {
                     return None;
                 };
-                shadowed_side(stmt, window_functions, name).then_some((i, name))
+                shadowed_path(window_functions, name).then_some((i, name))
             })
         {
             inputs.ordering.insert(
@@ -136,21 +136,23 @@ impl WindowInputs {
         columns: &'a [Column],
         windows: &'a [WindowFunction],
     ) -> impl Iterator<Item = (&'a Column, Value)> {
+        Self::projection_fields(columns, windows)
+            .map(move |(col, field)| (col, field.read(row).into_owned()))
+    }
+
+    pub(in crate::velesql) fn projection_fields<'a>(
+        columns: &'a [Column],
+        windows: &[WindowFunction],
+    ) -> impl Iterator<Item = (&'a Column, ProjectedField<'a>)> + 'a {
         let published =
             !windows.is_empty() && columns.iter().any(|col| shadowed_path(windows, &col.name));
         columns.iter().map(move |col| {
-            let value = if published && col.name != "id" {
-                let key = col.alias.as_deref().unwrap_or(&col.name);
-                row.point
-                    .payload
-                    .as_ref()
-                    .and_then(|p| p.get(key))
-                    .cloned()
-                    .unwrap_or(Value::Null)
+            let field = if published && col.name != "id" {
+                ProjectedField::Published(col.alias.as_deref().unwrap_or(&col.name))
             } else {
-                column_value(row, &col.name)
+                ProjectedField::Source(&col.name)
             };
-            (col, value)
+            (col, field)
         })
     }
 }
@@ -168,19 +170,6 @@ fn names_window(windows: &[WindowFunction], name: &str) -> bool {
             .unwrap_or(wf.function_type.default_alias())
             == name
     })
-}
-
-fn shadowed_side(stmt: &SelectStatement, windows: &[WindowFunction], name: &str) -> bool {
-    let Some((side, _)) = name.split_once('.') else {
-        return false;
-    };
-    !stmt.joins.is_empty()
-        && names_window(windows, side)
-        && (base_side(stmt) == side
-            || stmt
-                .joins
-                .iter()
-                .any(|join| side_alias(join.alias.as_deref(), &join.table) == side))
 }
 
 /// ORDER BY resolves a literal dotted key before traversing a nested path.

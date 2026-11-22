@@ -48,7 +48,7 @@ pub(crate) fn execute(
             crate::velesql_orderby::sort_rows(&window, rows, &ctx)
         },
     )?;
-    crate::velesql_project::project(&query.select, &rows)
+    crate::velesql_project::project_compound(query, &rows)
 }
 
 /// `stmt` ordered by `order_by`: the statement the window's ORDER BY is

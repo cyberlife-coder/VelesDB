@@ -24,7 +24,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tempfile::TempDir;
 use velesdb_core::collection::graph::GraphEdge;
-use velesdb_core::collection::search::query::projection::project_results;
+use velesdb_core::collection::search::query::projection::project_query_results;
 use velesdb_core::velesql::Parser;
 use velesdb_core::{Database, DistanceMetric, Point};
 
@@ -433,7 +433,7 @@ fn test_velesql_executor_conformance_dml_cases() {
 }
 
 /// DISTINCT and named-column projection, compared on the rows core's
-/// `project_results` builds from the result set — what the CLI prints.
+/// `project_query_results` builds from the result set — what the CLI prints.
 #[test]
 fn test_velesql_executor_conformance_projection_cases() {
     let fixture = load_fixture();
@@ -444,7 +444,7 @@ fn test_velesql_executor_conformance_projection_cases() {
         let results = db
             .execute_query(&query, &fixture.query_params)
             .unwrap_or_else(|e| panic!("case {} failed to execute: {e}", case.id));
-        let rows = project_results(&results, &query.select.columns);
+        let rows = project_query_results(&results, &query);
         assert_eq!(
             rows, case.expect_rows,
             "projection conformance mismatch for case {}: query={:?}",

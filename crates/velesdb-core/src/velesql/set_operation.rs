@@ -31,8 +31,10 @@ use std::collections::HashMap;
 use crate::distance::rank_scores;
 use crate::point::SearchResult;
 
-use super::distinct_evaluator::{compute_distinct_key, key_columns};
-use super::json_path::column_value;
+use super::compound_projection::{preserve_operand_positions, CompoundProjection};
+use super::distinct_evaluator::{compute_distinct_key, key_columns, projected_key};
+use super::json_path::ProjectedField;
+use super::window_evaluator::WindowInputs;
 use super::{Query, SelectColumns, SelectOrderBy, SelectStatement, SetOperator};
 
 /// A row with its identity under its operand's projection.
@@ -93,17 +95,17 @@ pub fn operand_queries(query: &Query, ceiling: u64) -> Vec<Query> {
 /// DISTINCT, which runs before them and so leaves them out of its key.
 #[must_use]
 pub fn row_key(result: &SearchResult, columns: &SelectColumns) -> String {
-    let (mut names, include_score) = key_columns(columns);
-    if !names.is_empty() {
-        names.extend(window_outputs(columns));
+    let (listed, include_score) = key_columns(columns);
+    if !listed.is_empty() {
+        return projected_key(result, listed_fields(columns), include_score);
     }
-    let values = compute_distinct_key(result, &names, include_score);
-    if names.is_empty() && !matches!(columns, SelectColumns::SimilarityScore(_)) {
+    let values = compute_distinct_key(result, &[], include_score);
+    if matches!(columns, SelectColumns::SimilarityScore(_)) {
+        values
+    } else {
         // `*` projects the id beside the payload: two points are one row
         // only when both agree.
         format!("{}\x1F{values}", result.point.id)
-    } else {
-        values
     }
 }
 
@@ -122,27 +124,48 @@ pub fn execute_compound<E>(
     mut run_operand: impl FnMut(&Query) -> Result<Vec<SearchResult>, E>,
     order_by: impl FnOnce(&mut [SearchResult], &[SelectOrderBy]) -> Result<(), E>,
 ) -> Result<Vec<SearchResult>, E> {
-    let operands = operand_queries(query, ceiling);
+    let mut operands = operand_queries(query, ceiling);
     let operators = query.compound.iter().flat_map(|c| c.operations.iter());
-    let mut combined = keyed(run_operand(&operands[0])?, &operands[0].select);
-    for ((operator, _), operand) in operators.zip(&operands[1..]) {
-        let mut right = keyed(run_operand(operand)?, &operand.select);
-        align_columns(
-            &mut right,
-            &operand.select.columns,
-            &operands[0].select.columns,
-        );
+    let first = &query.select.columns;
+    let layout = CompoundProjection::for_query(query);
+    let mut combined = keyed_operand(
+        &mut operands[0],
+        first,
+        layout.as_ref(),
+        false,
+        &mut run_operand,
+    )?;
+    for ((operator, _), operand) in operators.zip(&mut operands[1..]) {
+        let right = keyed_operand(operand, first, layout.as_ref(), true, &mut run_operand)?;
         combined = combine(combined, right, *operator, higher_is_better);
     }
     let mut rows: Vec<SearchResult> = combined.into_iter().map(|(_, row)| row).collect();
     let window = compound_window(query);
     match window.order_by {
-        Some(order) => order_by(&mut rows, order)?,
+        Some(order) => {
+            let mapped = layout.as_ref().map(|layout| layout.order(order));
+            order_by(&mut rows, mapped.as_deref().unwrap_or(order))?;
+        }
         None => rank_by_score(&mut rows, higher_is_better),
     }
     let offset = usize::try_from(window.offset).unwrap_or(usize::MAX);
     let limit = usize::try_from(window.limit.unwrap_or(ceiling).min(ceiling)).unwrap_or(usize::MAX);
     Ok(rows.into_iter().skip(offset).take(limit).collect())
+}
+
+fn keyed_operand<'a, E>(
+    operand: &mut Query,
+    first: &'a SelectColumns,
+    layout: Option<&CompoundProjection<'a>>,
+    later_operand: bool,
+    run: &mut impl FnMut(&Query) -> Result<Vec<SearchResult>, E>,
+) -> Result<Vec<KeyedRow>, E> {
+    let preserved = preserve_operand_positions(&mut operand.select.columns);
+    let mut rows = keyed(run(operand)?, &operand.select);
+    if later_operand || preserved || layout.is_some() {
+        align_columns(&mut rows, &operand.select.columns, first, layout);
+    }
+    Ok(rows)
 }
 
 /// Combines two keyed row sets under `operator`.
@@ -222,21 +245,6 @@ fn is_better(a: f32, b: f32, higher_is_better: bool) -> bool {
     rank_scores(a, b, higher_is_better) == Ordering::Less
 }
 
-/// The names a SELECT's window functions write their outputs under.
-fn window_outputs(columns: &SelectColumns) -> impl Iterator<Item = String> + '_ {
-    let functions = match columns {
-        SelectColumns::Mixed {
-            window_functions, ..
-        } => window_functions.as_slice(),
-        _ => &[],
-    };
-    functions.iter().map(|wf| {
-        wf.alias
-            .clone()
-            .unwrap_or_else(|| wf.function_type.default_alias().to_string())
-    })
-}
-
 /// Stable sort, best score first in the metric's direction, NaN last.
 fn rank_by_score(rows: &mut [SearchResult], higher_is_better: bool) {
     rows.sort_by(|a, b| rank_scores(a.score, b.score, higher_is_better));
@@ -245,45 +253,71 @@ fn rank_by_score(rows: &mut [SearchResult], higher_is_better: bool) {
 /// Writes each row's listed column `i` under the first operand's column `i`
 /// (a compound's columns are positional). Rows of a `*` operand, or under a
 /// first operand's `id`, which reads the point id, are left as they are.
-fn align_columns(rows: &mut [KeyedRow], columns: &SelectColumns, first: &SelectColumns) {
-    let (Some(own), Some(first)) = (listed_columns(columns), listed_columns(first)) else {
-        return;
-    };
-    let renames: Vec<(&str, &str)> = own
-        .iter()
-        .zip(first)
-        .map(|(own, first)| (own.name.as_str(), first.name.as_str()))
-        .filter(|(own, first)| own != first && *first != "id")
+fn align_columns<'a>(
+    rows: &mut [KeyedRow],
+    columns: &SelectColumns,
+    first: &'a SelectColumns,
+    layout: Option<&CompoundProjection<'a>>,
+) {
+    // An identity assignment still restores a window output if an earlier
+    // position writes the same name. Read its value before any assignment.
+    let mut changed = rustc_hash::FxHashSet::default();
+    let renames: Vec<_> = listed_fields(columns)
+        .zip(
+            listed_fields(first)
+                .enumerate()
+                .map(|(i, field)| layout.map_or(Some(field), |l| l.destination(i, field))),
+        )
+        .filter_map(|(own, first)| first.map(|first| (own, first)))
+        .filter(|(own, first)| {
+            if *first == ProjectedField::Source("id") {
+                return false;
+            }
+            if own == first {
+                return changed.contains(first);
+            }
+            changed.insert(*first);
+            true
+        })
         .collect();
     if renames.is_empty() {
         return;
     }
     for (_, row) in rows {
-        let values: Vec<(&str, serde_json::Value)> = renames
+        let values: Vec<_> = renames
             .iter()
-            .map(|(own, first)| (*first, column_value(row, own)))
+            .map(|(own, first)| (*first, own.read(row).into_owned()))
             .collect();
-        let mut payload = match row.point.payload.take() {
-            Some(serde_json::Value::Object(map)) => map,
-            _ => serde_json::Map::new(),
-        };
-        for (first, value) in values {
-            payload.insert(first.to_string(), value);
+        let payload = row.point.payload.get_or_insert(serde_json::Value::Null);
+        if !payload.is_object() {
+            *payload = serde_json::Value::Object(serde_json::Map::new());
         }
-        row.point.payload = Some(serde_json::Value::Object(payload));
+        for (first, value) in values {
+            first.write(payload, value);
+        }
     }
 }
 
-/// The columns a SELECT lists by name, if it lists any.
-fn listed_columns(columns: &SelectColumns) -> Option<&[super::Column]> {
-    match columns {
-        SelectColumns::Columns(cols) | SelectColumns::Mixed { columns: cols, .. }
-            if !cols.is_empty() =>
-        {
-            Some(cols)
-        }
-        _ => None,
-    }
+/// Named columns followed by the window outputs, in projection order.
+fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = ProjectedField<'_>> {
+    let (cols, windows) = match columns {
+        SelectColumns::Columns(cols) => (cols.as_slice(), &[][..]),
+        SelectColumns::Mixed {
+            columns,
+            window_functions,
+            ..
+        } if !columns.is_empty() => (columns.as_slice(), window_functions.as_slice()),
+        _ => (&[][..], &[][..]),
+    };
+    let named = WindowInputs::projection_fields(cols, windows).map(|(_, field)| field);
+    let ranks = windows.iter().map(|wf| {
+        ProjectedField::Published(
+            wf.alias
+                .as_deref()
+                .unwrap_or(wf.function_type.default_alias()),
+        )
+    });
+    named.chain(ranks)
 }
 
 /// Keys each row of an operand by its projection.
