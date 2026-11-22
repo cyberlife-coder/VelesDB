@@ -119,7 +119,14 @@ impl Database {
         let validate_let = deferred_let
             .as_ref()
             .is_some_and(|bindings| !bindings.is_empty());
-        let rows = self.joined_rows(single_query, select, params, Some(ctx), validate_let)?;
+        let rows = self.joined_rows(
+            single_query,
+            select,
+            base_collection,
+            params,
+            ctx,
+            validate_let,
+        )?;
         let rows = window.apply(
             rows,
             select,
@@ -138,15 +145,15 @@ impl Database {
         &self,
         mut query: crate::velesql::Query,
         budget_select: &crate::velesql::SelectStatement,
+        base_collection: &crate::collection::Collection,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        ctx: Option<&crate::guardrails::QueryContext>,
+        ctx: &crate::guardrails::QueryContext,
         validate_deferred_let: bool,
     ) -> Result<Vec<SearchResult>> {
-        let base_collection = self.resolve_collection(&query.select.from)?;
         let joins = query.select.joins.clone();
         let (analysis, post_join_filters) = self.prepare_join_filters(
             &mut query,
-            &base_collection,
+            base_collection,
             &joins,
             params,
             validate_deferred_let,
@@ -165,11 +172,11 @@ impl Database {
             analysis: &analysis,
             post_join_filters: &post_join_filters,
             row_budget,
-            collection: &base_collection,
+            collection: base_collection,
             params,
         };
         loop {
-            let base = Self::base_rows(&base_collection, &mut query, fetch.rows, params, ctx)?;
+            let base = Self::base_rows(base_collection, &mut query, fetch.rows, params, ctx)?;
             let base_len = base.len();
             let joined = self.join_base_rows(base, &plan)?;
             if fetch.is_enough(base_len, joined.len()) {
@@ -180,24 +187,19 @@ impl Database {
     }
 
     /// The first `fetch` base rows of `query` (its joins and join-side
-    /// predicates removed), under the caller's JOIN context when it has one.
+    /// predicates removed), under the statement's JOIN context.
     fn base_rows(
         collection: &crate::collection::Collection,
         query: &mut crate::velesql::Query,
         fetch: usize,
         params: &std::collections::HashMap<String, serde_json::Value>,
-        ctx: Option<&crate::guardrails::QueryContext>,
+        ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
         query.select.limit = Some(u64::try_from(fetch).unwrap_or(u64::MAX));
-        match ctx {
-            Some(ctx) => {
-                crate::velesql::QueryValidator::validate(query)?;
-                collection
-                    .execute_in_query_context(query, params, ctx)
-                    .map(|(rows, _)| rows)
-            }
-            None => collection.execute_query(query, params),
-        }
+        crate::velesql::QueryValidator::validate(query)?;
+        collection
+            .execute_in_query_context(query, params, ctx)
+            .map(|(rows, _)| rows)
     }
 
     /// Joins the base rows of a SELECT: each scoped under the FROM alias

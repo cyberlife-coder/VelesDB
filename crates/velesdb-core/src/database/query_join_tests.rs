@@ -175,6 +175,52 @@ fn seed_indexed_join_fixtures(db: &Database) {
 }
 
 #[test]
+fn joined_aggregates_charge_the_scalar_or_the_returned_groups() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    seed_indexed_join_fixtures(&db);
+    let run = |columns: &str, tail: &str| {
+        let sql =
+            format!("SELECT {columns} FROM products p JOIN inventory i ON i.sku = p.sku {tail}");
+        let query = crate::velesql::Parser::parse(&sql).unwrap();
+        db.execute_aggregate(&query, &std::collections::HashMap::new())
+    };
+    let scalar = "COUNT(*) AS n";
+    let groups = "i.wh, COUNT(*) AS n";
+    let two = "WHERE p.id = 1 GROUP BY i.wh";
+    assert_eq!(run(groups, two).unwrap().as_array().unwrap().len(), 2);
+    db.update_guardrails(&crate::guardrails::QueryLimits::new().with_max_cardinality(1));
+    assert_eq!(run(scalar, "").unwrap()["n"], 2);
+    assert_eq!(
+        run(groups, "GROUP BY i.wh ORDER BY i.wh LIMIT 1 OFFSET 1")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(matches!(
+        run(groups, two),
+        Err(crate::Error::GuardRail {
+            kind: crate::error::GuardRailKind::Cardinality,
+            ..
+        })
+    ));
+    db.update_guardrails(&crate::guardrails::QueryLimits::new().with_max_cardinality(0));
+    assert_eq!(
+        run(groups, "WHERE p.id = 99 GROUP BY i.wh").unwrap(),
+        serde_json::json!([])
+    );
+    assert!(matches!(
+        run(scalar, "WHERE p.id = 99"),
+        Err(crate::Error::GuardRail {
+            kind: crate::error::GuardRailKind::Cardinality,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn joined_window_charges_the_returned_page() {
     let dir = tempdir().unwrap();
     let db = Database::open(dir.path()).unwrap();
