@@ -9,8 +9,32 @@ use super::super::row_universe::RowScope;
 use super::super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;
 use crate::error::Result;
+use crate::point::SearchResult;
 use crate::velesql::{GroupInput, Grouper, HavingClause, Query};
 use std::collections::HashMap;
+
+#[cfg(test)]
+#[path = "grouped_tests.rs"]
+mod tests;
+
+fn feed_joined_groups(
+    ordered: &[&SearchResult],
+    grouper: &mut Grouper<'_>,
+    check_deadline: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    const ROWS_PER_CHECK: usize = 100;
+    for batch in ordered.chunks(ROWS_PER_CHECK) {
+        check_deadline()?;
+        for row in batch {
+            grouper.push(GroupInput::new(
+                row.point.id,
+                0.0,
+                row.point.payload.as_ref(),
+            ))?;
+        }
+    }
+    Ok(())
+}
 
 impl Collection {
     /// Execute a grouped aggregation query (GROUP BY) with optional HAVING
@@ -51,12 +75,13 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// An unbound HAVING parameter, an ORDER BY naming no grouped field, or
-    /// more groups than the query allows.
+    /// Returns an error for an unbound HAVING parameter, an invalid grouped
+    /// sort key, a group count above the budget or an expired deadline.
     pub(crate) fn aggregate_rows(
         query: &Query,
-        rows: &[crate::point::SearchResult],
+        rows: &[SearchResult],
         params: &HashMap<String, serde_json::Value>,
+        check_deadline: &dyn Fn() -> Result<()>,
     ) -> Result<serde_json::Value> {
         let stmt = &query.select;
         let having = stmt
@@ -65,21 +90,18 @@ impl Collection {
             .map(|h| Self::resolve_having_params(h, params))
             .transpose()?;
         let mut grouper = Grouper::new(stmt, having.as_ref(), true)?;
+        check_deadline()?;
         // Id order, as a scan feeds the grouper (stable for 1:N joins).
-        let mut ordered: Vec<&crate::point::SearchResult> = rows.iter().collect();
+        let mut ordered: Vec<_> = rows.iter().collect();
         ordered.sort_by_key(|row| row.point.id);
-        for row in ordered {
-            grouper.push(GroupInput::new(
-                row.point.id,
-                0.0,
-                row.point.payload.as_ref(),
-            ))?;
-        }
+        feed_joined_groups(&ordered, &mut grouper, check_deadline)?;
+        check_deadline()?;
         let groups: Vec<serde_json::Value> = grouper
             .finish()
             .into_iter()
             .map(|group| group.row)
             .collect();
+        check_deadline()?;
         Self::shape_groups(stmt, groups)
     }
 

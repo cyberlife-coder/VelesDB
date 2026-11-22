@@ -97,7 +97,9 @@ impl Database {
         select.limit = None;
         let budget = select.clone();
         let rows = self.joined_rows(rows_query, &budget, collection, params, &ctx, false)?;
-        let result = crate::collection::Collection::aggregate_rows(query, &rows, params)?;
+        let result = crate::collection::Collection::aggregate_rows(query, &rows, params, &|| {
+            collection.check_read_deadline(&ctx)
+        })?;
         collection.finish_returned_rows(&ctx, result.as_array().map_or(1, Vec::len))?;
         Ok(result)
     }
