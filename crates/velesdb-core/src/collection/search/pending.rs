@@ -128,7 +128,7 @@ impl PendingSnapshot {
     }
 
     /// Whether `id` is unindexed.
-    fn holds(&self, id: u64) -> bool {
+    pub(super) fn holds(&self, id: u64) -> bool {
         self.0.binary_search(&id).is_ok()
     }
 }

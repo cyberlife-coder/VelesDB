@@ -15,6 +15,8 @@ const _: () = assert!(MAX_LIMIT as u64 == crate::velesql::MAX_SELECT_LIMIT);
 /// all fields are `None` and the default behavior is preserved.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct QuerySearchOptions {
+    /// Score source guaranteed by a bounded, explicit f32 SELECT ordering.
+    pub(in crate::collection::search) vector_score_source: super::super::vector::VectorScoreSource,
     /// Search quality profile parsed from `WITH (mode='...')`.
     pub quality: Option<crate::SearchQuality>,
     /// Explicit ef_search override from `WITH (ef_search=N)`.
@@ -60,8 +62,7 @@ impl QuerySearchOptions {
             quality,
             ef_search,
             force_rerank,
-            fusion_clause: None,
-            executed_strategy_probe: None,
+            ..Self::default()
         })
     }
 
@@ -113,8 +114,22 @@ impl QuerySearchOptions {
     }
 }
 
+/// Source of the ordered scan's native NEAR scores.
+#[derive(Clone, Copy)]
+pub(super) enum OrderedIndexScores {
+    Index(crate::index::hnsw::index::IndexRowScores),
+    /// Resolved after MATCH populates the candidate ids for the ordered scan.
+    Anchors,
+}
+
 /// Extracted query components from the WHERE clause.
 pub(in crate::collection::search::query) struct ExtractedComponents {
+    /// Native primary score for an ordered NEAR whose index score can differ
+    /// from a calculation on the hydrated row.
+    pub(super) ordered_index_scores: Option<OrderedIndexScores>,
+    /// Filter the window planner resolved to identify the native NEAR scorer.
+    /// Reuse its bitmap in the search or in the ordered scan.
+    pub(super) ordered_prefilter: Option<OrderedPrefilter>,
     pub(in crate::collection::search::query) vector_search: Option<Vec<f32>>,
     pub(in crate::collection::search::query) similarity_conditions:
         Vec<(String, Vec<f32>, crate::velesql::CompareOp, f64)>,
@@ -134,6 +149,31 @@ pub(in crate::collection::search::query) struct ExtractedComponents {
     pub(in crate::collection::search::query) similarity_scan: bool,
 }
 
+impl ExtractedComponents {
+    pub(super) fn is_unfiltered_near(&self) -> bool {
+        use crate::velesql::Condition;
+        let mut condition = self.filter_condition.as_ref();
+        while let Some(Condition::Group(inner)) = condition {
+            condition = Some(inner);
+        }
+        self.vector_search.is_some() && matches!(condition, Some(Condition::VectorSearch(_)))
+    }
+
+    /// A NEAR or an index-bounded threshold uses the configured vector
+    /// search quality. Exact predicate scans have their own candidate ceiling.
+    pub(super) fn requests_dense_search(&self) -> bool {
+        self.vector_search.is_some()
+            || (!self.similarity_scan && !self.similarity_conditions.is_empty())
+    }
+}
+
+pub(super) struct OrderedPrefilter {
+    pub(super) filter: crate::filter::Filter,
+    pub(super) bitmap: Option<roaring::RoaringBitmap>,
+    /// Payload indexes read literal field names; WHERE follows dotted paths.
+    pub(super) covers_scan: bool,
+}
+
 /// Bundles the parameters for [`Collection::finalize_query_results`] to stay
 /// within the 8-parameter limit.
 ///
@@ -145,5 +185,6 @@ pub(in crate::collection::search::query) struct QueryFinalizationContext<'a> {
     pub(in crate::collection::search::query) limit: usize,
     pub(in crate::collection::search::query) extracted: &'a ExtractedComponents,
     pub(in crate::collection::search::query) ctx: &'a crate::guardrails::QueryContext,
+    pub(in crate::collection::search::query) started_at: std::time::Instant,
     pub(in crate::collection::search::query) let_bindings: &'a [crate::velesql::LetBinding],
 }

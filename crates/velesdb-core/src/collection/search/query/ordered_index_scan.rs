@@ -2,9 +2,9 @@
 //! (EPIC-081 phases 2 & 3b).
 //!
 //! Routes a scalar `ORDER BY <indexed_field> LIMIT k` — optionally carrying a
-//! pure-metadata `WHERE` — to the field's ordered secondary B-tree index instead
-//! of the B001 exhaustive `MAX_LIMIT` fetch + in-memory sort. Without a filter
-//! the walk is `O(log n + k)`. With one it walks the fully-covered ordered index
+//! pure-metadata `WHERE` — to the field's ordered secondary B-tree index. The
+//! fallback ranks every admitted row before applying OFFSET and LIMIT. Without
+//! a filter the index returns up to OFFSET + LIMIT ids. With one it walks the index
 //! applying the **same** metadata predicate the exhaustive path applies, stopping
 //! once the page is filled — equivalent to the exhaustive `filter → sort → limit`
 //! because the index yields rows in the identical total order (ties broken by
@@ -20,10 +20,9 @@ use crate::velesql::Condition;
 use super::options::MAX_LIMIT;
 use super::ExtractedComponents;
 
-/// Rows hydrated per batch while walking the ordered index under a WHERE filter.
-/// Bounds peak memory; a broadly-matching filter fills its page within the first
-/// batch or two and stops.
-const FILTER_HYDRATION_CHUNK: usize = 1024;
+/// Rows hydrated together when checking a skipped prefix for expiry or walking
+/// the ordered index under a WHERE filter.
+const HYDRATION_CHUNK: usize = 1024;
 
 /// Minimum estimated WHERE selectivity for the filtered route. Below this the
 /// filter is selective enough that the exhaustive path's bitmap prefilter (which
@@ -75,12 +74,12 @@ impl Collection {
             return Ok(None);
         };
         self.check_guardrails_and_record(ctx, results.len())?;
-        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(Some(results))
     }
 
-    /// Plain (no-WHERE) route: hydrate the top `offset+limit` ordered IDs, then
-    /// apply OFFSET/LIMIT. Score is 1.0 to match the exhaustive metadata-scan
+    /// Plain (no-WHERE) route: take the ordered IDs through the end of the
+    /// page. Check skipped rows in batches, then hydrate the page in one read.
+    /// Score is 1.0 to match the exhaustive metadata-scan
     /// path. Records an advisor observation and returns `None` when the index is
     /// missing or not fully covering (EPIC-081 phase 3a).
     ///
@@ -89,30 +88,34 @@ impl Collection {
     /// still passes), this index slice no longer aligns with the exhaustive path,
     /// which filters such rows **before** OFFSET and backfills from beyond the
     /// slice. So decline and let the exhaustive path run — correctness over the
-    /// fast path. The common (no-TTL) case keeps the `O(log n + k)` walk.
+    /// fast path. A live prefix needs no hydration beyond OFFSET + LIMIT.
     fn ordered_index_plain_results(
         &self,
         stmt: &crate::velesql::SelectStatement,
         field: &str,
     ) -> Option<Vec<SearchResult>> {
-        let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
-        let Some(ids) = self.ordered_ids_if_covered(field, order_descending(stmt), fetch_limit)
-        else {
+        let (limit, _) = Self::compute_fetch_limit(stmt);
+        let offset = order_offset(stmt);
+        // MAX_LIMIT caps the result count. The prefix also includes the skipped rows.
+        let page = offset..offset.saturating_add(limit);
+        let Some(ids) = self.ordered_ids_if_covered(field, order_descending(stmt), page) else {
             self.query.order_by_advisor.write().observe(field);
             return None;
         };
-        let hydrated: Vec<crate::point::Point> = self.get(&ids).into_iter().flatten().collect();
-        if hydrated.len() != ids.len() {
+        if ids.len() <= offset {
+            return Some(Vec::new());
+        }
+        let (skipped, page) = ids.split_at(offset);
+        if skipped
+            .chunks(HYDRATION_CHUNK)
+            .any(|chunk| self.get(chunk).iter().any(Option::is_none))
+        {
             return None;
         }
-        Some(
-            hydrated
-                .into_iter()
-                .skip(order_offset(stmt))
-                .take(limit)
-                .map(|point| SearchResult::new(point, crate::velesql::METADATA_MATCH_SCORE))
-                .collect(),
-        )
+        self.get(page)
+            .into_iter()
+            .map(|point| point.map(|p| SearchResult::new(p, crate::velesql::METADATA_MATCH_SCORE)))
+            .collect()
     }
 
     /// WHERE-filtered route (EPIC-081 phase 3b): walk the fully-covered ordered
@@ -120,7 +123,7 @@ impl Collection {
     /// stopping once the OFFSET+LIMIT page is filled.
     ///
     /// Declines (returns `None`) **without** observing the advisor when the
-    /// collection exceeds `MAX_LIMIT` (matching the capped exhaustive baseline)
+    /// collection exceeds `MAX_LIMIT` (the filtered route snapshots every ordered id)
     /// or the filter is too selective for the walk to beat the exhaustive bitmap
     /// prefilter — in those cases a covering index would not enable the route, so
     /// it is not an advisable gap. It *does* observe when the only thing missing
@@ -143,7 +146,8 @@ impl Collection {
         }
         // Snapshot every covered ordered id under one lock + coverage check, then
         // release before hydrating.
-        let Some(ids) = self.ordered_ids_if_covered(field, order_descending(stmt), point_count)
+        let Some(ids) =
+            self.covered_index_prefix(field, order_descending(stmt), point_count, point_count)
         else {
             self.query.order_by_advisor.write().observe(field);
             return None;
@@ -220,7 +224,7 @@ impl Collection {
             return out;
         }
         let mut skipped = 0usize;
-        for chunk in ids.chunks(FILTER_HYDRATION_CHUNK) {
+        for chunk in ids.chunks(HYDRATION_CHUNK) {
             for point in self.get(chunk).into_iter().flatten() {
                 if !predicate.matches_point(point.id, point.payload.as_ref()) {
                     continue;

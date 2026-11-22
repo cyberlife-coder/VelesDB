@@ -217,3 +217,52 @@ fn test_non_compound_query_unaffected() {
         .expect("Simple SELECT should still work");
     assert_eq!(results.len(), 2);
 }
+
+#[test]
+fn wildcard_id_cycle_preserves_both_projection_apis() {
+    use crate::collection::search::query::projection::{project_query_results, project_results};
+    let dir = TempDir::new().unwrap();
+    let collection = make_collection_with_data(dir.path(), "docs", &[(7, "a"), (9, "b")]);
+    let sql = "SELECT t.*, category AS id, id AS category FROM docs AS t WHERE id=7 \
+               UNION ALL SELECT t.*, category AS id, id AS category FROM docs AS t WHERE id=9 \
+               ORDER BY id ASC";
+    let query = crate::velesql::Parser::parse(sql).unwrap();
+    let rows = collection.execute_query(&query, &HashMap::new()).unwrap();
+    let expected = [
+        serde_json::json!({"id":"a", "category":7, "idx":7}),
+        serde_json::json!({"id":"b", "category":9, "idx":9}),
+    ];
+    assert_eq!(project_results(&rows, &query.select.columns), expected);
+    assert_eq!(project_query_results(&rows, &query), expected);
+}
+
+#[test]
+fn wildcard_member_order_follows_its_standalone_projection() {
+    use crate::collection::search::query::projection::project_query_results;
+    let dir = TempDir::new().unwrap();
+    let col = Collection::create(dir.path().join("docs"), 2, DistanceMetric::Cosine).unwrap();
+    let payload = serde_json::json!({"a": 11, "meta": {"v": [0, 1]}, "b": 22});
+    col.upsert(vec![Point::new(7, vec![1.0, 0.0], Some(payload))])
+        .unwrap();
+    let run = |sql: &str| {
+        let query = crate::velesql::Parser::parse(sql).unwrap();
+        let rows = col.execute_query(&query, &HashMap::new()).unwrap();
+        project_query_results(&rows, &query)
+            .into_iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+    };
+    for fields in [
+        "meta.v, a AS one, b AS two",
+        "a AS id, id AS original_id, b AS two",
+    ] {
+        let sql = format!("SELECT t.*, {fields} FROM docs AS t");
+        let reference = run(&sql);
+        assert_eq!(reference.len(), 1);
+        let compound = format!("{sql} UNION ALL {sql} ORDER BY similarity(meta.v,[1,0]) DESC");
+        assert_eq!(
+            run(&compound),
+            [reference[0].as_str(), reference[0].as_str()]
+        );
+    }
+}

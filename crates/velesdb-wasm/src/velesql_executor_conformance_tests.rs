@@ -256,7 +256,7 @@ fn seed_dataset(db: &mut DatabaseInner, ds: &Dataset) {
         let mut bound = serde_json::Map::new();
         bound.insert("v".to_string(), serde_json::json!(point.vector));
         for (key, val) in obj {
-            columns.push(key.clone());
+            columns.push(format!("\"{}\"", key.replace('"', "\"\"")));
             // VelesQL has no array or object literal: those bind as `$pN`.
             if val.is_array() || val.is_object() {
                 let name = format!("p{}", bound.len());

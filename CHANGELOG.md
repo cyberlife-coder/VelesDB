@@ -1306,6 +1306,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Rank admitted rows before applying SELECT `LIMIT` and `OFFSET`** (core,
+  WASM, 2026-11-21). For example, `ORDER BY similarity(vector, $q) ASC LIMIT 1`
+  can now return the least similar row even when it occurs after the first
+  100,000 candidates. Core scans every admitted row for sort keys it can
+  compute, including scalar, arithmetic, secondary and named-vector keys.
+  The scan stores all candidate IDs and buffers O(`OFFSET + LIMIT` + batch
+  size) hydrated rows. It honors expiry, the exact similarity scan's candidate
+  ceiling, and the cardinality guard on the final rows. Concurrent writes
+  can be visible between batches. Indexed time predicates use one timestamp
+  per execution. Named-vector sorting reads each row's own payload, including
+  on JOIN and compound rows. A SELECT captures these vector keys before a
+  window alias can overwrite their input. JOIN windows rank the joined rows
+  and preserve the input columns named in the projection.
+  `similarity(vector, $q)` scores the original vector. Bare `similarity()`
+  retains the NEAR score, including PQ or OPQ scores and the index's
+  floating-point rounding for cosine and Jaccard.
+  Vector searches whose ranking already matches the requested order read
+  past ties at the cut, up to the fetch ceiling. Sparse rankings already
+  order equal scores by ascending ID. Reordered BM25 and sparse scores, fusions,
+  `DISTINCT`, vector grouping and window functions use up to
+  `MAX_SELECT_LIMIT` candidates and warn on a full capped fetch. WASM uses
+  this ceiling for sparse and fused searches that need it.
+
 - **Payload WAL: a write that fails partway through a record no longer
   costs the records written after it** (core, 2026-11-20, #2850). A record
   at least as large as the `BufWriter`'s buffer goes straight to the file, so

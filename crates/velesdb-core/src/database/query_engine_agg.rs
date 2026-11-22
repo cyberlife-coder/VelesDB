@@ -67,10 +67,10 @@ impl Database {
         }
         crate::velesql::QueryValidator::validate(query)?;
         let authorized = self.authorize_statement(query, params, decisions)?;
-        if !authorized.query().select.joins.is_empty() {
-            return self.aggregate_joined(authorized.query(), params);
-        }
         let collection = self.resolve_read_target(&authorized, AGGREGATE_TARGET_MISSING)?;
+        if !authorized.query().select.joins.is_empty() {
+            return self.aggregate_joined(authorized.query(), &collection, params);
+        }
         collection.execute_aggregate(authorized.query(), params)
     }
 
@@ -81,8 +81,12 @@ impl Database {
     fn aggregate_joined(
         &self,
         query: &crate::velesql::Query,
+        collection: &crate::collection::Collection,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
+        let ctx = collection
+            .prepare_query_context(query, "default")?
+            .for_join_input();
         let mut rows_query = query.clone();
         let select = &mut rows_query.select;
         select.columns = crate::velesql::SelectColumns::All;
@@ -92,8 +96,12 @@ impl Database {
         select.offset = None;
         select.limit = None;
         let budget = select.clone();
-        let rows = self.joined_rows(rows_query, &budget, params, None)?;
-        crate::collection::Collection::aggregate_rows(query, &rows, params)
+        let rows = self.joined_rows(rows_query, &budget, collection, params, &ctx, false)?;
+        let result = crate::collection::Collection::aggregate_rows(query, &rows, params, &|| {
+            collection.check_read_deadline(&ctx)
+        })?;
+        collection.finish_returned_rows(&ctx, result.as_array().map_or(1, Vec::len))?;
+        Ok(result)
     }
 }
 

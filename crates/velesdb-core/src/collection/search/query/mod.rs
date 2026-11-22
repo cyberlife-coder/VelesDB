@@ -40,6 +40,7 @@ mod execution_paths;
 mod extraction;
 #[cfg(test)]
 mod extraction_tests;
+mod fetch_window;
 mod fused_dispatch;
 mod graph_prefilter;
 mod hybrid_sparse;
@@ -71,9 +72,12 @@ mod multi_vector_tests;
 mod near_disjunction_tests;
 mod options;
 mod ordered_index_scan;
+mod ordered_scan;
 mod ordering;
 #[cfg(test)]
 mod ordering_tests;
+#[cfg(test)]
+mod ordering_window_tests;
 pub mod parallel_traversal;
 #[cfg(test)]
 mod parallel_traversal_tests;
@@ -135,10 +139,31 @@ use std::collections::HashSet;
 /// [`Collection::dispatch_and_finalize`] to stay within the parameter limit.
 struct DispatchFinalizeArgs<'a> {
     extracted: &'a ExtractedComponents,
+    search_opts: &'a QuerySearchOptions,
     limit: usize,
     fetch_limit: usize,
     is_vgb: bool,
     ctx: &'a crate::guardrails::QueryContext,
+    started_at: std::time::Instant,
+}
+
+impl DispatchFinalizeArgs<'_> {
+    fn finalization<'a>(
+        &'a self,
+        stmt: &'a crate::velesql::SelectStatement,
+        params: &'a std::collections::HashMap<String, serde_json::Value>,
+        let_bindings: &'a [crate::velesql::LetBinding],
+    ) -> QueryFinalizationContext<'a> {
+        QueryFinalizationContext {
+            stmt,
+            params,
+            limit: self.limit,
+            extracted: self.extracted,
+            ctx: self.ctx,
+            started_at: self.started_at,
+            let_bindings,
+        }
+    }
 }
 
 impl Collection {
@@ -165,14 +190,40 @@ impl Collection {
         crate::velesql::QueryValidator::validate(query)?;
         // Compound semantics are velesql's (`velesql::execute_compound`),
         // shared with the `Database` executor and WASM; each operand runs here.
+        self.execute_compound_read(query, params, &mut |operand| {
+            let inputs = crate::velesql::compound_rank_inputs(query, &operand.select.columns);
+            self.execute_set_operand(operand, params, inputs)
+        })
+    }
+
+    /// Runs a native compound using its first collection's ordering policy.
+    pub(crate) fn execute_compound_read(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        run_operand: &mut dyn FnMut(&crate::velesql::Query) -> Result<Vec<SearchResult>>,
+    ) -> Result<Vec<SearchResult>> {
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
         crate::velesql::execute_compound(
             query,
             higher_is_better,
             u64::try_from(MAX_LIMIT).unwrap_or(u64::MAX),
-            |operand| self.execute_query_with_client(operand, params, "default"),
+            run_operand,
             |rows, order_by| self.apply_order_by(rows, order_by, params),
         )
+    }
+
+    /// Runs an operand and retains only the rank inputs its compound will order.
+    pub(crate) fn execute_set_operand(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        inputs: Vec<String>,
+    ) -> Result<Vec<SearchResult>> {
+        let mut ctx = self.prepare_query_context(query, "default")?;
+        ctx.window_rank_inputs = inputs;
+        self.execute_in_query_context(query, params, &ctx)
+            .map(|(rows, _)| rows)
     }
 
     /// Executes a `VelesQL` query with a specific client identifier for per-client rate limiting.
@@ -221,12 +272,20 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         client_id: &str,
     ) -> Result<(Vec<SearchResult>, Option<crate::velesql::FilterStrategy>)> {
-        // Phase 1: Pre-checks and context setup.
         let ctx = self.prepare_query_context(query, client_id)?;
+        self.execute_in_query_context(query, params, &ctx)
+    }
 
+    /// Executes an already validated read under its statement's deadline and guard rails.
+    pub(crate) fn execute_in_query_context(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<(Vec<SearchResult>, Option<crate::velesql::FilterStrategy>)> {
         // MATCH queries take a completely separate path (no extraction needed).
         if let Some(results) =
-            self.try_dispatch_match(query, params, &ctx, &match_exec::MatchSources::default())?
+            self.try_dispatch_match(query, params, ctx, &match_exec::MatchSources::default())?
         {
             return Ok((results, None));
         }
@@ -235,7 +294,7 @@ impl Collection {
         let query = resolved_query.as_ref().unwrap_or(query);
 
         // Phase 2-3: SELECT extraction, early-return, dispatch, and finalization.
-        let results = self.execute_select_pipeline(query, params, &ctx)?;
+        let results = self.execute_select_pipeline(query, params, ctx)?;
         Ok((results, ctx.executed_filter_strategy()))
     }
 
@@ -272,29 +331,52 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
         let stmt = &query.select;
+        let started_at = ctx.select_started_at();
         let (limit, fetch_limit) = Self::compute_fetch_limit(stmt);
-        let extracted = Self::extract_query_components(stmt, params)?;
+        let mut extracted = Self::extract_query_components(stmt, params)?;
 
-        // EPIC-081 phase 2: serve a plain `ORDER BY <indexed_field> LIMIT k` from
-        // the field's ordered secondary index instead of the exhaustive
-        // MAX_LIMIT fetch + sort. Gated hard (single plain Field key, fully
-        // covered index, no WHERE/JOIN/graph/vector/sparse/DISTINCT/aggregate);
-        // OFFSET/LIMIT are applied inside the scan, so it returns the finished
-        // page directly. Falls through unchanged otherwise.
+        // A covering secondary index can supply the finished ORDER BY page.
+        // The scan checks the filter and sort shape before applying OFFSET/LIMIT.
         if let Some(results) = self.try_ordered_index_scan(query, stmt, &extracted, ctx)? {
             return Ok(results);
         }
 
-        // DISTINCT and a vector GROUP BY reshape the fetched rows before the
-        // window, so the window bounds what they return, never what they read:
-        // a fetch cut at LIMIT + OFFSET deduplicated or grouped only the top
-        // of the ranking (`SELECT DISTINCT cat … LIMIT 2` returned one row
-        // when the two best hits shared a category).
-        let is_vgb = stmt.is_vector_group_by();
-        let effective_fetch_limit = if stmt.reshapes_rows_before_window() {
-            MAX_LIMIT
-        } else {
-            fetch_limit
+        // The fetch stops at LIMIT + OFFSET only when the rows it stops at
+        // are the window's (`fetch_window.rs`); an ORDER BY it does not rank
+        // by takes the ordered scan, which ranks every admitted row.
+        let mut search_opts = QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())?
+            .with_fusion(stmt.fusion_clause.clone())
+            .with_executed_strategy_probe(ctx);
+        let window =
+            self.select_fetch_window(stmt, &mut extracted, params, fetch_limit, &mut search_opts);
+        let args = DispatchFinalizeArgs {
+            extracted: &extracted,
+            search_opts: &search_opts,
+            limit,
+            fetch_limit,
+            is_vgb: stmt.is_vector_group_by(),
+            ctx,
+            started_at,
+        };
+        self.execute_fetch_window(query, params, window, args)
+    }
+
+    /// Runs the selected candidate window and finalizes its rows.
+    fn execute_fetch_window(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        window: fetch_window::FetchWindow,
+        mut args: DispatchFinalizeArgs<'_>,
+    ) -> Result<Vec<SearchResult>> {
+        let stmt = &query.select;
+        args.fetch_limit = match window {
+            fetch_window::FetchWindow::Bounded(rows) => rows,
+            fetch_window::FetchWindow::Exhaustive => MAX_LIMIT,
+            fetch_window::FetchWindow::OrderedScan { pq_scores } => {
+                let context = args.finalization(stmt, params, &query.let_bindings);
+                return self.execute_ordered_scan(&context, args.search_opts, pq_scores);
+            }
         };
 
         // Early-return paths or LET-binding guard for special query shapes.
@@ -302,24 +384,14 @@ impl Collection {
             query,
             stmt,
             params,
-            &extracted,
-            effective_fetch_limit,
-            ctx,
+            args.extracted,
+            args.fetch_limit,
+            args.ctx,
         )? {
             return Ok(results);
         }
 
-        self.dispatch_and_finalize(
-            query,
-            params,
-            &DispatchFinalizeArgs {
-                extracted: &extracted,
-                limit,
-                fetch_limit: effective_fetch_limit,
-                is_vgb,
-                ctx,
-            },
-        )
+        self.dispatch_and_finalize::<MAX_LIMIT>(query, params, &args)
     }
 
     /// Runs the main dispatch, optional vector GROUP BY, and finalization
@@ -327,15 +399,21 @@ impl Collection {
     ///
     /// Split out of [`Self::execute_select_pipeline`] so each stays within the
     /// cyclomatic-complexity budget.
-    fn dispatch_and_finalize(
+    fn dispatch_and_finalize<const CEILING: usize>(
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
         args: &DispatchFinalizeArgs<'_>,
     ) -> Result<Vec<SearchResult>> {
         let stmt = &query.select;
-        let mut results =
-            self.dispatch_main_select(stmt, params, args.extracted, args.fetch_limit, args.ctx)?;
+        let mut most_fetched = 0;
+        let mut results = fetch_window::fetch_past_ties(stmt, args.fetch_limit, |rows| {
+            let (fetched, results) =
+                self.dispatch_main_select(stmt, params, args.extracted, rows, args.search_opts)?;
+            most_fetched = most_fetched.max(fetched);
+            Ok(results)
+        })?;
+        self.warn_if_window_capped_at(stmt, most_fetched, CEILING);
 
         // Vector GROUP BY post-processing: group results by parent field
         // before ORDER BY / LIMIT / OFFSET are applied, which then sort the
@@ -349,15 +427,22 @@ impl Collection {
 
         self.finalize_query_results(
             &mut results,
-            &QueryFinalizationContext {
-                stmt: &stmt,
-                params,
-                limit: args.limit,
-                extracted: args.extracted,
-                ctx: args.ctx,
-                let_bindings: &query.let_bindings,
-            },
+            &args.finalization(&stmt, params, &query.let_bindings),
         )?;
+        // The ef_search cost estimate belongs to vector dispatch. The separate
+        // ordered scan shares finalization and records its latency there.
+        if args.extracted.vector_search.is_some() {
+            let ef_search = stmt
+                .with_clause
+                .as_ref()
+                .and_then(crate::velesql::WithClause::get_ef_search)
+                .unwrap_or(100);
+            self.query.query_planner.record_cbo_feedback(
+                self.vector_count(),
+                ef_search,
+                args.started_at.elapsed().as_secs_f64() * 1000.0,
+            );
+        }
         Ok(results)
     }
 

@@ -187,6 +187,25 @@ impl From<Vec<u64>> for IdSet {
     }
 }
 
+/// Unions complete buckets until either an ID cannot be represented or the
+/// next bucket would cost more than the caller's remaining candidate count.
+fn range_bitmap_from_buckets<'a>(
+    buckets: impl Iterator<Item = &'a IdSet>,
+    mut remaining: Option<u64>,
+) -> Option<roaring::RoaringBitmap> {
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for ids in buckets {
+        if !ids.overflow.is_empty() {
+            return None;
+        }
+        if let Some(left) = &mut remaining {
+            *left = left.checked_sub(ids.bitmap.len())?;
+        }
+        bitmap |= &ids.bitmap;
+    }
+    Some(bitmap)
+}
+
 /// Secondary index implementation.
 #[derive(Debug)]
 pub(crate) enum SecondaryIndex {
@@ -251,25 +270,32 @@ impl SecondaryIndex {
     /// Uses `BTreeMap::range()` for efficient ordered iteration. This powers
     /// Gt, Gte, Lt, Lte, and BETWEEN pre-filters. Returns `Some(empty)` when no
     /// keys fall within the range, and `None` when any in-range ID exceeds
-    /// [`u32::MAX`] (incomplete — callers must fall back to a full scan).
+    /// [`u32::MAX`].
     #[must_use]
     pub fn range_bitmap(
         &self,
         from: Bound<&JsonValue>,
         to: Bound<&JsonValue>,
     ) -> Option<roaring::RoaringBitmap> {
+        self.range_bitmap_with_limit(from, to, None)
+    }
+
+    /// Also abandons the union when the next bucket would exceed the candidate
+    /// limit. An unlimited read skips bucket cardinality checks.
+    #[must_use]
+    pub(crate) fn range_bitmap_with_limit(
+        &self,
+        from: Bound<&JsonValue>,
+        to: Bound<&JsonValue>,
+        max_ids: Option<u64>,
+    ) -> Option<roaring::RoaringBitmap> {
         match self {
             Self::BTree(tree) => {
                 let guard = tree.read();
-                let mut bm = roaring::RoaringBitmap::new();
-                for ids in guard.range((from, to)).map(|(_, v)| v) {
-                    if !ids.overflow.is_empty() {
-                        return None;
-                    }
-                    bm |= &ids.bitmap;
-                }
+                let bitmap =
+                    range_bitmap_from_buckets(guard.range((from, to)).map(|(_, ids)| ids), max_ids);
                 drop(guard);
-                Some(bm)
+                bitmap
             }
         }
     }
@@ -286,9 +312,9 @@ impl SecondaryIndex {
     /// are absent, so callers MUST restrict use to fully-covered fields and
     /// fall back to the full scan otherwise.
     // Consumed by the `ORDER BY <field> LIMIT k` pushdown (routing at
-    // `Collection::try_ordered_index_scan`, gated by
-    // `order_by_requires_exhaustive_fetch`) — phase 2 of the ordered-index
-    // EPIC, see docs/planning/CORE_PARITY_REMEDIATION.md.
+    // `Collection::try_ordered_index_scan`, ahead of the ordered scan
+    // `Collection::select_fetch_window` gives such an `ORDER BY`) — phase 2
+    // of the ordered-index EPIC, see docs/planning/CORE_PARITY_REMEDIATION.md.
     #[cfg(test)]
     #[must_use]
     pub fn ordered_ids(&self, descending: bool, limit: usize) -> Vec<u64> {

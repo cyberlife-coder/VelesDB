@@ -158,7 +158,7 @@ impl Collection {
     ///
     /// LET bindings require [`Self::finalize_query_results`] which early-return paths
     /// bypass. Returns an explicit error for unsupported combinations.
-    fn validate_let_binding_support(extracted: &ExtractedComponents) -> Result<()> {
+    pub(super) fn validate_let_binding_support(extracted: &ExtractedComponents) -> Result<()> {
         let unsupported = if extracted.sparse_vector_search.is_some() {
             Some("SPARSE_NEAR")
         } else if extracted.fused_search.is_some() {
@@ -183,7 +183,7 @@ impl Collection {
     ///
     /// Creates a [`QueryContext`](crate::guardrails::QueryContext) with optional
     /// timeout override from `WITH (timeout_ms=N)`.
-    pub(super) fn prepare_query_context(
+    pub(crate) fn prepare_query_context(
         &self,
         query: &crate::velesql::Query,
         client_id: &str,
@@ -219,21 +219,23 @@ impl Collection {
         fctx: &QueryFinalizationContext<'_>,
     ) -> Result<()> {
         // Run pushdown analysis for diagnostic tracing at Collection level.
-        // The actual pushdown execution happens in Database::execute_single_select().
+        // Database::execute_select_operand runs JOIN pushdown.
         let _analysis = self.analyze_join_pushdown(fctx.stmt);
-        self.check_guardrails_and_record(fctx.ctx, results.len())?;
-
         *results = self.apply_select_postprocessing(
             fctx.stmt,
             std::mem::take(results),
             fctx.params,
             fctx.limit,
             fctx.let_bindings,
+            &fctx.ctx.window_rank_inputs,
         )?;
+        // The guard-rails count the rows the statement returns, after its
+        // window, on every path (`Self::finalize_ranked_and_check`).
+        self.check_guardrails_and_record(fctx.ctx, results.len())?;
 
         // Update QueryPlanner adaptive stats for vector/SELECT queries (Fix #8).
         if fctx.extracted.vector_search.is_some() {
-            let elapsed = fctx.ctx.elapsed();
+            let elapsed = fctx.started_at.elapsed();
             // Reason: u128->u64 cast; query durations < u64::MAX µs (~585 millennia)
             #[allow(clippy::cast_possible_truncation)]
             let vector_latency_us = elapsed.as_micros() as u64;
@@ -241,26 +243,13 @@ impl Collection {
                 .query_planner
                 .stats()
                 .update_vector_latency(vector_latency_us);
-
-            // Issue #469: CBO calibration feedback — record actual ms vs cost estimate.
-            let actual_ms = elapsed.as_secs_f64() * 1000.0;
-            let dataset_size = self.vector_count();
-            let ef_search = fctx
-                .stmt
-                .with_clause
-                .as_ref()
-                .and_then(crate::velesql::WithClause::get_ef_search)
-                .unwrap_or(100);
-            self.query
-                .query_planner
-                .record_cbo_feedback(dataset_size, ef_search, actual_ms);
         }
-        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(())
     }
 
     /// Returns a copy of `query` whose WHERE is bound, or `None` when it has
-    /// no WHERE clause: its scalar parameter placeholders resolved, every
+    /// no WHERE clause: its scalar parameters and temporal operands resolved
+    /// for this execution, every
     /// column its FROM side's name qualifies written as this collection's
     /// own ([`crate::velesql::resolve_base_qualifiers`] — `d.cat` in
     /// `FROM docs d` is the row's `cat`, as it is for a JOIN's base query),
@@ -288,7 +277,7 @@ impl Collection {
             return Ok(None);
         };
         let resolved = crate::velesql::resolve_base_qualifiers(
-            &crate::velesql::bind_condition(cond, params)?,
+            &crate::velesql::bind_query_condition(cond, params)?,
             crate::velesql::base_side(&query.select),
         );
         let bound = self.bind_where_text_matches(&resolved, reader);
@@ -336,6 +325,8 @@ impl Collection {
             });
 
         Ok(ExtractedComponents {
+            ordered_index_scores: None,
+            ordered_prefilter: None,
             vector_search,
             similarity_conditions,
             filter_condition,
@@ -370,13 +361,30 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
         result_count: usize,
     ) -> Result<()> {
-        ctx.check_timeout()
-            .map_err(crate::error::Error::from)
-            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
+        if ctx.is_join_input() {
+            return self.check_read_deadline(ctx);
+        }
+        self.finish_returned_rows(ctx, result_count)
+    }
+
+    /// Charges the final rows and records one successfully completed read.
+    pub(crate) fn finish_returned_rows(
+        &self,
+        ctx: &crate::guardrails::QueryContext,
+        result_count: usize,
+    ) -> Result<()> {
+        self.check_read_deadline(ctx)?;
         ctx.check_cardinality(result_count)
             .map_err(crate::error::Error::from)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
+        self.runtime.guard_rails.circuit_breaker.record_success();
         Ok(())
+    }
+
+    pub(crate) fn check_read_deadline(&self, ctx: &crate::guardrails::QueryContext) -> Result<()> {
+        ctx.check_timeout()
+            .map_err(crate::error::Error::from)
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
     }
 
     /// Executes a query with instrumentation and returns plan + actual stats.

@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 use super::limits::{GuardRailViolation, QueryLimits};
 use crate::metrics::{global_guardrails_metrics, LimitType};
 
+#[cfg(test)]
+#[path = "context_tests.rs"]
+mod tests;
+
 /// Counts a violation in `velesdb_limits_exceeded_total` and hands it back,
 /// so each check stays one expression.
 fn exceeded(limit: LimitType, violation: GuardRailViolation) -> GuardRailViolation {
@@ -34,8 +38,11 @@ pub struct QueryContext {
     start_time: Instant,
     /// Current traversal depth.
     current_depth: AtomicU64,
-    /// Current cardinality (intermediate results count).
+    /// Number of rows charged to the cardinality limit.
     current_cardinality: AtomicUsize,
+    /// A JOIN charges its page after matching and windowing the base SELECT's rows.
+    join_input: bool,
+    pub(crate) window_rank_inputs: Vec<String>,
     /// Estimated memory usage in bytes.
     memory_used: AtomicUsize,
     /// Graph nodes visited during MATCH traversal (for EXPLAIN ANALYZE).
@@ -136,12 +143,35 @@ impl QueryContext {
             start_time: Instant::now(),
             current_depth: AtomicU64::new(0),
             current_cardinality: AtomicUsize::new(0),
+            join_input: false,
+            window_rank_inputs: Vec::new(),
             memory_used: AtomicUsize::new(0),
             traversal_nodes_visited: AtomicU64::new(0),
             traversal_edges_traversed: AtomicU64::new(0),
             executed_filter_strategy: Arc::new(ExecutedStrategyCell::default()),
             #[cfg(any(test, feature = "test-fault-injection"))]
             clock_skew_ms: 0,
+        }
+    }
+
+    /// Marks the base SELECTs of a JOIN as inputs to the statement's final window.
+    pub(crate) fn for_join_input(mut self) -> Self {
+        self.join_input = true;
+        self
+    }
+
+    /// Whether the JOIN still has to apply its predicates and window to these rows.
+    pub(crate) fn is_join_input(&self) -> bool {
+        self.join_input
+    }
+
+    /// Each base fetch trains the planner on its own duration while the statement
+    /// keeps the original start time for its deadline.
+    pub(crate) fn select_started_at(&self) -> Instant {
+        if self.join_input {
+            Instant::now()
+        } else {
+            self.start_time
         }
     }
 
@@ -237,20 +267,14 @@ impl QueryContext {
         Ok(())
     }
 
-    /// Checks and updates cardinality (US-003).
+    /// Charges `count` rows to the query's cumulative cardinality (US-003).
+    /// A SELECT charges its returned window after ordering and pagination.
+    /// MATCH also bounds the rows its walk produces.
     ///
     /// # Errors
     ///
-    /// Returns [`GuardRailViolation::CardinalityExceeded`] when cumulative
-    /// intermediate result count exceeds the configured maximum.
-    ///
-    /// # Known Limitation
-    ///
-    /// This method is called on the final result set (post-filter, post-ORDER BY,
-    /// pre-LIMIT). It does **not** track intermediate over-fetched candidate sets
-    /// (e.g., `candidates_k = execution_limit * 10 * N` during similarity search).
-    /// Those are bounded by `MAX_LIMIT` internally and therefore do not escape.
-    /// Future work: thread `QueryContext` into ANN search to track intermediates.
+    /// Returns [`GuardRailViolation::CardinalityExceeded`] when the cumulative
+    /// count exceeds the configured maximum.
     pub fn check_cardinality(&self, count: usize) -> Result<(), GuardRailViolation> {
         let current = self.current_cardinality.fetch_add(count, Ordering::Relaxed) + count;
         if current > self.limits.max_cardinality {

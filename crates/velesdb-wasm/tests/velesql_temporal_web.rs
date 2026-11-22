@@ -36,6 +36,32 @@ fn now_compares_against_the_hosts_clock() {
 }
 
 #[wasm_bindgen_test]
+fn joined_predicates_read_the_host_clock_once() {
+    use std::{cell::Cell, rc::Rc};
+    use wasm_bindgen::{closure::Closure, JsValue};
+
+    let mut db = seeded();
+    let date = js_sys::Reflect::get(&js_sys::global(), &"Date".into()).unwrap();
+    let key = JsValue::from_str("now");
+    let original = js_sys::Reflect::get(&date, &key).unwrap();
+    let calls = Rc::new(Cell::new(0_u32));
+    let tick = Rc::clone(&calls);
+    let clock = Closure::wrap(Box::new(move || {
+        let count = tick.get();
+        tick.set(count + 1);
+        1_000_000 + count * 1_000
+    }) as Box<dyn FnMut() -> u32>);
+    js_sys::Reflect::set(&date, &key, clock.as_ref()).unwrap();
+    let rows = db.execute_query(
+        "SELECT * FROM events a JOIN events b ON a.id = b.id WHERE a.ts >= NOW() AND b.ts < NOW()",
+        None,
+    );
+    js_sys::Reflect::set(&date, &key, &original).unwrap();
+    assert_eq!(rows.unwrap().row_count(), 0);
+    assert_eq!(calls.get(), 1);
+}
+
+#[wasm_bindgen_test]
 fn an_interval_alone_needs_no_clock() {
     let mut db = seeded();
     let rows = db

@@ -1536,6 +1536,12 @@ Window functions are evaluated **after** `WHERE`, `GROUP BY`, `HAVING`, and
 Each window call pre-captures its inputs and emits one output value per
 input row; the outer `ORDER BY` then sees those values as ordinary
 projected columns.
+With a JOIN, the window ranks the joined rows. A parent with several
+matching children can have a different rank on each result row. The native
+engine applies its JOIN candidate ceiling even when the outer query asks
+for a single row.
+Explicitly selected input columns remain available when a window alias
+reuses their qualifier.
 
 Grammar: `grammar.pest:window_item`, `grammar.pest:over_clause`.
 Evaluator: `crates/velesdb-core/src/velesql/window_evaluator.rs`.
@@ -1653,17 +1659,58 @@ one of another length — has a null key, sorted as every ORDER BY sorts a
 `null`: last under `ASC`, first under `DESC`, whatever the metric, in SELECT
 and MATCH alike, in core and WASM. Such a row keeps the score its plan gave
 it, without a `vector_score`: no stand-in score is written back.
+For computed SELECT similarity scores, a NaN sorts after every numeric
+score in either direction. Positive and negative zero tie, and equal
+scores use the next sort key, then ascending row id. Rows of a join that
+also share the same base id keep their input order across pages.
 
-> **CBO routing (v1.13.0+):** When `ORDER BY` contains `similarity(<col>, $q)`
-> (two-argument form) against a vector column with an HNSW index, the
-> cost-based optimiser (CBO) automatically routes the query through the
-> native HNSW path — even if the query does not contain an explicit `NEAR`
-> clause. The planner rewrites the sort into a top-k vector search and
-> short-circuits when a `LIMIT` is present. The legacy full-scan-then-sort
-> path remains available and is chosen by the CBO when the top-k target is
-> large relative to the collection size or when no HNSW index exists for
-> the column. See `crates/velesdb-core/src/velesql/planner/similarity_route.rs`
-> and `docs/guides/TUNING_GUIDE.md` for the routing heuristics.
+Like every ORDER BY, it ranks every row the statement admits before
+`OFFSET` and `LIMIT` cut them. For `ORDER BY similarity() DESC`, a
+`NEAR` can fetch the requested prefix in retrieval order. An index-bounded
+`similarity(vector, $v) > t` (or `>=`) threshold and a standalone
+`SPARSE_NEAR` can also use a prefix when their scores have the requested
+order. An unfiltered native `NEAR` can use secondary keys on this prefix
+when retrieval is exhaustive and the entire collection fits below the fetch
+ceiling. The engine then reads through the boundary tie before applying the
+secondary keys and ascending row id. When the ordered scan ranks an
+unfiltered `NEAR` with secondary keys, its score calculation is independent
+of the requested page. Sparse hits already break ties by id.
+
+A descending `similarity(vector, $q)` on the same query vector can use the
+bounded fetch when retrieval uses the same scoring calculation. An explicit
+similarity key and a similarity threshold read the original vectors. They
+scan the admitted rows when PQ or OPQ codes, cosine or Jaccard rounding,
+or a device reduction could change the order. Bare `similarity()` on a
+`NEAR` uses the retrieval score. If a native ordered scan admits additional
+rows beyond the hits returned by a GPU graph traversal, it scores those
+rows on the CPU and keeps the GPU traversal's scores for its returned hits.
+The HNSW candidate search remains approximate.
+With a metadata post-filter, `NEAR` tests the live candidates within its
+search budget. It can return fewer than `LIMIT` even when more rows match.
+The bounded fetch and its extension for ties stop at `MAX_SELECT_LIMIT`
+(100,000). A page whose offset reaches that ceiling can be empty.
+
+An ordered scan ranks every admitted row for a scalar key, `ASC`, another
+vector or field, an arithmetic expression or a second key when the scan can
+compute the scores. This includes metadata and graph scans, `NEAR` and
+similarity thresholds. Queries that require an exact `similarity()` scan
+retain its server limit on candidate count. The scan stores all candidate
+IDs and narrows batches of hydrated rows to the leading `OFFSET + LIMIT`
+window. Its ranking buffer holds O(window size + batch size) rows. Batches
+take separate storage read locks and can observe different concurrent writes.
+
+A fusion (`NEAR` with a text `MATCH`, `NEAR` with `SPARSE_NEAR`,
+`NEAR_FUSED`), a BM25 or sparse score read in another order, `DISTINCT`, a
+vector `GROUP BY` and a window function read at most the `MAX_SELECT_LIMIT`
+row ceiling before the window instead; a read that reaches the ceiling is
+logged as a warning, since rows past it may be missing. The cardinality
+guard-rail (`max_cardinality`) counts the rows a statement returns, not the
+rows its window was selected from (see
+`crates/velesdb-core/src/collection/search/query/fetch_window.rs`). A MATCH
+ranks every row its walk produces before its `LIMIT`. In the WASM executor,
+plain and single-vector scans rank all admitted rows. Sparse and fused
+searches use the candidate ceiling when their final order or partition
+requires it and report a full capped fetch in the browser console.
 
 ### Order by Aggregate
 

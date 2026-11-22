@@ -9,13 +9,34 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
 
-use crate::collection::search::live::Nearest;
+use crate::collection::search::live::{LiveHit, Nearest};
 use crate::collection::search::pending::PendingRestriction;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
 use crate::scored_result::ScoredResult;
 use crate::velesql::{decide_filter_strategy, FilterDecisionMode, FilterStrategy};
+
+/// An ordered query already looked for this filter's bitmap while planning.
+pub(super) enum SearchBitmap<'a> {
+    Lookup,
+    Prepared(Option<&'a roaring::RoaringBitmap>),
+}
+
+impl<'a> SearchBitmap<'a> {
+    pub(super) fn resolve(
+        self,
+        col: &Collection,
+        filter: &crate::filter::Filter,
+    ) -> Option<std::borrow::Cow<'a, roaring::RoaringBitmap>> {
+        match self {
+            Self::Lookup => col
+                .build_prefilter_bitmap(filter)
+                .map(std::borrow::Cow::Owned),
+            Self::Prepared(bitmap) => bitmap.map(std::borrow::Cow::Borrowed),
+        }
+    }
+}
 
 /// How a filtered search with quality overrides asks the index for its
 /// candidates, chosen once from the filter's prefilter bitmap.
@@ -63,8 +84,19 @@ impl Collection {
         filter: &crate::filter::Filter,
         opts: &crate::collection::search::query::QuerySearchOptions,
     ) -> Result<Vec<SearchResult>> {
+        self.search_projected_with_filter(query, k, filter, opts, SearchBitmap::Lookup)
+    }
+
+    pub(super) fn search_projected_with_filter<T: LiveHit>(
+        &self,
+        query: &[f32],
+        k: usize,
+        filter: &crate::filter::Filter,
+        opts: &crate::collection::search::query::QuerySearchOptions,
+        prepared: SearchBitmap<'_>,
+    ) -> Result<Vec<T>> {
         if !opts.has_quality_overrides() {
-            return self.search_with_filter_recorded(query, k, filter, opts);
+            return self.search_with_filter_impl(query, k, filter, Some(opts), prepared);
         }
 
         let config = self.storage.config.read();
@@ -79,14 +111,18 @@ impl Collection {
         // unbounded brute-force scan, matching the unfiltered entry points.
         self.enforce_perfect_mode_limit(quality)?;
 
-        let bitmap = self.build_prefilter_bitmap(filter);
-        let search = match &bitmap {
+        let bitmap = prepared.resolve(self, filter);
+        let search = match bitmap.as_deref() {
             Some(bitmap) if bitmap.is_empty() => {
                 // The bitmap answers the query exactly: nothing matches.
                 opts.record_executed_strategy(FilterStrategy::PreFilterExact);
                 return Ok(Vec::new());
             }
-            Some(bitmap) => self.bitmap_search(bitmap, opts),
+            Some(bitmap) => {
+                let (strategy, search) = self.bitmap_search(bitmap);
+                opts.record_executed_strategy(strategy);
+                search
+            }
             None => {
                 opts.record_executed_strategy(FilterStrategy::PostFilter);
                 FilteredIndexSearch::PostFilter
@@ -129,18 +165,37 @@ impl Collection {
         self.search_with_filter_and_opts(query, k, filter, &opts)
     }
 
-    /// Chooses the index search for a non-empty prefilter `bitmap` by its
-    /// selectivity, recording the strategy.
+    /// The scorer of a full-depth restricted search on this bitmap.
+    pub(super) fn filtered_row_scores(
+        &self,
+        bitmap: &roaring::RoaringBitmap,
+        opts: &crate::collection::search::query::QuerySearchOptions,
+        quality: crate::SearchQuality,
+    ) -> crate::index::hnsw::index::IndexRowScores {
+        use crate::index::hnsw::index::IndexRowScores;
+        let native = self.storage.index.full_depth_row_scores(quality, None);
+        let search = if opts.has_quality_overrides() {
+            self.bitmap_search(bitmap).1
+        } else {
+            FilteredIndexSearch::BitmapHnsw(bitmap)
+        };
+        match search {
+            FilteredIndexSearch::BitmapScan(_) => IndexRowScores::Bitmap,
+            FilteredIndexSearch::BitmapHnsw(_) => self.storage.index.bitmap_row_scores(quality),
+            FilteredIndexSearch::PostFilter => native,
+        }
+    }
+
+    /// Chooses the strategy and index search for a non-empty prefilter bitmap.
+    /// The dispatch site records the strategy when it runs that search.
     fn bitmap_search<'b>(
         &self,
         bitmap: &'b roaring::RoaringBitmap,
-        opts: &crate::collection::search::query::QuerySearchOptions,
-    ) -> FilteredIndexSearch<'b> {
+    ) -> (FilterStrategy, FilteredIndexSearch<'b>) {
         let selectivity =
             super::vector::estimate_real_selectivity(bitmap, self.storage.index.len());
         let strategy = decide_filter_strategy(selectivity, FilterDecisionMode::Exact, None);
-        opts.record_executed_strategy(strategy);
-        match strategy {
+        let search = match strategy {
             FilterStrategy::PostFilter => FilteredIndexSearch::PostFilter,
             FilterStrategy::PreFilterExact => FilteredIndexSearch::BitmapScan(bitmap),
             // Exact mode never emits `None`; if it ever did, the bitmap
@@ -150,7 +205,8 @@ impl Collection {
             FilterStrategy::PreFilter | FilterStrategy::None => {
                 FilteredIndexSearch::BitmapHnsw(bitmap)
             }
-        }
+        };
+        (strategy, search)
     }
 
     /// Asks the index for its `n` nearest candidates by `search`, the

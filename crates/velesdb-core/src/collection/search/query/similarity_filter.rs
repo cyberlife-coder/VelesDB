@@ -250,7 +250,10 @@ impl Collection {
     /// Walks the filter condition tree looking for `Eq` conditions on indexed
     /// fields. Returns the smallest candidate set found, or `None` if no
     /// indexed condition exists.
-    fn try_index_accelerated_ids(&self, filter: &crate::filter::Filter) -> Option<Vec<u64>> {
+    pub(super) fn try_index_accelerated_ids(
+        &self,
+        filter: &crate::filter::Filter,
+    ) -> Option<Vec<u64>> {
         self.extract_bitmap_ids_from_filter(&filter.condition)
     }
 

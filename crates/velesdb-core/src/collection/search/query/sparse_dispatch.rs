@@ -15,7 +15,7 @@ struct SparseFetch<'a> {
 
 impl Collection {
     /// Dispatches sparse-only or hybrid dense+sparse search.
-    pub(super) fn dispatch_sparse_query(
+    pub(super) fn dispatch_sparse_query<const CEILING: usize>(
         &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
@@ -39,7 +39,11 @@ impl Collection {
             anchors: anchors.as_ref(),
         };
 
-        let mut results = self.fetch_sparse_results(stmt, params, extracted, svs, limit, &fetch)?;
+        // A lone sparse search already breaks score ties by ascending id
+        // (Ranked::arranged). An explicitly ordered fusion fetches the ceiling.
+        let mut results =
+            self.fetch_sparse_results::<CEILING>(stmt, params, extracted, svs, limit, &fetch)?;
+        self.warn_if_window_capped_at(stmt, results.len(), CEILING);
 
         if has_graph_predicates {
             results = self.filter_by_graph_predicates_with_cache(
@@ -50,10 +54,7 @@ impl Collection {
             )?;
         }
 
-        self.check_guardrails_and_record(ctx, results.len())?;
-        let results = self.finalize_ranked_results(stmt, params, results)?;
-        self.runtime.guard_rails.circuit_breaker.record_success();
-        Ok(results)
+        self.finalize_ranked_and_check(stmt, params, results, ctx)
     }
 
     /// The condition both branches of a sparse or hybrid search filter by:
@@ -89,9 +90,9 @@ impl Collection {
         )))
     }
 
-    /// Fetches sparse/hybrid results: anchored exact fetch when a GraphFirst
-    /// anchor set is available, MAX_LIMIT window fetch otherwise.
-    fn fetch_sparse_results(
+    /// Fetches sparse/hybrid results at `limit` within the anchors, or at
+    /// `CEILING` when graph predicates must be checked after the fetch.
+    fn fetch_sparse_results<const CEILING: usize>(
         &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
@@ -104,7 +105,7 @@ impl Collection {
             let execution_limit = if extracted.graph_match_predicates.is_empty() {
                 limit
             } else {
-                MAX_LIMIT
+                CEILING
             };
             return self.execute_sparse_or_hybrid(
                 stmt,
@@ -209,13 +210,37 @@ impl Collection {
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         results: Vec<SearchResult>,
+        rank_inputs: &[String],
     ) -> Result<Vec<SearchResult>> {
         if !stmt.is_vector_group_by() {
-            return self.postprocess_ranked_results(stmt, params, results);
+            return self.postprocess_ranked_results(stmt, params, results, rank_inputs);
         }
         let groups = self.apply_vector_group_by(stmt, &results, params)?;
         let stmt = stmt.order_by_aggregates_as_fields()?;
-        self.postprocess_ranked_results(&stmt, params, groups)
+        self.postprocess_ranked_results(&stmt, params, groups, rank_inputs)
+    }
+
+    /// The SELECT post-processing of a ranked fetch's rows
+    /// ([`Self::finalize_ranked_results`]), then the guard-rails on the rows
+    /// it returns: the order every SELECT path takes
+    /// (`Self::finalize_query_results`), so a window selected from more rows
+    /// than the cardinality guard allows still returns.
+    ///
+    /// # Errors
+    ///
+    /// A post-processing error or a guard-rail violation.
+    pub(super) fn finalize_ranked_and_check(
+        &self,
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        results: Vec<SearchResult>,
+        ctx: &crate::guardrails::QueryContext,
+    ) -> Result<Vec<SearchResult>> {
+        let results = self
+            .finalize_ranked_results(stmt, params, results, &ctx.window_rank_inputs)
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
+        self.check_guardrails_and_record(ctx, results.len())?;
+        Ok(results)
     }
 
     /// [`Self::apply_select_postprocessing`] at the statement's own `LIMIT`.
@@ -224,6 +249,7 @@ impl Collection {
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         results: Vec<SearchResult>,
+        rank_inputs: &[String],
     ) -> Result<Vec<SearchResult>> {
         // Intentional saturating clamp: a missing or out-of-range limit collapses
         // to `MAX_LIMIT` rather than erroring.
@@ -231,7 +257,7 @@ impl Collection {
             usize::try_from(stmt.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
                 .unwrap_or(MAX_LIMIT)
                 .min(MAX_LIMIT);
-        self.apply_select_postprocessing(stmt, results, params, final_limit, &[])
+        self.apply_select_postprocessing(stmt, results, params, final_limit, &[], rank_inputs)
     }
 
     /// Resolves the fusion strategy from the query's FUSION clause: RRF when

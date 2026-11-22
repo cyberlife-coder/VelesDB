@@ -175,29 +175,68 @@ cost-based optimizer picks automatically when statistics are available
 
 ### 9. Bounded query-result materialization
 
-**Status**: resolved (bounded memory). Source: `crates/velesdb-core/src/collection/search/query/` (set_operations, parallel_traversal, similarity_filter), `database/query_engine.rs`, `database/query_join.rs`.
+**Status**: final row materialization is bounded. Candidate storage and read
+ceilings depend on the operator. Source: `crates/velesdb-core/src/collection/search/query/`
+(set_operations, parallel_traversal, similarity_filter, ordered_scan), `database/query_engine.rs`, `database/query_join.rs`.
 
 Result materialization for top-k scans, JOIN, parallel graph traversal, and
 set operations (UNION/INTERSECT) is bounded by the effective LIMIT via bounded
-top-k rather than collect-all-then-truncate. Results are identical to the
-unbounded path; only peak memory is bounded. Intermediate operators that can
-legitimately drop rows fall back to the conservative server-side ceiling — this
-includes a scalar (non-`similarity()`) `ORDER BY ... LIMIT k`, which must rank
-the full matching set before truncating, so it fetches exhaustively rather than
-bounding the fetch at `k`. (Capping the fetch at `k` first was the
-`ORDER BY`-before-sort defect fixed 2026-06-14; the bounded==unbounded identity
-above now holds for scalar `ORDER BY` as well, at the cost of an exhaustive
-fetch for that one operator.) The `similarity()`-ordered HNSW path stays bounded
-top-k — it is pre-sorted by score, so truncation is correct without an
-exhaustive fetch and recall is unaffected.
+top-k. Intermediate operators that can drop rows can use the server-side
+candidate ceiling described below.
 
-The O(n) cost of that exhaustive scalar-`ORDER BY` fetch is removed by the
-ordered-index pushdown (EPIC-081, `docs/planning/CORE_PARITY_REMEDIATION.md`):
-when the single `ORDER BY` field has a fully-covering secondary index and the
+An `ORDER BY ... LIMIT k` ranks every row the statement admits before it
+truncates (`collection/search/query/fetch_window.rs`):
+
+- A search can fetch a prefix for a descending `similarity()` key when a
+  `NEAR`, an index-bounded `similarity(vector, $v) > t` / `>= t` threshold,
+  or a standalone `SPARSE_NEAR` already ranks by that score. An unfiltered
+  native `NEAR` can also apply secondary keys to the prefix when retrieval is
+  exhaustive and the collection fits below the fetch ceiling.
+  An explicit similarity on the same vector can also use this shortcut when
+  the fetch uses the same scoring calculation. PQ or OPQ codes, the
+  index's cosine or Jaccard rounding and device reductions can change the
+  order. In those cases
+  an explicit similarity key and a similarity threshold read the original
+  vectors across the admitted rows. Bare `similarity()` keeps the score of
+  its NEAR search. Vector searches
+  read past equal scores at the cut. The sparse ranking already orders equal
+  scores by ascending id. The HNSW candidate search remains approximate.
+  A dense `NEAR` with a metadata post-filter can return fewer than the
+  requested rows once its budget of live candidates is spent
+  (`collection/search/live.rs`, `Judged::settles`).
+  Both the bounded fetch and a vector search's extension for ties stop at
+  100,000 candidates, including when the requested offset reaches that ceiling.
+- Every other order over rows a scan can score — a metadata-filtered scan, a
+  scan without WHERE, a graph's nodes, a `NEAR` or threshold read in another
+  order, the exact `similarity()` scan (under `OR` / `NOT`, a named vector, a
+  `<` / `<=` bound) — takes the ordered scan. It stores O(candidate count)
+  IDs and buffers O(`OFFSET + LIMIT` + batch size) hydrated rows as it ranks
+  every admitted row. When a GPU graph traversal supplies native scores,
+  the scan also stores an ID and score for each hit that traversal returned.
+  Additional admitted rows use the CPU graph scoring path.
+  The exact `similarity()` scan retains its server limit
+  on candidate count. On stable data the window equals a full sort. The scan
+  takes separate read locks per batch, so concurrent writes can affect which
+  row values it observes. (A premature fetch limit was fixed on 2026-06-14
+  for scalar keys and on 2026-11-20 for `similarity()`. The ordered scan
+  extended the ranking past the fetch ceiling on 2026-11-21.)
+- A fusion (`NEAR` + text `MATCH`, `NEAR` + `SPARSE_NEAR`, `NEAR_FUSED`), a
+  BM25 or sparse score read in another order, `DISTINCT`, a vector
+  `GROUP BY` and a window function read at most `MAX_LIMIT` rows before the
+  window. A later graph filter can discard candidates already counted toward
+  that ceiling. The engine warns when a fetch reaches the ceiling because
+  candidates beyond it may qualify for the result.
+
+The cardinality guard-rail counts the rows a statement returns, not the rows
+its window was selected from.
+
+An ordered index avoids visiting every candidate for a scalar `ORDER BY`
+(EPIC-081, `docs/planning/CORE_PARITY_REMEDIATION.md`).
+When the single `ORDER BY` field has a fully-covering secondary index and the
 query has no WHERE/JOIN/graph/similarity, the engine serves the top-k from the
 index in O(log n + k) (`create_index(field)` to opt in) — ~89 ms → ~0.013 ms for
 that 50k-row query — with identical results to the exhaustive path. Queries
-without a covering index keep the exhaustive scalar-`ORDER BY` behaviour above.
+without a covering index keep the ordered scan above.
 The `create_index(field)` opt-in is persisted (recorded in `config.json` and
 rebuilt from the stored payloads on open), so the fast path keeps firing after a
 process restart instead of silently reverting to the exhaustive scan.

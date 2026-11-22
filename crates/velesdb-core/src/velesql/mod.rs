@@ -103,8 +103,11 @@ mod orderby_multi_tests;
 #[cfg(test)]
 mod parallel_aggregation_tests;
 mod param_binding;
-pub use param_binding::{bind_condition, bind_match_clause, bind_value, bind_vector};
+pub use param_binding::{
+    bind_condition, bind_match_clause, bind_query_condition, bind_value, bind_vector,
+};
 pub(crate) use param_binding::{bind_dml_value, bind_dml_vector};
+mod compound_projection;
 pub(crate) mod condition_tree;
 mod edge_query;
 mod hash_join;
@@ -117,6 +120,7 @@ mod side_qualifier;
 mod similarity_threshold;
 pub(crate) mod text_match;
 mod vector_predicates;
+pub use compound_projection::{compound_rank_inputs, project_query_rows};
 #[cfg(feature = "persistence")]
 pub(crate) use edge_query::literal_id;
 pub use edge_query::EdgeQuery;

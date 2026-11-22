@@ -27,8 +27,12 @@
 #![allow(clippy::doc_markdown)] // API names and parameter labels are kept verbatim in docs.
 
 mod batch;
+#[cfg(feature = "persistence")]
+mod row_scores;
 #[cfg(test)]
 pub(crate) use batch::UnlessIndexed;
+#[cfg(feature = "persistence")]
+pub(crate) use row_scores::IndexRowScores;
 mod brute_force;
 mod constructors;
 mod rerank;

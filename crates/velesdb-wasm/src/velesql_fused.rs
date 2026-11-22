@@ -2,9 +2,9 @@
 //!
 //! Core's `Collection::multi_query_search` contract, over WASM's brute-force
 //! scoring: at most `velesdb_core::fusion::MAX_FUSED_VECTORS` query vectors;
-//! one branch per vector holding the `branch_depth(LIMIT + OFFSET)` best points
-//! that pass the residual metadata filter (every passing point for an
-//! aggregation, see [`branch_depth`]); the branches fused, in the
+//! one branch per vector holding the best passing points up to
+//! `branch_depth(fetch)`, where [`CandidateWindow`] sizes the candidate set
+//! for the statement; the branches fused, in the
 //! metric's score direction, by the strategy core maps from the fusion
 //! config ([`velesdb_core::velesql::FusionConfig::near_fused_strategy`]).
 //!
@@ -51,14 +51,18 @@ pub(crate) fn execute_fused_search(
     let borrowed = store.borrow();
     let vectors = resolve_fused_vectors(fused, params)?;
     let residual = residual_metadata_filter(stmt.where_clause.as_ref());
-    let depth = branch_depth(stmt);
+    let window = CandidateWindow::for_search(stmt, false);
+    let fetch = window.count();
+    let depth = velesdb_core::fusion::branch_depth(fetch);
     let branches = score_branches(&vectors, &borrowed, residual.as_ref(), params, depth)?;
     let directions = vec![borrowed.metric.score_direction(); branches.len()];
-    let fused_scores = fused
+    let mut fused_scores = fused
         .fusion
         .near_fused_strategy()
         .fuse_with_directions(branches, &directions)
         .map_err(velesdb_core::Error::from)?;
+    fused_scores.truncate(fetch);
+    window.warn_if_full(&stmt.from, fused_scores.len());
 
     // Hydrate rows via the shared collector (same id->idx map + drop-unknown
     // semantics as the single-vector fusion path).
@@ -105,36 +109,70 @@ fn score_branches(
     Ok(branches)
 }
 
-/// How many points each branch holds.
-///
-/// A search (rows, or a vector GROUP BY) follows core's `multi_query_search`:
-/// the `branch_depth(LIMIT + OFFSET)` best points passing the filter. An
-/// aggregation reads the whole collection, as core's `execute_aggregate`
-/// does, where a vector leaf filters no point: every branch then holds every
-/// passing point, so neither LIMIT nor the default window bounds what an
-/// aggregate counts.
-fn branch_depth(stmt: &SelectStatement) -> usize {
-    if stmt.is_aggregation_query() {
-        usize::MAX
-    } else {
-        velesdb_core::fusion::branch_depth(fetch_limit(stmt))
+/// The candidates needed before the sparse or fused ranking's output window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CandidateWindow {
+    /// The search can return the requested rows, including all rows for a scalar aggregate.
+    Requested(usize),
+    /// The SELECT ceiling can exclude rows needed by the final order or partition.
+    Capped,
+}
+
+impl CandidateWindow {
+    pub(crate) fn for_search(stmt: &SelectStatement, ranks_by_descending_similarity: bool) -> Self {
+        use velesdb_core::velesql::{DEFAULT_SELECT_LIMIT, MAX_SELECT_LIMIT};
+        if stmt.is_aggregation_query() {
+            return Self::Requested(usize::MAX);
+        }
+        let requested = stmt
+            .limit
+            .unwrap_or(DEFAULT_SELECT_LIMIT)
+            .saturating_add(stmt.offset.unwrap_or(0));
+        if stmt.reshapes_rows_before_window()
+            || !search_preserves_order(stmt, ranks_by_descending_similarity)
+            || requested > MAX_SELECT_LIMIT
+        {
+            Self::Capped
+        } else {
+            Self::Requested(usize::try_from(requested).unwrap_or(usize::MAX))
+        }
+    }
+
+    pub(crate) fn count(self) -> usize {
+        match self {
+            Self::Requested(count) => count,
+            Self::Capped => {
+                usize::try_from(velesdb_core::velesql::MAX_SELECT_LIMIT).unwrap_or(usize::MAX)
+            }
+        }
+    }
+
+    pub(crate) fn warn_if_full(self, collection: &str, rows: usize) {
+        if self != Self::Capped || rows < self.count() {
+            return;
+        }
+        let warning = format!(
+            "SELECT on {collection} reached its {rows}-row candidate ceiling before its final window. \
+             Narrow the WHERE to include all candidates in the ranking."
+        );
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::warn_1(&warning.into());
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!("{warning}");
     }
 }
 
-/// The rows a search must fetch for a SELECT: `LIMIT` (core's default when
-/// absent) plus `OFFSET` (core's `compute_fetch_limit`), or core's ceiling
-/// when DISTINCT or a vector GROUP BY reshapes the rows before that window
-/// ([`SelectStatement::reshapes_rows_before_window`]), as core's pipeline
-/// sizes it.
-pub(crate) fn fetch_limit(stmt: &SelectStatement) -> usize {
-    if stmt.reshapes_rows_before_window() {
-        return usize::try_from(velesdb_core::velesql::MAX_SELECT_LIMIT).unwrap_or(usize::MAX);
+/// A ranked prefix preserves an explicit order only when both use the same single key.
+fn search_preserves_order(stmt: &SelectStatement, ranks_by_descending_similarity: bool) -> bool {
+    match stmt.order_by.as_deref() {
+        None => true,
+        Some([key]) => {
+            ranks_by_descending_similarity
+                && key.descending
+                && matches!(key.expr, velesdb_core::velesql::OrderByExpr::SimilarityBare)
+        }
+        Some(_) => false,
     }
-    let limit = stmt
-        .limit
-        .unwrap_or(velesdb_core::velesql::DEFAULT_SELECT_LIMIT);
-    let offset = stmt.offset.unwrap_or(0);
-    usize::try_from(limit.saturating_add(offset)).unwrap_or(usize::MAX)
 }
 
 /// Returns the set of ids passing the residual metadata predicate, or `None`

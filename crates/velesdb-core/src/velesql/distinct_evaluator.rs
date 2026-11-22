@@ -5,10 +5,10 @@
 //! through the same key: one DISTINCT contract for both engines (conformance
 //! `projection_cases` in `conformance/velesql_executor_cases.json`).
 
-use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use super::group_key::normalise;
+use super::json_path::ProjectedField;
 use crate::point::SearchResult;
 use crate::velesql::SelectColumns;
 use rustc_hash::FxHashSet;
@@ -43,12 +43,13 @@ use rustc_hash::FxHashSet;
 /// - `Aggregations(_)` → no dedup (aggregations collapse rows themselves).
 #[must_use]
 pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Vec<SearchResult> {
-    let (column_names, include_score) = key_columns(columns);
+    let (columns, include_score) = key_columns(columns);
     let mut seen: FxHashSet<String> = FxHashSet::default();
     results
         .into_iter()
         .filter(|r| {
-            let key = compute_distinct_key(r, &column_names, include_score);
+            let fields = columns.iter().map(|col| ProjectedField::Source(&col.name));
+            let key = projected_key(r, fields, include_score);
             seen.insert(key)
         })
         .collect()
@@ -57,9 +58,9 @@ pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Ve
 /// The fields a projected row is keyed by under `columns` (see the
 /// [`apply_distinct`] contract): the listed columns, or none for "the full
 /// payload", and whether the similarity score is part of the key.
-pub(crate) fn key_columns(columns: &SelectColumns) -> (Vec<String>, bool) {
+pub(super) fn key_columns(columns: &SelectColumns) -> (&[super::Column], bool) {
     match columns {
-        SelectColumns::Columns(cols) => (cols.iter().map(|c| c.name.clone()).collect(), false),
+        SelectColumns::Columns(cols) => (cols, false),
         SelectColumns::Mixed {
             columns: cols,
             similarity_scores,
@@ -70,19 +71,19 @@ pub(crate) fn key_columns(columns: &SelectColumns) -> (Vec<String>, bool) {
             // to "dedup by full payload" (empty column list) so those
             // fields participate in the key.
             let cols_for_dedup = if qualified_wildcards.is_empty() {
-                cols.iter().map(|c| c.name.clone()).collect()
+                cols.as_slice()
             } else {
-                Vec::new()
+                &[]
             };
             (cols_for_dedup, !similarity_scores.is_empty())
         }
-        SelectColumns::SimilarityScore(_) => (Vec::new(), true),
+        SelectColumns::SimilarityScore(_) => (&[], true),
         // All / QualifiedWildcard → full payload; Aggregations → no dedup
         // (the empty-column path gives the same "full payload" key, which is
         // harmless for Aggregations since that path never reaches DISTINCT).
         SelectColumns::All
         | SelectColumns::Aggregations(_)
-        | SelectColumns::QualifiedWildcard(_) => (Vec::new(), false),
+        | SelectColumns::QualifiedWildcard(_) => (&[], false),
     }
 }
 
@@ -97,34 +98,47 @@ pub(crate) fn compute_distinct_key(
     columns: &[String],
     include_score: bool,
 ) -> String {
-    let payload = result.point.payload.as_ref();
+    projected_key(
+        result,
+        columns.iter().map(|name| ProjectedField::Source(name)),
+        include_score,
+    )
+}
 
-    let mut key = if columns.is_empty() {
-        // SELECT * or SELECT DISTINCT *: use full payload as key
-        payload.map_or_else(|| "null".to_string(), canonical_json_string)
+/// Set operators key the published projection, while SELECT DISTINCT keys
+/// its input columns before window evaluation. Both share one value encoding.
+pub(super) fn projected_key<'a>(
+    result: &SearchResult,
+    fields: impl Iterator<Item = ProjectedField<'a>>,
+    include_score: bool,
+) -> String {
+    projected_values_key(
+        result,
+        &mut fields.map(|field| field.read(result)),
+        include_score,
+    )
+}
+
+/// Both SELECT DISTINCT and set operators encode their own projected values
+/// with the same separator and numeric normalisation.
+pub(super) fn projected_values_key(
+    result: &SearchResult,
+    values: &mut dyn Iterator<Item = std::borrow::Cow<'_, serde_json::Value>>,
+    include_score: bool,
+) -> String {
+    let mut key = if let Some(first) = values.next() {
+        let mut key = canonical_value(normalise(first));
+        for value in values {
+            key.push('\x1f');
+            key.push_str(&canonical_value(normalise(value)));
+        }
+        key
     } else {
-        // SELECT DISTINCT col1, col2: use specific columns, a dotted one
-        // (`c.name`, `meta.lang`) by path as the projection reads it. `id` is
-        // the point id, as in every clause, not a payload field of that name;
-        // numbers key as `GROUP BY` keys them (`group_key::normalise`), so
-        // `1` and `1.0`, or `0` and `-0.0`, are one value.
-        columns
-            .iter()
-            .map(|col| {
-                let value = if col == "id" {
-                    Some(Cow::Owned(serde_json::Value::from(result.point.id)))
-                } else {
-                    payload
-                        .and_then(|p| super::json_path::payload_path(p, col))
-                        .map(Cow::Borrowed)
-                };
-                value.map_or_else(
-                    || "null".to_string(),
-                    |v| canonical_json_string(&normalise(v)),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\x1F") // ASCII Unit Separator
+        result
+            .point
+            .payload
+            .as_ref()
+            .map_or_else(|| "null".to_owned(), canonical_payload)
     };
 
     if include_score {
@@ -135,33 +149,29 @@ pub(crate) fn compute_distinct_key(
     key
 }
 
-/// Produce a canonical JSON string with sorted object keys.
-///
-/// This ensures that logically equal JSON objects produce identical strings,
-/// regardless of the original key order (e.g., `{"a":1,"b":2}` == `{"b":2,"a":1}`).
-/// Keys are JSON-quoted like values, so a key containing `:` or `,` cannot
-/// make two different objects share a string (`{"a:1,b":2}` vs `{"a":1,"b":2}`).
-fn canonical_json_string(value: &serde_json::Value) -> String {
+/// JSON object order is part of the wire key even when serde_json is built
+/// with its insertion-order feature. The normalised projection is already owned.
+fn canonical_value(mut value: serde_json::Value) -> String {
+    value.sort_all_objects();
+    value.to_string()
+}
+
+/// Full-payload keys can serialize an already ordered document by reference.
+pub(super) fn canonical_payload(value: &serde_json::Value) -> String {
+    if ordered_objects(value) {
+        value.to_string()
+    } else {
+        canonical_value(value.clone())
+    }
+}
+
+fn ordered_objects(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Object(map) => {
-            // Sort keys alphabetically for deterministic output
-            let mut keys: Vec<_> = map.keys().collect();
-            keys.sort_unstable();
-            let pairs: Vec<String> = keys
-                .iter()
-                .map(|k| {
-                    let key = serde_json::Value::from(k.as_str());
-                    format!("{key}:{}", canonical_json_string(&map[*k]))
-                })
-                .collect();
-            format!("{{{}}}", pairs.join(","))
+            map.keys().is_sorted() && map.values().all(ordered_objects)
         }
-        serde_json::Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(canonical_json_string).collect();
-            format!("[{}]", items.join(","))
-        }
-        // Primitives: use standard JSON representation
-        _ => value.to_string(),
+        serde_json::Value::Array(list) => list.iter().all(ordered_objects),
+        _ => true,
     }
 }
 

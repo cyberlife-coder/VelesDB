@@ -2,6 +2,24 @@ use super::*;
 use crate::velesql_value::parse_params;
 use velesdb_core::velesql::Parser;
 
+#[test]
+fn a_requested_full_window_and_a_truncated_window_are_distinct() {
+    let max = velesdb_core::velesql::MAX_SELECT_LIMIT;
+    let search = |tail: &str| {
+        let sql = format!("SELECT * FROM c WHERE vector SPARSE_NEAR {{7: 1.0}} {tail}");
+        CandidateWindow::for_search(&Parser::parse(&sql).expect("test: parse").select, true)
+    };
+    assert_eq!(
+        search(&format!("ORDER BY similarity() DESC LIMIT {max}")),
+        CandidateWindow::Requested(usize::try_from(max).expect("test: ceiling"))
+    );
+    assert_eq!(
+        search(&format!("ORDER BY similarity() DESC LIMIT 1 OFFSET {max}")),
+        CandidateWindow::Capped
+    );
+    assert_eq!(search("ORDER BY id DESC LIMIT 1"), CandidateWindow::Capped);
+}
+
 fn seed(db: &mut DatabaseInner) {
     db.create_collection("vecs", 4, "cosine")
         .expect("test: create");

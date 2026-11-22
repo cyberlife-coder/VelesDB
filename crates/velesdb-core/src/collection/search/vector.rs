@@ -5,13 +5,20 @@ use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::point::SearchResult;
-use crate::quantization::{
-    distance_pq_l2, pq_adc_batch_rescore, PQVector, ProductQuantizer, StorageMode,
-};
+use crate::quantization::{pq_adc_batch_rescore, PQVector, ProductQuantizer};
 use crate::scored_result::ScoredResult;
 
-use super::live::Nearest;
+use super::live::{LiveHit, Nearest};
 use super::pending::PendingRestriction;
+
+/// The default NEAR scorer, or the original vectors required by a bounded
+/// f32 ORDER BY. A live quantizer reconfiguration cannot switch that order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum VectorScoreSource {
+    #[default]
+    Configured,
+    Original,
+}
 
 /// Estimates the real selectivity from a pre-filter bitmap.
 ///
@@ -50,14 +57,12 @@ impl Collection {
         k: usize,
         quality: crate::SearchQuality,
         restriction: PendingRestriction<'_>,
+        source: VectorScoreSource,
     ) -> Result<Vec<ScoredResult>> {
         let config = self.storage.config.read();
-        let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
         let higher_is_better = config.metric.higher_is_better();
         let metric = config.metric;
-        // u32 → usize: safe on all 32-bit+ targets (u32::MAX fits in usize).
-        #[allow(clippy::cast_possible_truncation)]
-        let oversampling = config.pq_rescore_oversampling.unwrap_or(0) as usize;
+        let oversampling = config.pq_search_oversampling();
         drop(config);
 
         // `search_with_quality` rather than `search`: the latter hard-codes
@@ -65,14 +70,14 @@ impl Collection {
         // path now takes from the config instead. Its errors are returned: an
         // error read as an empty answer is the one failure a caller cannot tell
         // from a correct result, and every caller here returns a `Result`.
-        if !is_pq || oversampling == 0 {
+        if source == VectorScoreSource::Original || oversampling == 0 {
             return self.search_merging_pending(query, k, metric, restriction, |n| {
                 self.storage.index.search_with_quality(query, n, quality)
             });
         }
 
         self.search_merging_pending(query, k, metric, restriction, |n| {
-            let candidates_k = n.saturating_mul(oversampling).max(n + 32);
+            let candidates_k = n.saturating_mul(oversampling).max(n.saturating_add(32));
             // The rescore keeps `n` of the `candidates_k`: nodes a delete or
             // an upsert left behind make the walk run again only when they
             // leave fewer than `n`.
@@ -97,44 +102,34 @@ impl Collection {
         higher_is_better: bool,
         index_results: Vec<ScoredResult>,
     ) -> Vec<ScoredResult> {
-        let pq_cache = self.storage.pq_cache.read();
-        let quantizer_guard = self.storage.pq_quantizer.read();
-        let Some(quantizer) = quantizer_guard.as_ref() else {
+        let Some(mut rescored) = self.pq_scores(query, metric, &index_results) else {
             return index_results.into_iter().take(k).collect();
         };
-
-        let mut rescored = if metric == DistanceMetric::Euclidean {
-            rescore_euclidean_batch(query, quantizer, &pq_cache, &index_results)
-        } else {
-            rescore_per_item(query, quantizer, metric, &pq_cache, &index_results)
-        };
-        // Rescoring is both guards' last use; the sort and truncate below read
-        // neither the cache nor the quantizer.
-        drop(quantizer_guard);
-        drop(pq_cache);
-
         resolve::sort_scored_by_metric(&mut rescored, higher_is_better);
         rescored.truncate(k);
         rescored
     }
-}
 
-fn rescore_with_metric(
-    query: &[f32],
-    pq_vec: &PQVector,
-    quantizer: &ProductQuantizer,
-    metric: DistanceMetric,
-) -> Result<f32> {
-    if metric == DistanceMetric::Euclidean {
-        Ok(distance_pq_l2(query, pq_vec, quantizer))
-    } else {
-        // reconstruct() returns a vector in OPQ-rotated space when a rotation matrix is
-        // present. Apply the same rotation to the query so both operands are in the same
-        // space before computing the metric. apply_rotation is a no-op (Cow::Borrowed) when
-        // rotation is None, so this adds no overhead for standard PQ.
-        let rotated_query = quantizer.apply_rotation(query);
-        let reconstructed = quantizer.reconstruct(pq_vec)?;
-        Ok(metric.calculate(&rotated_query, &reconstructed))
+    /// Returns the native PQ search scores in input order. A row without a
+    /// cached code keeps its input score; a collection without a trained
+    /// quantizer leaves the entire batch as received.
+    pub(super) fn pq_scores(
+        &self,
+        query: &[f32],
+        metric: DistanceMetric,
+        candidates: &[ScoredResult],
+    ) -> Option<Vec<ScoredResult>> {
+        let cache = self.storage.pq_cache.read();
+        let guard = self.storage.pq_quantizer.read();
+        let quantizer = guard.as_ref()?;
+        let scores = if metric == DistanceMetric::Euclidean {
+            rescore_euclidean_batch(query, quantizer, &cache, candidates)
+        } else {
+            rescore_per_item(query, quantizer, metric, &cache, candidates)
+        };
+        drop(guard);
+        drop(cache);
+        Some(scores)
     }
 }
 
@@ -202,14 +197,19 @@ fn rescore_per_item(
     pq_cache: &std::collections::HashMap<u64, PQVector>,
     index_results: &[ScoredResult],
 ) -> Vec<ScoredResult> {
+    let mut rotated = None;
     index_results
         .iter()
         .map(|sr| {
             let score = pq_cache.get(&sr.id).map_or(sr.score, |pq_vec| {
-                rescore_with_metric(query, pq_vec, quantizer, metric).unwrap_or_else(|err| {
-                    tracing::warn!(sr.id, %err, "PQ rescore failed; using HNSW score");
-                    sr.score
-                })
+                let q = rotated.get_or_insert_with(|| quantizer.apply_rotation(query));
+                quantizer.reconstruct(pq_vec).map_or_else(
+                    |err| {
+                        tracing::warn!(sr.id, %err, "PQ rescore failed; using HNSW score");
+                        sr.score
+                    },
+                    |vector| metric.calculate(q, &vector),
+                )
             });
             ScoredResult::new(sr.id, score)
         })
@@ -255,6 +255,15 @@ impl Collection {
     /// Returns an error if the query vector dimension doesn't match the collection,
     /// or if this is a metadata-only collection (use `query()` instead).
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
+        self.search_default(query, k, VectorScoreSource::Configured)
+    }
+
+    fn search_default<T: LiveHit>(
+        &self,
+        query: &[f32],
+        k: usize,
+        source: VectorScoreSource,
+    ) -> Result<Vec<T>> {
         let metric = self.validate_query_and_read_metric(query)?;
 
         // Every typed wrapper — VectorCollection, MetadataCollection,
@@ -267,7 +276,7 @@ impl Collection {
         // Use HNSW index for fast ANN search
         let quality = self.runtime_search_quality();
         self.nearest_live(&Nearest::rows(query, metric, k), |n| {
-            self.search_ids_with_adc_if_pq(query, n, quality, PendingRestriction::NONE)
+            self.search_ids_with_adc_if_pq(query, n, quality, PendingRestriction::NONE, source)
         })
     }
 
@@ -300,11 +309,8 @@ impl Collection {
     /// Rejects a Perfect (brute-force) search on a collection larger than the
     /// configured `max_perfect_mode_vectors` cap (parity item E).
     ///
-    /// Gates at search entry — before `index.search_with_quality` — so the
-    /// HNSW/SIMD inner loop is never touched on a violation. A no-op for every
-    /// non-Perfect quality mode. Shared by [`Self::search_with_quality`],
-    /// `search_with_opts`, and the filtered path `search_with_filter_and_opts`
-    /// so all four index entry points apply the identical gate.
+    /// Indexed searches and ordered scans for `NEAR` or an index-bounded
+    /// similarity threshold check the effective quality before reading rows.
     ///
     /// # Errors
     ///
@@ -347,6 +353,15 @@ impl Collection {
         k: usize,
         quality: crate::SearchQuality,
     ) -> Result<Vec<SearchResult>> {
+        self.search_at_quality(query, k, quality)
+    }
+
+    fn search_at_quality<T: LiveHit>(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<T>> {
         let metric = self.validate_query_and_read_metric(query)?;
         self.enforce_perfect_mode_limit(quality)?;
 
@@ -375,9 +390,18 @@ impl Collection {
         k: usize,
         opts: &crate::collection::search::query::QuerySearchOptions,
     ) -> Result<Vec<SearchResult>> {
+        self.search_projected_with_opts(query, k, opts)
+    }
+
+    pub(super) fn search_projected_with_opts<T: LiveHit>(
+        &self,
+        query: &[f32],
+        k: usize,
+        opts: &crate::collection::search::query::QuerySearchOptions,
+    ) -> Result<Vec<T>> {
         // When no options are set, fall back to default search.
-        if opts.quality.is_none() && opts.ef_search.is_none() && opts.force_rerank.is_none() {
-            return self.search(query, k);
+        if !opts.has_quality_overrides() {
+            return self.search_default(query, k, opts.vector_score_source);
         }
 
         let quality = opts.resolved_quality(self.runtime_search_quality());
@@ -389,22 +413,22 @@ impl Collection {
         match opts.force_rerank {
             Some(true) => self.search_with_forced_rerank(query, k, quality),
             Some(false) => self.search_with_quality_no_rerank(query, k, quality),
-            None => self.search_with_quality(query, k, quality),
+            None => self.search_at_quality(query, k, quality),
         }
     }
 
     /// Searches with forced SIMD reranking regardless of quality mode.
-    fn search_with_forced_rerank(
+    fn search_with_forced_rerank<T: LiveHit>(
         &self,
         query: &[f32],
         k: usize,
         quality: crate::SearchQuality,
-    ) -> Result<Vec<SearchResult>> {
+    ) -> Result<Vec<T>> {
         let metric = self.validate_query_and_read_metric(query)?;
 
         self.nearest_live(&Nearest::rows(query, metric, k), |asked| {
             self.search_merging_pending(query, asked, metric, PendingRestriction::NONE, |n| {
-                let rerank_k = n.saturating_mul(4).max(n + 32);
+                let rerank_k = n.saturating_mul(4).max(n.saturating_add(32));
                 self.storage
                     .index
                     .search_with_rerank_quality(query, n, rerank_k, quality)
@@ -416,12 +440,12 @@ impl Collection {
     ///
     /// Uses `search_hnsw_only` via the ef_search derived from the quality profile,
     /// skipping the automatic reranking that `search_with_quality` would enable.
-    fn search_with_quality_no_rerank(
+    fn search_with_quality_no_rerank<T: LiveHit>(
         &self,
         query: &[f32],
         k: usize,
         quality: crate::SearchQuality,
-    ) -> Result<Vec<SearchResult>> {
+    ) -> Result<Vec<T>> {
         let metric = self.validate_query_and_read_metric(query)?;
 
         // Issue #699 follow-up: align with HnswIndex::search_with_quality which
@@ -465,7 +489,13 @@ impl Collection {
         let metric = self.validate_query_and_read_metric(query)?;
         let quality = self.runtime_search_quality();
         self.nearest_live_ids(&Nearest::rows(query, metric, k), |n| {
-            self.search_ids_with_adc_if_pq(query, n, quality, PendingRestriction::NONE)
+            self.search_ids_with_adc_if_pq(
+                query,
+                n,
+                quality,
+                PendingRestriction::NONE,
+                VectorScoreSource::Configured,
+            )
         })
     }
 
@@ -491,29 +521,23 @@ impl Collection {
         k: usize,
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
-        self.search_with_filter_impl(query, k, filter, None)
+        self.search_with_filter_impl(
+            query,
+            k,
+            filter,
+            None,
+            super::vector_filter::SearchBitmap::Lookup,
+        )
     }
 
-    /// Like [`search_with_filter`](Self::search_with_filter), recording the
-    /// executed filter strategy into the options' EXPLAIN ANALYZE probe.
-    /// Taken by the quality-aware dispatch when no quality override applies.
-    pub(crate) fn search_with_filter_recorded(
-        &self,
-        query: &[f32],
-        k: usize,
-        filter: &crate::filter::Filter,
-        opts: &crate::collection::search::query::QuerySearchOptions,
-    ) -> Result<Vec<SearchResult>> {
-        self.search_with_filter_impl(query, k, filter, Some(opts))
-    }
-
-    fn search_with_filter_impl(
+    pub(super) fn search_with_filter_impl<T: LiveHit>(
         &self,
         query: &[f32],
         k: usize,
         filter: &crate::filter::Filter,
         opts: Option<&crate::collection::search::query::QuerySearchOptions>,
-    ) -> Result<Vec<SearchResult>> {
+        prepared: super::vector_filter::SearchBitmap<'_>,
+    ) -> Result<Vec<T>> {
         let metric = self.validate_query_and_read_metric(query)?;
 
         // Raw search path: no stats handle threaded here, and get_stats() may
@@ -526,7 +550,7 @@ impl Collection {
         // filter re-matches every candidate: the bitmap can be a superset of
         // its matches, and a post-filtered search merges pending points
         // unfiltered.
-        let bitmap = self.build_prefilter_bitmap(filter);
+        let bitmap = prepared.resolve(self, filter);
         let want = Nearest::judging(query, metric, k, candidates_k);
         let want = bitmap
             .as_ref()
@@ -534,7 +558,7 @@ impl Collection {
         self.nearest_live_where(
             &want,
             |id, payload| filter.matches_point(id, payload),
-            |n| self.search_with_optional_bitmap(query, n, bitmap.as_ref(), metric, opts),
+            |n| self.search_with_optional_bitmap(query, n, bitmap.as_deref(), metric, opts),
         )
     }
 
@@ -578,6 +602,7 @@ impl Collection {
             candidates_k,
             self.runtime_search_quality(),
             PendingRestriction::post_filtered(),
+            opts.map_or(VectorScoreSource::Configured, |o| o.vector_score_source),
         )
     }
 }

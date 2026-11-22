@@ -1,5 +1,6 @@
+use super::fetch_window::{fill_similarity_window, filtered_search_depth};
 use super::similarity_filter::SimilarityLeaf;
-use super::{Collection, HashSet, QuerySearchOptions, Result, SearchResult, MAX_LIMIT};
+use super::{Collection, HashSet, QuerySearchOptions, Result, SearchResult};
 
 impl Collection {
     // Metadata index query strategy is in metadata_query.rs
@@ -151,21 +152,27 @@ impl Collection {
         skip_metadata_prefilter_for_graph_or: bool,
         execution_limit: usize,
     ) -> Vec<SearchResult> {
-        let Some(cond) = filter_cond else {
+        let Some(filter) =
+            Self::postfilter_metadata(filter_cond, skip_metadata_prefilter_for_graph_or)
+        else {
             return filtered;
         };
-        if skip_metadata_prefilter_for_graph_or {
-            return filtered;
-        }
-        let Some(metadata_cond) = Self::extract_metadata_filter(cond) else {
-            return filtered;
-        };
-        let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
         filtered
             .into_iter()
             .filter(|r| filter.matches_point(r.point.id, r.point.payload.as_ref()))
             .take(execution_limit)
             .collect()
+    }
+
+    pub(super) fn postfilter_metadata(
+        condition: Option<&crate::velesql::Condition>,
+        skip: bool,
+    ) -> Option<crate::filter::Filter> {
+        if skip {
+            return None;
+        }
+        Self::extract_metadata_filter(condition?)
+            .map(|cond| crate::filter::Filter::new(cond.into()))
     }
 
     /// Handles the `(NEAR vector, no similarity(), optional metadata filter)` path.
@@ -197,9 +204,7 @@ impl Collection {
                 filter.as_ref(),
             );
         }
-        let cbo_search_k = execution_limit
-            .saturating_mul(cbo_over_fetch)
-            .min(MAX_LIMIT);
+        let cbo_search_k = filtered_search_depth(execution_limit, cbo_over_fetch);
         if skip_metadata_prefilter_for_graph_or {
             return self.search_with_opts(vector, execution_limit, search_opts);
         }
@@ -661,43 +666,41 @@ impl Collection {
         let (_, sim_vector, sim_op, sim_threshold) = sim;
         let ranking_vector = search_vector.unwrap_or(sim_vector);
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
-        let total = self.vector_count();
-        let mut k = execution_limit
-            .saturating_mul(10 * similarity_conditions.len().max(1))
-            .clamp(1, total.max(1));
-        loop {
-            let candidates = self.search_with_opts(ranking_vector, k, search_opts)?;
-            let exhausted = candidates.len() < k || k >= total;
-            let past_threshold = search_vector.is_none()
-                && candidates.last().is_some_and(|farthest| {
-                    !crate::velesql::similarity_holds(
-                        *sim_op,
-                        farthest.score,
-                        *sim_threshold,
-                        higher_is_better,
-                    )
-                });
-            let passing = self
-                .filter_by_similarity(candidates, similarity_conditions, usize::MAX)
-                .into_iter()
-                .map(|(mut r, similarity)| {
-                    if search_vector.is_none() {
-                        r.score = similarity;
-                    }
-                    r
-                })
-                .collect();
-            let rows = Self::apply_optional_metadata_filter(
-                passing,
-                filter_cond,
-                skip_metadata_prefilter_for_graph_or,
-                execution_limit,
-            );
-            if rows.len() >= execution_limit || exhausted || past_threshold {
-                return Ok(rows);
-            }
-            k = k.saturating_mul(2).min(total);
-        }
+        fill_similarity_window(
+            self.vector_count(),
+            execution_limit,
+            similarity_conditions.len(),
+            |k| {
+                let candidates = self.search_with_opts(ranking_vector, k, search_opts)?;
+                let exhausted = candidates.len() < k;
+                let past_threshold = search_vector.is_none()
+                    && candidates.last().is_some_and(|farthest| {
+                        !crate::velesql::similarity_holds(
+                            *sim_op,
+                            farthest.score,
+                            *sim_threshold,
+                            higher_is_better,
+                        )
+                    });
+                let passing = self
+                    .filter_by_similarity(candidates, similarity_conditions, usize::MAX)
+                    .into_iter()
+                    .map(|(mut r, similarity)| {
+                        if search_vector.is_none() {
+                            r.score = similarity;
+                        }
+                        r
+                    })
+                    .collect();
+                let rows = Self::apply_optional_metadata_filter(
+                    passing,
+                    filter_cond,
+                    skip_metadata_prefilter_for_graph_or,
+                    execution_limit,
+                );
+                Ok((rows, exhausted || past_threshold))
+            },
+        )
     }
 
     /// Handles the pure NEAR path (no similarity threshold, no metadata filter).

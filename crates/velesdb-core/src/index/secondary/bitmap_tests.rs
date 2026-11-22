@@ -20,6 +20,50 @@ mod tests {
     }
 
     #[test]
+    fn bounded_and_unbounded_ranges_agree_when_all_postings_fit() {
+        use std::ops::Bound::Unbounded;
+        let key = JsonValue::String("indexed".to_owned());
+        let index = make_btree_index(vec![(key, vec![2, 5])]);
+        let all = index
+            .range_bitmap(Unbounded, Unbounded)
+            .expect("both postings fit in a bitmap");
+        assert_eq!(all.iter().collect::<Vec<_>>(), vec![2, 5]);
+        assert_eq!(
+            index.range_bitmap_with_limit(Unbounded, Unbounded, Some(2)),
+            Some(all)
+        );
+        assert!(index
+            .range_bitmap_with_limit(Unbounded, Unbounded, Some(1))
+            .is_none());
+    }
+
+    #[test]
+    fn range_budget_stops_at_the_first_bucket_that_exceeds_it() {
+        use crate::index::secondary::range_bitmap_from_buckets;
+        let buckets = [
+            IdSet::from(vec![1, 2]),
+            IdSet::from(vec![3]),
+            IdSet::from(vec![4, 5]),
+        ];
+        for (budget, visits, complete) in [
+            (Some(1), 1, false),
+            (Some(2), 2, false),
+            (Some(5), 3, true),
+            (None, 3, true),
+        ] {
+            let mut visited = 0;
+            let bitmap =
+                range_bitmap_from_buckets(buckets.iter().inspect(|_| visited += 1), budget);
+            assert_eq!(visited, visits, "budget {budget:?}");
+            assert_eq!(
+                bitmap.map(|ids| ids.len()),
+                complete.then_some(5),
+                "budget {budget:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_to_bitmap_returns_matching_ids() {
         let key = JsonValue::String("tech".to_string());
         let index = make_btree_index(vec![(key.clone(), vec![1, 5, 42])]);

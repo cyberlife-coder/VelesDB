@@ -264,15 +264,49 @@ pub fn payload_path<'a>(payload: &'a Value, path: &str) -> Option<&'a Value> {
 /// `id`), else the payload's value at that path, `null` when absent.
 #[must_use]
 pub fn column_value(row: &crate::point::SearchResult, column: &str) -> Value {
-    if column == "id" {
-        return Value::from(row.point.id);
+    ProjectedField::Source(column).read(row).into_owned()
+}
+
+/// A source path or a value already published as a literal output key.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum ProjectedField<'a> {
+    Source(&'a str),
+    Published(&'a str),
+}
+
+impl<'a> ProjectedField<'a> {
+    pub(super) fn name(self) -> &'a str {
+        match self {
+            Self::Source(name) | Self::Published(name) => name,
+        }
     }
-    row.point
-        .payload
-        .as_ref()
-        .and_then(|payload| payload_path(payload, column))
-        .cloned()
-        .unwrap_or(Value::Null)
+
+    pub(super) fn read(self, row: &crate::point::SearchResult) -> std::borrow::Cow<'_, Value> {
+        let payload = row.point.payload.as_ref();
+        let value = match self {
+            Self::Source("id") => return std::borrow::Cow::Owned(Value::from(row.point.id)),
+            Self::Source(path) => payload.and_then(|p| payload_path(p, path)),
+            Self::Published(key) => payload.and_then(|p| p.get(key)),
+        };
+        std::borrow::Cow::Borrowed(value.unwrap_or(&Value::Null))
+    }
+
+    /// Align a later operand with the field the first operand's projection reads.
+    pub(super) fn write(self, payload: &mut Value, value: Value) {
+        match self {
+            Self::Published(key) => payload[key] = value,
+            Self::Source(path) => {
+                let mut target = payload;
+                for key in path.split('.') {
+                    if !target.is_object() {
+                        *target = Value::Object(serde_json::Map::new());
+                    }
+                    target = &mut target[key];
+                }
+                *target = value;
+            }
+        }
+    }
 }
 
 // Tests moved to json_path_tests.rs per project rules

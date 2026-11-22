@@ -3,25 +3,16 @@
 use super::super::distance::{batch_distance_with_prefetch, DistanceEngine};
 use super::super::layer::{Layer, NodeId};
 use super::super::ordered_float::OrderedFloat;
-use super::search_pools::should_prefetch;
+use super::search_pools::{should_prefetch, QUERY_BUF};
 use super::search_state::{gather_unvisited_neighbors, process_batch_results, SearchState};
 use super::{NativeHnsw, NO_ENTRY_POINT};
 use crate::index::hnsw::native::csr_adjacency::NeighborSlice;
 use crate::perf_optimizations::ContiguousVectors;
 use smallvec::SmallVec;
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::cmp::Reverse;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-// Thread-local reusable buffer for cosine query normalization.
-//
-// Avoids allocating a new `Vec<f32>` on every cosine search call.
-// Pre-sized for 1536-dim (common embedding dimension). After the first
-// search, subsequent searches reuse the same allocation (zero-alloc hot path).
-thread_local! {
-    static QUERY_BUF: RefCell<Vec<f32>> = RefCell::new(Vec::with_capacity(1536));
-}
 
 /// Global counter for seeding per-thread probe RNGs (issue #967).
 ///
@@ -250,18 +241,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             cell.set(next);
             next
         })
-    }
-
-    /// Returns a `Cow`'s owned buffer to the thread-local pool for reuse.
-    ///
-    /// If the `Cow` is `Borrowed`, this is a no-op. If `Owned`, the buffer
-    /// is returned to `QUERY_BUF` so the next `prepare_query` call avoids
-    /// allocation.
-    #[inline]
-    fn recycle_cow(cow: Cow<'_, [f32]>) {
-        if let Cow::Owned(buf) = cow {
-            Self::return_query_buf(buf);
-        }
     }
 
     // =========================================================================
@@ -743,49 +722,6 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         } else {
             Cow::Borrowed(query)
         }
-    }
-
-    /// Runs `f` on a prepared (cosine-normalized) view of `query`, recycling
-    /// the thread-local scratch buffer afterwards.
-    ///
-    /// For non-cosine (or non-pre-normalized) engines this is a zero-cost
-    /// pass-through of the raw slice. For the pre-normalized cosine engine
-    /// the query is normalized into the `QUERY_BUF` thread-local scratch,
-    /// which is returned to the pool after `f` completes — so a batch loop
-    /// calling this per element keeps at most **one** owned buffer alive per
-    /// thread, instead of one per element (PERF2).
-    ///
-    /// The normalized bits are identical to those produced by
-    /// [`Self::prepare_query`] and by the in-place storage normalization in
-    /// the batch insert path: `normalize_inplace_native` dispatches on the
-    /// global SIMD level and slice length only (unaligned loads), so the
-    /// same input bits always yield the same output bits.
-    #[inline]
-    pub(in crate::index::hnsw::native) fn with_prepared_query<R>(
-        &self,
-        query: &[f32],
-        f: impl FnOnce(&[f32]) -> R,
-    ) -> R {
-        let prepared = self.prepare_query(query);
-        let result = f(&prepared);
-        Self::recycle_cow(prepared);
-        result
-    }
-
-    /// Returns a query buffer to the thread-local pool for reuse.
-    ///
-    /// Called after the prepared query is no longer needed. This avoids
-    /// deallocation so the next `prepare_query` call is zero-alloc.
-    #[inline]
-    fn return_query_buf(buf: Vec<f32>) {
-        QUERY_BUF.with(|cell| {
-            let mut borrow = cell.borrow_mut();
-            if borrow.is_empty() {
-                *borrow = buf;
-            }
-            // If the thread-local already has a buffer (e.g., concurrent
-            // reentrant use), silently drop the extra one.
-        });
     }
 }
 

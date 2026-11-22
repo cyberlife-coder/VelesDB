@@ -187,6 +187,15 @@ pub struct CollectionConfig {
 }
 
 impl CollectionConfig {
+    /// The oversampling factor that enables ADC rescoring of default searches.
+    pub(crate) fn pq_search_oversampling(&self) -> usize {
+        if self.storage_mode == StorageMode::ProductQuantization {
+            usize::try_from(self.pq_rescore_oversampling.unwrap_or_default()).unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
     /// What a query vector against this collection must match: the
     /// dimension of the vectors it stores, or none when it stores none — a
     /// metadata collection, or a graph created without embeddings, whose

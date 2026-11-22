@@ -172,7 +172,7 @@ fn run_row_query(
             .execute_query(parsed, &HashMap::new())
             .context(QUERY_ERROR)?;
         if matches!(kind, QueryKind::Select) {
-            project_select_rows(&results, &parsed.select.columns)
+            project_select_rows(&results, parsed)
         } else {
             results.into_iter().map(result_to_row).collect()
         }
@@ -189,9 +189,9 @@ fn run_row_query(
 /// functions) instead of always emitting id+score+full payload.
 fn project_select_rows(
     results: &[velesdb_core::SearchResult],
-    columns: &velesdb_core::velesql::SelectColumns,
+    query: &velesdb_core::velesql::Query,
 ) -> Vec<HashMap<String, serde_json::Value>> {
-    velesdb_core::collection::search::query::projection::project_results(results, columns)
+    velesdb_core::collection::search::query::projection::project_query_results(results, query)
         .into_iter()
         .map(json_object_to_row)
         .collect()

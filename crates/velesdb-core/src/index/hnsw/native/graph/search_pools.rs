@@ -1,14 +1,83 @@
 //! Object pools and compact data structures for HNSW search.
 //!
 //! Contains [`BitVecVisited`] (compact visited-node tracker), thread-local
-//! pools for search heaps and bitsets, and helper type aliases shared by
+//! pools for search heaps, bitsets and prepared queries, and helper type aliases shared by
 //! the search subsystem.
 
+use super::super::distance::DistanceEngine;
 use super::super::layer::NodeId;
 use super::super::ordered_float::OrderedFloat;
+use super::NativeHnsw;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+
+// Thread-local reusable buffer for cosine query normalization.
+//
+// Avoids allocating a new `Vec<f32>` on every cosine search call.
+// Pre-sized for 1536-dim (common embedding dimension). After the first
+// search, subsequent searches reuse the same allocation (zero-alloc hot path).
+thread_local! {
+    pub(super) static QUERY_BUF: RefCell<Vec<f32>> = RefCell::new(Vec::with_capacity(1536));
+}
+
+impl<D: DistanceEngine> NativeHnsw<D> {
+    /// Runs `f` on a prepared (cosine-normalized) view of `query`, recycling
+    /// the thread-local scratch buffer afterwards.
+    ///
+    /// For non-cosine (or non-pre-normalized) engines this is a zero-cost
+    /// pass-through of the raw slice. For the pre-normalized cosine engine
+    /// the query is normalized into the `QUERY_BUF` thread-local scratch,
+    /// which is returned to the pool after `f` completes — so a batch loop
+    /// calling this per element keeps at most **one** owned buffer alive per
+    /// thread, instead of one per element (PERF2).
+    ///
+    /// The normalized bits are identical to those produced by
+    /// [`Self::prepare_query`] and by the in-place storage normalization in
+    /// the batch insert path: `normalize_inplace_native` dispatches on the
+    /// global SIMD level and slice length only (unaligned loads), so the
+    /// same input bits always yield the same output bits.
+    #[inline]
+    pub(in crate::index::hnsw) fn with_prepared_query<R>(
+        &self,
+        query: &[f32],
+        f: impl FnOnce(&[f32]) -> R,
+    ) -> R {
+        let prepared = self.prepare_query(query);
+        let result = f(&prepared);
+        Self::recycle_cow(prepared);
+        result
+    }
+
+    /// Returns a query buffer to the thread-local pool for reuse.
+    ///
+    /// Called after the prepared query is no longer needed. This avoids
+    /// deallocation so the next `prepare_query` call is zero-alloc.
+    #[inline]
+    fn return_query_buf(buf: Vec<f32>) {
+        QUERY_BUF.with(|cell| {
+            let mut borrow = cell.borrow_mut();
+            if borrow.is_empty() {
+                *borrow = buf;
+            }
+            // If the thread-local already has a buffer (e.g., concurrent
+            // reentrant use), silently drop the extra one.
+        });
+    }
+
+    /// Returns a `Cow`'s owned buffer to the thread-local pool for reuse.
+    ///
+    /// If the `Cow` is `Borrowed`, this is a no-op. If `Owned`, the buffer
+    /// is returned to `QUERY_BUF` so the next `prepare_query` call avoids
+    /// allocation.
+    #[inline]
+    pub(super) fn recycle_cow(cow: Cow<'_, [f32]>) {
+        if let Cow::Owned(buf) = cow {
+            Self::return_query_buf(buf);
+        }
+    }
+}
 
 // =============================================================================
 // BitVecVisited — compact visited-node tracker (Issue #420, Component 2)

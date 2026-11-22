@@ -72,11 +72,7 @@ pub(crate) fn execute_sparse_search(
         vector: svs.vector.resolve(params)?,
         keep: keep.as_ref(),
     };
-    let fetch = crate::velesql_fused::fetch_limit(stmt);
-    let scored = match crate::velesql_select::find_vector_search(stmt.where_clause.as_ref()) {
-        None => search.ranked(fetch),
-        Some(dense) => fuse_hybrid(stmt, dense, &search, &store, params, fetch)?,
-    };
+    let scored = search.ranked_for_statement(stmt, &store, params)?;
     crate::velesql_select::collect_vector_rows_unfiltered(&scored, &store)
 }
 
@@ -89,6 +85,26 @@ struct SparseQuery<'a> {
 }
 
 impl SparseQuery<'_> {
+    /// Read the candidate window for the lone sparse score or the dense/sparse fusion.
+    fn ranked_for_statement(
+        &self,
+        stmt: &SelectStatement,
+        store: &StoreState,
+        params: &Params,
+    ) -> Result<Vec<(u64, f32)>, ExecError> {
+        let dense = crate::velesql_select::find_vector_search(stmt.where_clause.as_ref());
+        let window = crate::velesql_fused::CandidateWindow::for_search(
+            stmt,
+            dense.is_none() && store.metric.higher_is_better(),
+        );
+        let scored = match dense {
+            None => self.ranked(window.count()),
+            Some(dense) => fuse_hybrid(stmt, dense, self, store, params, window.count())?,
+        };
+        window.warn_if_full(&stmt.from, scored.len());
+        Ok(scored)
+    }
+
     /// The `k` best kept documents, best first.
     fn ranked(&self, k: usize) -> Vec<(u64, f32)> {
         self.index.search_filtered(&self.vector, k, self.keep)

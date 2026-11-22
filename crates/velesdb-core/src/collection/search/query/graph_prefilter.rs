@@ -34,6 +34,30 @@ const ANCHOR_HYDRATION_CHUNK: usize = 1024;
 /// Matches the order of magnitude of the GraphFirst scan cap.
 const ANCHORED_EXACT_SCORE_MAX: usize = 10_000;
 
+/// The fetch selects its scorer by the number of MATCH anchors, including
+/// graph nodes without embeddings. The ordered scan already holds these ids.
+fn anchors_use_bitmap(count: usize) -> bool {
+    count > ANCHORED_EXACT_SCORE_MAX
+}
+
+/// Every scan candidate already belongs to MATCH. Only its u32 representation
+/// and an optional indexed metadata restriction can remove it from the native bitmap.
+pub(super) struct OrderedAnchors {
+    indexed: Option<roaring::RoaringBitmap>,
+    #[cfg(any(feature = "gpu", test))]
+    filter: Option<crate::filter::Filter>,
+}
+
+impl OrderedAnchors {
+    pub(super) fn in_native_bitmap(&self, id: u64) -> bool {
+        u32::try_from(id).is_ok_and(|id| {
+            self.indexed
+                .as_ref()
+                .is_none_or(|bitmap| bitmap.contains(id))
+        })
+    }
+}
+
 /// Collects graph predicates that are AND-required by `cond`: every result
 /// row must satisfy them. Predicates under `Or`/`Not` are skipped (a row may
 /// match without them).
@@ -106,9 +130,7 @@ impl Collection {
         filter_condition: Option<&Condition>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        let metadata_filter = filter_condition
-            .and_then(Self::extract_metadata_filter)
-            .map(|c| crate::filter::Filter::new(crate::filter::Condition::from(c)));
+        let metadata_filter = Self::postfilter_metadata(filter_condition, false);
         self.search_near_within_anchors(vector, anchor_ids, metadata_filter.as_ref(), limit)
     }
 
@@ -130,7 +152,7 @@ impl Collection {
             return Ok(Vec::new());
         }
         let metric = self.validate_query_and_read_metric(vector)?;
-        if anchor_ids.len() <= ANCHORED_EXACT_SCORE_MAX {
+        if !anchors_use_bitmap(anchor_ids.len()) {
             return Ok(self.score_anchors_exact(
                 vector,
                 anchor_ids,
@@ -152,16 +174,64 @@ impl Collection {
         limit: usize,
         metric: crate::distance::DistanceMetric,
     ) -> Result<Vec<SearchResult>> {
-        let mut bitmap = roaring::RoaringBitmap::new();
-        for &id in anchor_ids {
-            if let Ok(id32) = u32::try_from(id) {
-                bitmap.insert(id32);
-            }
-        }
-        if let Some(meta_bitmap) = metadata_filter.and_then(|f| self.build_prefilter_bitmap(f)) {
-            bitmap &= meta_bitmap;
-        }
+        let indexed = metadata_filter.and_then(|filter| self.build_prefilter_bitmap(filter));
+        let bitmap = Self::bitmap_for_anchors(anchor_ids.iter().copied(), indexed.as_ref());
+        self.read_anchor_bitmap(vector, &bitmap, metadata_filter, limit, metric)
+    }
 
+    pub(super) fn ordered_anchors(
+        &self,
+        count: usize,
+        condition: Option<&Condition>,
+    ) -> Option<OrderedAnchors> {
+        if !anchors_use_bitmap(count) {
+            return None;
+        }
+        let filter = Self::postfilter_metadata(condition, false);
+        let indexed = filter.as_ref().and_then(|f| self.build_prefilter_bitmap(f));
+        Some(OrderedAnchors {
+            indexed,
+            #[cfg(any(feature = "gpu", test))]
+            filter,
+        })
+    }
+
+    fn bitmap_for_anchors(
+        ids: impl Iterator<Item = u64>,
+        indexed: Option<&roaring::RoaringBitmap>,
+    ) -> roaring::RoaringBitmap {
+        let mut bitmap: roaring::RoaringBitmap =
+            ids.filter_map(|id| u32::try_from(id).ok()).collect();
+        if let Some(metadata) = indexed {
+            bitmap &= metadata;
+        }
+        bitmap
+    }
+
+    /// Project the native anchored read, sharing the ordered scan's resolved
+    /// MATCH candidates and metadata lookup. Only this index read needs the
+    /// full u32 bitmap; CPU row scoring can test membership on its current id.
+    #[cfg(any(feature = "gpu", test))]
+    pub(super) fn ordered_anchor_hits(
+        &self,
+        ids: &[u64],
+        anchors: &OrderedAnchors,
+        vector: &[f32],
+        limit: usize,
+        metric: crate::DistanceMetric,
+    ) -> Result<Vec<crate::scored_result::ScoredResult>> {
+        let bitmap = Self::bitmap_for_anchors(ids.iter().copied(), anchors.indexed.as_ref());
+        self.read_anchor_bitmap(vector, &bitmap, anchors.filter.as_ref(), limit, metric)
+    }
+
+    fn read_anchor_bitmap<T: super::super::live::LiveHit>(
+        &self,
+        vector: &[f32],
+        bitmap: &roaring::RoaringBitmap,
+        metadata_filter: Option<&crate::filter::Filter>,
+        limit: usize,
+        metric: crate::DistanceMetric,
+    ) -> Result<Vec<T>> {
         // Residual (non-indexed) metadata conditions are applied after the
         // fetch — oversample for them; pure graph prefilters need no slack.
         let candidates_k = metadata_filter
@@ -176,7 +246,7 @@ impl Collection {
         // The pending points get the same restriction as the index: the
         // anchors (narrowed by the indexed metadata), and the residual
         // metadata filter the nearest live rows are judged by below.
-        let restriction = crate::collection::search::pending::PendingRestriction::within(&bitmap)
+        let restriction = crate::collection::search::pending::PendingRestriction::within(bitmap)
             .post_filtered_if(metadata_filter.is_some());
         // The anchors judge every candidate too: an exact scan past dead
         // candidates scores every stored vector, not the bitmap's alone. The
@@ -196,7 +266,7 @@ impl Collection {
                         vector,
                         m,
                         self.runtime_search_quality(),
-                        &bitmap,
+                        bitmap,
                     )
                 })
             },

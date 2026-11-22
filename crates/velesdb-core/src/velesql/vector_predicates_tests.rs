@@ -53,12 +53,13 @@ fn near_fused_must_be_the_only_vector_predicate_under_and() {
 
 #[test]
 fn a_named_vector_is_the_payload_numeric_array() {
-    let payload = json!({"e": [1, 0.5], "text": "x", "mixed": [1, "a"]});
+    let payload = json!({"e": [1, 0.5], "empty": null, "text": "x", "mixed": [1, "a"]});
     assert_eq!(
         payload_vector(&payload, "e").expect("test: ok"),
         Some(vec![1.0, 0.5])
     );
     assert_eq!(payload_vector(&payload, "missing").expect("test: ok"), None);
+    assert_eq!(payload_vector(&payload, "empty").expect("test: ok"), None);
     assert!(payload_vector(&payload, "text").is_err(), "not an array");
     assert!(
         payload_vector(&payload, "mixed").is_err(),

@@ -88,25 +88,6 @@ impl Collection {
             .any(|item| Self::order_by_item_reduces_to_similarity(&item.expr))
     }
 
-    /// Returns `true` when the primary ORDER BY key is a scalar column (not a
-    /// `similarity()` reduction), so the candidate fetch must be exhaustive.
-    ///
-    /// The similarity-ordered fast path (HNSW returns top-k pre-sorted by
-    /// score) is correct under a bounded fetch, but a scalar key is only
-    /// ranked downstream in `apply_select_postprocessing`; truncating the
-    /// fetch first would yield the first `limit` rows in storage/score order
-    /// rather than the top `limit` by the ORDER BY key. The *primary* key
-    /// decides: a leading `similarity()` keeps the fast path even when a
-    /// scalar tie-breaker follows it.
-    pub(super) fn order_by_requires_exhaustive_fetch(
-        stmt: &crate::velesql::SelectStatement,
-    ) -> bool {
-        stmt.order_by
-            .as_ref()
-            .and_then(|ob| ob.first())
-            .is_some_and(|first| !Self::order_by_item_reduces_to_similarity(&first.expr))
-    }
-
     /// Helper for [`Self::has_order_by_similarity`]. Kept as an associated function
     /// so the match arm can delegate to the arithmetic-expression walker
     /// without inflating the outer method's cyclomatic complexity.
@@ -197,25 +178,20 @@ impl Collection {
         (plan.strategy, over_fetch)
     }
 
-    /// Dispatches the main SELECT query path (vector, similarity, metadata).
+    /// Dispatches the main SELECT query path and returns the candidate count
+    /// alongside the rows admitted by its graph predicates.
     pub(super) fn dispatch_main_select(
         &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         extracted: &ExtractedComponents,
         limit: usize,
-        ctx: &crate::guardrails::QueryContext,
-    ) -> Result<Vec<SearchResult>> {
+        search_opts: &super::QuerySearchOptions,
+    ) -> Result<(usize, Vec<SearchResult>)> {
         let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
-        let skip_metadata_prefilter_for_graph_or = has_graph_predicates
-            && stmt
-                .where_clause
-                .as_ref()
-                .is_some_and(Self::condition_contains_or);
-        let execution_limit = main_select_execution_limit(stmt, extracted, limit);
-        let search_opts = super::QuerySearchOptions::from_with_clause(stmt.with_clause.as_ref())?
-            .with_fusion(stmt.fusion_clause.clone())
-            .with_executed_strategy_probe(ctx);
+        let skip_metadata_prefilter_for_graph_or =
+            Self::graph_or_reads_all_candidates(stmt, extracted);
+        let execution_limit = main_select_execution_limit(extracted, limit);
         let (cbo_strategy, cbo_over_fetch) =
             self.compute_cbo_strategy(stmt, extracted.filter_condition.as_ref(), limit);
 
@@ -224,19 +200,10 @@ impl Collection {
         // matches instead of bounded by an over-fetch window. The cache
         // carries the computed anchor sets into the exact post-filter.
         //
-        // When ORDER BY similarity() is present without a NEAR vector,
-        // fetch_anchor_candidates must see EVERY anchor — the similarity
-        // sort only runs downstream, so a bounded window would drop the
-        // most-similar anchors by ascending-id order (see anchor_fetch_limit).
+        // `fetch_anchor_candidates` hydrates anchors in ascending-id order
+        // up to the candidate window chosen by `Collection::select_fetch_window`.
         let mut graph_cache = super::where_eval::GraphMatchEvalCache::default();
-        let anchor_fetch_limit = anchor_fetch_limit(stmt, extracted, limit);
-        let anchored = self.try_anchored_fetch(
-            stmt,
-            params,
-            extracted,
-            anchor_fetch_limit,
-            &mut graph_cache,
-        )?;
+        let anchored = self.try_anchored_fetch(stmt, params, extracted, limit, &mut graph_cache)?;
 
         let mut results = self.resolve_initial_results(
             anchored,
@@ -245,17 +212,18 @@ impl Collection {
             extracted,
             execution_limit,
             skip_metadata_prefilter_for_graph_or,
-            &search_opts,
+            search_opts,
             cbo_strategy,
             cbo_over_fetch,
             &mut graph_cache,
         )?;
 
+        let fetched = results.len();
         if has_graph_predicates {
             results = self.post_filter_graph_where(stmt, params, results, &mut graph_cache)?;
         }
 
-        Ok(results)
+        Ok((fetched, results))
     }
 
     /// Resolves the initial result set from the anchored, hybrid-anchored,
@@ -276,6 +244,20 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         if let Some(results) = anchored {
             return Ok(results);
+        }
+        // The window planner already resolved this VectorFirst NEAR's
+        // metadata restriction when distinguishing f32 from ADC scores.
+        if let Some((vector, prepared)) = extracted
+            .vector_search
+            .as_deref()
+            .zip(extracted.ordered_prefilter.as_ref())
+        {
+            let depth = super::fetch_window::filtered_search_depth(execution_limit, cbo_over_fetch);
+            let bitmap =
+                super::super::vector_filter::SearchBitmap::Prepared(prepared.bitmap.as_ref());
+            return self
+                .search_projected_with_filter(vector, depth, &prepared.filter, search_opts, bitmap)
+                .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e));
         }
         // Anchored hybrid: graph MATCH + text MATCH + NEAR vector.
         // The standard anchored path skips text-MATCH shapes; handle
@@ -298,6 +280,17 @@ impl Collection {
             cbo_over_fetch,
         )
         .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
+    }
+
+    pub(super) fn graph_or_reads_all_candidates(
+        stmt: &crate::velesql::SelectStatement,
+        extracted: &ExtractedComponents,
+    ) -> bool {
+        !extracted.graph_match_predicates.is_empty()
+            && stmt
+                .where_clause
+                .as_ref()
+                .is_some_and(Self::condition_contains_or)
     }
 
     /// Applies the exact WHERE post-filter when graph predicates are present,
@@ -484,28 +477,33 @@ impl Collection {
     /// compatibility mode), swap step 1 and step 2 and wrap behind a feature
     /// flag. Regression coverage is in
     /// `window_function_tests::test_distinct_runs_before_window_functions`.
-    pub(super) fn apply_select_postprocessing(
+    pub(crate) fn apply_select_postprocessing(
         &self,
         stmt: &crate::velesql::SelectStatement,
         mut results: Vec<SearchResult>,
         params: &std::collections::HashMap<String, serde_json::Value>,
         limit: usize,
         let_bindings: &[crate::velesql::LetBinding],
+        rank_inputs: &[String],
     ) -> Result<Vec<SearchResult>> {
         // Step 1: DISTINCT — deduplication before any ranking (see pipeline
         // order contract in the doc comment above).
         if stmt.distinct == crate::velesql::DistinctMode::All {
             results = distinct_evaluator::apply_distinct(results, &stmt.columns);
         }
-        // Step 2: Window functions — after DISTINCT, before ORDER BY/LIMIT.
-        if let Some(wfs) = Self::extract_window_functions(&stmt.columns) {
-            crate::velesql::window_evaluator::evaluate(&mut results, wfs)?;
-        }
-        // Step 3: ORDER BY (with optional LET bindings).
-        self.apply_order_by_step(stmt, &mut results, params, let_bindings)?;
-        // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
-        if let Some(offset) = stmt.offset {
-            let skip = usize::try_from(offset).unwrap_or(usize::MAX);
+        // Window functions and ORDER BY operate on the distinct rows.
+        let skip = stmt
+            .offset
+            .map_or(0, |offset| usize::try_from(offset).unwrap_or(usize::MAX));
+        let inputs = self.apply_window_order(
+            stmt,
+            &mut results,
+            params,
+            let_bindings,
+            skip.saturating_add(limit),
+            rank_inputs,
+        )?;
+        if skip > 0 {
             results = results.into_iter().skip(skip).collect();
         }
         results.truncate(limit);
@@ -517,32 +515,55 @@ impl Collection {
             inject_let_into_payloads(&mut results, &per_result_let);
         }
 
+        inputs.publish(&mut results, &stmt.columns, skip);
         Ok(results)
     }
 
-    /// Apply ORDER BY, choosing the plain or LET-aware path depending on
-    /// whether any LET bindings are in scope.
-    fn apply_order_by_step(
+    /// Capture vector sort keys from the input rows. Window evaluation writes
+    /// aliases in place without moving rows; scalar and LET keys then see them.
+    fn apply_window_order(
         &self,
         stmt: &crate::velesql::SelectStatement,
         results: &mut [SearchResult],
         params: &std::collections::HashMap<String, serde_json::Value>,
         let_bindings: &[crate::velesql::LetBinding],
-    ) -> Result<()> {
-        let Some(ref order_by) = stmt.order_by else {
-            return Ok(());
-        };
-        if let_bindings.is_empty() {
-            self.apply_order_by(results, order_by, params)?;
-        } else {
-            let per_result_let = Self::evaluate_let_for_results(let_bindings, results);
-            self.apply_order_by_with_let(results, order_by, params, &per_result_let)?;
+        leading: usize,
+        rank_inputs: &[String],
+    ) -> Result<crate::velesql::window_evaluator::WindowInputs> {
+        let order_by = stmt.order_by.as_deref().unwrap_or_default();
+        let mut keys = self.precompute_similarity_scores(results, order_by, params)?;
+        if let Some(wfs) = Self::extract_window_functions(&stmt.columns) {
+            keys.window = crate::velesql::window_evaluator::WindowInputs::capture(stmt, results);
+            crate::velesql::window_evaluator::evaluate_compound_windows(
+                results,
+                wfs,
+                &mut keys.window,
+                rank_inputs,
+            )?;
         }
-        Ok(())
+        if order_by.is_empty() {
+            return Ok(keys.window);
+        }
+        let per_result_let = if let_bindings.is_empty() {
+            Vec::new()
+        } else {
+            Self::evaluate_let_for_results(let_bindings, results)
+        };
+        self.apply_prepared_order(results, order_by, &mut keys, &per_result_let, leading);
+        Ok(keys.window)
+    }
+
+    /// Check the base query's LET restrictions when a JOIN will evaluate its
+    /// bindings on the joined rows; the base executor no longer carries them.
+    pub(crate) fn validate_deferred_let(
+        stmt: &crate::velesql::SelectStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        Self::validate_let_binding_support(&Self::extract_query_components(stmt, params)?)
     }
 
     /// Evaluates LET bindings for every result, producing per-result binding maps.
-    fn evaluate_let_for_results(
+    pub(super) fn evaluate_let_for_results(
         let_bindings: &[crate::velesql::LetBinding],
         results: &[SearchResult],
     ) -> Vec<Vec<(String, f32)>> {
@@ -612,20 +633,7 @@ fn anchored_fetch_applies(
 /// queries never reach here; they are dispatched by `try_early_return_path`).
 /// This window only applies when the GraphFirst anchored fetch declined
 /// (`try_anchored_fetch`).
-fn main_select_execution_limit(
-    stmt: &crate::velesql::SelectStatement,
-    extracted: &ExtractedComponents,
-    limit: usize,
-) -> usize {
-    // A scalar (non-similarity) ORDER BY ranks rows AFTER the fetch, in
-    // `apply_select_postprocessing`. Capping the fetch at `limit` would
-    // truncate before that sort, returning the first `limit` rows in
-    // storage/score order instead of the top `limit` by the ORDER BY key
-    // (KNOWN_LIMITATIONS #9: bounded results must equal the unbounded path
-    // truncated to k). Fetch exhaustively so the sort precedes truncation.
-    if Collection::order_by_requires_exhaustive_fetch(stmt) {
-        return MAX_LIMIT;
-    }
+pub(super) fn main_select_execution_limit(extracted: &ExtractedComponents, limit: usize) -> usize {
     let has_graph_predicates = !extracted.graph_match_predicates.is_empty();
     let has_ranked_fetch =
         extracted.vector_search.is_some() || !extracted.similarity_conditions.is_empty();
@@ -639,36 +647,6 @@ fn main_select_execution_limit(
 fn graph_overfetch_limit(limit: usize) -> usize {
     const GRAPH_OVERFETCH_CAP: usize = 10_000;
     limit.max(limit.saturating_mul(10).min(GRAPH_OVERFETCH_CAP))
-}
-
-/// Anchored-fetch window for the main SELECT path.
-///
-/// With ORDER BY similarity() and no NEAR vector the anchored fetch must be
-/// EXHAUSTIVE: `fetch_anchor_candidates` hydrates anchors in ascending-id
-/// order and stops at the window, while the similarity sort only runs
-/// downstream in `apply_order_by` — any bounded window therefore drops the
-/// most-similar anchors whenever the anchor set is larger than the window.
-/// `MAX_LIMIT` is the same exhaustive window the unranked graph paths use.
-/// Without ORDER BY similarity() the plain `limit` stays (nothing ranked to
-/// protect); with a NEAR vector the anchored search ranks inside the anchor
-/// set already.
-fn anchor_fetch_limit(
-    stmt: &crate::velesql::SelectStatement,
-    extracted: &ExtractedComponents,
-    limit: usize,
-) -> usize {
-    // A scalar ORDER BY ranks downstream, so the anchored fetch (which
-    // hydrates anchors in ascending-id order) must be exhaustive too —
-    // otherwise the ascending-id window drops rows the ORDER BY key would
-    // have surfaced. Mirrors `main_select_execution_limit`.
-    if Collection::order_by_requires_exhaustive_fetch(stmt) {
-        return MAX_LIMIT;
-    }
-    if Collection::has_order_by_similarity(stmt) && extracted.vector_search.is_none() {
-        MAX_LIMIT
-    } else {
-        limit
-    }
 }
 
 /// Injects evaluated LET binding values into each result's payload.

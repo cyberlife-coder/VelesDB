@@ -68,6 +68,7 @@ fn an_index_search_error_is_returned_not_read_as_no_match() {
             1,
             crate::SearchQuality::Balanced,
             super::super::pending::PendingRestriction::NONE,
+            super::VectorScoreSource::Configured,
         )
         .expect("CONTROL: a well-formed query succeeds");
     assert_eq!(control.len(), 1, "CONTROL: the fixture's point is found");
@@ -77,6 +78,7 @@ fn an_index_search_error_is_returned_not_read_as_no_match() {
         1,
         crate::SearchQuality::Balanced,
         super::super::pending::PendingRestriction::NONE,
+        super::VectorScoreSource::Configured,
     );
     assert!(
         outcome.is_err(),

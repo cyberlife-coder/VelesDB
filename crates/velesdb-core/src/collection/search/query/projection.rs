@@ -6,12 +6,15 @@
 
 use crate::point::SearchResult;
 use crate::velesql::json_path::column_value;
+use crate::velesql::window_evaluator::WindowInputs;
 use crate::velesql::{SelectColumns, SimilarityScoreExpr};
 
 /// Projects a list of `SearchResult` according to the parsed SELECT expressions.
 ///
 /// Returns `serde_json::Value::Object` rows with only the requested fields.
-/// The `id` field is always the system point ID (takes precedence over payload).
+/// Reading the `id` column yields the system point ID. A wildcard also uses
+/// the point ID for `id` when the payload contains that name. An explicit
+/// output such as `a AS id` can replace `id` in the projected object.
 #[must_use]
 pub fn project_results(
     results: &[SearchResult],
@@ -20,6 +23,21 @@ pub fn project_results(
     results
         .iter()
         .map(|r| project_single(r, select_exprs))
+        .collect()
+}
+
+/// Projects rows returned by executing `query`, including independent
+/// positional values produced by a compound SELECT.
+#[must_use]
+pub fn project_query_results(
+    results: &[SearchResult],
+    query: &crate::velesql::Query,
+) -> Vec<serde_json::Value> {
+    if query.compound.is_none() {
+        return project_results(results, &query.select.columns);
+    }
+    crate::velesql::project_query_rows(query, results, project_single)
+        .map(|(_, output)| output)
         .collect()
 }
 
@@ -124,7 +142,7 @@ fn project_mixed(
     if !qualified_wildcards.is_empty() {
         insert_qualified_wildcards(&mut map, result, &window_aliases);
     }
-    insert_named_columns(&mut map, result, columns);
+    insert_named_columns(&mut map, result, columns, window_functions);
     insert_similarity_scores(&mut map, result, similarity_scores);
     insert_window_values(&mut map, result, window_functions);
 
@@ -153,10 +171,10 @@ fn insert_named_columns(
     map: &mut serde_json::Map<String, serde_json::Value>,
     result: &SearchResult,
     columns: &[crate::velesql::Column],
+    windows: &[crate::velesql::WindowFunction],
 ) {
-    for col in columns {
+    for (col, value) in WindowInputs::selected_columns(result, columns, windows) {
         let output_key = col.alias.as_deref().unwrap_or(&col.name);
-        let value = column_value(result, &col.name);
         map.insert(output_key.to_string(), value);
     }
 }

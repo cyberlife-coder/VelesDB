@@ -1,5 +1,8 @@
 //! Index management methods for Collection (EPIC-009 propagation).
 
+#[path = "index_range_bitmap.rs"]
+mod range;
+
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::index::{JsonValue, SecondaryIndex};
@@ -275,10 +278,10 @@ impl Collection {
             .collect()
     }
 
-    /// Returns the top `limit` point IDs for `field_name` in index order
-    /// (ascending, or descending when `descending`), **only when the index
-    /// fully covers** the collection (every point carries the field). Returns
-    /// `None` when no such index exists or coverage is incomplete.
+    /// Returns the ordered IDs through the end of `page`, including rows
+    /// before its offset so the caller can check expiry. An empty page or
+    /// one starting past the last row needs no IDs. Both still require a
+    /// fully covering index. A missing or incomplete index returns `None`.
     ///
     /// Backs the index-backed `ORDER BY <field> LIMIT k` fast path
     /// (EPIC-081 phase 2): the returned IDs are a snapshot, so the secondary
@@ -288,9 +291,26 @@ impl Collection {
         &self,
         field_name: &str,
         descending: bool,
-        limit: usize,
+        page: std::ops::Range<usize>,
     ) -> Option<Vec<u64>> {
         let point_count = self.len();
+        let prefix_len = if page.is_empty() || page.start >= point_count {
+            0
+        } else {
+            page.end
+        };
+        self.covered_index_prefix(field_name, descending, prefix_len, point_count)
+    }
+
+    /// Reads up to `limit` IDs under the same lock that checks coverage of
+    /// the `point_count` rows the caller already counted.
+    pub(in crate::collection) fn covered_index_prefix(
+        &self,
+        field_name: &str,
+        descending: bool,
+        limit: usize,
+        point_count: usize,
+    ) -> Option<Vec<u64>> {
         let indexes = self.query.secondary_indexes.read();
         indexes
             .get(field_name)?
@@ -347,7 +367,18 @@ impl Collection {
         &self,
         filter: &crate::filter::Filter,
     ) -> Option<roaring::RoaringBitmap> {
-        Self::bitmap_from_condition(&self.query.secondary_indexes, &filter.condition)
+        Self::bitmap_from_condition(&self.query.secondary_indexes, &filter.condition, None)
+    }
+
+    /// An ordered scan verifies the full WHERE on every candidate. A necessary
+    /// equality or ID list limits how many IDs are worth reading from a range.
+    pub(crate) fn ordered_range_bitmap(
+        &self,
+        filter: &crate::filter::Filter,
+    ) -> Option<roaring::RoaringBitmap> {
+        let indexes = &self.query.secondary_indexes;
+        let max_range_ids = range::required_candidate_count(indexes, &filter.condition);
+        Self::bitmap_from_condition(indexes, &filter.condition, max_range_ids)
     }
 
     /// Recursively extracts bitmaps from conditions backed by secondary indexes.
@@ -365,6 +396,7 @@ impl Collection {
     fn bitmap_from_condition(
         indexes: &SecondaryIndexMap,
         cond: &crate::filter::Condition,
+        max_range_ids: Option<u64>,
     ) -> Option<roaring::RoaringBitmap> {
         match cond {
             crate::filter::Condition::Eq { field, value } => {
@@ -387,7 +419,7 @@ impl Collection {
             | crate::filter::Condition::Gte { field, value }
             | crate::filter::Condition::Lt { field, value }
             | crate::filter::Condition::Lte { field, value } => {
-                Self::bitmap_for_range_field(indexes, field, value, cond)
+                range::one_sided_bitmap(indexes, field, value, cond, max_range_ids)
             }
             crate::filter::Condition::In { field, values } => {
                 Self::bitmap_for_in_field(indexes, field, values)
@@ -396,10 +428,10 @@ impl Collection {
                 Self::bitmap_for_not_in(indexes, condition)
             }
             crate::filter::Condition::And { conditions } => {
-                Self::bitmap_from_and(indexes, conditions)
+                Self::bitmap_from_and(indexes, conditions, max_range_ids)
             }
             crate::filter::Condition::Or { conditions } => {
-                Self::bitmap_from_or(indexes, conditions)
+                Self::bitmap_from_or(indexes, conditions, max_range_ids)
             }
             _ => None,
         }
@@ -485,46 +517,21 @@ impl Collection {
         None
     }
 
-    /// Whether a payload index may answer a range on `field` bounded by
-    /// `value`. The index keys numbers by `f64`: past 2^53 a bound can share
-    /// its key with a neighbour the filter orders exactly, and a range would
-    /// drop it. And `id` is the point id, which no payload index holds.
-    fn range_indexable(field: &str, value: &serde_json::Value) -> bool {
-        field != crate::filter::POINT_ID_FIELD && crate::filter::exact_as_f64(value)
-    }
-
-    /// Builds a range bitmap for Gt/Gte/Lt/Lte using `SecondaryIndex::range_bitmap`.
-    fn bitmap_for_range_field(
-        indexes: &SecondaryIndexMap,
-        field: &str,
-        value: &serde_json::Value,
-        cond: &crate::filter::Condition,
-    ) -> Option<roaring::RoaringBitmap> {
-        use std::ops::Bound;
-        if !Self::range_indexable(field, value) {
-            return None;
-        }
-
-        let key = JsonValue::from_json(value)?;
-        let guard = indexes.read();
-        let index = guard.get(field)?;
-        let (from, to) = match cond {
-            crate::filter::Condition::Gt { .. } => (Bound::Excluded(&key), Bound::Unbounded),
-            crate::filter::Condition::Gte { .. } => (Bound::Included(&key), Bound::Unbounded),
-            crate::filter::Condition::Lt { .. } => (Bound::Unbounded, Bound::Excluded(&key)),
-            crate::filter::Condition::Lte { .. } => (Bound::Unbounded, Bound::Included(&key)),
-            _ => return None,
-        };
-        let bitmap = index.range_bitmap(from, to);
-        drop(guard);
-        bitmap
-    }
-
-    /// Intersects bitmaps from AND-ed conditions.
     fn bitmap_from_and(
         indexes: &SecondaryIndexMap,
         conditions: &[crate::filter::Condition],
+        max_range_ids: Option<u64>,
     ) -> Option<roaring::RoaringBitmap> {
+        if let Some((field, low, high)) = range::inclusive_index_bounds(conditions) {
+            use std::ops::Bound::Included;
+            return range::indexed_range(
+                indexes,
+                field,
+                Included(&low),
+                Included(&high),
+                max_range_ids,
+            );
+        }
         // Children that cannot be pre-filtered are skipped: for AND that
         // yields a superset bitmap, which the post-filter narrows — same
         // contract as before. Intersect smallest-first and in place: the
@@ -532,7 +539,7 @@ impl Collection {
         // a 10-row Eq child against a million-row range child first.
         let mut bitmaps: Vec<roaring::RoaringBitmap> = conditions
             .iter()
-            .filter_map(|cond| Self::bitmap_from_condition(indexes, cond))
+            .filter_map(|cond| Self::bitmap_from_condition(indexes, cond, max_range_ids))
             .collect();
         bitmaps.sort_unstable_by_key(roaring::RoaringBitmap::len);
         let mut iter = bitmaps.into_iter();
@@ -554,10 +561,11 @@ impl Collection {
     fn bitmap_from_or(
         indexes: &SecondaryIndexMap,
         conditions: &[crate::filter::Condition],
+        max_range_ids: Option<u64>,
     ) -> Option<roaring::RoaringBitmap> {
         let mut result = roaring::RoaringBitmap::new();
         for cond in conditions {
-            let bm = Self::bitmap_from_condition(indexes, cond)?;
+            let bm = Self::bitmap_from_condition(indexes, cond, max_range_ids)?;
             result |= bm;
         }
         Some(result)
