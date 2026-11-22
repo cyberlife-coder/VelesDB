@@ -292,6 +292,37 @@
         { "id": 42, "vector": [1, 0], "payload": { "v1": [0, 1], "v2": [1, 0], "meta": { "v": [1, 0] }, "a": 4, "b": 7 } },
         { "id": 43, "vector": [1, 0], "payload": { "v1": [1, 0], "a": 6 } }
       ]
+    },
+    {
+      "collection": "wild_left", "dimension": 2, "metric": "cosine",
+      "points": [
+        {"id": 51, "vector": [1, 0], "payload": {"meta": {"v": [0, 1]}}},
+        {"id": 52, "vector": [1, 0], "payload": {"meta": {"v": [1, 0]}, "saved": "left"}},
+        {"id": 53, "vector": [1, 0], "payload": {"meta": {"v": [0, 1]}, "aux": {"label": 7}}},
+        {"id": 54, "vector": [1, 0], "payload": {"meta": {"v": [1, 0]}, "a": 5, "b": 9}},
+        {"id": 55, "vector": [1, 0], "payload": {"v": [0.6, 0.8], "alt": [0, 1]}},
+        {"id": 57, "vector": [1, 0], "payload": {"meta": {"v": [0, 1]}, "meta.v": [1, 0], "aux": {"label": 7}, "aux.label": "literal"}},
+        {"id": 59, "vector": [1, 0], "payload": {"v": [1, 0], "s": "left"}},
+        {"id": 60, "vector": [1, 0], "payload": {"v": [1, 0]}},
+        {"id": 61, "vector": [1, 0], "payload": {"v": [1, 0]}},
+        {"id": 62, "vector": [1, 0], "payload": {"a": 5, "b": 9, "v": [1, 0]}}
+      ]
+    },
+    {
+      "collection": "wild_right", "dimension": 2, "metric": "cosine",
+      "points": [
+        {"id": 51, "vector": [1, 0], "payload": {"meta": {"v": [1, 0]}}},
+        {"id": 52, "vector": [1, 0], "payload": {"meta": {"v": [1, 0]}, "saved": "right"}},
+        {"id": 53, "vector": [1, 0], "payload": {"meta": {"v": [1, 0]}, "aux": {"label": 10}, "aux.label": "literal"}},
+        {"id": 54, "vector": [1, 0], "payload": {"meta": {"v": [1, 0]}, "a": 5, "b": 9}},
+        {"id": 56, "vector": [1, 0], "payload": {"v": [0, 1], "alt": [1, 0]}},
+        {"id": 58, "vector": [1, 0], "payload": {"meta": {"v": [1, 0]}, "meta.v": [0, 1], "aux": {"label": 10}, "aux.label": "literal"}},
+        {"id": 59, "vector": [1, 0], "payload": {"v": [2, 0], "s": "right"}},
+        {"id": 60, "vector": [1, 0], "payload": {"v": [1, 0]}},
+        {"id": 61, "vector": [1, 0], "payload": {"v": [1, 0], "flag": null}},
+        {"id": 62, "vector": [1, 0], "payload": {"a": 5, "b": 9, "v": [1, 0]}},
+        {"id": 63, "vector": [1, 0], "payload": {"a": 5, "b": 9, "v": [1, 0]}}
+      ]
     }
   ],
   "join_cases": [
@@ -1649,6 +1680,120 @@
       "query": "SELECT named.*, RANK() OVER (ORDER BY id) AS alt, RANK() OVER (ORDER BY id) AS units FROM named WHERE id=41 INTERSECT SELECT set_rows.*, RANK() OVER (ORDER BY id) AS alt, RANK() OVER (ORDER BY id) AS units FROM set_rows WHERE id=41 ORDER BY similarity(alt,$x) DESC",
       "expect_rows": [{"alt": 1, "id": 41, "meta": {"price": 30}, "units": 1}],
       "note": "Two wildcard projections agree on the ID, metadata and ranks even when one rank hides a vector present on just one side."
+    },
+    {
+      "id": "P051",
+      "query": "SELECT wild_left.*, meta AS saved, RANK() OVER (ORDER BY id) AS meta FROM wild_left WHERE id=51 UNION SELECT wild_right.*, meta AS saved, RANK() OVER (ORDER BY id) AS meta FROM wild_right WHERE id=51 ORDER BY similarity(meta.v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 51, "meta": 1, "saved": {"v": [1, 0]}}, {"id": 51, "meta": 1, "saved": {"v": [0, 1]}}],
+      "note": "A retained source displayed under an alias distinguishes the two wildcard rows."
+    },
+    {
+      "id": "P052",
+      "query": "SELECT wild_left.*, meta AS saved, RANK() OVER (ORDER BY id) AS meta FROM wild_left WHERE id=52 INTERSECT SELECT wild_right.*, meta AS saved, RANK() OVER (ORDER BY id) AS meta FROM wild_right WHERE id=52 ORDER BY similarity(meta.v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 52, "meta": 1, "saved": {"v": [1, 0]}}],
+      "note": "An explicit wildcard output replaces the payload field of the same name before set comparison."
+    },
+    {
+      "id": "P053",
+      "query": "SELECT wild_left.*, aux.label AS chosen, RANK() OVER (ORDER BY id) AS meta FROM wild_left WHERE id=53 UNION ALL SELECT wild_right.*, aux.label AS chosen, RANK() OVER (ORDER BY id) AS meta FROM wild_right WHERE id=53 ORDER BY similarity(meta.v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 53, "aux": {"label": 10}, "aux.label": "literal", "chosen": 10, "meta": 1}, {"id": 53, "aux": {"label": 7}, "chosen": 7, "meta": 1}],
+      "note": "Selecting a path under an alias preserves the literal dotted key and never creates an extra one."
+    },
+    {
+      "id": "P054",
+      "query": "SELECT wild_left.*, a AS chosen, RANK() OVER (ORDER BY id) AS meta FROM wild_left WHERE id=54 UNION SELECT wild_right.*, b AS other, RANK() OVER (ORDER BY id) AS meta FROM wild_right WHERE id=54 ORDER BY similarity(meta.v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 54, "a": 5, "b": 9, "chosen": 5, "meta": 1}, {"id": 54, "a": 5, "b": 9, "chosen": 9, "meta": 1}],
+      "note": "Positional aliases do not replace unrelated fields exposed by the wildcard."
+    },
+    {
+      "id": "P055",
+      "query": "SELECT wild_left.*, v AS chosen, RANK() OVER (ORDER BY id) AS v FROM wild_left WHERE id=55 UNION ALL SELECT wild_right.*, alt AS other, RANK() OVER (ORDER BY id) AS v FROM wild_right WHERE id=56 ORDER BY similarity(v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 56, "v": 1, "alt": [1, 0], "chosen": [1, 0]}, {"id": 55, "v": 1, "alt": [0, 1], "chosen": [0.6, 0.8]}],
+      "note": "A wildcard ranks the vector supplied by each operand at the selected position."
+    },
+    {
+      "id": "P056",
+      "query": "SELECT wild_left.*, meta.v AS saved, aux.label AS chosen, RANK() OVER (ORDER BY id) AS meta FROM wild_left WHERE id=57 UNION ALL SELECT wild_right.*, meta.v AS saved, aux.label AS chosen, RANK() OVER (ORDER BY id) AS meta FROM wild_right WHERE id=58 ORDER BY similarity(meta.v,$x) DESC, id ASC",
+      "expect_rows": [{"aux": {"label": 7}, "aux.label": "literal", "meta.v": [1, 0], "id": 57, "saved": [0, 1], "chosen": 7, "meta": 1}, {"aux": {"label": 10}, "aux.label": "literal", "meta.v": [0, 1], "id": 58, "saved": [1, 0], "chosen": 10, "meta": 1}],
+      "note": "A projected path reads the nested value while the vector order reads the literal dotted vector first."
+    },
+    {
+      "id": "P057",
+      "query": "SELECT id, meta.v AS saved, aux.label AS chosen, RANK() OVER (ORDER BY id) AS meta FROM wild_left WHERE id=57 UNION ALL SELECT id, meta.v AS saved, aux.label AS chosen, RANK() OVER (ORDER BY id) AS meta FROM wild_right WHERE id=58 ORDER BY similarity(meta.v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 57, "saved": [0, 1], "chosen": 7, "meta": 1}, {"id": 58, "saved": [1, 0], "chosen": 10, "meta": 1}],
+      "note": "A projected path reads the nested value while the vector order reads the literal dotted vector first."
+    },
+    {
+      "id": "P058",
+      "query": "SELECT wild_left.*, v AS chosen, RANK() OVER (ORDER BY id) AS rn FROM wild_left WHERE id=55 UNION ALL SELECT wild_right.*, alt AS other, RANK() OVER (ORDER BY id) AS rn FROM wild_right WHERE id=56 ORDER BY similarity(v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 56, "v": [0, 1], "alt": [1, 0], "chosen": [1, 0], "rn": 1}, {"id": 55, "v": [0.6, 0.8], "alt": [0, 1], "chosen": [0.6, 0.8], "rn": 1}],
+      "note": "The right operand ranks its selected vector and keeps its own wildcard vector in the result."
+    },
+    {
+      "id": "P059",
+      "query": "SELECT wild_left.*, v AS s, similarity() AS s, RANK() OVER (ORDER BY id) AS v FROM wild_left WHERE vector NEAR [1,0] AND id=59 INTERSECT SELECT wild_right.*, v AS s, similarity() AS s, RANK() OVER (ORDER BY id) AS v FROM wild_right WHERE vector NEAR [1,0] AND id=59 ORDER BY similarity(v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 59, "v": 1, "s": 1.0}],
+      "note": "The visible score overwrites the projected column and its original wildcard member."
+    },
+    {
+      "id": "P060",
+      "query": "SELECT wild_left.*, similarity() AS v, RANK() OVER (ORDER BY id) AS v FROM wild_left WHERE vector NEAR [1,0] AND id=60 INTERSECT SELECT wild_right.*, similarity() AS v, RANK() OVER (ORDER BY id) AS v FROM wild_right WHERE vector NEAR [0,1] AND id=60 ORDER BY similarity(v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 60, "v": 1}],
+      "note": "A rank masks both operand scores even when their NEAR queries give different scores."
+    },
+    {
+      "id": "P061",
+      "query": "SELECT wild_left.*, flag, RANK() OVER (ORDER BY id) AS v FROM wild_left WHERE id=61 INTERSECT SELECT wild_right.*, flag, RANK() OVER (ORDER BY id) AS v FROM wild_right WHERE id=61 ORDER BY similarity(v,$x) DESC, id ASC",
+      "expect_rows": [{"id": 61, "v": 1, "flag": null}],
+      "note": "An explicitly selected missing member is NULL, matching a member present as NULL."
+    },
+    {
+      "id": "P062",
+      "query": "SELECT wild_left.*, flag AS x, RANK() OVER (ORDER BY id) AS v FROM wild_left WHERE id=61 INTERSECT SELECT wild_right.*, flag AS x, RANK() OVER (ORDER BY id) AS v FROM wild_right WHERE id=61 ORDER BY similarity(v,$x) DESC, id ASC",
+      "expect_rows": [],
+      "note": "Renaming the missing member leaves the original wildcard field absent on just one side."
+    },
+    {
+      "id": "P063",
+      "query": "SELECT wild_left.*, RANK() OVER (ORDER BY id) AS id FROM wild_left WHERE id>=59 AND id<=60 INTERSECT SELECT wild_right.*, RANK() OVER (ORDER BY id) AS id FROM wild_right WHERE id=60 ORDER BY similarity(v,$x) DESC",
+      "expect_rows": [],
+      "note": "A window named id still contributes its published rank when the same physical point has different ranks in the two operands."
+    },
+    {
+      "id": "P064",
+      "query": "SELECT wild_left.*, RANK() OVER (ORDER BY id) AS id FROM wild_left WHERE id=60 INTERSECT SELECT wild_right.*, RANK() OVER (ORDER BY id) AS id FROM wild_right WHERE id=60 ORDER BY similarity(v,$x) DESC",
+      "expect_rows": [{"id": 1, "v": [1, 0]}],
+      "note": "The same physical point with the same rank named id intersects."
+    },
+    {
+      "id": "P065",
+      "query": "SELECT wild_left.*, a AS id, RANK() OVER (ORDER BY id) AS rn FROM wild_left WHERE id=62 UNION SELECT wild_right.*, a AS id, RANK() OVER (ORDER BY id) AS rn FROM wild_right WHERE id=63 ORDER BY id ASC",
+      "expect_rows": [{"a": 5, "b": 9, "v": [1, 0], "id": 5, "rn": 1}, {"a": 5, "b": 9, "v": [1, 0], "id": 5, "rn": 1}],
+      "note": "Different physical points remain distinct when a column replaces the displayed id with the same scalar."
+    },
+    {
+      "id": "P066",
+      "query": "SELECT wild_left.*, a AS id, RANK() OVER (ORDER BY id) AS rn FROM wild_left WHERE id=62 INTERSECT SELECT wild_right.*, b AS peer, RANK() OVER (ORDER BY id) AS rn FROM wild_right WHERE id=62 ORDER BY id ASC",
+      "expect_rows": [],
+      "note": "A scalar aligned to id has a different public value for the same physical point."
+    },
+    {
+      "id": "P067",
+      "query": "SELECT wild_left.*, a AS id, similarity() AS id, RANK() OVER (ORDER BY id) AS rn FROM wild_left WHERE vector NEAR [1,0] AND id=62 INTERSECT SELECT wild_right.*, b AS peer, similarity() AS other, RANK() OVER (ORDER BY id) AS rn FROM wild_right WHERE vector NEAR [1,0] AND id=62 ORDER BY id ASC",
+      "expect_rows": [{"a": 5, "b": 9, "v": [1, 0], "id": 1.0, "rn": 1}],
+      "note": "The visible score named id overrides different positionally selected scalars."
+    },
+    {
+      "id": "P068",
+      "query": "SELECT wild_left.*, similarity() AS id, RANK() OVER (ORDER BY id) AS rn FROM wild_left WHERE vector NEAR [1,0] AND id=62 EXCEPT SELECT wild_right.*, similarity() AS id, RANK() OVER (ORDER BY id) AS rn FROM wild_right WHERE vector NEAR [0,1] AND id=62 ORDER BY id ASC",
+      "expect_rows": [{"a": 5, "b": 9, "v": [1, 0], "id": 1.0, "rn": 1}],
+      "note": "Different visible scores named id distinguish the same physical point."
+    },
+    {
+      "id": "P069",
+      "query": "SELECT wild_left.*, similarity() AS id, RANK() OVER (ORDER BY id) AS id FROM wild_left WHERE vector NEAR [1,0] AND id=62 INTERSECT SELECT wild_right.*, similarity() AS id, RANK() OVER (ORDER BY id) AS id FROM wild_right WHERE vector NEAR [0,1] AND id=62 ORDER BY id ASC",
+      "expect_rows": [{"a": 5, "b": 9, "v": [1, 0], "id": 1}],
+      "note": "A window named id replaces different operand scores with the same rank."
     }
   ],
   "vector_group_cases": [

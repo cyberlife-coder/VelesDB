@@ -31,7 +31,9 @@ use std::collections::HashMap;
 use crate::distance::rank_scores;
 use crate::point::SearchResult;
 
-use super::compound_projection::{preserve_operand_positions, CompoundProjection, VectorSortSlots};
+use super::compound_projection::{
+    exchange_member, preserve_operand_positions, CompoundProjection, VectorSortSlots,
+};
 use super::distinct_evaluator::{compute_distinct_key, key_columns, projected_values_key};
 use super::json_path::ProjectedField;
 use super::window_evaluator::WindowInputs;
@@ -46,19 +48,49 @@ enum OperandField<'a> {
     Column(ProjectedField<'a>),
     Rank(&'a str),
     RankInput(&'a str),
+    RankPath(&'a str, &'a str, ProjectedField<'a>),
 }
 
 impl<'a> OperandField<'a> {
     fn storage(self) -> ProjectedField<'a> {
         match self {
-            Self::Column(field) => field,
+            Self::Column(field) | Self::RankPath(_, _, field) => field,
             Self::Rank(name) | Self::RankInput(name) => ProjectedField::Published(name),
         }
+    }
+
+    fn already_visible(self, target: ProjectedField<'_>, retained: &[String]) -> bool {
+        matches!(self, Self::Rank(name) if target.name() == name && !retained.iter().any(|saved| saved == name))
+    }
+
+    fn unchanged(self, target: ProjectedField<'_>, row: &SearchResult) -> bool {
+        let Self::Column(ProjectedField::Source(name)) = self else {
+            return false;
+        };
+        target == ProjectedField::Published(name)
+            && name != "id"
+            && !name.contains('.')
+            && row
+                .point
+                .payload
+                .as_ref()
+                .is_some_and(|p| p.get(name).is_some())
     }
 
     fn read(self, row: &SearchResult) -> std::borrow::Cow<'_, serde_json::Value> {
         let (name, index) = match self {
             Self::Column(field) => return field.read(row),
+            Self::RankPath(root, tail, field) => {
+                if let Some(serde_json::Value::Array(pair)) =
+                    row.point.payload.as_ref().and_then(|p| p.get(root))
+                {
+                    let val = pair
+                        .get(1)
+                        .and_then(|v| super::json_path::payload_path(v, tail));
+                    return std::borrow::Cow::Borrowed(val.unwrap_or(&serde_json::Value::Null));
+                }
+                return field.read(row);
+            }
             Self::Rank(name) => (name, 0),
             Self::RankInput(name) => (name, 1),
         };
@@ -208,12 +240,13 @@ fn prepare_compound_rows(
             order?,
             listed_fields(&query.select.columns).map(OperandField::storage),
             combined.iter().map(|(_, row, _)| row),
+            layout.wildcard_replacements(query),
         )
     });
     if let (Some(layout), Some(slots)) = (&mut layout, &slots) {
         layout.redirect_slots(slots);
     }
-    let rows = aligned_rows(combined, operands, query, layout.as_ref());
+    let rows = aligned_rows(combined, operands, query, layout.as_ref(), slots.as_ref());
     let order = order.and_then(|order| layout.as_ref().map(|layout| layout.order(order)));
     PreparedCompound { rows, order, slots }
 }
@@ -238,21 +271,25 @@ fn aligned_rows(
     operands: &[Query],
     query: &Query,
     layout: Option<&CompoundProjection<'_>>,
+    slots: Option<&VectorSortSlots>,
 ) -> Vec<SearchResult> {
     let renames: Vec<_> = operands
         .iter()
         .map(|operand| {
             (
-                column_renames(&operand.select.columns, &query.select.columns, layout),
+                column_renames(&operand.select.columns, query, layout),
                 super::compound_rank_inputs(query, &operand.select.columns),
+                slots.map_or_else(Vec::new, |s| {
+                    s.replaced_members(select_fields(&operand.select.columns).0)
+                }),
             )
         })
         .collect();
     combined
         .into_iter()
         .map(|(_, mut row, operand)| {
-            let (columns, ranks) = &renames[operand];
-            align_columns(&mut row, columns, ranks);
+            let (columns, ranks, originals) = &renames[operand];
+            align_columns(&mut row, columns, ranks, originals);
             row
         })
         .collect()
@@ -360,9 +397,17 @@ fn rank_by_score(rows: &mut [SearchResult], higher_is_better: bool) {
 /// first operand's `id`, which reads the point id, are left as they are.
 fn column_renames<'a>(
     columns: &'a SelectColumns,
-    first: &'a SelectColumns,
+    query: &'a Query,
     layout: Option<&CompoundProjection<'a>>,
 ) -> Vec<(OperandField<'a>, ProjectedField<'a>)> {
+    let first = &query.select.columns;
+    if super::compound_projection::qualified_wildcard(first) {
+        let mut fields = wildcard_bindings(columns, query, layout);
+        if let Some(layout) = layout {
+            add_positional_vectors(&mut fields, layout, columns);
+        }
+        return fields;
+    }
     // An identity assignment still restores a window output if an earlier
     // position writes the same name. Read its value before any assignment.
     let mut changed = rustc_hash::FxHashSet::default();
@@ -393,7 +438,7 @@ fn add_positional_vectors<'a>(
     layout: &CompoundProjection<'a>,
     columns: &'a SelectColumns,
 ) {
-    let (cols, _) = key_columns(columns);
+    let (cols, _) = select_fields(columns);
     for &(name, i) in layout.positional_vectors() {
         if cols.get(i).is_some_and(|col| col.name != name) {
             if let Some(source) = listed_fields(columns).nth(i) {
@@ -407,12 +452,14 @@ fn align_columns(
     row: &mut SearchResult,
     renames: &[(OperandField<'_>, ProjectedField<'_>)],
     ranks: &[String],
+    originals: &[(&str, &str)],
 ) {
     if renames.is_empty() && ranks.is_empty() {
         return;
     }
     let values: Vec<_> = renames
         .iter()
+        .filter(|(own, first)| !own.unchanged(*first, row))
         .map(|(own, first)| (*first, own.read(row).into_owned()))
         .collect();
     let payload = row.point.payload.get_or_insert(serde_json::Value::Null);
@@ -420,29 +467,33 @@ fn align_columns(
         *payload = serde_json::Value::Object(serde_json::Map::new());
     }
     restore_rank_inputs(payload, ranks);
+    for &(source, temporary) in originals {
+        let input = payload.get_mut(source).map(serde_json::Value::take);
+        exchange_member(
+            payload,
+            temporary,
+            Some(serde_json::Value::Array(input.into_iter().collect())),
+        );
+    }
     for (first, value) in values {
         first.write(payload, value);
     }
 }
 
 fn restore_rank_inputs(payload: &mut serde_json::Value, ranks: &[String]) {
-    if let Some(map) = payload.as_object_mut() {
-        for name in ranks {
-            if let Some(serde_json::Value::Array(pair)) = map.get_mut(name) {
-                let input = pair.get_mut(1).map(std::mem::take);
-                if let Some(input) = input {
-                    map.insert(name.clone(), input);
-                } else {
-                    map.remove(name);
-                }
-            }
+    for name in ranks {
+        if let Some(serde_json::Value::Array(pair)) = payload.get_mut(name) {
+            let original = pair.get_mut(1).map(std::mem::take);
+            exchange_member(payload, name, original);
         }
     }
 }
 
 /// Named columns followed by the window outputs, in projection order.
-fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = OperandField<'_>> {
-    let (cols, windows) = match columns {
+pub(super) fn select_fields(
+    columns: &SelectColumns,
+) -> (&[super::Column], &[super::WindowFunction]) {
+    match columns {
         SelectColumns::Columns(cols) => (cols.as_slice(), &[][..]),
         SelectColumns::Mixed {
             columns,
@@ -450,8 +501,23 @@ fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = OperandField<'
             ..
         } => (columns.as_slice(), window_functions.as_slice()),
         _ => (&[][..], &[][..]),
-    };
+    }
+}
+
+fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = OperandField<'_>> {
+    let (cols, windows) = select_fields(columns);
+    let wildcard = super::compound_projection::qualified_wildcard(columns);
     let named = WindowInputs::projection_fields(cols, windows).map(move |(col, field)| {
+        let field = if wildcard {
+            ProjectedField::Source(&col.name)
+        } else {
+            field
+        };
+        if let Some((root, tail)) = col.name.split_once('.') {
+            if windows.iter().any(|wf| window_name(wf) == root) {
+                return OperandField::RankPath(root, tail, field);
+            }
+        }
         if field.name() == col.name
             && col.name != "id"
             && !col.name.contains('.')
@@ -477,59 +543,16 @@ fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = OperandField<'
     named.chain(ranks)
 }
 
-/// Keys each row of an operand by its projection.
-fn keyed(
-    rows: Vec<SearchResult>,
-    select: &SelectStatement,
-    operand: usize,
-    query: &Query,
-) -> Vec<KeyedRow> {
-    let mut inputs = Vec::new();
-    if matches!(&select.columns, SelectColumns::Mixed { qualified_wildcards, .. }
-        if !qualified_wildcards.is_empty())
-    {
-        inputs.extend(
-            super::compound_rank_inputs(query, &select.columns)
-                .into_iter()
-                .map(|name| (name, serde_json::Value::Null)),
-        );
-    }
-    rows.into_iter()
-        .map(|mut row| {
-            let key = if inputs.is_empty() {
-                row_key(&row, &select.columns)
-            } else {
-                swap_wildcard_ranks(&mut row, &mut inputs);
-                let key = row_key(&row, &select.columns);
-                swap_wildcard_ranks(&mut row, &mut inputs);
-                key
-            };
-            (key, row, operand)
-        })
-        .collect()
+fn window_name(window: &super::WindowFunction) -> &str {
+    window
+        .alias
+        .as_deref()
+        .unwrap_or(window.function_type.default_alias())
 }
 
-/// Temporarily expose just the public rank in a wildcard's payload for
-/// its set key. The second swap returns the captured inputs for ordering.
-fn swap_wildcard_ranks(row: &mut SearchResult, inputs: &mut [(String, serde_json::Value)]) {
-    let Some(payload) = row.point.payload.as_mut() else {
-        return;
-    };
-    for (name, saved) in inputs {
-        let Some(value) = payload.get_mut(name.as_str()) else {
-            continue;
-        };
-        let (pair, rank) = if saved.is_array() {
-            (saved, value)
-        } else {
-            (value, saved)
-        };
-        if let Some(first) = pair.get_mut(0) {
-            std::mem::swap(first, rank);
-            std::mem::swap(pair, rank);
-        }
-    }
-}
+#[path = "compound_wildcard.rs"]
+mod wildcard;
+use wildcard::{keyed, wildcard_bindings};
 
 /// The last operand of `query` (the query itself without a compound).
 fn last_operand(query: &Query) -> &SelectStatement {

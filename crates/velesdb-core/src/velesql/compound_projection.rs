@@ -20,24 +20,9 @@ pub(super) struct CompoundProjection<'a> {
     positional_vectors: Vec<(&'a str, usize)>,
 }
 
-/// Scalar values whose normal output slots shadow a vector input. The
-/// alternative literal keys exist only while the compound is being ordered.
-pub(super) struct VectorSortSlots(Vec<(String, String)>);
-
-impl VectorSortSlots {
-    pub(super) fn publish(&self, page: &mut [SearchResult]) {
-        for payload in page
-            .iter_mut()
-            .filter_map(|row| row.point.payload.as_mut()?.as_object_mut())
-        {
-            for (output, temporary) in &self.0 {
-                if let Some(value) = payload.remove(temporary) {
-                    payload.insert(output.clone(), value);
-                }
-            }
-        }
-    }
-}
+#[path = "compound_sort_slots.rs"]
+mod sort_slots;
+pub(super) use sort_slots::{exchange_member, VectorSortSlots};
 
 struct VisibleColumn<'a> {
     position: usize,
@@ -94,7 +79,8 @@ impl<'a> CompoundProjection<'a> {
             _ => return None,
         };
         let rank_inputs = compound_rank_inputs(query, &query.select.columns);
-        let published = window_publishes_columns(columns, windows);
+        let published =
+            qualified_wildcard(&query.select.columns) || window_publishes_columns(columns, windows);
         needs_positional_slots(query, columns, published, &rank_inputs).then(|| {
             let mut layout = Self::from_sources(columns, windows, scores, published);
             layout.bind_ranks(windows, &rank_inputs);
@@ -252,65 +238,6 @@ impl<'a> CompoundProjection<'a> {
             .map_or(Some(fallback), |binding| binding.map(|(_, slot)| slot))
     }
 
-    /// A named vector reads its literal field first, then its dotted source
-    /// path. Defer a write to either that literal or its root until the sort
-    /// has read the original vector. A primary vector lives on the point.
-    pub(super) fn vector_sort_slots<'r>(
-        &self,
-        order: &[SelectOrderBy],
-        fields: impl Iterator<Item = ProjectedField<'a>>,
-        rows: impl Iterator<Item = &'r SearchResult>,
-    ) -> Option<VectorSortSlots> {
-        let shadowed: Vec<_> = self
-            .auxiliary
-            .iter()
-            .copied()
-            .filter(|slot| {
-                order
-                    .iter()
-                    .any(|item| reads_vector_input(&item.expr, slot))
-            })
-            .collect();
-        if shadowed.is_empty() {
-            return None;
-        }
-        let mut occupied: FxHashSet<&str> = rows
-            .filter_map(|row| row.point.payload.as_ref()?.as_object())
-            .flat_map(|payload| payload.keys().map(String::as_str))
-            .filter(|name| name.starts_with('.'))
-            .collect();
-        for &(output, field) in self.named.iter().flatten() {
-            occupied.extend([output, field.name()]);
-        }
-        for field in fields {
-            occupied.insert(field.name());
-        }
-        for item in order {
-            occupy_order_names(&item.expr, &mut occupied);
-        }
-        // A literal dotted key can shadow only a lookup of that exact name.
-        let available = (0_usize..)
-            .map(|i| format!(".{i}"))
-            .filter(|k| !occupied.contains(k.as_str()));
-        Some(VectorSortSlots(
-            shadowed
-                .into_iter()
-                .map(str::to_owned)
-                .zip(available)
-                .collect(),
-        ))
-    }
-
-    pub(super) fn redirect_slots(&mut self, slots: &'a VectorSortSlots) {
-        for (_, field) in self.named.iter_mut().flatten() {
-            if let ProjectedField::Published(name) = field {
-                if let Some((_, key)) = slots.0.iter().find(|(slot, _)| slot.as_str() == *name) {
-                    *field = ProjectedField::Published(key);
-                }
-            }
-        }
-    }
-
     pub(super) fn positional_vectors(&self) -> &[(&'a str, usize)] {
         &self.positional_vectors
     }
@@ -368,8 +295,10 @@ impl<'a> CompoundProjection<'a> {
     }
 }
 
-/// Names of window ranks that would overwrite a named vector read by this
-/// compound. Compute this once per operand before running its SELECT.
+/// Source fields retained alongside a compound operand's window ranks. A
+/// named-vector order can need a shadowed input. A qualified wildcard also
+/// needs the original members when aligning the public output names of its
+/// operand with the first SELECT. Compute this list before running the operand.
 #[must_use]
 pub fn compound_rank_inputs(query: &Query, columns: &SelectColumns) -> Vec<String> {
     let SelectColumns::Mixed {
@@ -383,23 +312,48 @@ pub fn compound_rank_inputs(query: &Query, columns: &SelectColumns) -> Vec<Strin
     }
     let order = super::compound_window(query).order_by.unwrap_or_default();
     let mut names = Vec::new();
-    for wf in window_functions {
+    for (position, wf) in window_functions.iter().enumerate() {
         let name = wf
             .alias
             .as_deref()
             .unwrap_or(wf.function_type.default_alias());
-        if order
+        let retained = order
             .iter()
             .any(|item| reads_vector_input(&item.expr, name))
-            && !names.iter().any(|n| n == name)
-        {
+            || wildcard_retains_input(query, columns, name, position);
+        if retained && !names.iter().any(|n| n == name) {
             names.push(name.to_owned());
         }
     }
     names
 }
 
-fn reads_vector_input(expr: &OrderByExpr, slot: &str) -> bool {
+fn wildcard_retains_input(
+    query: &Query,
+    selection: &SelectColumns,
+    name: &str,
+    index: usize,
+) -> bool {
+    if !qualified_wildcard(selection) {
+        return false;
+    }
+    let (columns, _) = super::set_operation::select_fields(selection);
+    let (_, first) = super::set_operation::select_fields(&query.select.columns);
+    let projected_path = columns.iter().any(|col| {
+        col.name
+            .split_once('.')
+            .is_some_and(|(root, _)| root == name)
+    });
+    projected_path
+        || first.get(index).is_some_and(|wf| {
+            wf.alias
+                .as_deref()
+                .unwrap_or(wf.function_type.default_alias())
+                != name
+        })
+}
+
+pub(super) fn reads_vector_input(expr: &OrderByExpr, slot: &str) -> bool {
     let OrderByExpr::Similarity(sim) = expr else {
         return false;
     };
@@ -467,6 +421,10 @@ pub(super) fn orders_named_vector(query: &Query) -> bool {
         .any(|item| matches!(&item.expr, OrderByExpr::Similarity(sim) if sim.field != super::PRIMARY_VECTOR_FIELD))
 }
 
+pub(super) fn qualified_wildcard(columns: &SelectColumns) -> bool {
+    matches!(columns, SelectColumns::Mixed { qualified_wildcards, .. } if !qualified_wildcards.is_empty())
+}
+
 fn needs_positional_slots(
     query: &Query,
     columns: &[Column],
@@ -476,10 +434,8 @@ fn needs_positional_slots(
     if !ranks.is_empty() {
         return true;
     }
-    if matches!(&query.select.columns, SelectColumns::Mixed { qualified_wildcards, .. }
-        if !qualified_wildcards.is_empty())
-    {
-        return false;
+    if qualified_wildcard(&query.select.columns) {
+        return !columns.is_empty();
     }
     if published {
         return orders_named_vector(query);
@@ -496,6 +452,9 @@ fn window_publishes_columns(columns: &[Column], windows: &[WindowFunction]) -> b
 /// A windowed operand publishes captured columns by source. Positional
 /// alignment assigns output slots once its set key and vector inputs are known.
 pub(super) fn preserve_operand_positions(selection: &mut SelectColumns, vector_order: bool) {
+    if qualified_wildcard(selection) {
+        return;
+    }
     let SelectColumns::Mixed {
         columns,
         window_functions,

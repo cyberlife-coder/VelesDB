@@ -77,7 +77,7 @@ impl WindowInputs {
         for name in names {
             let values = rows
                 .iter_mut()
-                .map(|row| row.point.payload.as_mut()?.as_object_mut()?.remove(name))
+                .map(|row| row.point.payload.as_mut()?.get_mut(name).map(Value::take))
                 .collect();
             self.rank_inputs.push((name.clone(), values));
         }
@@ -128,7 +128,11 @@ impl WindowInputs {
     /// expressions for a row before writing any output alias over an input.
     #[inline(never)]
     pub fn publish(mut self, rows: &mut [SearchResult], columns: &SelectColumns, offset: usize) {
-        self.publish_columns(rows, columns, offset);
+        if self.rank_inputs.is_empty()
+            || !crate::velesql::compound_projection::qualified_wildcard(columns)
+        {
+            self.publish_columns(rows, columns, offset);
+        }
         self.carry_rank_inputs(rows, offset);
     }
 
@@ -153,7 +157,11 @@ impl WindowInputs {
             .iter()
             .enumerate()
             .filter(|(_, col)| {
-                !names_window(window_functions, col.alias.as_deref().unwrap_or(&col.name))
+                !(names_window(window_functions, col.alias.as_deref().unwrap_or(&col.name))
+                    || col.alias.is_none()
+                        && col.name.split_once('.').is_some_and(|(root, _)| {
+                            self.rank_inputs.iter().any(|(name, _)| name == root)
+                        }))
             })
             .collect::<Vec<_>>();
         for (at, row) in rows.iter_mut().enumerate() {

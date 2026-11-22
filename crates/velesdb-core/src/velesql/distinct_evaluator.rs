@@ -157,7 +157,7 @@ fn canonical_value(mut value: serde_json::Value) -> String {
 }
 
 /// Full-payload keys can serialize an already ordered document by reference.
-fn canonical_payload(value: &serde_json::Value) -> String {
+pub(super) fn canonical_payload(value: &serde_json::Value) -> String {
     if ordered_objects(value) {
         value.to_string()
     } else {

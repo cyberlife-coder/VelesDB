@@ -342,3 +342,26 @@ fn a_nan_score_ranks_last_and_never_wins_a_duplicate() {
         }
     }
 }
+
+#[test]
+fn comparing_wildcard_rows_preserves_their_payload_member_order() {
+    let payload: serde_json::Value = serde_json::from_str(
+        r#"{"start":1,"id":99,"middle":2,"other":3,"s":"original","inside":4,"ending":5,"zz":6,"r":1}"#,
+    )
+    .unwrap();
+    let original = payload.to_string();
+    let sql = "SELECT t.*, similarity() AS s, RANK() OVER (ORDER BY id) AS r FROM a AS t WHERE vector NEAR [1,0] UNION SELECT t.*, similarity() AS s, RANK() OVER (ORDER BY id) AS r FROM b AS t WHERE vector NEAR [1,0]";
+    let rows = run(
+        sql,
+        vec![
+            vec![row(7, 1.0, payload.clone())],
+            vec![row(7, 1.0, payload)],
+        ],
+        true,
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].point.payload.as_ref().unwrap().to_string(),
+        original
+    );
+}
