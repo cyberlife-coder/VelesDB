@@ -719,23 +719,11 @@ impl Database {
         let joined = super::query_engine_join::JoinedRead::begin(query, &first);
         // A compound has several strategies. Only a single SELECT can publish one.
         let probe = probe.filter(|_| query.compound.is_none());
-        let run = |operand: &crate::velesql::Query| {
-            self.execute_select_operand(
-                operand,
-                params,
-                probe,
-                (&query.select.from, &first),
-                joined.as_ref(),
-            )
+        let mut run = |operand: &crate::velesql::Query| {
+            self.execute_select_operand(operand, params, probe, (query, &first), joined.as_ref())
         };
         let rows = if query.compound.is_some() {
-            crate::velesql::execute_compound(
-                query,
-                first.config().metric.higher_is_better(),
-                u64::try_from(crate::collection::search::query::MAX_LIMIT).unwrap_or(u64::MAX),
-                run,
-                |rows, order_by| first.apply_order_by(rows, order_by, params),
-            )?
+            first.execute_compound_read(query, params, &mut run)?
         } else {
             run(query)?
         };

@@ -65,7 +65,8 @@ fn test_project_alias_renames() {
 fn test_inject_window_functions_noop_without_window() {
     let stmt = SelectStatement::empty();
     let mut results = to_search_results(rows());
-    inject_window_functions(&stmt, &mut results).expect("test: noop");
+    inject_window_functions(&stmt, &mut results, &mut WindowInputs::default(), &[])
+        .expect("test: noop");
     // Payload untouched.
     assert_eq!(results[0].point.payload.as_ref().unwrap()["cat"], "a");
 }

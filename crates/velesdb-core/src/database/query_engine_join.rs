@@ -15,7 +15,7 @@ mod clock_tests;
 
 /// The leading collection owns the final output quota of a statement containing a JOIN.
 pub(super) struct JoinedRead<'a> {
-    leading: &'a str,
+    statement: &'a crate::velesql::Query,
     ctx: crate::guardrails::QueryContext,
 }
 
@@ -36,7 +36,7 @@ impl<'a> JoinedRead<'a> {
             return None;
         }
         Some(Self {
-            leading: &query.select.from,
+            statement: query,
             ctx: leading.guard_rails().create_context(),
         })
     }
@@ -50,15 +50,17 @@ impl<'a> JoinedRead<'a> {
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
-        let ctx = collection
+        let mut ctx = collection
             .prepare_query_context(query, "default")?
             .for_join_input();
+        ctx.window_rank_inputs =
+            crate::velesql::compound_rank_inputs(self.statement, &query.select.columns);
         let rows = if query.select.joins.is_empty() {
             collection.execute_in_query_context(query, params, &ctx)?.0
         } else {
             db.execute_joined_select(query.clone(), &query.select, collection, params, &ctx)?
         };
-        if query.select.from != self.leading {
+        if query.select.from != self.statement.select.from {
             collection.guard_rails().circuit_breaker.record_success();
         }
         if let (Some(slot), Some(strategy)) = (probe, ctx.executed_filter_strategy()) {
@@ -83,11 +85,11 @@ impl Database {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
-        leading: (&str, &crate::collection::Collection),
+        leading: (&crate::velesql::Query, &crate::collection::Collection),
         joined: Option<&JoinedRead<'_>>,
     ) -> Result<Vec<SearchResult>> {
         let other;
-        let collection = if query.select.from == leading.0 {
+        let collection = if query.select.from == leading.0.select.from {
             leading.1
         } else {
             other = self.resolve_collection(&query.select.from)?;
@@ -98,6 +100,11 @@ impl Database {
         }
         match probe {
             Some(slot) => collection.execute_query_probed(query, params, slot),
+            None if leading.0.compound.is_some() => collection.execute_set_operand(
+                query,
+                params,
+                crate::velesql::compound_rank_inputs(leading.0, &query.select.columns),
+            ),
             None => collection.execute_query(query, params),
         }
     }
@@ -133,6 +140,7 @@ impl Database {
             base_collection,
             params,
             deferred_let.as_deref(),
+            &ctx.window_rank_inputs,
         )?;
         base_collection.check_read_deadline(ctx)?;
         Ok(rows)
@@ -459,11 +467,19 @@ impl JoinWindow {
         collection: &crate::collection::Collection,
         params: &std::collections::HashMap<String, serde_json::Value>,
         deferred_let: Option<&[crate::velesql::LetBinding]>,
+        rank_inputs: &[String],
     ) -> Result<Vec<SearchResult>> {
         let limit = usize::try_from(self.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
             .unwrap_or(usize::MAX);
         if let Some(bindings) = deferred_let {
-            return collection.apply_select_postprocessing(select, rows, params, limit, bindings);
+            return collection.apply_select_postprocessing(
+                select,
+                rows,
+                params,
+                limit,
+                bindings,
+                rank_inputs,
+            );
         }
         if self.distinct == crate::velesql::DistinctMode::All {
             rows = crate::velesql::distinct_evaluator::apply_distinct(rows, &select.columns);

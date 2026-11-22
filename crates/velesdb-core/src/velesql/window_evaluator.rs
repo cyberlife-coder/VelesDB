@@ -103,6 +103,17 @@ pub fn evaluate(
     results: &mut [SearchResult],
     window_functions: &[WindowFunction],
 ) -> crate::Result<()> {
+    evaluate_compound_windows(results, window_functions, &mut WindowInputs::default(), &[])
+}
+
+/// Evaluates an operand's window functions after preserving the source fields
+/// its compound will rank. The selected ranks remain scalar for local ordering.
+pub fn evaluate_compound_windows(
+    results: &mut [SearchResult],
+    window_functions: &[WindowFunction],
+    inputs: &mut WindowInputs,
+    rank_inputs: &[String],
+) -> crate::Result<()> {
     // Phase 0: snapshot EVERY window function's inputs before any injection.
     // This is the fix for inter-function contamination — once any window
     // function injects values into payloads, later snapshots would read the
@@ -112,6 +123,7 @@ pub fn evaluate(
         .map(|wf| WindowSnapshot::capture(results, wf))
         .collect();
 
+    inputs.take_rank_inputs(rank_inputs, results);
     for (wf, snapshot) in window_functions.iter().zip(snapshots.iter()) {
         apply_single_window(results, wf, snapshot);
     }
@@ -343,8 +355,7 @@ fn extract_sort_value(result: &SearchResult, column: &str) -> serde_json::Value 
 /// - `Value::Number(1)` vs `Value::String("1")` → `1` vs `"1"` (distinct)
 /// - `Value::Bool(true)` vs `Value::String("true")` → `true` vs `"true"`
 ///
-/// Consistent with `distinct_evaluator::canonical_json_string` which applies the same
-/// rule for DISTINCT deduplication keys.
+/// DISTINCT keys use the same numeric normalisation before serializing values.
 fn extract_payload_value(result: &SearchResult, column: &str) -> String {
     normalise(Cow::Owned(column_value(result, column))).to_string()
 }

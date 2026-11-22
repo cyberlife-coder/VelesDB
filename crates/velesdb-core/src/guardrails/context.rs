@@ -42,6 +42,7 @@ pub struct QueryContext {
     current_cardinality: AtomicUsize,
     /// A JOIN charges its page after matching and windowing the base SELECT's rows.
     join_input: bool,
+    pub(crate) window_rank_inputs: Vec<String>,
     /// Estimated memory usage in bytes.
     memory_used: AtomicUsize,
     /// Graph nodes visited during MATCH traversal (for EXPLAIN ANALYZE).
@@ -143,6 +144,7 @@ impl QueryContext {
             current_depth: AtomicU64::new(0),
             current_cardinality: AtomicUsize::new(0),
             join_input: false,
+            window_rank_inputs: Vec::new(),
             memory_used: AtomicUsize::new(0),
             traversal_nodes_visited: AtomicU64::new(0),
             traversal_edges_traversed: AtomicU64::new(0),

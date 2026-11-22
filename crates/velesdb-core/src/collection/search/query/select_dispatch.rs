@@ -484,6 +484,7 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         limit: usize,
         let_bindings: &[crate::velesql::LetBinding],
+        rank_inputs: &[String],
     ) -> Result<Vec<SearchResult>> {
         // Step 1: DISTINCT — deduplication before any ranking (see pipeline
         // order contract in the doc comment above).
@@ -500,6 +501,7 @@ impl Collection {
             params,
             let_bindings,
             skip.saturating_add(limit),
+            rank_inputs,
         )?;
         if skip > 0 {
             results = results.into_iter().skip(skip).collect();
@@ -526,12 +528,18 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         let_bindings: &[crate::velesql::LetBinding],
         leading: usize,
+        rank_inputs: &[String],
     ) -> Result<crate::velesql::window_evaluator::WindowInputs> {
         let order_by = stmt.order_by.as_deref().unwrap_or_default();
         let mut keys = self.precompute_similarity_scores(results, order_by, params)?;
         if let Some(wfs) = Self::extract_window_functions(&stmt.columns) {
             keys.window = crate::velesql::window_evaluator::WindowInputs::capture(stmt, results);
-            crate::velesql::window_evaluator::evaluate(results, wfs)?;
+            crate::velesql::window_evaluator::evaluate_compound_windows(
+                results,
+                wfs,
+                &mut keys.window,
+                rank_inputs,
+            )?;
         }
         if order_by.is_empty() {
             return Ok(keys.window);

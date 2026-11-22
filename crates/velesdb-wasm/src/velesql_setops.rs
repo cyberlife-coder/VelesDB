@@ -13,6 +13,25 @@ use crate::exec_error::ExecError;
 use crate::velesql_result::QueryResultRow;
 use crate::velesql_value::Params;
 
+/// Gives each row its own vector, as core's search results carry theirs: a
+/// compound's rows come from several collections, whose ids are local, so the
+/// window's `similarity(vector, $v)` reads the vector on the row.
+pub(crate) fn carry_own_vectors(
+    rows: &mut [velesdb_core::SearchResult],
+    store: &crate::store_state::StoreState,
+) {
+    let dim = store.dimension;
+    if dim == 0 {
+        return;
+    }
+    let index = crate::velesql_select::build_id_to_idx(store);
+    for row in rows {
+        if let Some(&at) = index.get(&row.point.id) {
+            row.point.vector = store.data[at * dim..(at + 1) * dim].to_vec();
+        }
+    }
+}
+
 /// Executes a compound query.
 ///
 /// # Errors
@@ -34,7 +53,11 @@ pub(crate) fn execute(
         query,
         higher_is_better,
         ceiling,
-        |operand| crate::velesql_select::execute_operand(db, operand, params),
+        |operand| {
+            let inputs =
+                velesdb_core::velesql::compound_rank_inputs(query, &operand.select.columns);
+            crate::velesql_select::execute_operand(db, operand, params, &inputs)
+        },
         |rows, order_by| {
             let window = ordered_by(&query.select, order_by);
             let ctx = crate::velesql_orderby::OrderContext {

@@ -274,7 +274,13 @@ pub(super) enum ProjectedField<'a> {
     Published(&'a str),
 }
 
-impl ProjectedField<'_> {
+impl<'a> ProjectedField<'a> {
+    pub(super) fn name(self) -> &'a str {
+        match self {
+            Self::Source(name) | Self::Published(name) => name,
+        }
+    }
+
     pub(super) fn read(self, row: &crate::point::SearchResult) -> std::borrow::Cow<'_, Value> {
         let payload = row.point.payload.as_ref();
         let value = match self {

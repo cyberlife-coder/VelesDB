@@ -227,6 +227,7 @@ impl Collection {
             fctx.params,
             fctx.limit,
             fctx.let_bindings,
+            &fctx.ctx.window_rank_inputs,
         )?;
         // The guard-rails count the rows the statement returns, after its
         // window, on every path (`Self::finalize_ranked_and_check`).

@@ -112,18 +112,33 @@ pub(super) fn projected_key<'a>(
     fields: impl Iterator<Item = ProjectedField<'a>>,
     include_score: bool,
 ) -> String {
-    let mut fields = fields.peekable();
-    let mut key = if fields.peek().is_none() {
+    projected_values_key(
+        result,
+        &mut fields.map(|field| field.read(result)),
+        include_score,
+    )
+}
+
+/// Both SELECT DISTINCT and set operators encode their own projected values
+/// with the same separator and numeric normalisation.
+pub(super) fn projected_values_key(
+    result: &SearchResult,
+    values: &mut dyn Iterator<Item = std::borrow::Cow<'_, serde_json::Value>>,
+    include_score: bool,
+) -> String {
+    let mut key = if let Some(first) = values.next() {
+        let mut key = canonical_value(normalise(first));
+        for value in values {
+            key.push('\x1f');
+            key.push_str(&canonical_value(normalise(value)));
+        }
+        key
+    } else {
         result
             .point
             .payload
             .as_ref()
-            .map_or_else(|| "null".to_string(), canonical_json_string)
-    } else {
-        fields
-            .map(|field| canonical_json_string(&normalise(field.read(result))))
-            .collect::<Vec<_>>()
-            .join("\x1F") // ASCII Unit Separator
+            .map_or_else(|| "null".to_owned(), canonical_payload)
     };
 
     if include_score {
@@ -134,33 +149,29 @@ pub(super) fn projected_key<'a>(
     key
 }
 
-/// Produce a canonical JSON string with sorted object keys.
-///
-/// This ensures that logically equal JSON objects produce identical strings,
-/// regardless of the original key order (e.g., `{"a":1,"b":2}` == `{"b":2,"a":1}`).
-/// Keys are JSON-quoted like values, so a key containing `:` or `,` cannot
-/// make two different objects share a string (`{"a:1,b":2}` vs `{"a":1,"b":2}`).
-fn canonical_json_string(value: &serde_json::Value) -> String {
+/// JSON object order is part of the wire key even when serde_json is built
+/// with its insertion-order feature. The normalised projection is already owned.
+fn canonical_value(mut value: serde_json::Value) -> String {
+    value.sort_all_objects();
+    value.to_string()
+}
+
+/// Full-payload keys can serialize an already ordered document by reference.
+fn canonical_payload(value: &serde_json::Value) -> String {
+    if ordered_objects(value) {
+        value.to_string()
+    } else {
+        canonical_value(value.clone())
+    }
+}
+
+fn ordered_objects(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Object(map) => {
-            // Sort keys alphabetically for deterministic output
-            let mut keys: Vec<_> = map.keys().collect();
-            keys.sort_unstable();
-            let pairs: Vec<String> = keys
-                .iter()
-                .map(|k| {
-                    let key = serde_json::Value::from(k.as_str());
-                    format!("{key}:{}", canonical_json_string(&map[*k]))
-                })
-                .collect();
-            format!("{{{}}}", pairs.join(","))
+            map.keys().is_sorted() && map.values().all(ordered_objects)
         }
-        serde_json::Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(canonical_json_string).collect();
-            format!("[{}]", items.join(","))
-        }
-        // Primitives: use standard JSON representation
-        _ => value.to_string(),
+        serde_json::Value::Array(list) => list.iter().all(ordered_objects),
+        _ => true,
     }
 }
 

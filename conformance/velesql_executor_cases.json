@@ -1583,6 +1583,42 @@
       "query": "SELECT a AS meta, a AS v1, a AS tag, id FROM set_vectors UNION ALL SELECT b,b,b,id FROM set_vectors WHERE id=42 ORDER BY similarity(meta.v,$x) DESC, similarity(v1,$x) DESC, meta ASC, id ASC",
       "expect_rows": [{"meta": 6, "v1": 6, "tag": 6, "id": 43}, {"meta": 3, "v1": 3, "tag": 3, "id": 41}, {"meta": 4, "v1": 4, "tag": 4, "id": 42}, {"meta": 7, "v1": 7, "tag": 7, "id": 42}],
       "note": "A missing first vector sorts first under DESC. Its ties use the second vector, then the scalar alias, including the two output rows sharing id 42."
+    },
+    {
+      "id": "P040",
+      "query": "SELECT meta.price AS alt, meta.price AS dup, id, RANK() OVER (ORDER BY id) AS meta FROM named WHERE id=41 UNION ALL SELECT meta.price, id, id, RANK() OVER (ORDER BY id) AS meta FROM named WHERE id=42 ORDER BY similarity(alt,$x) DESC, id ASC LIMIT 1",
+      "expect_rows": [{"alt": 7, "dup": 42, "id": 42, "meta": 1}],
+      "note": "A window publishes the captured price. Its scalar alias leaves the source vector available to rank both operands before the output page is projected."
+    },
+    {
+      "id": "P041",
+      "query": "SELECT v1 AS chosen, v1 AS dup, meta.v AS tag, id, RANK() OVER (ORDER BY id) AS meta FROM set_vectors WHERE id=41 UNION ALL SELECT v2, v2, meta.v, id, RANK() OVER (ORDER BY id) AS meta FROM set_vectors WHERE id=42 ORDER BY similarity(v1,$x) DESC, id ASC LIMIT 1",
+      "expect_rows": [{"chosen": [1, 0], "dup": [1, 0], "tag": [1, 0], "id": 42, "meta": 1}],
+      "note": "A window captures the nested tag while the second operand supplies v2 for the selected vector v1."
+    },
+    {
+      "id": "P042",
+      "query": "SELECT id, RANK() OVER (ORDER BY id) AS alt FROM named WHERE id=41 UNION ALL SELECT id, RANK() OVER (ORDER BY id) AS alt FROM named WHERE id=42 ORDER BY similarity(alt,$x) DESC, alt ASC, id ASC LIMIT 1",
+      "expect_rows": [{"id": 42, "alt": 1}],
+      "note": "The compound ranks the incoming alt vector. The same name exposes the integer rank in the output."
+    },
+    {
+      "id": "P043",
+      "query": "SELECT id, RANK() OVER (ORDER BY id) AS meta FROM set_vectors WHERE id=41 UNION ALL SELECT id, RANK() OVER (ORDER BY id) AS meta FROM set_vectors WHERE id=43 ORDER BY similarity(meta.v,$x) DESC, id ASC LIMIT 1",
+      "expect_rows": [{"id": 43, "meta": 1}],
+      "note": "The missing nested vector sorts ahead of a present one under DESC even when the rank is written over its parent."
+    },
+    {
+      "id": "P044",
+      "query": "SELECT v1 AS chosen, v1 AS dup, id, RANK() OVER (ORDER BY id) AS v1 FROM set_vectors WHERE id=41 UNION ALL SELECT v2, v2, id, RANK() OVER (ORDER BY id) AS v1 FROM set_vectors WHERE id=42 ORDER BY similarity(v1,$x) DESC, id ASC LIMIT 1",
+      "expect_rows": [{"chosen": [1, 0], "dup": [1, 0], "id": 42, "v1": 1}],
+      "note": "The right operand supplies its selected v2 for v1, and the displayed v1 is its window rank."
+    },
+    {
+      "id": "P045",
+      "query": "SELECT meta.price AS child, meta AS whole, RANK() OVER (ORDER BY id) AS meta FROM named WHERE id=41 UNION ALL SELECT meta.price AS p, id AS n, RANK() OVER (ORDER BY id) AS rn FROM named WHERE id=42",
+      "expect_rows": [{"child": 30, "whole": 1, "meta": 1}, {"child": 7, "whole": 42, "meta": 1}],
+      "note": "A captured scalar published under whole keeps the value supplied by the second operand while the rank is shown under meta."
     }
   ],
   "vector_group_cases": [

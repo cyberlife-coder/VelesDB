@@ -91,6 +91,7 @@ pub(crate) fn execute_operand(
     db: &mut DatabaseInner,
     query: &Query,
     params: &Params,
+    rank_inputs: &[String],
 ) -> Result<Vec<SearchResult>, ExecError> {
     check_select(db, &query.select, params)?;
     if !query.let_bindings.is_empty() {
@@ -107,25 +108,14 @@ pub(crate) fn execute_operand(
     let rows = scan(db, &with_base_columns(&query.select), params)?;
     let store = db.get_shared_store(&query.select.from)?;
     let borrowed = store.borrow();
-    let mut rows = window_plain(&query.select, rows, &order_context(&borrowed, params))?;
-    carry_own_vectors(&mut rows, &borrowed);
+    let mut rows = window_plain(
+        &query.select,
+        rows,
+        &order_context(&borrowed, params),
+        rank_inputs,
+    )?;
+    crate::velesql_setops::carry_own_vectors(&mut rows, &borrowed);
     Ok(rows)
-}
-
-/// Gives each row its own vector, as core's search results carry theirs: a
-/// compound's rows come from several collections, whose ids are local, so the
-/// window's `similarity(vector, $v)` reads the vector on the row.
-fn carry_own_vectors(rows: &mut [SearchResult], store: &crate::store_state::StoreState) {
-    let dim = store.dimension;
-    if dim == 0 {
-        return;
-    }
-    let index = build_id_to_idx(store);
-    for row in rows {
-        if let Some(&at) = index.get(&row.point.id) {
-            row.point.vector = store.data[at * dim..(at + 1) * dim].to_vec();
-        }
-    }
 }
 
 /// What the ORDER BY of rows from `store` reads: its metric's direction, and
@@ -518,7 +508,7 @@ fn apply_fusion(
 ///
 /// The non-fusion path walks every scored row, calls this once per query,
 /// and then hits the map N times; overall work goes from O(n^2) to O(n).
-fn build_id_to_idx(store: &crate::store_state::StoreState) -> HashMap<u64, usize> {
+pub(crate) fn build_id_to_idx(store: &crate::store_state::StoreState) -> HashMap<u64, usize> {
     store
         .ids
         .iter()
@@ -628,7 +618,7 @@ fn finalize(
     if velesql_aggregate::needs_aggregation_pipeline(stmt) {
         return finalize_aggregated(stmt, rows, params, borrowed.metric.higher_is_better());
     }
-    let results = window_plain(stmt, rows, &order_context(&borrowed, params))?;
+    let results = window_plain(stmt, rows, &order_context(&borrowed, params), &[])?;
     velesql_project::project(stmt, &results)
 }
 
@@ -665,13 +655,14 @@ fn window_plain(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
     order: &velesql_orderby::OrderContext<'_>,
+    rank_inputs: &[String],
 ) -> Result<Vec<SearchResult>, ExecError> {
     let mut results = velesql_project::to_search_results(rows);
     if stmt.distinct == DistinctMode::All {
         results = apply_distinct(results, &stmt.columns);
     }
-    let order = velesql_orderby::RowOrder::prepare(stmt, &results, order)?;
-    velesql_project::inject_window_functions(stmt, &mut results)?;
+    let mut order = velesql_orderby::RowOrder::prepare(stmt, &results, order)?;
+    velesql_project::inject_window_functions(stmt, &mut results, &mut order.window, rank_inputs)?;
     let inputs = order.apply(&mut results);
     let mut results =
         apply_limit_offset(stmt, results, velesdb_core::velesql::DEFAULT_SELECT_LIMIT);

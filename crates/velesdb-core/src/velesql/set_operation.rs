@@ -31,14 +31,45 @@ use std::collections::HashMap;
 use crate::distance::rank_scores;
 use crate::point::SearchResult;
 
-use super::compound_projection::{preserve_operand_positions, CompoundProjection};
-use super::distinct_evaluator::{compute_distinct_key, key_columns, projected_key};
+use super::compound_projection::{preserve_operand_positions, CompoundProjection, VectorSortSlots};
+use super::distinct_evaluator::{compute_distinct_key, key_columns, projected_values_key};
 use super::json_path::ProjectedField;
 use super::window_evaluator::WindowInputs;
 use super::{Query, SelectColumns, SelectOrderBy, SelectStatement, SetOperator};
 
 /// A surviving row keeps its own operand's positional schema until ordering.
 type KeyedRow = (String, SearchResult, usize);
+
+/// A physical SELECT column or one side of a window rank retained across a set.
+#[derive(Clone, Copy)]
+enum OperandField<'a> {
+    Column(ProjectedField<'a>),
+    Rank(&'a str),
+    RankInput(&'a str),
+}
+
+impl<'a> OperandField<'a> {
+    fn storage(self) -> ProjectedField<'a> {
+        match self {
+            Self::Column(field) => field,
+            Self::Rank(name) | Self::RankInput(name) => ProjectedField::Published(name),
+        }
+    }
+
+    fn read(self, row: &SearchResult) -> std::borrow::Cow<'_, serde_json::Value> {
+        let (name, index) = match self {
+            Self::Column(field) => return field.read(row),
+            Self::Rank(name) => (name, 0),
+            Self::RankInput(name) => (name, 1),
+        };
+        let value = row.point.payload.as_ref().and_then(|p| p.get(name));
+        let value = value.and_then(|v| match v {
+            serde_json::Value::Array(pair) => pair.get(index),
+            scalar => Some(scalar),
+        });
+        std::borrow::Cow::Borrowed(value.unwrap_or(&serde_json::Value::Null))
+    }
+}
 
 /// The window the last operand's clauses put on the combined rows.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -97,7 +128,11 @@ pub fn operand_queries(query: &Query, ceiling: u64) -> Vec<Query> {
 pub fn row_key(result: &SearchResult, columns: &SelectColumns) -> String {
     let (listed, include_score) = key_columns(columns);
     if !listed.is_empty() {
-        return projected_key(result, listed_fields(columns), include_score);
+        return projected_values_key(
+            result,
+            &mut listed_fields(columns).map(|field| field.read(result)),
+            include_score,
+        );
     }
     let values = compute_distinct_key(result, &[], include_score);
     if matches!(columns, SelectColumns::SimilarityScore(_)) {
@@ -125,53 +160,88 @@ pub fn execute_compound<E>(
     order_by: impl FnOnce(&mut [SearchResult], &[SelectOrderBy]) -> Result<(), E>,
 ) -> Result<Vec<SearchResult>, E> {
     let mut operands = operand_queries(query, ceiling);
+    let vector_order = super::compound_projection::orders_named_vector(query);
     for operand in &mut operands {
-        preserve_operand_positions(&mut operand.select.columns);
+        preserve_operand_positions(&mut operand.select.columns, vector_order);
     }
     let combined = combine_operands(query, &operands, higher_is_better, &mut run_operand)?;
     let window = compound_window(query);
+    let PreparedCompound {
+        mut rows,
+        order,
+        slots,
+    } = prepare_compound_rows(query, &operands, combined);
+    match window.order_by {
+        Some(original) => order_by(&mut rows, order.as_deref().unwrap_or(original))?,
+        None => rank_by_score(&mut rows, higher_is_better),
+    }
+    Ok(window_page(rows, slots.as_ref(), window, ceiling))
+}
+
+struct PreparedCompound {
+    rows: Vec<SearchResult>,
+    order: Option<Vec<SelectOrderBy>>,
+    slots: Option<VectorSortSlots>,
+}
+
+#[inline(never)]
+fn prepare_compound_rows(
+    query: &Query,
+    operands: &[Query],
+    combined: Vec<KeyedRow>,
+) -> PreparedCompound {
+    let order = compound_window(query).order_by;
     let mut layout = CompoundProjection::for_query(query);
     let slots = layout.as_ref().and_then(|layout| {
         layout.vector_sort_slots(
-            window.order_by?,
-            listed_fields(&query.select.columns),
+            order?,
+            listed_fields(&query.select.columns).map(OperandField::storage),
             combined.iter().map(|(_, row, _)| row),
         )
     });
     if let (Some(layout), Some(slots)) = (&mut layout, &slots) {
         layout.redirect_slots(slots);
     }
-    let mut rows = aligned_rows(combined, &operands, &query.select.columns, layout.as_ref());
-    match window.order_by {
-        Some(order) => {
-            let mapped = layout.as_ref().map(|layout| layout.order(order));
-            order_by(&mut rows, mapped.as_deref().unwrap_or(order))?;
-        }
-        None => rank_by_score(&mut rows, higher_is_better),
-    }
+    let rows = aligned_rows(combined, operands, query, layout.as_ref());
+    let order = order.and_then(|order| layout.as_ref().map(|layout| layout.order(order)));
+    PreparedCompound { rows, order, slots }
+}
+
+fn window_page(
+    rows: Vec<SearchResult>,
+    slots: Option<&VectorSortSlots>,
+    window: CompoundWindow<'_>,
+    ceiling: u64,
+) -> Vec<SearchResult> {
     let offset = usize::try_from(window.offset).unwrap_or(usize::MAX);
     let limit = usize::try_from(window.limit.unwrap_or(ceiling).min(ceiling)).unwrap_or(usize::MAX);
     let mut page: Vec<_> = rows.into_iter().skip(offset).take(limit).collect();
-    if let Some(slots) = &slots {
+    if let Some(slots) = slots {
         slots.publish(&mut page);
     }
-    Ok(page)
+    page
 }
 
 fn aligned_rows(
     combined: Vec<KeyedRow>,
     operands: &[Query],
-    first: &SelectColumns,
+    query: &Query,
     layout: Option<&CompoundProjection<'_>>,
 ) -> Vec<SearchResult> {
     let renames: Vec<_> = operands
         .iter()
-        .map(|operand| column_renames(&operand.select.columns, first, layout))
+        .map(|operand| {
+            (
+                column_renames(&operand.select.columns, &query.select.columns, layout),
+                super::compound_rank_inputs(query, &operand.select.columns),
+            )
+        })
         .collect();
     combined
         .into_iter()
         .map(|(_, mut row, operand)| {
-            align_columns(&mut row, &renames[operand]);
+            let (columns, ranks) = &renames[operand];
+            align_columns(&mut row, columns, ranks);
             row
         })
         .collect()
@@ -281,32 +351,53 @@ fn column_renames<'a>(
     columns: &'a SelectColumns,
     first: &'a SelectColumns,
     layout: Option<&CompoundProjection<'a>>,
-) -> Vec<(ProjectedField<'a>, ProjectedField<'a>)> {
+) -> Vec<(OperandField<'a>, ProjectedField<'a>)> {
     // An identity assignment still restores a window output if an earlier
     // position writes the same name. Read its value before any assignment.
     let mut changed = rustc_hash::FxHashSet::default();
-    listed_fields(columns)
-        .zip(
-            listed_fields(first)
-                .enumerate()
-                .map(|(i, field)| layout.map_or(Some(field), |l| l.destination(i, field))),
-        )
+    let mut renames: Vec<_> = listed_fields(columns)
+        .zip(listed_fields(first).enumerate().map(|(i, field)| {
+            layout.map_or(Some(field.storage()), |l| l.destination(i, field.storage()))
+        }))
         .filter_map(|(own, first)| first.map(|first| (own, first)))
         .filter(|(own, first)| {
             if *first == ProjectedField::Source("id") {
                 return false;
             }
-            if own == first {
+            if own.storage() == *first {
                 return changed.contains(first);
             }
             changed.insert(*first);
             true
         })
-        .collect()
+        .collect();
+    if let Some(layout) = layout {
+        add_positional_vectors(&mut renames, layout, columns);
+    }
+    renames
 }
 
-fn align_columns(row: &mut SearchResult, renames: &[(ProjectedField<'_>, ProjectedField<'_>)]) {
-    if renames.is_empty() {
+fn add_positional_vectors<'a>(
+    renames: &mut Vec<(OperandField<'a>, ProjectedField<'a>)>,
+    layout: &CompoundProjection<'a>,
+    columns: &'a SelectColumns,
+) {
+    let (cols, _) = key_columns(columns);
+    for &(name, i) in layout.positional_vectors() {
+        if cols.get(i).is_some_and(|col| col.name != name) {
+            if let Some(source) = listed_fields(columns).nth(i) {
+                renames.push((source, ProjectedField::Published(name)));
+            }
+        }
+    }
+}
+
+fn align_columns(
+    row: &mut SearchResult,
+    renames: &[(OperandField<'_>, ProjectedField<'_>)],
+    ranks: &[String],
+) {
+    if renames.is_empty() && ranks.is_empty() {
         return;
     }
     let values: Vec<_> = renames
@@ -317,13 +408,29 @@ fn align_columns(row: &mut SearchResult, renames: &[(ProjectedField<'_>, Project
     if !payload.is_object() {
         *payload = serde_json::Value::Object(serde_json::Map::new());
     }
+    restore_rank_inputs(payload, ranks);
     for (first, value) in values {
         first.write(payload, value);
     }
 }
 
+fn restore_rank_inputs(payload: &mut serde_json::Value, ranks: &[String]) {
+    if let Some(map) = payload.as_object_mut() {
+        for name in ranks {
+            if let Some(serde_json::Value::Array(pair)) = map.get_mut(name) {
+                let input = pair.get_mut(1).map(std::mem::take);
+                if let Some(input) = input {
+                    map.insert(name.clone(), input);
+                } else {
+                    map.remove(name);
+                }
+            }
+        }
+    }
+}
+
 /// Named columns followed by the window outputs, in projection order.
-fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = ProjectedField<'_>> {
+fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = OperandField<'_>> {
     let (cols, windows) = match columns {
         SelectColumns::Columns(cols) => (cols.as_slice(), &[][..]),
         SelectColumns::Mixed {
@@ -333,9 +440,24 @@ fn listed_fields(columns: &SelectColumns) -> impl Iterator<Item = ProjectedField
         } if !columns.is_empty() => (columns.as_slice(), window_functions.as_slice()),
         _ => (&[][..], &[][..]),
     };
-    let named = WindowInputs::projection_fields(cols, windows).map(|(_, field)| field);
+    let named = WindowInputs::projection_fields(cols, windows).map(move |(col, field)| {
+        if field.name() == col.name
+            && col.name != "id"
+            && !col.name.contains('.')
+            && windows.iter().any(|wf| {
+                wf.alias
+                    .as_deref()
+                    .unwrap_or(wf.function_type.default_alias())
+                    == col.name
+            })
+        {
+            OperandField::RankInput(&col.name)
+        } else {
+            OperandField::Column(field)
+        }
+    });
     let ranks = windows.iter().map(|wf| {
-        ProjectedField::Published(
+        OperandField::Rank(
             wf.alias
                 .as_deref()
                 .unwrap_or(wf.function_type.default_alias()),

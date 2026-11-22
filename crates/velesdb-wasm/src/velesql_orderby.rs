@@ -93,7 +93,7 @@ pub(crate) fn sort_rows(
 pub(crate) struct RowOrder<'a> {
     specs: &'a [SelectOrderBy],
     keys: Vec<SimilarityKeys>,
-    window: velesdb_core::velesql::window_evaluator::WindowInputs,
+    pub(crate) window: velesdb_core::velesql::window_evaluator::WindowInputs,
     higher_is_better: bool,
 }
 

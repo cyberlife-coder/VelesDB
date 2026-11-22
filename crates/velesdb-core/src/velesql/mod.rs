@@ -120,7 +120,7 @@ mod side_qualifier;
 mod similarity_threshold;
 pub(crate) mod text_match;
 mod vector_predicates;
-pub use compound_projection::project_query_rows;
+pub use compound_projection::{compound_rank_inputs, project_query_rows};
 #[cfg(feature = "persistence")]
 pub(crate) use edge_query::literal_id;
 pub use edge_query::EdgeQuery;

@@ -210,13 +210,14 @@ impl Collection {
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         results: Vec<SearchResult>,
+        rank_inputs: &[String],
     ) -> Result<Vec<SearchResult>> {
         if !stmt.is_vector_group_by() {
-            return self.postprocess_ranked_results(stmt, params, results);
+            return self.postprocess_ranked_results(stmt, params, results, rank_inputs);
         }
         let groups = self.apply_vector_group_by(stmt, &results, params)?;
         let stmt = stmt.order_by_aggregates_as_fields()?;
-        self.postprocess_ranked_results(&stmt, params, groups)
+        self.postprocess_ranked_results(&stmt, params, groups, rank_inputs)
     }
 
     /// The SELECT post-processing of a ranked fetch's rows
@@ -236,7 +237,7 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
         let results = self
-            .finalize_ranked_results(stmt, params, results)
+            .finalize_ranked_results(stmt, params, results, &ctx.window_rank_inputs)
             .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         self.check_guardrails_and_record(ctx, results.len())?;
         Ok(results)
@@ -248,6 +249,7 @@ impl Collection {
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
         results: Vec<SearchResult>,
+        rank_inputs: &[String],
     ) -> Result<Vec<SearchResult>> {
         // Intentional saturating clamp: a missing or out-of-range limit collapses
         // to `MAX_LIMIT` rather than erroring.
@@ -255,7 +257,7 @@ impl Collection {
             usize::try_from(stmt.limit.unwrap_or(crate::velesql::DEFAULT_SELECT_LIMIT))
                 .unwrap_or(MAX_LIMIT)
                 .min(MAX_LIMIT);
-        self.apply_select_postprocessing(stmt, results, params, final_limit, &[])
+        self.apply_select_postprocessing(stmt, results, params, final_limit, &[], rank_inputs)
     }
 
     /// Resolves the fusion strategy from the query's FUSION clause: RRF when

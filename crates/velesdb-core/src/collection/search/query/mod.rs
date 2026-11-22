@@ -190,14 +190,40 @@ impl Collection {
         crate::velesql::QueryValidator::validate(query)?;
         // Compound semantics are velesql's (`velesql::execute_compound`),
         // shared with the `Database` executor and WASM; each operand runs here.
+        self.execute_compound_read(query, params, &mut |operand| {
+            let inputs = crate::velesql::compound_rank_inputs(query, &operand.select.columns);
+            self.execute_set_operand(operand, params, inputs)
+        })
+    }
+
+    /// Runs a native compound using its first collection's ordering policy.
+    pub(crate) fn execute_compound_read(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        run_operand: &mut dyn FnMut(&crate::velesql::Query) -> Result<Vec<SearchResult>>,
+    ) -> Result<Vec<SearchResult>> {
         let higher_is_better = self.storage.config.read().metric.higher_is_better();
         crate::velesql::execute_compound(
             query,
             higher_is_better,
             u64::try_from(MAX_LIMIT).unwrap_or(u64::MAX),
-            |operand| self.execute_query_with_client(operand, params, "default"),
+            run_operand,
             |rows, order_by| self.apply_order_by(rows, order_by, params),
         )
+    }
+
+    /// Runs an operand and retains only the rank inputs its compound will order.
+    pub(crate) fn execute_set_operand(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        inputs: Vec<String>,
+    ) -> Result<Vec<SearchResult>> {
+        let mut ctx = self.prepare_query_context(query, "default")?;
+        ctx.window_rank_inputs = inputs;
+        self.execute_in_query_context(query, params, &ctx)
+            .map(|(rows, _)| rows)
     }
 
     /// Executes a `VelesQL` query with a specific client identifier for per-client rate limiting.

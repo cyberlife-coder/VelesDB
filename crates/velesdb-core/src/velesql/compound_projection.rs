@@ -17,13 +17,14 @@ pub(super) struct CompoundProjection<'a> {
     // Only a value stored away from its positional source can shadow
     // an unrelated named vector. A realigned source is the vector to rank.
     auxiliary: Vec<&'a str>,
+    positional_vectors: Vec<(&'a str, usize)>,
 }
 
 /// Scalar values whose normal output slots shadow a vector input. The
 /// alternative literal keys exist only while the compound is being ordered.
-pub(super) struct VectorSortSlots<'a>(Vec<(&'a str, String)>);
+pub(super) struct VectorSortSlots(Vec<(String, String)>);
 
-impl VectorSortSlots<'_> {
+impl VectorSortSlots {
     pub(super) fn publish(&self, page: &mut [SearchResult]) {
         for payload in page
             .iter_mut()
@@ -31,7 +32,7 @@ impl VectorSortSlots<'_> {
         {
             for (output, temporary) in &self.0 {
                 if let Some(value) = payload.remove(temporary) {
-                    payload.insert((*output).to_owned(), value);
+                    payload.insert(output.clone(), value);
                 }
             }
         }
@@ -56,6 +57,25 @@ fn sources_overlap(columns: &[Column]) -> bool {
     sources.len() < columns.len() || columns.iter().any(nested)
 }
 
+fn computed_outputs<'a>(
+    windows: &'a [WindowFunction],
+    scores: &'a [SimilarityScoreExpr],
+) -> FxHashSet<&'a str> {
+    windows
+        .iter()
+        .map(|wf| {
+            wf.alias
+                .as_deref()
+                .unwrap_or(wf.function_type.default_alias())
+        })
+        .chain(
+            scores
+                .iter()
+                .map(|s| s.alias.as_deref().unwrap_or("similarity")),
+        )
+        .collect()
+}
+
 impl<'a> CompoundProjection<'a> {
     pub(super) fn for_query(query: &'a Query) -> Option<Self> {
         query.compound.as_ref()?;
@@ -74,33 +94,68 @@ impl<'a> CompoundProjection<'a> {
             ),
             _ => return None,
         };
-        if columns.len() < 2
-            || WindowInputs::projection_fields(columns, windows)
-                .any(|(_, field)| matches!(field, ProjectedField::Published(_)))
-        {
-            return None;
+        let rank_inputs = compound_rank_inputs(query, &query.select.columns);
+        let published = window_publishes_columns(columns, windows);
+        needs_positional_slots(query, columns, published, &rank_inputs).then(|| {
+            let mut layout = Self::from_sources(columns, windows, scores, published);
+            layout.bind_ranks(windows, &rank_inputs);
+            if published || !rank_inputs.is_empty() {
+                layout.bind_vector_sources(columns, query);
+            }
+            layout
+        })
+    }
+
+    fn bind_ranks(&mut self, windows: &'a [WindowFunction], inputs: &[String]) {
+        if inputs.is_empty() {
+            return;
         }
-        sources_overlap(columns).then(|| Self::from_sources(columns, windows, scores))
+        for wf in windows {
+            let name = wf
+                .alias
+                .as_deref()
+                .unwrap_or(wf.function_type.default_alias());
+            self.named
+                .push(Some((name, ProjectedField::Published(name))));
+            if inputs.iter().any(|n| n == name) {
+                self.auxiliary.push(name);
+            }
+        }
+    }
+
+    /// When published aliases are the output slots, a vector selected under
+    /// another name can still receive a different source by operand position.
+    fn bind_vector_sources(&mut self, columns: &'a [Column], query: &Query) {
+        for item in super::compound_window(query).order_by.unwrap_or_default() {
+            let OrderByExpr::Similarity(sim) = &item.expr else {
+                continue;
+            };
+            if sim.field == super::PRIMARY_VECTOR_FIELD {
+                continue;
+            }
+            let mut selected = columns
+                .iter()
+                .enumerate()
+                .filter(|(i, col)| col.name == sim.field && self.named[*i].is_some());
+            if selected
+                .clone()
+                .any(|(i, col)| self.named[i].is_some_and(|(_, slot)| slot.name() == col.name))
+            {
+                continue;
+            }
+            if let Some((i, col)) = selected.next() {
+                self.positional_vectors.push((&col.name, i));
+            }
+        }
     }
 
     fn from_sources(
         columns: &'a [Column],
         windows: &'a [WindowFunction],
         scores: &'a [SimilarityScoreExpr],
+        published: bool,
     ) -> Self {
-        let computed: FxHashSet<_> = windows
-            .iter()
-            .map(|wf| {
-                wf.alias
-                    .as_deref()
-                    .unwrap_or(wf.function_type.default_alias())
-            })
-            .chain(
-                scores
-                    .iter()
-                    .map(|s| s.alias.as_deref().unwrap_or("similarity")),
-            )
-            .collect();
+        let computed = computed_outputs(windows, scores);
         // The projector writes columns in SELECT order, then writes computed
         // outputs. Only the last write to each JSON output name is observable.
         let mut seen = computed.clone();
@@ -120,7 +175,12 @@ impl<'a> CompoundProjection<'a> {
         let mut layout = Self {
             named: vec![None; columns.len()],
             auxiliary: Vec::new(),
+            positional_vectors: Vec::new(),
         };
+        if published {
+            layout.bind_published(&visible);
+            return layout;
+        }
         let mut used = computed;
         for kind in OrderName::BY_RESTRICTION {
             let group: Vec<_> = visible
@@ -131,6 +191,22 @@ impl<'a> CompoundProjection<'a> {
             layout.bind_slots(&group, &mut used, kind);
         }
         layout
+    }
+
+    /// The public SELECT projector reads a captured window's columns by their
+    /// output names, even when its caller only supplies the first SELECT.
+    fn bind_published(&mut self, visible: &[VisibleColumn<'a>]) {
+        for col in visible {
+            let field = if col.source == "id" {
+                ProjectedField::Source("id")
+            } else {
+                if col.source != col.output {
+                    self.auxiliary.push(col.output);
+                }
+                ProjectedField::Published(col.output)
+            };
+            self.named[col.position] = Some((col.output, field));
+        }
     }
 
     fn bind_slots(
@@ -185,7 +261,7 @@ impl<'a> CompoundProjection<'a> {
         order: &[SelectOrderBy],
         fields: impl Iterator<Item = ProjectedField<'a>>,
         rows: impl Iterator<Item = &'r SearchResult>,
-    ) -> Option<VectorSortSlots<'a>> {
+    ) -> Option<VectorSortSlots> {
         let shadowed: Vec<_> = self
             .auxiliary
             .iter()
@@ -205,12 +281,10 @@ impl<'a> CompoundProjection<'a> {
             .filter(|name| name.starts_with('.'))
             .collect();
         for &(output, field) in self.named.iter().flatten() {
-            let (ProjectedField::Source(name) | ProjectedField::Published(name)) = field;
-            occupied.extend([output, name]);
+            occupied.extend([output, field.name()]);
         }
         for field in fields {
-            let (ProjectedField::Source(name) | ProjectedField::Published(name)) = field;
-            occupied.insert(name);
+            occupied.insert(field.name());
         }
         for item in order {
             occupy_order_names(&item.expr, &mut occupied);
@@ -220,18 +294,26 @@ impl<'a> CompoundProjection<'a> {
             .map(|i| format!(".{i}"))
             .filter(|k| !occupied.contains(k.as_str()));
         Some(VectorSortSlots(
-            shadowed.into_iter().zip(available).collect(),
+            shadowed
+                .into_iter()
+                .map(str::to_owned)
+                .zip(available)
+                .collect(),
         ))
     }
 
-    pub(super) fn redirect_slots(&mut self, slots: &'a VectorSortSlots<'_>) {
+    pub(super) fn redirect_slots(&mut self, slots: &'a VectorSortSlots) {
         for (_, field) in self.named.iter_mut().flatten() {
             if let ProjectedField::Published(name) = field {
-                if let Some((_, key)) = slots.0.iter().find(|(slot, _)| slot == name) {
+                if let Some((_, key)) = slots.0.iter().find(|(slot, _)| slot.as_str() == *name) {
                     *field = ProjectedField::Published(key);
                 }
             }
         }
+    }
+
+    pub(super) fn positional_vectors(&self) -> &[(&'a str, usize)] {
+        &self.positional_vectors
     }
 
     pub(super) fn order(&self, items: &[SelectOrderBy]) -> Vec<SelectOrderBy> {
@@ -285,6 +367,37 @@ impl<'a> CompoundProjection<'a> {
             }
         }
     }
+}
+
+/// Names of window ranks that would overwrite a named vector read by this
+/// compound. Compute this once per operand before running its SELECT.
+#[must_use]
+pub fn compound_rank_inputs(query: &Query, columns: &SelectColumns) -> Vec<String> {
+    let SelectColumns::Mixed {
+        window_functions, ..
+    } = columns
+    else {
+        return Vec::new();
+    };
+    if query.compound.is_none() || window_functions.is_empty() {
+        return Vec::new();
+    }
+    let order = super::compound_window(query).order_by.unwrap_or_default();
+    let mut names = Vec::new();
+    for wf in window_functions {
+        let name = wf
+            .alias
+            .as_deref()
+            .unwrap_or(wf.function_type.default_alias());
+        if order
+            .iter()
+            .any(|item| reads_vector_input(&item.expr, name))
+            && !names.iter().any(|n| n == name)
+        {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
 
 fn reads_vector_input(expr: &OrderByExpr, slot: &str) -> bool {
@@ -350,24 +463,50 @@ impl OrderName {
     }
 }
 
-/// Keep each source in an operand until its set key and destination positions
-/// have been read. A window that publishes two distinct sources under one
-/// name would otherwise overwrite the earlier source before either read.
-pub(super) fn preserve_operand_positions(selection: &mut SelectColumns) -> bool {
+pub(super) fn orders_named_vector(query: &Query) -> bool {
+    super::compound_window(query).order_by.unwrap_or_default().iter()
+        .any(|item| matches!(&item.expr, OrderByExpr::Similarity(sim) if sim.field != super::PRIMARY_VECTOR_FIELD))
+}
+
+fn needs_positional_slots(
+    query: &Query,
+    columns: &[Column],
+    published: bool,
+    ranks: &[String],
+) -> bool {
+    if published {
+        return orders_named_vector(query);
+    }
+    !ranks.is_empty() || (columns.len() >= 2 && sources_overlap(columns))
+}
+
+fn window_publishes_columns(columns: &[Column], windows: &[WindowFunction]) -> bool {
+    !windows.is_empty()
+        && WindowInputs::projection_fields(columns, windows)
+            .any(|(_, field)| matches!(field, ProjectedField::Published(_)))
+}
+
+/// A windowed operand publishes captured columns by source. Positional
+/// alignment assigns output slots once its set key and vector inputs are known.
+pub(super) fn preserve_operand_positions(selection: &mut SelectColumns, vector_order: bool) {
     let SelectColumns::Mixed {
         columns,
         window_functions,
         ..
     } = selection
     else {
-        return false;
+        return;
     };
-    if window_functions.is_empty()
-        || !WindowInputs::projection_fields(columns, window_functions)
-            .any(|(_, field)| matches!(field, ProjectedField::Published(_)))
+    if window_publishes_columns(columns, window_functions)
+        && (vector_order || window_output_repeats(columns, window_functions))
     {
-        return false;
+        for col in columns {
+            col.alias = None;
+        }
     }
+}
+
+fn window_output_repeats(columns: &[Column], window_functions: &[WindowFunction]) -> bool {
     let mut outputs: FxHashSet<_> = window_functions
         .iter()
         .map(|wf| {
@@ -376,16 +515,9 @@ pub(super) fn preserve_operand_positions(selection: &mut SelectColumns) -> bool 
                 .unwrap_or(wf.function_type.default_alias())
         })
         .collect();
-    if !columns
+    columns
         .iter()
         .any(|col| !outputs.insert(col.alias.as_deref().unwrap_or(&col.name)))
-    {
-        return false;
-    }
-    for col in columns {
-        col.alias = None;
-    }
-    true
 }
 
 /// Project executed query rows with the first operand's positional output

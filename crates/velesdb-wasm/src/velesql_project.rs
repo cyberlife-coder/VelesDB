@@ -60,14 +60,20 @@ pub(crate) fn to_search_results(rows: Vec<OwnedScanRow>) -> Vec<SearchResult> {
 pub(crate) fn inject_window_functions(
     stmt: &SelectStatement,
     results: &mut [SearchResult],
+    inputs: &mut WindowInputs,
+    rank_inputs: &[String],
 ) -> Result<(), ExecError> {
     let Some(window_functions) = extract_window_functions(&stmt.columns) else {
         return Ok(());
     };
-    Ok(velesdb_core::velesql::window_evaluator::evaluate(
-        results,
-        window_functions,
-    )?)
+    Ok(
+        velesdb_core::velesql::window_evaluator::evaluate_compound_windows(
+            results,
+            window_functions,
+            inputs,
+            rank_inputs,
+        )?,
+    )
 }
 
 /// Returns the window functions in a `SELECT` list, if any (mirrors core's
