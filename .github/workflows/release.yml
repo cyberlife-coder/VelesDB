@@ -391,7 +391,7 @@ jobs:
           python-version: |
             3.10
             3.11
-      - uses: PyO3/maturin-action@aa826d1a6f607acc2eb2371392301320bc551275 # v1
+      - uses: PyO3/maturin-action@e540ea8409b4a5477e16fafabf7e74d1ffca6d29 # v1
         env:
           # ring's pregenerated ARM assembly opens on a guard —
           # `#error "ARM assembler must define __ARM_ARCH"` (ring-core/asm_base.h:73)
@@ -453,7 +453,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
-      - uses: PyO3/maturin-action@aa826d1a6f607acc2eb2371392301320bc551275 # v1
+      - uses: PyO3/maturin-action@e540ea8409b4a5477e16fafabf7e74d1ffca6d29 # v1
         with:
           command: sdist
           working-directory: crates/velesdb-python
