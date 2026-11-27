@@ -1249,6 +1249,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`url` 2.5.9 and `cookie` 0.18.3 in the root and Tauri demo lockfiles**
+  (deps, 2026-11-27). RUSTSEC-2026-0592 (`Url::origin()` recurses once per
+  nested `blob:` prefix and overflows the stack) and RUSTSEC-2026-0594
+  (private-cookie nonces can repeat after `fork()`; `cookie` comes in only
+  through Tauri) failed the required `cargo deny` advisories gate. The
+  lockfiles were bumped package by package (`cargo update -p … --precise`);
+  `form_urlencoded` 1.2.3 came with `url`, and nothing else moved.
+  `cargo deny` passes on all seven tracked lockfiles.
+
 - **The npm audit gate takes dated, per-advisory exceptions; picomatch's
   ReDoS (GHSA-fc5q-39xc-vjpf) is the first** (CI, 2026-11-17). Every high
   advisory in the `sdks/typescript`, `examples/react-wasm-search` and
@@ -1305,6 +1314,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file. Anything else is now a usage error (exit 2).
 
 ### Fixed
+
+- **An empty relationship-type filter no longer filters out every edge**
+  (REST server, CLI, 2026-11-27). `GET
+  /collections/{name}/graph/traverse/stream?relationship_types=` (or a value
+  of only commas and spaces), `velesdb graph traverse --rel-types ","` and the
+  REPL's `.graph traverse … --rel-types ,` passed a `""` type to core, which
+  reads it as a type no edge carries, so the traversal returned no node.
+  After: blank entries are dropped before the filter is built, and an empty
+  filter means every type, as an absent one does.
 
 - **Payload WAL: a write that fails partway through a record no longer
   costs the records written after it** (core, 2026-11-20, #2850). A record

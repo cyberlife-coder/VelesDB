@@ -2660,6 +2660,58 @@ async fn test_graph_traverse_stream_rejects_unknown_algorithm() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// GIVEN a graph with one `KNOWS` edge 1 -> 2
+/// WHEN the SSE traversal is sent an empty `relationship_types=`
+/// THEN it streams the unfiltered traversal, not an empty one: core reads a
+///      `""` type as a filter no edge matches.
+#[tokio::test]
+async fn test_graph_traverse_stream_empty_relationship_types_is_unfiltered() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let db = velesdb_core::Database::open(temp_dir.path()).expect("Failed to open db");
+    let (app, _state) = create_full_app(db);
+    create_graph_collection(&app, "rt").await;
+    for id in [1, 2] {
+        create_graph_node(&app, "rt", id).await;
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections/rt/graph/edges")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({"id": 1, "source": 1, "target": 2, "label": "KNOWS"}).to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    for query in ["relationship_types=", "relationship_types=KNOWS,"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/collections/rt/graph/traverse/stream?start_node=1&{query}"
+                    ))
+                    .body(Body::empty())
+                    .expect("Failed to build request"),
+            )
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "{query}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("\"total_nodes\":1"), "{query}: {body}");
+    }
+}
+
 /// GIVEN no graph collection under a name
 /// WHEN the SSE traversal endpoint targets it
 /// THEN it answers as `POST /graph/traverse` does — 404 for a missing
