@@ -107,8 +107,8 @@ pub(crate) fn handle_traverse(
     format: &str,
 ) -> anyhow::Result<()> {
     let col = open_graph(path, collection)?;
-    let rel_vec: Vec<String> = rel_types
-        .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
+    let rel_vec = rel_types
+        .map(graph_display::parse_rel_types)
         .unwrap_or_default();
     let config = TraversalConfig {
         min_depth: 1,

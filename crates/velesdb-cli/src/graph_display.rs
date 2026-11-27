@@ -97,6 +97,20 @@ pub fn print_traversal(
     }
 }
 
+/// Split a comma-separated relationship-type filter (`--rel-types X,Y`).
+///
+/// Blank entries are dropped: core reads an empty list as "every type" but a
+/// `""` entry as a type no edge carries, so `--rel-types ""` or `" , "` would
+/// otherwise filter out every edge.
+#[must_use]
+pub fn parse_rel_types(csv: &str) -> Vec<String> {
+    csv.split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Collect unique node IDs from edges into a sorted set.
 #[must_use]
 pub fn unique_node_ids(edges: &[GraphEdge]) -> BTreeSet<u64> {
@@ -158,4 +172,16 @@ pub fn paginate_graph_nodes(
         page,
         total_pages,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_rel_types;
+
+    #[test]
+    fn parse_rel_types_drops_blank_entries() {
+        assert!(parse_rel_types("").is_empty());
+        assert!(parse_rel_types(" , ,").is_empty());
+        assert_eq!(parse_rel_types(" KNOWS, ,FOLLOWS,"), ["KNOWS", "FOLLOWS"]);
+    }
 }

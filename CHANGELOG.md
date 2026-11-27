@@ -1306,6 +1306,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An empty relationship-type filter no longer filters out every edge**
+  (REST server, CLI, 2026-11-27). `GET
+  /collections/{name}/graph/traverse/stream?relationship_types=` (or a value
+  of only commas and spaces), `velesdb graph traverse --rel-types ","` and the
+  REPL's `.graph traverse … --rel-types ,` passed a `""` type to core, which
+  reads it as a type no edge carries, so the traversal returned no node.
+  After: blank entries are dropped before the filter is built, and an empty
+  filter means every type, as an absent one does.
+
 - **Payload WAL: a write that fails partway through a record no longer
   costs the records written after it** (core, 2026-11-20, #2850). A record
   at least as large as the `BufWriter`'s buffer goes straight to the file, so

@@ -148,11 +148,7 @@ fn run_traversal_blocking(
 ) -> Vec<TraversalResultItem> {
     use velesdb_core::collection::graph::TraversalConfig;
 
-    let rel_types: Vec<String> = params
-        .relationship_types
-        .as_ref()
-        .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
-        .unwrap_or_default();
+    let rel_types = parse_relationship_types(params.relationship_types.as_deref());
 
     let config = TraversalConfig::with_range(1, params.max_depth)
         .with_limit(params.limit)
@@ -170,6 +166,21 @@ fn run_traversal_blocking(
             depth: r.depth,
             path: r.path,
         })
+        .collect()
+}
+
+/// Splits the comma-separated `relationship_types` query parameter.
+///
+/// Blank entries are dropped: core reads an empty list as "every type" but a
+/// `""` entry as a type no edge carries, so an empty value
+/// (`relationship_types=`) would otherwise filter out every edge and stream
+/// an empty traversal instead of an unfiltered one.
+fn parse_relationship_types(csv: Option<&str>) -> Vec<String> {
+    csv.into_iter()
+        .flat_map(|s| s.split(','))
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
         .collect()
 }
 

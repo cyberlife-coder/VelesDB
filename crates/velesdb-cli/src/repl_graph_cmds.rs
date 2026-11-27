@@ -170,8 +170,8 @@ fn cmd_graph_traverse(db: &Database, parts: &[&str]) -> CommandResult {
     let limit: usize = parse_flag(parts, "--limit")
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
-    let rel_types: Vec<String> = parse_flag(parts, "--rel-types")
-        .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
+    let rel_types = parse_flag(parts, "--rel-types")
+        .map(|s| graph_display::parse_rel_types(&s))
         .unwrap_or_default();
 
     let config = TraversalConfig {

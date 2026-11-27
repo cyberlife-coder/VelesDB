@@ -66,3 +66,16 @@ fn test_published_description_states_the_stats_interval() {
         .expect("test: the description states the stats interval");
     assert_eq!(stated, STATS_INTERVAL, "{description}");
 }
+
+/// An empty list means "every type" to core, but a `""` entry is a type no
+/// edge carries: blank entries must not reach the traversal config.
+#[test]
+fn test_parse_relationship_types_drops_blank_entries() {
+    assert!(parse_relationship_types(None).is_empty());
+    assert!(parse_relationship_types(Some("")).is_empty());
+    assert!(parse_relationship_types(Some(" , ,")).is_empty());
+    assert_eq!(
+        parse_relationship_types(Some(" KNOWS, ,FOLLOWS,")),
+        vec!["KNOWS".to_string(), "FOLLOWS".to_string()]
+    );
+}
