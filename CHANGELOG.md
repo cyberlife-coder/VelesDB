@@ -1249,6 +1249,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`url` 2.5.9 and `cookie` 0.18.3 in the root and Tauri demo lockfiles**
+  (deps, 2026-11-27). RUSTSEC-2026-0592 (`Url::origin()` recurses once per
+  nested `blob:` prefix and overflows the stack) and RUSTSEC-2026-0594
+  (private-cookie nonces can repeat after `fork()`; `cookie` comes in only
+  through Tauri) failed the required `cargo deny` advisories gate. The
+  lockfiles were bumped package by package (`cargo update -p … --precise`);
+  `form_urlencoded` 1.2.3 came with `url`, and nothing else moved.
+  `cargo deny` passes on all seven tracked lockfiles.
+
 - **The npm audit gate takes dated, per-advisory exceptions; picomatch's
   ReDoS (GHSA-fc5q-39xc-vjpf) is the first** (CI, 2026-11-17). Every high
   advisory in the `sdks/typescript`, `examples/react-wasm-search` and
