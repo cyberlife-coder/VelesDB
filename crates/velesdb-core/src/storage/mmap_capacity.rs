@@ -120,11 +120,23 @@ impl MmapStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn compact(&mut self) -> io::Result<usize> {
-        let bytes_reclaimed = self.compaction_ctx().compact()?;
+        let compacted = self.compaction_ctx().compact();
 
-        if bytes_reclaimed > 0 {
+        // `Ok(0)` is the only outcome that never reaches the swap. An error
+        // may come after it (`finalize_commit` runs once the mmap and index
+        // have adopted the compacted file), and `ensure_capacity` remaps
+        // through `data_file`, so it must follow `vectors.dat` whichever way
+        // the compaction ended; before the swap, reopening is a no-op.
+        if !matches!(compacted, Ok(0)) {
             let data_path = self.path().join("vectors.dat");
-            self.data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
+            let reopened = OpenOptions::new().read(true).write(true).open(&data_path);
+            match (reopened, &compacted) {
+                (Ok(file), _) => self.data_file = file,
+                (Err(e), Ok(_)) => return Err(e),
+                (Err(e), Err(_)) => {
+                    tracing::warn!(error = %e, "compaction: reopening vectors.dat failed");
+                }
+            }
             // No flush_full() here: `commit_compaction` already synced the
             // compacted data file before the swap, promoted an identical
             // fsynced vectors.idx and truncated the WAL. Rewriting
@@ -134,7 +146,7 @@ impl MmapStorage {
             // already-empty WAL is unrecoverable (audit 2026-06, finding 3).
         }
 
-        Ok(bytes_reclaimed)
+        compacted
     }
 
     /// Returns the fragmentation ratio (0.0 = no fragmentation, 1.0 = 100% fragmented).
