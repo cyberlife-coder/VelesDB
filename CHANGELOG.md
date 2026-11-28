@@ -1306,29 +1306,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Vector storage: a compaction that fails after its data-file swap no
-  longer serves zeros after the next growth** (core, 2026-11-28). The swap
-  of `vectors.dat` is compaction's commit point; the mmap and the index
-  adopt the compacted file right after it. When the step that follows
-  (index promotion, directory fsync, WAL truncation) returned an error,
-  `MmapStorage::compact` returned before reopening its data-file handle,
-  which stayed on the replaced inode. The next `ensure_capacity` grew and
-  remapped *that* file under compacted offsets: surviving vectors read back
-  as zeros or as other vectors' bytes, and new writes went to an unlinked
-  file. After: the handle follows `vectors.dat` whatever the compaction
-  returned, except a no-op `Ok(0)`
-  (`test_compact_finalize_failure_keeps_data_file_on_compacted_file`).
-
-- **Relative-score fusion reads an id repeated within a branch at its best
-  score** (core, 2026-11-28). `min_max_normalize` kept the *last*
-  occurrence of a repeated id and counted every occurrence in the branch's
-  min and max, so `[(1, 0.9), (2, 0.8), (1, 0.1)]` normalized doc 1 to `0`
-  where every other strategy (`average`, `maximum`, `weighted`, `rrf`,
-  `weighted_rrf`) reads it at `0.9`. After: a repeated id counts once, at
-  its highest score, for `relative_score`/`rsf` and
-  `WeightedRelativeScore` alike, on every surface that fuses through core
-  (WASM `fuse_results` included).
-
 - **Payload WAL: a write that fails partway through a record no longer
   costs the records written after it** (core, 2026-11-20, #2850). A record
   at least as large as the `BufWriter`'s buffer goes straight to the file, so
