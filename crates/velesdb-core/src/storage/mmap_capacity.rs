@@ -6,7 +6,6 @@ use super::compaction::CompactionContext;
 use super::mmap::MmapStorage;
 
 use memmap2::MmapMut;
-use std::fs::OpenOptions;
 use std::io;
 use std::time::Instant;
 
@@ -120,11 +119,15 @@ impl MmapStorage {
     ///
     /// Returns an error if file operations fail.
     pub fn compact(&mut self) -> io::Result<usize> {
-        let bytes_reclaimed = self.compaction_ctx().compact()?;
+        let mut swapped_data_file = None;
+        let compacted = self.compaction_ctx().compact(&mut swapped_data_file);
 
-        if bytes_reclaimed > 0 {
-            let data_path = self.path().join("vectors.dat");
-            self.data_file = OpenOptions::new().read(true).write(true).open(&data_path)?;
+        // Once the swap committed, the mmap and index describe the compacted
+        // file even if a later step failed (`finalize_commit`), and
+        // `ensure_capacity` grows and remaps through `data_file`: adopt the
+        // compacted file's handle on every outcome, before returning.
+        if let Some(file) = swapped_data_file {
+            self.data_file = file;
             // No flush_full() here: `commit_compaction` already synced the
             // compacted data file before the swap, promoted an identical
             // fsynced vectors.idx and truncated the WAL. Rewriting
@@ -134,7 +137,7 @@ impl MmapStorage {
             // already-empty WAL is unrecoverable (audit 2026-06, finding 3).
         }
 
-        Ok(bytes_reclaimed)
+        compacted
     }
 
     /// Returns the fragmentation ratio (0.0 = no fragmentation, 1.0 = 100% fragmented).

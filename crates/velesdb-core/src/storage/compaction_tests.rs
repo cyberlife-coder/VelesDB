@@ -663,7 +663,7 @@ fn test_context_compact_updates_index_offsets() {
         watermarks: &watermarks,
     };
 
-    let reclaimed = ctx.compact().expect("compact");
+    let reclaimed = ctx.compact(&mut None).expect("compact");
     let vector_size = dim * std::mem::size_of::<f32>();
     assert_eq!(reclaimed, 2 * vector_size);
 
@@ -907,4 +907,59 @@ fn test_compact_roundtrip_data_integrity() {
 
     // Index length matches survivors.
     assert_eq!(storage.len(), survivors.len());
+}
+
+/// A compaction whose finalize step fails after the data-file swap must
+/// still leave `data_file` on the compacted `vectors.dat`.
+///
+/// The swap is the commit point: once it succeeds the mmap and the index
+/// describe the new file. `ensure_capacity` grows and remaps through
+/// `data_file`, so if that handle stayed on the replaced inode the next
+/// growth would remap the pre-compaction layout under compacted offsets.
+/// A non-empty directory at `vectors.idx` makes the index promotion fail
+/// (`rename` onto it is refused) after the swap has committed.
+#[cfg(unix)]
+#[test]
+fn test_compact_finalize_failure_keeps_data_file_on_compacted_file() {
+    let dir = tempdir().expect("tempdir");
+    let survivors = [2u64, 4, 5];
+    let mut storage = storage_with_vectors(dir.path(), 4, &[1, 2, 3, 4, 5]);
+    storage.delete(1).expect("delete");
+    storage.delete(3).expect("delete");
+    let stored: Vec<_> = survivors
+        .iter()
+        .map(|&id| storage.retrieve(id).expect("retrieve"))
+        .collect();
+
+    let idx_path = dir.path().join("vectors.idx");
+    if idx_path.is_file() {
+        std::fs::remove_file(&idx_path).expect("remove vectors.idx");
+    }
+    std::fs::create_dir(&idx_path).expect("vectors.idx as a directory");
+    std::fs::write(idx_path.join("blocker"), b"x").expect("make it non-empty");
+
+    assert!(storage.compact().is_err(), "the index promotion must fail");
+    // The failure came after the commit point: the swap consumed the
+    // compacted temp file, and the staged index was never promoted.
+    assert!(
+        !dir.path().join("vectors.dat.tmp").exists(),
+        "swap committed"
+    );
+    assert!(
+        dir.path().join("vectors.idx.tmp").exists(),
+        "promotion failed"
+    );
+
+    // Grow past the mapping: the remap goes through `data_file`.
+    let grown = usize::try_from(MmapStorage::INITIAL_SIZE).expect("fits usize") + 1;
+    storage.ensure_capacity(grown).expect("grow");
+
+    let read_back: Vec<_> = survivors
+        .iter()
+        .map(|&id| storage.retrieve(id).expect("retrieve"))
+        .collect();
+    assert_eq!(
+        read_back, stored,
+        "survivors after growth past a failed finalize"
+    );
 }

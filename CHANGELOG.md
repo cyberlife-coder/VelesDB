@@ -1306,6 +1306,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Vector storage: a compaction that fails after its data-file swap no
+  longer serves wrong vectors after the next growth** (core, 2026-11-28).
+  The swap of `vectors.dat` is compaction's commit point; the mmap and the
+  index adopt the compacted file right after it. When the step that follows
+  (index promotion, directory fsync, WAL truncation) returned an error,
+  `MmapStorage::compact` returned before reopening its data-file handle,
+  which stayed on the replaced inode. The next `ensure_capacity` grew and
+  remapped *that* file under compacted offsets: surviving vectors read back
+  as zeros or as other vectors' bytes, and new writes went to an unlinked
+  file. After: `CompactionContext::compact` hands back the compacted file it
+  opened at the swap, and the storage adopts it whatever the result, with
+  no second open that could fail
+  (`test_compact_finalize_failure_keeps_data_file_on_compacted_file`).
+
 - **Payload WAL: a write that fails partway through a record no longer
   costs the records written after it** (core, 2026-11-20, #2850). A record
   at least as large as the `BufWriter`'s buffer goes straight to the file, so
