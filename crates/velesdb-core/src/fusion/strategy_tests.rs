@@ -1228,3 +1228,31 @@ fn test_weight_checks_run_when_every_branch_is_empty() {
         Ok(Vec::new())
     );
 }
+
+#[test]
+fn test_min_max_normalize_duplicate_id_keeps_its_best_score() {
+    // Every other strategy reads a branch's repeated id at its best score
+    // (`collect_doc_scores`, `fuse_rrf`, `fuse_weighted_rrf`); relative-score
+    // fusion must too, whatever order the duplicates arrive in.
+    let best_first = vec![(1u64, 0.9), (2u64, 0.5), (1u64, 0.1)];
+    let best_last = vec![(1u64, 0.1), (2u64, 0.5), (1u64, 0.9)];
+    for branch in [best_first, best_last] {
+        let normalized = min_max_normalize(&branch);
+        assert_eq!(normalized.len(), 2);
+        // The worse duplicate is not a score of the branch: 0.5 is its min.
+        assert!((normalized[&1] - 1.0).abs() < 1e-6, "{normalized:?}");
+        assert!((normalized[&2] - 0.0).abs() < 1e-6, "{normalized:?}");
+    }
+}
+
+#[test]
+fn test_relative_score_duplicate_id_ranks_as_its_best_score() {
+    let strategy = FusionStrategy::relative_score(0.5, 0.5).unwrap();
+    // Doc 1 is the dense branch's top hit, repeated lower down.
+    let results = vec![vec![(1, 0.9), (2, 0.8), (1, 0.1)], vec![(2, 0.7), (1, 0.6)]];
+    let fused = strategy.fuse(results).unwrap();
+    // Dense normalizes over {1: 0.9, 2: 0.8} → 1.0, 0.0; sparse → 0.0, 1.0.
+    let score = |id| fused.iter().find(|(d, _)| *d == id).unwrap().1;
+    assert!((score(1) - 0.5).abs() < 1e-6, "{fused:?}");
+    assert!((score(2) - 0.5).abs() < 1e-6, "{fused:?}");
+}

@@ -852,6 +852,10 @@ fn rsf_branch_weights(
 /// If the score range is smaller than `f32::EPSILON` (all scores effectively
 /// equal), every item receives `0.5` rather than dividing by (near) zero.
 ///
+/// An id repeated within the branch counts once, at its best (highest)
+/// score, as in every other strategy; its worse occurrences take no part in
+/// the branch's min or max.
+///
 /// This is the single canonical implementation of min-max normalization for
 /// `VelesDB` fusion. It is `pub` specifically so other engines that need the
 /// same per-branch normalization semantics can call it directly instead of
@@ -859,24 +863,22 @@ fn rsf_branch_weights(
 /// issue #1545).
 #[must_use]
 pub fn min_max_normalize(branch: &[(u64, f32)]) -> HashMap<u64, f32> {
-    if branch.is_empty() {
-        return HashMap::new();
+    let mut best: HashMap<u64, f32> = HashMap::with_capacity(branch.len());
+    for &(id, s) in branch {
+        best.entry(id).and_modify(|b| *b = b.max(s)).or_insert(s);
     }
-    // Single pass to find both min and max.
-    let (min, max) = branch
-        .iter()
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &(_, s)| {
+    let (min, max) = best
+        .values()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &s| {
             (lo.min(s), hi.max(s))
         });
     let range = max - min;
-    let mut out = HashMap::with_capacity(branch.len());
-    for &(id, s) in branch {
-        let norm = if range < f32::EPSILON {
+    for s in best.values_mut() {
+        *s = if range < f32::EPSILON {
             0.5
         } else {
-            (s - min) / range
+            (*s - min) / range
         };
-        out.insert(id, norm);
     }
-    out
+    best
 }
