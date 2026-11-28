@@ -447,12 +447,16 @@ impl CompactionContext<'_> {
     ///
     /// # Returns
     ///
-    /// The number of bytes reclaimed.
+    /// The number of bytes reclaimed. Once the data-file swap has committed,
+    /// `swapped_data_file` holds the compacted `vectors.dat`, opened
+    /// read/write, *whatever the result*: the mmap and the index already
+    /// describe that file, so the caller's own handle must follow it even
+    /// when a later step fails.
     ///
     /// # Errors
     ///
     /// Returns an error if file operations fail.
-    pub fn compact(&self) -> io::Result<usize> {
+    pub fn compact(&self, swapped_data_file: &mut Option<File>) -> io::Result<usize> {
         let vector_size = self.dimension * std::mem::size_of::<f32>();
 
         // 1. Get current state (EPIC-033/US-004: Use ShardedIndex)
@@ -574,6 +578,7 @@ impl CompactionContext<'_> {
         // failed, the original data file is intact and the existing index/offset
         // still describe it, so return the error without touching them.
         swapped?;
+        *swapped_data_file = Some(new_data_file);
         // Swap succeeded: `vectors.dat` is the compacted layout, so the index and
         // offset MUST switch to it. Adopt them BEFORE finalizing, so a failure in
         // `finalize_commit` still leaves the index and the mmap mutually

@@ -663,7 +663,7 @@ fn test_context_compact_updates_index_offsets() {
         watermarks: &watermarks,
     };
 
-    let reclaimed = ctx.compact().expect("compact");
+    let reclaimed = ctx.compact(&mut None).expect("compact");
     let vector_size = dim * std::mem::size_of::<f32>();
     assert_eq!(reclaimed, 2 * vector_size);
 
@@ -920,13 +920,16 @@ fn test_compact_roundtrip_data_integrity() {
 /// (`rename` onto it is refused) after the swap has committed.
 #[cfg(unix)]
 #[test]
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn test_compact_finalize_failure_keeps_data_file_on_compacted_file() {
     let dir = tempdir().expect("tempdir");
-    let dim = 4;
-    let mut storage = storage_with_vectors(dir.path(), dim, &[1, 2, 3, 4, 5]);
+    let survivors = [2u64, 4, 5];
+    let mut storage = storage_with_vectors(dir.path(), 4, &[1, 2, 3, 4, 5]);
     storage.delete(1).expect("delete");
     storage.delete(3).expect("delete");
+    let stored: Vec<_> = survivors
+        .iter()
+        .map(|&id| storage.retrieve(id).expect("retrieve"))
+        .collect();
 
     let idx_path = dir.path().join("vectors.idx");
     if idx_path.is_file() {
@@ -935,26 +938,28 @@ fn test_compact_finalize_failure_keeps_data_file_on_compacted_file() {
     std::fs::create_dir(&idx_path).expect("vectors.idx as a directory");
     std::fs::write(idx_path.join("blocker"), b"x").expect("make it non-empty");
 
+    assert!(storage.compact().is_err(), "the index promotion must fail");
+    // The failure came after the commit point: the swap consumed the
+    // compacted temp file, and the staged index was never promoted.
     assert!(
-        storage.compact().is_err(),
-        "the index promotion must fail for this test to exercise anything"
+        !dir.path().join("vectors.dat.tmp").exists(),
+        "swap committed"
     );
-    // The swap committed: survivors are read through the compacted mapping.
-    for &id in &[2u64, 4, 5] {
-        let expected: Vec<f32> = (0..dim).map(|d| id as f32 + d as f32).collect();
-        assert_eq!(storage.retrieve(id).expect("retrieve"), Some(expected));
-    }
+    assert!(
+        dir.path().join("vectors.idx.tmp").exists(),
+        "promotion failed"
+    );
 
     // Grow past the mapping: the remap goes through `data_file`.
-    let grown = MmapStorage::INITIAL_SIZE as usize + 1;
+    let grown = usize::try_from(MmapStorage::INITIAL_SIZE).expect("fits usize") + 1;
     storage.ensure_capacity(grown).expect("grow");
 
-    for &id in &[2u64, 4, 5] {
-        let expected: Vec<f32> = (0..dim).map(|d| id as f32 + d as f32).collect();
-        assert_eq!(
-            storage.retrieve(id).expect("retrieve"),
-            Some(expected),
-            "vector {id} after growth following a failed finalize"
-        );
-    }
+    let read_back: Vec<_> = survivors
+        .iter()
+        .map(|&id| storage.retrieve(id).expect("retrieve"))
+        .collect();
+    assert_eq!(
+        read_back, stored,
+        "survivors after growth past a failed finalize"
+    );
 }
